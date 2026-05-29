@@ -60,7 +60,7 @@ Symbol* FFTDemodulator::process_sample(int16_t sample) {
     }
     
     // Create symbol structure
-    static Symbol current_symbol;
+    // current_symbol is a member variable (see fft_demodulator.h)
     
     // Detect symbol from FFT magnitudes
     uint8_t symbol_bits = SymbolDecoder::detect_symbol(magnitudes);
