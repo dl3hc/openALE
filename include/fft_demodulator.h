@@ -2,12 +2,12 @@
  * \file fft_demodulator.h
  * \brief FFT-based 8-FSK demodulator
  * 
- * Implements sliding 64-point FFT for efficient tone detection.
- * One new sample per symbol (8000 Hz / 125 baud = 64 samples/symbol)
+* Implements block 64-point DFT, one block per symbol
+* (8000 Hz / 125 baud = 64 samples/symbol = one non-overlapping DFT block)
  * 
  * Specification: MIL-STD-188-141B
- *  - 8 tones: 750-1750 Hz, 125 Hz spacing
- *  - FFT bins 6-22 (every 2 bins) contain ALE tones
+*  - 8 tones: 750-2500 Hz, 250 Hz spacing
+*  - FFT bins 6-20 (every 2 bins) contain ALE tones
  *  - Peak detection with noise floor estimation
  */
 
@@ -25,7 +25,7 @@ public:
     
     /**
      * Process audio frame and detect symbols
-     * \param samples Audio buffer (8-bit samples)
+* \param samples Audio buffer (16-bit PCM samples)
      * \param num_samples Number of samples
      * \return Vector of detected symbols
      */
@@ -54,8 +54,9 @@ private:
     uint32_t sample_count;
     uint32_t samples_per_symbol;        // = 8000 / 125 = 64
     
-    std::array<float, FFT_SIZE> mag_history[SYMBOLS_PER_WORD];
+std::array<float, FFT_SIZE> mag_history[SYMBOLS_PER_WORD];
     uint32_t mag_history_offset;
+    Symbol current_symbol;     ///< Reused per-symbol output; not static
     
     /**
      * Detect peak tone from FFT bins
