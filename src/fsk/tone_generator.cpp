@@ -25,14 +25,16 @@ void ToneGenerator::init_sine_table() {
 }
 
 void ToneGenerator::init_phase_increments() {
-    // Phase increment = (freq_hz / sample_rate) * 2^32
-    // For fixed-point phase accumulation
-    for (uint32_t tone_idx = 0; tone_idx < NUM_TONES; ++tone_idx) {
-        uint32_t freq_hz = TONE_FREQS_HZ[tone_idx];
+    // Walk tones in ascending-frequency order (rank). FREQ_TO_SYMBOL[rank] gives the
+    // symbol value carried by that tone, so we store its increment in the matching
+    // symbol slot. phase_increment thus stays indexed by SYMBOL VALUE.
+    for (uint32_t rank = 0; rank < NUM_TONES; ++rank) {
+        uint8_t  symbol  = FREQ_TO_SYMBOL[rank];
+        uint32_t freq_hz = TONE_FREQS_HZ[rank];
         
         // phase_increment = freq_hz * 2^32 / sample_rate
         double increment = static_cast<double>(freq_hz) * (1LL << 32) / SAMPLE_RATE_HZ;
-        phase_increment[tone_idx] = static_cast<uint32_t>(increment);
+        phase_increment[symbol] = static_cast<uint32_t>(increment);
     }
 }
 
