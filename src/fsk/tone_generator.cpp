@@ -10,6 +10,9 @@
 
 namespace ale {
 
+static_assert(SAMPLE_RATE_HZ % SYMBOL_RATE_BAUD == 0,
+              "ALE2G requires an integer number of samples per symbol");
+
 ToneGenerator::ToneGenerator() {
     init_sine_table();
     init_phase_increments();
@@ -32,17 +35,17 @@ void ToneGenerator::init_phase_increments() {
         uint8_t  symbol  = FREQ_TO_SYMBOL[rank];
         uint32_t freq_hz = TONE_FREQS_HZ[rank];
         
-        // phase_increment = freq_hz * 2^32 / sample_rate
-        double increment = static_cast<double>(freq_hz) * (1LL << 32) / SAMPLE_RATE_HZ;
+        // Exact integer fixed-point increment in Q32.
+        // For ALE2G frequencies and 8 kHz, 64 samples complete an integer number of cycles.
+        uint64_t increment = (static_cast<uint64_t>(freq_hz) << 32) / SAMPLE_RATE_HZ;
         phase_increment[symbol] = static_cast<uint32_t>(increment);
     }
 }
 
 void ToneGenerator::reset() {
     // 0x40000000 = pi/2 in 32-bit phase: sin = +1, slope = 0.
-    // Ensures every symbol boundary is at a waveform maximum (slope zero)
-    // as required by MIL-STD-188-141B A.5.2.1.
-    std::fill(phase_accum.begin(), phase_accum.end(), 0x40000000u);
+    // Symbol boundaries are aligned to waveform maxima/minima.
+    phase_ = 0x40000000u;
 }
 
 float ToneGenerator::sine_interpolate(uint32_t phase) const {
@@ -70,15 +73,12 @@ uint32_t ToneGenerator::generate_symbols(const uint8_t* symbols, uint32_t num_sy
             symbol = NUM_TONES - 1;  // Clamp invalid symbols
         }
         
-        // Reset phase accumulator for this symbol to ensure phase continuity
-        // at symbol boundaries (slope zero transition as required by spec)
-        phase_accum[symbol] = 0x40000000u;
-        
         uint32_t phase_inc = phase_increment[symbol];
         
-        // Generate one symbol = 64 samples at this frequency
-        for (uint32_t sample_idx = 0; sample_idx < SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD; ++sample_idx) {
-            float sine_val = sine_interpolate(phase_accum[symbol]);
+        // Generate one symbol = 64 samples at this frequency.
+        // The phase accumulator is continuous across symbol boundaries.
+        for (uint32_t sample_idx = 0; sample_idx < SAMPLES_PER_SYMBOL; ++sample_idx) {
+            float sine_val = sine_interpolate(phase_);
             
             // Convert to int16 with amplitude scaling
             int32_t sample = static_cast<int32_t>(sine_val * amplitude * 32767.0f);
@@ -87,7 +87,7 @@ uint32_t ToneGenerator::generate_symbols(const uint8_t* symbols, uint32_t num_sy
             output[samples_written++] = static_cast<int16_t>(sample);
             
             // Update phase accumulator
-            phase_accum[symbol] += phase_inc;
+            phase_ += phase_inc;
         }
     }
     
@@ -95,7 +95,7 @@ uint32_t ToneGenerator::generate_symbols(const uint8_t* symbols, uint32_t num_sy
 }
 
 uint32_t ToneGenerator::generate_tone(uint8_t symbol_value, uint32_t num_samples,
-                                      int16_t* output, float amplitude) {
+                                       int16_t* output, float amplitude) {
     if (symbol_value >= NUM_TONES) {
         symbol_value = NUM_TONES - 1;
     }
@@ -103,14 +103,14 @@ uint32_t ToneGenerator::generate_tone(uint8_t symbol_value, uint32_t num_samples
     uint32_t phase_inc = phase_increment[symbol_value];
     
     for (uint32_t i = 0; i < num_samples; ++i) {
-        float sine_val = sine_interpolate(phase_accum[symbol_value]);
+        float sine_val = sine_interpolate(phase_);
         
         int32_t sample = static_cast<int32_t>(sine_val * amplitude * 32767.0f);
         sample = std::max(-32768, std::min(32767, sample));
         
         output[i] = static_cast<int16_t>(sample);
         
-        phase_accum[symbol_value] += phase_inc;
+        phase_ += phase_inc;
     }
     
     return num_samples;

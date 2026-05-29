@@ -2,10 +2,10 @@
  * \file tone_generator.h
  * \brief 8-FSK tone generator using NCO
  * 
- * Generates 8 FSK tones using numerically-controlled oscillator (NCO) approach
- * with sine lookup table for efficiency.
+ * Generates 8-FSK tones using a single continuous NCO phase accumulator.
+ * Symbol boundaries are aligned to waveform extrema (slope zero).
  * 
-* Specification: MIL-STD-188-141B
+ * Specification: MIL-STD-188-141B / ALE2G
  *  - Frequencies: 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500 Hz (Gray-coded by symbol value)
  *  - Sample rate: 8000 Hz
  *  - Symbol rate: 125 baud (64 samples per symbol)
@@ -33,7 +33,7 @@ public:
      * \return Number of samples written
      */
     uint32_t generate_symbols(const uint8_t* symbols, uint32_t num_symbols,
-                              int16_t* output, float amplitude = 0.7f);
+                               int16_t* output, float amplitude = 0.7f);
     
     /**
      * Generate continuous tone (no modulation switching)
@@ -54,12 +54,15 @@ public:
 private:
     // Sine table for 256 samples per cycle
     static constexpr uint32_t SINE_TABLE_SIZE = 256;
+    static constexpr uint32_t SAMPLES_PER_SYMBOL = SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD;
+    
     std::array<float, SINE_TABLE_SIZE> sine_table;
     
-    // Phase accumulators for each tone
-    std::array<uint32_t, NUM_TONES> phase_accum;
+    // One stream phase accumulator for the generated waveform.
+    // The current symbol selects the phase increment only.
+    uint32_t phase_;
     
-// Phase increment per sample for each tone (32-bit phase accumulator, Q32)
+    // Phase increment per sample for each tone (32-bit phase accumulator, Q32)
     std::array<uint32_t, NUM_TONES> phase_increment;
     
     /**
