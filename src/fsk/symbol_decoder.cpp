@@ -10,31 +10,38 @@
 namespace ale {
 
 uint8_t SymbolDecoder::detect_symbol(const std::array<float, FFT_SIZE>& magnitudes) {
-    // Find peak magnitude in ALE tone region (bins 6-13, one bin per tone)
-    // Tone frequencies: 750, 875, 1000, 1125, 1250, 1375, 1500, 1625 Hz
-    // At 8000 Hz sample rate with 64-point FFT (125 Hz/bin):
-    // 750/125=6, 875/125=7, 1000/125=8, 1125/125=9, 1250/125=10, 1375/125=11, 1500/125=12, 1625/125=13
+    // Find peak magnitude in ALE tone region (every FFT_BIN_STEP bins)
+    // Uses FREQ_TO_SYMBOL lookup table to convert frequency-ascending index to Gray-coded symbol
     
     float peak_mag = -1e6f;
-    uint32_t peak_bin = 0xFF;
+    uint32_t peak_freq_idx = 0;
     
-    // Check each ALE tone bin (consecutive from 6 to 13)
-    for (uint32_t bin = 6; bin <= 13; ++bin) {
+    // Check each ALE tone bin (every FFT_BIN_STEP bins starting from FFT_BIN_OFFSET)
+    for (uint32_t fi = 0; fi < NUM_TONES; ++fi) {
+        uint32_t bin = FFT_BIN_OFFSET + fi * FFT_BIN_STEP;
         if (bin < FFT_SIZE && magnitudes[bin] > peak_mag) {
             peak_mag = magnitudes[bin];
-            peak_bin = bin;
+            peak_freq_idx = fi;
         }
     }
     
-    if (peak_bin == 0xFF) {
-        return 0xFF;  // No valid tone detected
+    if (peak_freq_idx == 0) {
+        // Check if we actually found a peak (this check is redundant but for safety)
+        bool found_peak = false;
+        for (uint32_t fi = 0; fi < NUM_TONES; ++fi) {
+            uint32_t bin = FFT_BIN_OFFSET + fi * FFT_BIN_STEP;
+            if (bin < FFT_SIZE && magnitudes[bin] > 0.0f) {
+                found_peak = true;
+                break;
+            }
+        }
+        if (!found_peak) {
+            return 0xFF;  // No valid tone detected
+        }
     }
     
-    // Convert bin to symbol value (0-7)
-    // bin 6 -> symbol 0, bin 7 -> symbol 1, etc.
-    uint8_t symbol = peak_bin - 6;
-    
-    return symbol;
+    // Convert frequency-ascending index to Gray-coded symbol value
+    return FREQ_TO_SYMBOL[peak_freq_idx];
 }
 
 uint8_t SymbolDecoder::bin_to_symbol(uint32_t bin_index) {
