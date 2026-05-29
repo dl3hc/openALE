@@ -68,6 +68,10 @@ uint32_t ToneGenerator::generate_symbols(const uint8_t* symbols, uint32_t num_sy
             symbol = NUM_TONES - 1;  // Clamp invalid symbols
         }
         
+        // Reset phase accumulator for this symbol to ensure phase continuity
+        // at symbol boundaries (slope zero transition as required by spec)
+        phase_accum[symbol] = 0x40000000u;
+        
         uint32_t phase_inc = phase_increment[symbol];
         
         // Generate one symbol = 64 samples at this frequency
