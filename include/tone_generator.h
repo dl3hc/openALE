@@ -5,10 +5,11 @@
  * Generates 8 FSK tones using numerically-controlled oscillator (NCO) approach
  * with sine lookup table for efficiency.
  * 
- * Specification: MIL-STD-188-141B
- *  - Frequencies: 750, 875, 1000, 1125, 1250, 1375, 1500, 1625 Hz
+* Specification: MIL-STD-188-141B
+ *  - Frequencies: 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500 Hz (Gray-coded by symbol value)
  *  - Sample rate: 8000 Hz
  *  - Symbol rate: 125 baud (64 samples per symbol)
+ *  - Phase init: pi/2 (0x40000000) — boundaries at waveform maxima, slope zero
  */
 
 #pragma once
@@ -58,7 +59,7 @@ private:
     // Phase accumulators for each tone
     std::array<uint32_t, NUM_TONES> phase_accum;
     
-    // Phase increment per sample for each tone (fixed-point Q16)
+// Phase increment per sample for each tone (32-bit phase accumulator, Q32)
     std::array<uint32_t, NUM_TONES> phase_increment;
     
     /**

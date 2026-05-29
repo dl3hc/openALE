@@ -3,6 +3,7 @@
  * \brief Implementation of core ALE types
  */
 
+#define _USE_MATH_DEFINES
 #include "ale_types.h"
 #include <cmath>
 #include <algorithm>
@@ -10,12 +11,11 @@
 namespace ale {
 
 FFTBuffer::FFTBuffer()
-    : sample_count(0), fft_history_offset(0) {
+    : sample_count(0), fft_history_offset(0),
+      buffer_index(0) {
     
-    // Initialize sample history buffer (64 samples)
-    // We'll use a simple DFT for each bin rather than full FFT
-    
-    // Initialize state variables
+    // Initialize all arrays
+    std::fill(sample_buffer.begin(), sample_buffer.end(), 0.0f);
     std::fill(s0.begin(), s0.end(), 0.0f);
     std::fill(s1.begin(), s1.end(), 0.0f);
     std::fill(s2.begin(), s2.end(), 0.0f);
@@ -31,8 +31,7 @@ FFTBuffer::FFTBuffer()
 
 const std::array<float, FFT_SIZE>& FFTBuffer::push_sample(int16_t sample) {
     // Keep circular buffer of 64 samples
-    static std::array<float, FFT_SIZE> sample_buffer = {};
-    static uint32_t buffer_index = 0;
+    // sample_buffer and buffer_index are now instance members (see types.h)
     
     // Normalize and store sample
     float normalized = static_cast<float>(sample) / 32768.0f;
@@ -75,6 +74,8 @@ const std::array<float, FFT_SIZE>& FFTBuffer::get_magnitudes() const {
 void FFTBuffer::reset() {
     sample_count = 0;
     fft_history_offset = 0;
+    buffer_index = 0;
+    std::fill(sample_buffer.begin(), sample_buffer.end(), 0.0f);
     std::fill(s0.begin(), s0.end(), 0.0f);
     std::fill(s1.begin(), s1.end(), 0.0f);
     std::fill(s2.begin(), s2.end(), 0.0f);

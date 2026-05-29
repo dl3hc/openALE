@@ -3,6 +3,7 @@
  * \brief Implementation of NCO-based 8-FSK tone generator
  */
 
+#define _USE_MATH_DEFINES
 #include "tone_generator.h"
 #include <cmath>
 #include <algorithm>
@@ -36,7 +37,10 @@ void ToneGenerator::init_phase_increments() {
 }
 
 void ToneGenerator::reset() {
-    std::fill(phase_accum.begin(), phase_accum.end(), 0);
+    // 0x40000000 = pi/2 in 32-bit phase: sin = +1, slope = 0.
+    // Ensures every symbol boundary is at a waveform maximum (slope zero)
+    // as required by MIL-STD-188-141B A.5.2.1.
+    std::fill(phase_accum.begin(), phase_accum.end(), 0x40000000u);
 }
 
 float ToneGenerator::sine_interpolate(uint32_t phase) const {

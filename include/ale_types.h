@@ -4,8 +4,8 @@
  * 
  * Specification Reference:
  *  - MIL-STD-188-141B Appendix A
- *  - 8-FSK modulation: 8 tones, 125 baud, 125 Hz spacing
- *  - Bandwidth: 1 kHz (tones 750-1750 Hz)
+ *  - 8-FSK modulation: 8 tones, 125 baud, 250 Hz spacing
+ *  - Bandwidth: 1.75 kHz (tones 750-2500 Hz)
  */
 
 #pragma once
@@ -20,14 +20,16 @@ namespace ale {
 // Physical layer constants per MIL-STD-188-141B
 constexpr uint32_t SAMPLE_RATE_HZ = 8000;          ///< Audio sample rate
 constexpr uint32_t SYMBOL_RATE_BAUD = 125;         ///< Symbol transmission rate
-constexpr uint32_t TONE_SPACING_HZ = 125;          ///< Spacing between FSK tones
+constexpr uint32_t TONE_SPACING_HZ = 250;          ///< Spacing between FSK tones
 constexpr uint32_t NUM_TONES = 8;                  ///< Number of FSK tones
 constexpr uint32_t BITS_PER_SYMBOL = 3;            ///< Each symbol encodes 3 bits
-constexpr uint32_t BANDWIDTH_HZ = 1000;            ///< Total bandwidth 750-1750 Hz
+constexpr uint32_t BANDWIDTH_HZ = 1750;            ///< Total bandwidth 750-2500 Hz
 
-// Tone frequencies (Hz)
+// Tone frequencies (Hz), indexed by 3-bit symbol value (Gray code per MIL-STD-188-141B)
+// sym: 0     1     2     3     4     5     6     7
+// bits:000   001   010   011   100   101   110   111
 constexpr std::array<uint32_t, NUM_TONES> TONE_FREQS_HZ = {
-    750, 875, 1000, 1125, 1250, 1375, 1500, 1625
+    750, 1000, 1500, 1250, 2500, 2250, 1750, 2000
 };
 
 // FFT parameters
@@ -132,8 +134,10 @@ private:
     std::array<float, FFT_SIZE> coeff;                // Goertzel coeff (deprecated)
     std::array<float, FFT_SIZE> magnitude;            // Output magnitudes
     
-    uint32_t sample_count;
+uint32_t sample_count;
     uint32_t fft_history_offset;
+    std::array<float, FFT_SIZE> sample_buffer;        // Circular sample history
+    uint32_t buffer_index;                            // Write pointer into sample_buffer
     
     void compute_magnitudes();
     
