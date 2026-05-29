@@ -27,9 +27,11 @@ constexpr uint32_t BANDWIDTH_HZ = 1750;            ///< Total bandwidth 750-2500
 
 // Tone frequencies (Hz), indexed by 3-bit symbol value (Gray code per MIL-STD-188-141B)
 // sym: 0     1     2     3     4     5     6     7
-// bits:000   001   010   011   100   101   110   111
+// bits:000   001   011   010   110   111   101   100
+// Note: The bit ordering is not binary but follows Gray code pattern for adjacent tones
+// to minimize frequency transitions
 constexpr std::array<uint32_t, NUM_TONES> TONE_FREQS_HZ = {
-    750, 1000, 1500, 1250, 2500, 2250, 1750, 2000
+    750, 1000, 1250, 1500, 1750, 2000, 2250, 2500
 };
 
 // FFT parameters
