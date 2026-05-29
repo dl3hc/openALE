@@ -25,19 +25,41 @@ constexpr uint32_t NUM_TONES = 8;                  ///< Number of FSK tones
 constexpr uint32_t BITS_PER_SYMBOL = 3;            ///< Each symbol encodes 3 bits
 constexpr uint32_t BANDWIDTH_HZ = 1750;            ///< Total bandwidth 750-2500 Hz
 
-// Tone frequencies (Hz), indexed by 3-bit symbol value (Gray code per MIL-STD-188-141B)
-// sym: 0     1     2     3     4     5     6     7
-// bits:000   001   011   010   110   111   101   100
-// Note: The bit ordering is not binary but follows Gray code pattern for adjacent tones
-// to minimize frequency transitions
+// (1) Tone frequencies (Hz) in ASCENDING order, indexed by frequency rank (0 = lowest).
+//     A pure physical list — carries NO symbol assignment. Never index it with a
+//     symbol value.
 constexpr std::array<uint32_t, NUM_TONES> TONE_FREQS_HZ = {
     750, 1000, 1250, 1500, 1750, 2000, 2250, 2500
 };
 
+// (2) The MIL-STD-188-141B A.5.1.2 symbol assignment: frequency rank -> symbol value.
+//     This is the spec's bit column read top-to-bottom (LSB on the right):
+//       rank 0 750Hz=000=0   rank 1 1000Hz=001=1  rank 2 1250Hz=011=3  rank 3 1500Hz=010=2
+//       rank 4 1750Hz=110=6  rank 5 2000Hz=111=7  rank 6 2250Hz=101=5  rank 7 2500Hz=100=4
+//     Used directly by the demodulator; the modulator derives its mapping from it
+//     (see tone_generator.cpp). This is the single source of truth for the mapping.
+constexpr std::array<uint8_t, NUM_TONES> FREQ_TO_SYMBOL = {
+    0, 1, 3, 2, 6, 7, 5, 4
+};
+
+// Guard: verify bijection
+constexpr bool freq_to_symbol_is_permutation() {
+    std::array<bool, NUM_TONES> seen{};
+    for (uint8_t r = 0; r < NUM_TONES; ++r) {
+        uint8_t s = FREQ_TO_SYMBOL[r];
+        if (s >= NUM_TONES || seen[s]) return false;
+        seen[s] = true;
+    }
+    return true;
+}
+static_assert(freq_to_symbol_is_permutation(),
+              "FREQ_TO_SYMBOL must list each symbol value 0..7 exactly once");
+
 // FFT parameters
 constexpr uint32_t FFT_SIZE = 64;                  ///< 64-point FFT
-constexpr uint32_t FFT_BIN_OFFSET = 6;             ///< First ALE tone in bin 6
-constexpr uint32_t FFT_BIN_SPAN = 16;              ///< 8 tones span 16 bins (every 2 bins)
+constexpr uint32_t FFT_BIN_OFFSET = 6;             ///< First ALE tone in bin 6 (750 Hz)
+constexpr uint32_t FFT_BIN_STEP = 2;               ///< Bins between adjacent tones (250 Hz / 125 Hz per bin)
+constexpr uint32_t FFT_BIN_SPAN = 15;              ///< Bins from first to last tone inclusive (bin 6..20)
 
 // Word structure per spec
 constexpr uint32_t SYMBOLS_PER_WORD = 49;          ///< Word = 49 symbols = 147 bits
