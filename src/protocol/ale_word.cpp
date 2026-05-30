@@ -56,10 +56,10 @@ bool WordParser::parse_word(const uint8_t symbols[SYMBOLS_PER_WORD], ALEWord& ou
 }
 
 bool WordParser::parse_from_bits(uint32_t word_bits, ALEWord& output) {
-    // Extract preamble (bits 0-2)
+    // Extract preamble (bits 23-21)
     output.type = extract_preamble(word_bits);
     
-    // Extract payload (bits 3-23)
+    // Extract payload (bits 20-0)
     output.raw_payload = extract_payload(word_bits);
     
     // Decode ASCII characters
@@ -70,7 +70,7 @@ bool WordParser::parse_from_bits(uint32_t word_bits, ALEWord& output) {
 }
 
 WordType WordParser::extract_preamble(uint32_t word_bits) {
-    uint8_t preamble = word_bits & 0x07;  // Bits 0-2
+    uint8_t preamble = (word_bits >> 21) & 0x07;  // Bits 23-21
     
     if (preamble > 7) {
         return WordType::UNKNOWN;
@@ -80,14 +80,14 @@ WordType WordParser::extract_preamble(uint32_t word_bits) {
 }
 
 uint32_t WordParser::extract_payload(uint32_t word_bits) {
-    return (word_bits >> 3) & 0x1FFFFF;  // Bits 3-23 (21 bits)
+    return word_bits & 0x1FFFFF;  // Bits 20-0 (21 bits)
 }
 
 bool WordParser::decode_ascii(uint32_t payload, char output[4]) {
     // 21 bits = 3 × 7-bit characters
-    char char0 = (payload >> 0) & 0x7F;   // Bits 0-6
-    char char1 = (payload >> 7) & 0x7F;   // Bits 7-13
-    char char2 = (payload >> 14) & 0x7F;  // Bits 14-20
+    char char0 = (payload >> 14) & 0x7F;  // Bits 20-14 (Char1, W4..W10)
+    char char1 = (payload >> 7)  & 0x7F;  // Bits 13-7  (Char2, W11..W17)
+    char char2 = (payload >> 0)  & 0x7F;  // Bits 6-0   (Char3, W18..W24)
     
     // Validate characters
     if (!is_valid_ale_char(char0) || 
@@ -115,9 +115,9 @@ uint32_t WordParser::encode_ascii(const char chars[3]) {
     }
     
     uint32_t payload = 0;
-    payload |= (chars[0] & 0x7F) << 0;
-    payload |= (chars[1] & 0x7F) << 7;
-    payload |= (chars[2] & 0x7F) << 14;
+    payload |= (chars[0] & 0x7F) << 14;  // Char1 → Bits 20-14 (W4..W10)
+    payload |= (chars[1] & 0x7F) << 7;   // Char2 → Bits 13-7  (W11..W17)
+    payload |= (chars[2] & 0x7F) << 0;   // Char3 → Bits 6-0   (W18..W24)
     
     return payload & 0x1FFFFF;
 }
