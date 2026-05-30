@@ -82,8 +82,6 @@ private:
     
     static bool syndrome_table_initialized;
     
-    friend bool test_golay_syndrome_table();
-    friend bool test_golay_codec();
 };
 
 } // namespace ale
