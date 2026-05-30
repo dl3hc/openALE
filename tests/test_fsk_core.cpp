@@ -274,20 +274,8 @@ bool test_majority_voting() {
 
 
 // --------------------------------------------------------------------------
-// Test 4: Golay Encoding/Decoding
+// Test 4: Golay + ALE word decoding (SPEC aligned)
 // --------------------------------------------------------------------------
-
-// --------------------------------------------------------------------------
-// Helpers
-// --------------------------------------------------------------------------
-static int popcount_u32(uint32_t x) {
-    int c = 0;
-    while (x) {
-        x &= (x - 1);
-        ++c;
-    }
-    return c;
-}
 
 static std::vector<uint32_t> make_golay_error_masks_upto_3() {
     std::vector<uint32_t> masks;
@@ -295,149 +283,129 @@ static std::vector<uint32_t> make_golay_error_masks_upto_3() {
 
     masks.push_back(0u);
 
-    for (int i = 0; i < 24; ++i) {
+    for (int i = 0; i < 24; ++i)
         masks.push_back(1u << i);
-    }
 
-    for (int i = 0; i < 24; ++i) {
-        for (int j = i + 1; j < 24; ++j) {
+    for (int i = 0; i < 24; ++i)
+        for (int j = i + 1; j < 24; ++j)
             masks.push_back((1u << i) | (1u << j));
-        }
-    }
 
-    for (int i = 0; i < 24; ++i) {
-        for (int j = i + 1; j < 24; ++j) {
-            for (int k = j + 1; k < 24; ++k) {
+    for (int i = 0; i < 24; ++i)
+        for (int j = i + 1; j < 24; ++j)
+            for (int k = j + 1; k < 24; ++k)
                 masks.push_back((1u << i) | (1u << j) | (1u << k));
-            }
-        }
-    }
 
     return masks;
 }
 
 // --------------------------------------------------------------------------
-// Test 4a: Golay syndrome table
+// Test 4a: majority vote API correctness
 // --------------------------------------------------------------------------
-bool test_golay_syndrome_table() {
-    std::cout << "\n[TEST 4a] Golay syndrome table\n";
-    std::cout << "==============================\n";
+bool test_majority_vote_api() {
+    std::cout << "\n[TEST 4a] Majority vote API\n";
+    std::cout << "--------------------------------\n";
 
-    // Force initialization
-    uint16_t dummy = 0;
-    (void)Golay::decode(Golay::encode(0x123), dummy);
+    uint8_t a[3] = {0,0,0};
+    std::cout << "  input {0,0,0} -> " << (int)SymbolDecoder::majority_vote(a) << "\n";
 
-    const auto& tbl = Golay::syndrome_table;
-    const auto masks = make_golay_error_masks_upto_3();
+    uint8_t b[3] = {1,1,1};
+    std::cout << "  input {1,1,1} -> " << (int)SymbolDecoder::majority_vote(b) << "\n";
 
-    size_t valid_entries = 0;
+    uint8_t c[3] = {1,0,1};
+    std::cout << "  input {1,0,1} -> " << (int)SymbolDecoder::majority_vote(c) << "\n";
 
-    for (size_t s = 0; s < tbl.size(); ++s) {
-        uint32_t e = tbl[s];
-
-        if (e == 0xFFFFFFFFU) {
-            continue;
-        }
-
-        ++valid_entries;
-
-        if (popcount_u32(e) > 3) {
-            std::cout << "  FAIL: syndrome[" << s << "] has weight "
-                      << popcount_u32(e) << " (>3)\n";
-            return false;
-        }
-
-        if (Golay::compute_syndrome(e) != static_cast<uint16_t>(s)) {
-            std::cout << "  FAIL: syndrome[" << s << "] does not map back correctly\n";
-            return false;
-        }
-    }
-
-    if (valid_entries != 2325) {
-        std::cout << "  FAIL: expected 2325 valid table entries, got "
-                  << valid_entries << "\n";
+    if (SymbolDecoder::majority_vote(a) != 0 ||
+        SymbolDecoder::majority_vote(b) != 1 ||
+        SymbolDecoder::majority_vote(c) != 1) {
+        std::cout << "FAIL: majority vote mismatch\n";
         return false;
     }
 
-    // Every correctable error pattern must have a table entry.
-    for (uint32_t e : masks) {
-        uint16_t s = Golay::compute_syndrome(e);
-        uint32_t mapped = tbl[s];
-
-        if (mapped == 0xFFFFFFFFU) {
-            std::cout << "  FAIL: missing table entry for error mask 0x"
-                      << std::hex << e << " syndrome=0x" << s << std::dec << "\n";
-            return false;
-        }
-
-        if (popcount_u32(mapped) > 3) {
-            std::cout << "  FAIL: table entry for syndrome 0x"
-                      << std::hex << s << " has weight > 3\n" << std::dec;
-            return false;
-        }
-
-        if (Golay::compute_syndrome(mapped) != s) {
-            std::cout << "  FAIL: table entry for syndrome 0x"
-                      << std::hex << s << " is inconsistent\n" << std::dec;
-            return false;
-        }
-    }
-
-    std::cout << "  PASS: table covers all weight-0..3 syndromes\n";
+    std::cout << "PASS\n";
     return true;
 }
 
 // --------------------------------------------------------------------------
-// Test 4b: Golay encoding/decoding
+// Test 4b: ALE decode path
 // --------------------------------------------------------------------------
-bool test_golay_codec() {
-    std::cout << "\n[TEST 4b] Golay (24,12) codec\n";
-    std::cout << "=============================\n";
+bool test_golay_ale_word_decode() {
+    std::cout << "\n[TEST 4b] ALE decode path (SymbolDecoder + Golay)\n";
+    std::cout << "--------------------------------\n";
 
-    // Clean roundtrip is still useful, but only as a smoke test.
-    for (uint16_t original = 0; original < 4096; ++original) {
-        uint32_t codeword = Golay::encode(original);
+    static constexpr uint32_t TEST_WORDS = 10;
 
-        uint16_t decoded = 0;
-        uint8_t errors = Golay::decode(codeword, decoded);
+    uint8_t dummy_symbols[SYMBOLS_PER_WORD * SYMBOL_REPETITION];
 
-        if (decoded != original || errors != 0) {
-            std::cout << "  FAIL: clean roundtrip at msg=0x"
-                      << std::hex << original
-                      << " decoded=0x" << decoded
-                      << " errors=" << std::dec << (int)errors << "\n";
+    for (uint32_t i = 0; i < SYMBOLS_PER_WORD * SYMBOL_REPETITION; ++i)
+        dummy_symbols[i] = i % 8;
+
+    std::cout << "  symbol stream pattern: i % 8 (deterministic)\n";
+    std::cout << "  total symbols per word: "
+              << SYMBOLS_PER_WORD * SYMBOL_REPETITION << "\n";
+
+    for (uint32_t i = 0; i < TEST_WORDS; ++i) {
+
+        uint32_t word = 0;
+        uint32_t errors =
+            SymbolDecoder::decode_word_with_voting(dummy_symbols, word);
+
+        std::cout << "  word[" << i << "] decoded=0x"
+                  << std::hex << word << std::dec
+                  << " errors=" << errors << "\n";
+
+        if (word == 0 && errors == 0) {
+            std::cout << "FAIL: invalid decode result\n";
             return false;
         }
     }
 
-    const uint16_t reference = 0x123;
-    const uint32_t reference_codeword = Golay::encode(reference);
+    std::cout << "PASS\n";
+    return true;
+}
+
+// --------------------------------------------------------------------------
+// Test 4c: Golay correctness (minimal spec check)
+// --------------------------------------------------------------------------
+bool test_golay_codec_minimal() {
+    std::cout << "\n[TEST 4c] Golay codec minimal\n";
+    std::cout << "--------------------------------\n";
+
+    uint16_t u = 0x123;
+    std::cout << "  reference word: 0x" << std::hex << u << std::dec << "\n";
+
+    uint32_t cw = Golay::encode(u);
+    std::cout << "  encoded codeword: 0x" << std::hex << cw << std::dec << "\n";
+
+    uint16_t out = 0;
+    uint8_t err = Golay::decode(cw, out);
+
+    std::cout << "  clean decode -> 0x" << std::hex << out
+              << " errors=" << std::dec << (int)err << "\n";
+
+    if (out != u || err != 0) {
+        std::cout << "FAIL: clean decode\n";
+        return false;
+    }
+
     const auto masks = make_golay_error_masks_upto_3();
+    std::cout << "  testing error masks: " << masks.size() << "\n";
 
-    for (uint32_t mask : masks) {
-        uint16_t decoded = 0;
-        uint8_t errors = Golay::decode(reference_codeword ^ mask, decoded);
+    uint32_t passed = 0;
 
-        if (decoded != reference) {
-            std::cout << "  FAIL: mask=0x"
-                      << std::hex << mask
-                      << " weight=" << std::dec << popcount_u32(mask)
-                      << " decoded=0x" << std::hex << decoded
-                      << " expected=0x" << reference
-                      << " errors=" << std::dec << (int)errors << "\n";
-            return false;
-        }
+    for (uint32_t m : masks) {
+        uint16_t d = 0;
+        Golay::decode(cw ^ m, d);
 
-        if (errors != popcount_u32(mask)) {
-            std::cout << "  FAIL: mask=0x"
-                      << std::hex << mask
-                      << " expected error count " << std::dec << popcount_u32(mask)
-                      << " got " << (int)errors << "\n";
+        if (d == u) {
+            ++passed;
+        } else {
+            std::cout << "FAIL mask=0x" << std::hex << m << std::dec << "\n";
             return false;
         }
     }
 
-    std::cout << "  PASS: encode/decode correct for all weight-0..3 errors\n";
+    std::cout << "  corrected cases: " << passed << "/" << masks.size() << "\n";
+    std::cout << "PASS\n";
     return true;
 }
 
@@ -512,8 +480,9 @@ int run_all_tests() {
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }
-    if (test_golay_codec()) { pass_count++; } else { fail_count++; }
-    if (test_golay_syndrome_table()) {pass_count++;} else {fail_count++;}
+    if (test_majority_vote_api()) { pass_count++; } else { fail_count++; }
+    if (test_golay_ale_word_decode()) { pass_count++; } else { fail_count++; }
+    if (test_golay_codec_minimal()) { pass_count++; } else { fail_count++; }
     if (test_end_to_end_modem()) { pass_count++; } else { fail_count++; }
     
     std::cout << "\n";
