@@ -52,13 +52,13 @@ ctest --verbose  # All 91 tests should pass
 
 | Phase | Component | Tests | Status |
 |-------|-----------|-------|--------|
-| 1 | 8-FSK Modem Core | 5/5 | ✅ Complete |
-| 2 | Word Structure & Protocol | 5/5 | ✅ Complete |
-| 3 | Link State Machine | 7/7 | ✅ Complete |
-| 4 | AQC-ALE Extensions | 18/18 | ✅ Complete |
-| 5 | FS-1052 ARQ Protocol | 19/19 | ✅ Complete |
-| 6 | LQA System | 37/37 | ✅ Complete |
-| **Total** | **Complete Protocol Stack** | **91/91** | **100%** |
+| 1 | 8-FSK Modem Core | 0/5 | 🔄 In Progress |
+| 2 | Word Structure & Protocol | 0/5 | 🔄 In Progress |
+| 3 | Link State Machine | 0/7 | 🔄 In Progress |
+| 4 | AQC-ALE Extensions | 0/18 | 🔄 In Progress |
+| 5 | FS-1052 ARQ Protocol | 0/19 | 🔄 In Progress |
+| 6 | LQA System | 0/37 | 🔄 In Progress |
+| **Total** | **Complete Protocol Stack** | **0/91** | **0%** |
 
 ### What's Left to Build
 
