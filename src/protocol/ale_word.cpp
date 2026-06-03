@@ -231,7 +231,7 @@ bool AddressBook::is_known_station(const std::string& address) const
 bool AddressBook::is_known_net(const std::string& address) const
 {
     for (const auto& n : nets) {
-        if (n.first == net_address) return true;
+        if (n.first == address) return true;
     }
     return false;
 }
