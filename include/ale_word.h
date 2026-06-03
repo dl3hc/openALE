@@ -1,12 +1,17 @@
 /**
  * \file ale_word.h
  * \brief ALE word structure and parser
- * 
+ *
  * Implements MIL-STD-188-141B word structure:
- *  - 24 bits total after Golay decoding
- *  - 3-bit preamble (word type)
- *  - 21-bit payload (3 × 7-bit ASCII characters)
- * 
+ *  - 24 bits total after majority voting
+ *  - 3-bit preamble (word type), bits 23-21
+ *  - 21-bit payload (3 × 7-bit characters), bits 20-0
+ *
+ * Two character sets per MIL-STD-188-141B:
+ *  - Basic 38   (A.5.2.4.2): A-Z, 0-9, '@', '?' — routing/addressing only
+ *  - Expanded 64 (A.5.7.2.1): all 7-bit codepoints with b7b6 = 01 or 10
+ *                              (0x20-0x5F) — DATA/REP orderwire words only
+ *
  * Specification: MIL-STD-188-141B Appendix A
  */
 
@@ -23,14 +28,14 @@ namespace ale {
  * Preamble types per MIL-STD-188-141B Table A-II
  */
 enum class WordType : uint8_t {
-    DATA = 0,    ///< Data word (content)
-    THRU = 1,    ///< Through word (repeater)
-    TO   = 2,    ///< To address
-    TWS  = 3,    ///< To With Self (group call including caller)
-    FROM = 4,    ///< From address (calling station)
-    TIS  = 5,    ///< This Is Self (station identification)
-    CMD  = 6,    ///< Command word
-    REP  = 7,    ///< Repeat request
+    DATA = 0,    ///< Data word  — uses Expanded 64 character set
+    THRU = 1,    ///< Through word (repeater) — uses Basic 38
+    TO   = 2,    ///< To address  — uses Basic 38
+    TWS  = 3,    ///< To With Self — uses Basic 38
+    FROM = 4,    ///< From address — uses Basic 38
+    TIS  = 5,    ///< This Is Self — uses Basic 38
+    CMD  = 6,    ///< Command word — uses Basic 38
+    REP  = 7,    ///< Repeat (retransmit DATA) — uses Expanded 64
     UNKNOWN = 0xFF
 };
 
@@ -39,14 +44,14 @@ enum class WordType : uint8_t {
  * Decoded ALE word with preamble and payload
  */
 struct ALEWord {
-    WordType type;                    ///< Preamble type (3 bits)
-    char address[4];                  ///< 3 ASCII characters + null terminator
-    uint32_t raw_payload;             ///< Raw 21-bit payload
-    uint8_t fec_errors;               ///< Golay errors corrected
-    bool valid;                       ///< Word passed FEC and validation
-    uint32_t timestamp_ms;            ///< Reception timestamp
-    
-    ALEWord() : type(WordType::UNKNOWN), raw_payload(0), fec_errors(0), 
+    WordType type;        ///< Preamble type (3 bits)
+    char     address[4];  ///< 3 decoded characters + null terminator
+    uint32_t raw_payload; ///< Raw 21-bit payload
+    uint8_t  fec_errors;  ///< Golay errors corrected
+    bool     valid;       ///< Word passed FEC and character validation
+    uint32_t timestamp_ms;///< Reception timestamp (ms)
+
+    ALEWord() : type(WordType::UNKNOWN), raw_payload(0), fec_errors(0),
                 valid(false), timestamp_ms(0) {
         address[0] = address[1] = address[2] = address[3] = '\0';
     }
@@ -54,144 +59,176 @@ struct ALEWord {
 
 /**
  * \class WordParser
- * Parse ALE words from decoded symbols
+ * Parse ALE words from decoded symbols.
+ *
+ * Character-set selection is automatic: routing preambles (TO, TWS, FROM,
+ * TIS, THRU, CMD) validate against Basic 38; DATA and REP words validate
+ * against Expanded 64.
  */
 class WordParser {
 public:
     WordParser();
-    
+
     /**
-     * Parse 49 symbols into ALE word
-     * Applies Golay FEC and extracts preamble + payload
-     * 
-     * \param symbols Array of 49 detected symbols (0-7)
+     * Parse 49 symbols into an ALE word.
+     * Applies majority voting, then extracts preamble and payload.
+     *
+     * \param symbols      Array of 49 detected symbols (0-7)
      * \param output [out] Decoded ALE word
-     * \return true if parsing successful, false on error
-     */
-    bool parse_word(const uint8_t symbols[SYMBOLS_PER_WORD], ALEWord& output);
-    
-    /**
-     * Parse from raw 24-bit word (after FEC)
-     * \param word_bits 24-bit decoded word
-     * \param output [out] Decoded ALE word
+     * \param timestamp_ms Reception timestamp in milliseconds
      * \return true if parsing successful
      */
-    bool parse_from_bits(uint32_t word_bits, ALEWord& output);
-    
+    bool parse_word(const uint8_t symbols[SYMBOLS_PER_WORD],
+                    ALEWord& output,
+                    uint32_t timestamp_ms = 0);
+
     /**
-     * Extract preamble type from 24-bit word
-     * \param word_bits 24-bit word
-     * \return WordType enum
+     * Parse from a raw 24-bit word (after majority voting).
+     *
+     * \param word_bits    24-bit decoded word
+     * \param output [out] Decoded ALE word
+     * \param timestamp_ms Reception timestamp in milliseconds
+     * \return true if parsing successful
+     */
+    bool parse_from_bits(uint32_t word_bits,
+                         ALEWord& output,
+                         uint32_t timestamp_ms = 0);
+
+    /**
+     * Extract preamble type from 24-bit word (bits 23-21).
      */
     static WordType extract_preamble(uint32_t word_bits);
-    
+
     /**
-     * Extract 21-bit payload from 24-bit word
-     * \param word_bits 24-bit word
-     * \return 21-bit payload
+     * Extract 21-bit payload from 24-bit word (bits 20-0).
      */
     static uint32_t extract_payload(uint32_t word_bits);
-    
+
     /**
-     * Decode 21-bit payload to 3 ASCII characters
-     * Each character is 7 bits (ASCII-64 character set)
-     * 
-     * \param payload 21-bit payload
+     * Decode a 21-bit payload to 3 characters.
+     *
+     * The character set used for validation depends on the word type:
+     *  - Basic 38   for routing preambles (TO, FROM, TWS, TIS, THRU, CMD)
+     *  - Expanded 64 for data words (DATA, REP)
+     *
+     * \param payload     21-bit payload
+     * \param word_type   Preamble type (drives character-set selection)
      * \param output [out] 4-byte buffer (3 chars + null)
-     * \return true if all characters valid
+     * \return true if all three characters are valid for the given word type
      */
-    static bool decode_ascii(uint32_t payload, char output[4]);
-    
+    static bool decode_ascii(uint32_t payload,
+                              WordType  word_type,
+                              char      output[4]);
+
     /**
-     * Encode 3 ASCII characters to 21-bit payload
-     * \param chars 3-character string
-     * \return 21-bit payload, or 0xFFFFFFFF on error
+     * Encode 3 characters to a 21-bit payload.
+     *
+     * \param chars     Exactly 3 characters to encode
+     * \param word_type Preamble type (drives character-set selection)
+     * \return 21-bit payload, or 0xFFFFFFFF if any character is invalid
      */
-    static uint32_t encode_ascii(const char chars[3]);
-    
+    static uint32_t encode_ascii(const char chars[3], WordType word_type);
+
+    // ------------------------------------------------------------------
+    // Character-set predicates (A.5.2.4.2 and A.5.7.2.1)
+    // ------------------------------------------------------------------
+
     /**
-     * Validate ASCII character for ALE transmission
-     * MIL-STD-188-141B uses ASCII-64 character set
-     * 
-     * \param ch Character to validate
-     * \return true if valid for ALE
+     * Validate a character for the Basic 38 ASCII subset (A.5.2.4.2).
+     * Valid: A-Z, 0-9, '@', '?'
+     * Used for all routing/addressing preambles.
      */
-    static bool is_valid_ale_char(char ch);
-    
+    static bool is_valid_basic38_char(char ch);
+
     /**
-     * Get string name for word type
+     * Validate a character for the Expanded 64 ASCII subset (A.5.7.2.1).
+     * Valid: all 7-bit codepoints with b7=0 and b6=1 or b5=1, i.e. 0x20-0x5F.
+     * Per spec: digital discrimination by the two MSBs b7,b6 = 01 or 10.
+     * Used for DATA and REP words (orderwire / AMD messages).
+     */
+    static bool is_valid_expanded64_char(char ch);
+
+    /**
+     * Return true if the word type uses the Basic 38 character set.
+     * DATA and REP use Expanded 64; all other types use Basic 38.
+     */
+    static bool uses_basic38(WordType type);
+
+    /**
+     * Get string name for word type.
      */
     static const char* word_type_name(WordType type);
-    
+
 private:
-    uint32_t last_timestamp_ms;
+    uint32_t last_timestamp_ms; ///< Timestamp of most recently parsed word
 };
 
 /**
  * \class AddressBook
- * Manage ALE addresses (self, other stations, nets)
+ * Manage ALE addresses (self, other stations, nets).
+ *
+ * All addresses are constrained to the Basic 38 ASCII subset and
+ * 3-15 characters per MIL-STD-188-141B A.5.2.4.2.
  */
 class AddressBook {
 public:
     AddressBook();
-    
+
     /**
-     * Set self address (this station's call sign)
-     * \param address 3-15 character address
+     * Set self address (this station's call sign).
+     * Must be 3-15 Basic 38 characters.
      * \return true if valid and set
      */
     bool set_self_address(const std::string& address);
-    
-    /**
-     * Get self address
-     */
+
+    /** Get self address. */
     std::string get_self_address() const { return self_address; }
-    
+
     /**
-     * Add other station address
-     * \param address Station address
-     * \param name Optional friendly name
+     * Add a known station address.
+     * \param address Station address (Basic 38, 3-15 chars)
+     * \param name    Optional friendly name
      */
     void add_station(const std::string& address, const std::string& name = "");
-    
+
     /**
-     * Add net address (group)
-     * \param net_address Net/group address
+     * Add a net (group) address.
+     * \param net_address Net address (Basic 38, 3-15 chars)
      * \param description Optional description
      */
-    void add_net(const std::string& net_address, const std::string& description = "");
-    
-    /**
-     * Check if address matches self
-     * \param address Address to check
-     * \return true if matches self address
-     */
+    void add_net(const std::string& net_address,
+                 const std::string& description = "");
+
+    /** Return true if address matches the self address exactly. */
     bool is_self(const std::string& address) const;
-    
-    /**
-     * Check if address is in known stations
-     */
+
+    /** Return true if address is in the known-station list. */
     bool is_known_station(const std::string& address) const;
-    
-    /**
-     * Check if address is a known net
-     */
+
+    /** Return true if address is a known net. */
     bool is_known_net(const std::string& address) const;
-    
+
     /**
-     * Match address with wildcards
-     * Supports '@' wildcard per MIL-STD-188-141B
-     * 
-     * \param pattern Pattern with wildcards
-     * \param address Address to match
-     * \return true if matches
+     * Match an address against a pattern that may contain wildcard characters.
+     *
+     * Per MIL-STD-188-141B A.5.2.4.2:
+     *  '@' matches exactly one Basic 38 character at that position.
+     *  '?' is reserved for special functions (not a positional wildcard here).
+     *
+     * Pattern and address must have the same length; each '@' in the
+     * pattern accepts any single Basic 38 character in the address.
+     *
+     * \param pattern Pattern string (Basic 38 + '@')
+     * \param address Address to match (Basic 38 only)
+     * \return true if pattern matches address
      */
-    static bool match_wildcard(const std::string& pattern, const std::string& address);
-    
+    static bool match_wildcard(const std::string& pattern,
+                                const std::string& address);
+
 private:
     std::string self_address;
-    std::vector<std::pair<std::string, std::string>> stations;  // address, name
-    std::vector<std::pair<std::string, std::string>> nets;      // net, description
+    std::vector<std::pair<std::string, std::string>> stations; ///< address, name
+    std::vector<std::pair<std::string, std::string>> nets;     ///< net, description
 };
 
 } // namespace ale
