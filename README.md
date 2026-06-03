@@ -158,7 +158,7 @@ PC-ALE 2.0 uses a **two-repository architecture**:
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
 │              PHYSICAL LAYER (Phase 1)                        │
-│   8-FSK Modem: 750-1625 Hz, 125 baud, Golay FEC             │
+│   8-FSK Modem: 750-2500 Hz, 125 baud, Golay FEC             │
 │   FFT Demodulator, Tone Generator, Symbol Decoder           │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -169,41 +169,41 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation.
 
 ## 🏆 Key Features
 
-### Phase 1: 8-FSK Modem (Physical Layer)
+### 8-FSK Modem (Physical Layer)
 - FFT-based demodulator with sliding 64-point FFT
-- 8 tone generator (750-1625 Hz, 125 Hz spacing)
+- 8 tone generator (750-2500 Hz, 250 Hz spacing)
 - Symbol-to-bits decoder with peak detection
 - Majority voting (3x redundancy error correction)
 - Extended Golay (24,12) encoder/decoder - 3-bit error correction
 
-### Phase 2: Protocol Layer
+### Protocol Layer
 - Word structure parser (preamble + 21-bit payload)
 - Preamble types: DATA, THRU, TO, TWS, FROM, TIS, CMD, REP
 - ASCII-64 character encoding/decoding
 - Address book with wildcard matching
 - Message assembly and call type detection
 
-### Phase 3: Link State Machine
+### Link State Machine
 - 6 states: IDLE, SCANNING, CALLING, HANDSHAKE, LINKED, SOUNDING
 - Channel selection, scan list, dwell time management
 - Event-driven architecture with callbacks
 - Timeout handling (call, link, scan)
 
-### Phase 4: AQC-ALE Extensions
+### AQC-ALE Extensions
 - Data Element extraction (DE1-DE9)
 - 16 traffic classes (voice modes, data modes, email)
 - Transaction codes (ACK, NAK, TERMINATE)
 - CRC-8/CRC-16 orderwire protection
 - Slotted response timing (8 slots × 200ms)
 
-### Phase 5: FS-1052 ARQ Protocol
+### FS-1052 ARQ Protocol
 - Selective repeat ARQ with 256-bit ACK bitmap
 - CRC-32 frame protection
 - Automatic retransmission on timeout/NAK
 - Data rates: 75, 150, 300, 600, 1200, 2400, 4800 bps
 - Configurable window size and retry limits
 
-### Phase 6: LQA System
+### LQA System
 - Persistent quality tracking (binary + CSV formats)
 - Time-weighted averaging, composite scoring (0-31)
 - SNR/BER/SINAD/multipath/noise floor metrics
@@ -220,7 +220,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation.
 | **ARQ Standard** | FED-STD-1052 | Data Link Protocol |
 | **Modulation** | 8-FSK (8 tones) | 750-1625 Hz |
 | **Symbol Rate** | 125 baud | 125 symbols/sec |
-| **Tone Spacing** | 125 Hz | Narrowband HF |
+| **Tone Spacing** | 250 Hz | Narrowband HF |
 | **FEC** | Golay (24,12) | 3-bit correction |
 | **Sample Rate** | 8000 Hz | Audio sampling |
 
