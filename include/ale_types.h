@@ -24,6 +24,11 @@ constexpr uint32_t TONE_SPACING_HZ = 250;          ///< Spacing between FSK tone
 constexpr uint32_t NUM_TONES = 8;                  ///< Number of FSK tones
 constexpr uint32_t BITS_PER_SYMBOL = 3;            ///< Each symbol encodes 3 bits
 constexpr uint32_t BANDWIDTH_HZ = 1750;            ///< Total bandwidth 750-2500 Hz
+constexpr uint32_t SYMBOL_DURATION_MS = 8;         ///< Duration of one symbol = 1/125 baud = 8 ms
+constexpr uint32_t TRW_MS = 392;                   ///< Time redundant word = 3 × Tw = 392 ms
+constexpr double TW_MS = 392.0 / 3.0;             ///< Single word period = 392/3 ms ≈ 130.667 ms
+static_assert(TRW_MS == 392, "TRW must be exactly 392 ms");
+static_assert(TW_MS * 3 == TRW_MS, "3 × TW must equal TRW");
 
 // (1) Tone frequencies (Hz) in ASCENDING order, indexed by frequency rank (0 = lowest).
 //     A pure physical list — carries NO symbol assignment. Never index it with a
