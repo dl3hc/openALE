@@ -218,7 +218,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation.
 |-----------|-------|----------|
 | **ALE Standard** | MIL-STD-188-141B Appendix A | 2G ALE |
 | **ARQ Standard** | FED-STD-1052 | Data Link Protocol |
-| **Modulation** | 8-FSK (8 tones) | 750-1625 Hz |
+| **Modulation** | 8-FSK (8 tones) | 750-2500 Hz |
 | **Symbol Rate** | 125 baud | 125 symbols/sec |
 | **Tone Spacing** | 250 Hz | Narrowband HF |
 | **FEC** | Golay (24,12) | 3-bit correction |
