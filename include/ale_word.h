@@ -159,6 +159,17 @@ public:
      */
     static const char* word_type_name(WordType type);
 
+    /**
+     * Convenience factory: build an ALEWord from a preamble type and
+     * exactly 3 address characters.  Characters must be valid for the
+     * given word type (Basic 38 for routing words, Expanded 64 for DATA/REP).
+     *
+     * \param type   Word type (drives character-set selection)
+     * \param chars  Exactly 3 characters; must be valid for \p type
+     * \return Valid ALEWord on success; ALEWord with valid==false on invalid chars
+     */
+    static ALEWord make_word(WordType type, const char chars[3]);
+
 private:
     uint32_t last_timestamp_ms; ///< Timestamp of most recently parsed word
 };
@@ -229,6 +240,60 @@ private:
     std::string self_address;
     std::vector<std::pair<std::string, std::string>> stations; ///< address, name
     std::vector<std::pair<std::string, std::string>> nets;     ///< net, description
+};
+
+/**
+ * \class FrameValidator
+ * Word-sequence validators for ALE frame compliance.
+ *
+ * Per MIL-STD-188-141B A.5.2.3.2, THRU and FROM have structural constraints
+ * on where they may appear within a frame word sequence.  These static methods
+ * provide the conformance checks that receivers (and transmitters) must apply.
+ */
+class FrameValidator {
+public:
+    // ── REQ-WORD-007 (FROM position) ────────────────────────────────────────
+
+    /**
+     * AC-WORD-007-4: FROM appears at most once per ALE frame (A.5.2.3.2.5).
+     * \return true if the sequence contains zero or one FROM words.
+     */
+    static bool from_count_valid(const std::vector<ALEWord>& words);
+
+    /**
+     * AC-WORD-007-5/7: Every FROM in the sequence must be immediately
+     * followed by CMD (possibly after DATA/REP address extension words).
+     * Conformant systems ignore frames where FROM appears elsewhere.
+     * \return true if all FROM words lead (via optional DATA/REP) to CMD.
+     */
+    static bool from_precedes_cmd_only(const std::vector<ALEWord>& words);
+
+    // ── REQ-WORD-006 (THRU / group-call scanning section) ───────────────────
+
+    /**
+     * AC-WORD-006-1/7: THRU must not appear after the scanning section ends.
+     * The scanning section is the initial portion before any leading/conclusion
+     * word (TO, TIS, TWS, FROM, CMD).  Conformant receivers ignore calls that
+     * use the local address in a THRU word outside the scanning section.
+     * \return true if all THRU words appear before the first TO/TIS/TWS/FROM/CMD.
+     */
+    static bool thru_in_scanning_section_only(const std::vector<ALEWord>& words);
+
+    /**
+     * AC-WORD-006-2: In a group-call scanning section THRU and REP must
+     * alternate, starting with THRU, forming complete THRU-REP pairs.
+     * \param scanning_words  Words from the scanning section (THRU/REP pairs).
+     * \return true if the sequence consists of complete THRU, REP pairs.
+     */
+    static bool thru_rep_alternates(const std::vector<ALEWord>& scanning_words);
+
+    /**
+     * AC-WORD-006-4: A group call contains at most 5 different first address
+     * words (distinct THRU targets) per A.5.2.3.2.4.
+     * \param scanning_words  Words from the scanning section.
+     * \return true if the number of distinct THRU target addresses is <= 5.
+     */
+    static bool group_call_target_count_valid(const std::vector<ALEWord>& scanning_words);
 };
 
 } // namespace ale

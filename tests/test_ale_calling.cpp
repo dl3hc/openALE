@@ -481,6 +481,286 @@ bool test_all_routing_preambles_use_basic38()
 }
 
 // ============================================================================
+// AC-WORD-006-8/9, AC-WORD-007-8/9 — THRU and FROM preamble values are
+// reserved for future indirect/relay protocols and AQC-ALE (A.5.2.3.2.4/5).
+// Spec compliance is assured by the correct preamble assignment per Table A-II;
+// no additional runtime check is required beyond verifying the enum values.
+// ============================================================================
+
+bool test_thru_from_preamble_reserved()
+{
+    std::cout << "\n[AC-WORD-006-8/9, AC-WORD-007-8/9] THRU/FROM preamble values reserved\n";
+
+    // Per MIL-STD-188-141B Table A-II:
+    //   THRU = 1  (reserved for indirect addressing / relay / AQC-ALE)
+    //   FROM = 4  (reserved for indirect addressing / relay / AQC-ALE)
+    bool thru_is_1 = (static_cast<uint8_t>(WordType::THRU) == 1);
+    bool from_is_4 = (static_cast<uint8_t>(WordType::FROM) == 4);
+    std::cout << "  THRU preamble == 1 (relay/AQC reserved): "
+              << (thru_is_1 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  FROM preamble == 4 (relay/AQC reserved): "
+              << (from_is_4 ? "PASS" : "FAIL") << "\n";
+
+    // Verify round-trip preserves the reserved values
+    const char abc[3] = {'A','B','C'};
+    ALEWord tw = WordParser::make_word(WordType::THRU, abc);
+    ALEWord fw = WordParser::make_word(WordType::FROM, abc);
+    bool thru_rt = tw.valid && (tw.type == WordType::THRU);
+    bool from_rt = fw.valid && (fw.type == WordType::FROM);
+    std::cout << "  THRU round-trip: " << (thru_rt ? "PASS" : "FAIL") << "\n";
+    std::cout << "  FROM round-trip: " << (from_rt ? "PASS" : "FAIL") << "\n";
+
+    return thru_is_1 && from_is_4 && thru_rt && from_rt;
+}
+
+// ============================================================================
+// AC-WORD-007-4 — FROM appears at most once per ALE frame (A.5.2.3.2.5)
+// ============================================================================
+
+bool test_from_count_valid()
+{
+    std::cout << "\n[AC-WORD-007-4] FROM appears at most once per ALE frame\n";
+
+    const char sam[3] = {'S','A','M'};
+    const char cmd[3] = {'C','M','D'};
+
+    // No FROM → valid
+    std::vector<ALEWord> seq_none = {
+        WordParser::make_word(WordType::TO,  sam),
+        WordParser::make_word(WordType::TIS, sam),
+    };
+    bool v1 = FrameValidator::from_count_valid(seq_none);
+    std::cout << "  no FROM: " << (v1 ? "PASS" : "FAIL") << "\n";
+
+    // Exactly one FROM → valid
+    std::vector<ALEWord> seq_one = {
+        WordParser::make_word(WordType::FROM, sam),
+        WordParser::make_word(WordType::CMD,  cmd),
+    };
+    bool v2 = FrameValidator::from_count_valid(seq_one);
+    std::cout << "  one FROM: " << (v2 ? "PASS" : "FAIL") << "\n";
+
+    // Two FROM words → invalid
+    std::vector<ALEWord> seq_two = {
+        WordParser::make_word(WordType::FROM, sam),
+        WordParser::make_word(WordType::CMD,  cmd),
+        WordParser::make_word(WordType::FROM, sam),
+        WordParser::make_word(WordType::CMD,  cmd),
+    };
+    bool v3 = !FrameValidator::from_count_valid(seq_two);
+    std::cout << "  two FROM rejected: " << (v3 ? "PASS" : "FAIL") << "\n";
+
+    return v1 && v2 && v3;
+}
+
+// ============================================================================
+// AC-WORD-007-5/7 — FROM appears only immediately before CMD (A.5.2.3.2.5).
+// Conformant systems ignore FROM words not in this position.
+// ============================================================================
+
+bool test_from_precedes_cmd_only()
+{
+    std::cout << "\n[AC-WORD-007-5/7] FROM appears only immediately before CMD\n";
+
+    const char sam[3] = {'S','A','M'};
+    const char uel[3] = {'U','E','L'};
+    const char cmd[3] = {'C','M','D'};
+
+    // FROM directly before CMD → valid
+    std::vector<ALEWord> seq_direct = {
+        WordParser::make_word(WordType::FROM, sam),
+        WordParser::make_word(WordType::CMD,  cmd),
+    };
+    bool v1 = FrameValidator::from_precedes_cmd_only(seq_direct);
+    std::cout << "  FROM, CMD: " << (v1 ? "PASS" : "FAIL") << "\n";
+
+    // FROM + DATA address extension then CMD → valid
+    std::vector<ALEWord> seq_ext = {
+        WordParser::make_word(WordType::FROM, sam),
+        WordParser::make_word(WordType::DATA, uel),
+        WordParser::make_word(WordType::CMD,  cmd),
+    };
+    bool v2 = FrameValidator::from_precedes_cmd_only(seq_ext);
+    std::cout << "  FROM, DATA, CMD: " << (v2 ? "PASS" : "FAIL") << "\n";
+
+    // FROM followed by TIS instead of CMD → invalid
+    std::vector<ALEWord> seq_no_cmd = {
+        WordParser::make_word(WordType::FROM, sam),
+        WordParser::make_word(WordType::TIS,  sam),
+    };
+    bool v3 = !FrameValidator::from_precedes_cmd_only(seq_no_cmd);
+    std::cout << "  FROM, TIS (no CMD) rejected: " << (v3 ? "PASS" : "FAIL") << "\n";
+
+    // FROM at end of sequence (no following word) → invalid
+    std::vector<ALEWord> seq_orphan = {
+        WordParser::make_word(WordType::TO,   sam),
+        WordParser::make_word(WordType::FROM, sam),
+    };
+    bool v4 = !FrameValidator::from_precedes_cmd_only(seq_orphan);
+    std::cout << "  orphan FROM rejected: " << (v4 ? "PASS" : "FAIL") << "\n";
+
+    // No FROM → valid (vacuously true)
+    std::vector<ALEWord> seq_no_from = {
+        WordParser::make_word(WordType::TO,  sam),
+        WordParser::make_word(WordType::TIS, sam),
+    };
+    bool v5 = FrameValidator::from_precedes_cmd_only(seq_no_from);
+    std::cout << "  no FROM: " << (v5 ? "PASS" : "FAIL") << "\n";
+
+    return v1 && v2 && v3 && v4 && v5;
+}
+
+// ============================================================================
+// AC-WORD-006-1/7 — THRU only in scanning section (A.5.2.3.2.4).
+// Conformant systems ignore calls that use their address in THRU outside scanning.
+// ============================================================================
+
+bool test_thru_in_scanning_only()
+{
+    std::cout << "\n[AC-WORD-006-1/7] THRU only in scanning section\n";
+
+    const char abc[3] = {'A','B','C'};
+    const char xyz[3] = {'X','Y','Z'};
+    const char sam[3] = {'S','A','M'};
+
+    // THRU/REP before any leading/conclusion word → valid
+    std::vector<ALEWord> seq_valid = {
+        WordParser::make_word(WordType::THRU, abc),
+        WordParser::make_word(WordType::REP,  abc),
+        WordParser::make_word(WordType::TO,   abc),
+    };
+    bool v1 = FrameValidator::thru_in_scanning_section_only(seq_valid);
+    std::cout << "  THRU, REP, TO: " << (v1 ? "PASS" : "FAIL") << "\n";
+
+    // THRU after TO → invalid (outside scanning section)
+    std::vector<ALEWord> seq_after_to = {
+        WordParser::make_word(WordType::TO,   abc),
+        WordParser::make_word(WordType::THRU, abc),
+    };
+    bool v2 = !FrameValidator::thru_in_scanning_section_only(seq_after_to);
+    std::cout << "  THRU after TO rejected: " << (v2 ? "PASS" : "FAIL") << "\n";
+
+    // THRU after TIS → invalid
+    std::vector<ALEWord> seq_after_tis = {
+        WordParser::make_word(WordType::TIS,  sam),
+        WordParser::make_word(WordType::THRU, abc),
+    };
+    bool v3 = !FrameValidator::thru_in_scanning_section_only(seq_after_tis);
+    std::cout << "  THRU after TIS rejected: " << (v3 ? "PASS" : "FAIL") << "\n";
+
+    // THRU after TWS → invalid
+    std::vector<ALEWord> seq_after_tws = {
+        WordParser::make_word(WordType::TWS,  sam),
+        WordParser::make_word(WordType::THRU, abc),
+    };
+    bool v4 = !FrameValidator::thru_in_scanning_section_only(seq_after_tws);
+    std::cout << "  THRU after TWS rejected: " << (v4 ? "PASS" : "FAIL") << "\n";
+
+    // Scanning only (no leading/conclusion) → valid
+    std::vector<ALEWord> seq_scan_only = {
+        WordParser::make_word(WordType::THRU, abc),
+        WordParser::make_word(WordType::REP,  abc),
+        WordParser::make_word(WordType::THRU, xyz),
+        WordParser::make_word(WordType::REP,  xyz),
+    };
+    bool v5 = FrameValidator::thru_in_scanning_section_only(seq_scan_only);
+    std::cout << "  scanning only (THRU, REP pairs): " << (v5 ? "PASS" : "FAIL") << "\n";
+
+    return v1 && v2 && v3 && v4 && v5;
+}
+
+// ============================================================================
+// AC-WORD-006-2 — THRU and REP alternate in scanning section (A.5.2.3.2.4).
+// ============================================================================
+
+bool test_thru_rep_alternates()
+{
+    std::cout << "\n[AC-WORD-006-2] THRU and REP alternate in scanning section\n";
+
+    const char abc[3] = {'A','B','C'};
+    const char xyz[3] = {'X','Y','Z'};
+
+    // One complete pair → valid
+    bool v1 = FrameValidator::thru_rep_alternates({
+        WordParser::make_word(WordType::THRU, abc),
+        WordParser::make_word(WordType::REP,  abc),
+    });
+    std::cout << "  THRU, REP: " << (v1 ? "PASS" : "FAIL") << "\n";
+
+    // Two complete pairs → valid
+    bool v2 = FrameValidator::thru_rep_alternates({
+        WordParser::make_word(WordType::THRU, abc),
+        WordParser::make_word(WordType::REP,  abc),
+        WordParser::make_word(WordType::THRU, xyz),
+        WordParser::make_word(WordType::REP,  xyz),
+    });
+    std::cout << "  THRU, REP, THRU, REP: " << (v2 ? "PASS" : "FAIL") << "\n";
+
+    // Lone THRU without REP → invalid (incomplete pair)
+    bool v3 = !FrameValidator::thru_rep_alternates({
+        WordParser::make_word(WordType::THRU, abc),
+    });
+    std::cout << "  lone THRU rejected: " << (v3 ? "PASS" : "FAIL") << "\n";
+
+    // REP before THRU → invalid
+    bool v4 = !FrameValidator::thru_rep_alternates({
+        WordParser::make_word(WordType::REP,  abc),
+        WordParser::make_word(WordType::THRU, abc),
+    });
+    std::cout << "  REP before THRU rejected: " << (v4 ? "PASS" : "FAIL") << "\n";
+
+    // THRU, THRU → invalid (two THRU in a row)
+    bool v5 = !FrameValidator::thru_rep_alternates({
+        WordParser::make_word(WordType::THRU, abc),
+        WordParser::make_word(WordType::THRU, xyz),
+    });
+    std::cout << "  THRU, THRU rejected: " << (v5 ? "PASS" : "FAIL") << "\n";
+
+    // Empty → valid (no violation)
+    bool v6 = FrameValidator::thru_rep_alternates({});
+    std::cout << "  empty: " << (v6 ? "PASS" : "FAIL") << "\n";
+
+    return v1 && v2 && v3 && v4 && v5 && v6;
+}
+
+// ============================================================================
+// AC-WORD-006-4 — Group call has at most 5 different THRU targets (A.5.2.3.2.4).
+// ============================================================================
+
+bool test_group_call_max_5_targets()
+{
+    std::cout << "\n[AC-WORD-006-4] Group call has at most 5 different THRU targets\n";
+
+    // Build scanning section with N distinct targets
+    auto make_scan = [](std::initializer_list<const char*> addrs) {
+        std::vector<ALEWord> words;
+        for (const char* a : addrs) {
+            const char ch[3] = {a[0], a[1], a[2]};
+            words.push_back(WordParser::make_word(WordType::THRU, ch));
+            words.push_back(WordParser::make_word(WordType::REP,  ch));
+        }
+        return words;
+    };
+
+    // 5 distinct targets → valid
+    auto five = make_scan({"AA1", "BB2", "CC3", "DD4", "EE5"});
+    bool v1 = FrameValidator::group_call_target_count_valid(five);
+    std::cout << "  5 distinct targets: " << (v1 ? "PASS" : "FAIL") << "\n";
+
+    // 6 distinct targets → invalid
+    auto six = make_scan({"AA1", "BB2", "CC3", "DD4", "EE5", "FF6"});
+    bool v2 = !FrameValidator::group_call_target_count_valid(six);
+    std::cout << "  6 distinct targets rejected: " << (v2 ? "PASS" : "FAIL") << "\n";
+
+    // 8 THRU words but only 3 distinct addresses (repeats) → valid
+    auto repeat = make_scan({"AA1", "BB2", "CC3", "AA1"});
+    bool v3 = FrameValidator::group_call_target_count_valid(repeat);
+    std::cout << "  4 words, 3 distinct (1 repeat) accepted: " << (v3 ? "PASS" : "FAIL") << "\n";
+
+    return v1 && v2 && v3;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 
@@ -537,6 +817,30 @@ int run_all_tests()
     // Cross-cutting
     run("All routing preambles use Basic 38",
         test_all_routing_preambles_use_basic38());
+
+    // AC-WORD-006-8/9, AC-WORD-007-8/9
+    run("THRU/FROM preamble values reserved for relay/AQC-ALE",
+        test_thru_from_preamble_reserved());
+
+    // AC-WORD-007-4
+    run("AC-WORD-007-4 FROM at most once per frame",
+        test_from_count_valid());
+
+    // AC-WORD-007-5/7
+    run("AC-WORD-007-5/7 FROM only immediately before CMD",
+        test_from_precedes_cmd_only());
+
+    // AC-WORD-006-1/7
+    run("AC-WORD-006-1/7 THRU only in scanning section",
+        test_thru_in_scanning_only());
+
+    // AC-WORD-006-2
+    run("AC-WORD-006-2 THRU/REP alternate in scanning section",
+        test_thru_rep_alternates());
+
+    // AC-WORD-006-4
+    run("AC-WORD-006-4 group call max 5 THRU targets",
+        test_group_call_max_5_targets());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

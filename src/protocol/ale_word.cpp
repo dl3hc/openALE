@@ -170,6 +170,16 @@ bool WordParser::uses_basic38(WordType type)
     return (type != WordType::DATA) && (type != WordType::REP);
 }
 
+ALEWord WordParser::make_word(WordType type, const char chars[3])
+{
+    uint32_t payload = encode_ascii(chars, type);
+    ALEWord  w;
+    if (payload == 0xFFFFFFFF) return w;  // invalid characters
+    WordParser p;
+    p.parse_from_bits((static_cast<uint32_t>(type) << 21) | payload, w);
+    return w;
+}
+
 const char* WordParser::word_type_name(WordType type)
 {
     uint8_t index = static_cast<uint8_t>(type);
@@ -253,6 +263,93 @@ bool AddressBook::match_wildcard(const std::string& pattern,
             }
         } else if (pattern[i] != address[i]) {
             return false;
+        }
+    }
+    return true;
+}
+
+// ============================================================================
+// FrameValidator
+// ============================================================================
+
+bool FrameValidator::from_count_valid(const std::vector<ALEWord>& words)
+{
+    int count = 0;
+    for (const auto& w : words) {
+        if (w.type == WordType::FROM) ++count;
+    }
+    return count <= 1;
+}
+
+bool FrameValidator::from_precedes_cmd_only(const std::vector<ALEWord>& words)
+{
+    for (size_t i = 0; i < words.size(); ++i) {
+        if (words[i].type != WordType::FROM) continue;
+        // Skip optional DATA/REP address extension words
+        size_t j = i + 1;
+        while (j < words.size() &&
+               (words[j].type == WordType::DATA || words[j].type == WordType::REP)) {
+            ++j;
+        }
+        // FROM (+ optional DATA/REP) must be immediately followed by CMD
+        if (j >= words.size() || words[j].type != WordType::CMD) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool FrameValidator::thru_in_scanning_section_only(const std::vector<ALEWord>& words)
+{
+    bool past_scanning = false;
+    for (const auto& w : words) {
+        switch (w.type) {
+            case WordType::TO:
+            case WordType::TIS:
+            case WordType::TWS:
+            case WordType::FROM:
+            case WordType::CMD:
+                past_scanning = true;
+                break;
+            case WordType::THRU:
+                if (past_scanning) return false;
+                break;
+            default:
+                break;
+        }
+    }
+    return true;
+}
+
+bool FrameValidator::thru_rep_alternates(const std::vector<ALEWord>& scanning_words)
+{
+    // Scanning section must consist of complete THRU, REP pairs.
+    // expect_thru starts true; after each complete pair it returns to true.
+    // Returning true requires expect_thru == true (all pairs complete).
+    bool expect_thru = true;
+    for (const auto& w : scanning_words) {
+        if (w.type != WordType::THRU && w.type != WordType::REP) continue;
+        if (expect_thru  && w.type != WordType::THRU) return false;
+        if (!expect_thru && w.type != WordType::REP)  return false;
+        expect_thru = !expect_thru;
+    }
+    return expect_thru; // true only after an even number of THRU/REP words
+}
+
+bool FrameValidator::group_call_target_count_valid(const std::vector<ALEWord>& scanning_words)
+{
+    // Accumulate distinct THRU target addresses; maximum is 5 per spec.
+    std::vector<std::string> seen;
+    for (const auto& w : scanning_words) {
+        if (w.type != WordType::THRU) continue;
+        std::string addr(w.address, 3);
+        bool found = false;
+        for (const auto& s : seen) {
+            if (s == addr) { found = true; break; }
+        }
+        if (!found) {
+            if (seen.size() >= 5) return false;
+            seen.push_back(addr);
         }
     }
     return true;
