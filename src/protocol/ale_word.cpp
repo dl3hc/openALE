@@ -355,4 +355,88 @@ bool FrameValidator::group_call_target_count_valid(const std::vector<ALEWord>& s
     return true;
 }
 
+// ============================================================================
+// CMD/DATA/REP Frame Validation
+// ============================================================================
+
+bool FrameValidator::message_sections_begin_with_cmd(const std::vector<ALEWord>& words)
+{
+    // Check that every message section (after a CMD) starts with CMD
+    // A message section is a sequence that starts with CMD and continues until
+    // another CMD or end of frame
+    bool in_message_section = false;
+    
+    for (const auto& word : words) {
+        if (word.type == WordType::CMD) {
+            // CMD can start a new message section
+            in_message_section = true;
+        } else if (in_message_section && 
+                   (word.type == WordType::TO || word.type == WordType::TWS || 
+                    word.type == WordType::FROM || word.type == WordType::TIS ||
+                    word.type == WordType::DATA || word.type == WordType::REP)) {
+            // Continue in message section - valid word types
+            continue;
+        } else if (in_message_section && 
+                   (word.type == WordType::THRU || word.type == WordType::UNKNOWN)) {
+            // Invalid word type in message section
+            return false;
+        } else if (in_message_section && word.type == WordType::CMD) {
+            // CMD can start a new message section
+            continue;
+        } else if (in_message_section) {
+            // Any other word type ends the message section
+            in_message_section = false;
+        }
+    }
+    
+    return true;
+}
+
+bool FrameValidator::first_cmd_begins_message_section(const std::vector<ALEWord>& words)
+{
+    // The first CMD word in a frame should be at the beginning of the frame
+    // (i.e., it should not be preceded by any non-CMD words)
+    if (words.empty()) return true;
+    
+    // Find first CMD word
+    for (const auto& word : words) {
+        if (word.type == WordType::CMD) {
+            // If this is the first word in the frame, it begins the message section
+            return true;
+        } else if (word.type != WordType::UNKNOWN) {
+            // If we encounter any non-CMD word before the first CMD, 
+            // then the first CMD doesn't begin a message section
+            return false;
+        }
+    }
+    
+    // No CMD found, so it's not a problem
+    return true;
+}
+
+bool FrameValidator::rep_not_followed_by_self_tis_twas(const std::vector<ALEWord>& words)
+{
+    // REP must not follow itself, TIS, or TWAS
+    for (size_t i = 1; i < words.size(); ++i) {
+        if (words[i].type == WordType::REP) {
+            // Check if previous word is REP, TIS, or TWAS
+            if (words[i-1].type == WordType::REP ||
+                words[i-1].type == WordType::TIS ||
+                words[i-1].type == WordType::TWS) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool FrameValidator::rep_not_used_in_multiple_sender_situation(const std::vector<ALEWord>& words)
+{
+    // This is a complex validation that requires detailed frame analysis
+    // For now, we'll return true to indicate it's a placeholder
+    // In a full implementation, this would analyze the frame structure to 
+    // detect multiple sender situations where REP is not appropriate
+    return true;
+}
+
 } // namespace ale

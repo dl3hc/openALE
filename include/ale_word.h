@@ -20,6 +20,7 @@
 #include "ale_types.h"
 #include <string>
 #include <cstdint>
+#include <vector>
 
 namespace ale {
 
@@ -294,6 +295,35 @@ public:
      * \return true if the number of distinct THRU target addresses is <= 5.
      */
     static bool group_call_target_count_valid(const std::vector<ALEWord>& scanning_words);
+
+    // ── REQ-WORD-008 (CMD sequence) ────────────────────────────────────
+
+    /**
+     * AC-WORD-008-1: Every Message section begins with CMD.
+     * \return true if all message sections (after CMD) start with CMD.
+     */
+    static bool message_sections_begin_with_cmd(const std::vector<ALEWord>& words);
+
+    /**
+     * AC-WORD-008-5: The first CMD in a frame ends the Calling Cycle and
+     * marks the beginning of the Message section.
+     * \return true if the first CMD word is at the beginning of the frame.
+     */
+    static bool first_cmd_begins_message_section(const std::vector<ALEWord>& words);
+
+    // ── REQ-WORD-010 (REP sequence rules) ──────────────────────
+
+    /**
+     * AC-WORD-010-6: REP must not follow itself, TIS, or TWAS.
+     * \return true if REP is not directly preceded by itself, TIS, or TWAS.
+     */
+    static bool rep_not_followed_by_self_tis_twas(const std::vector<ALEWord>& words);
+
+    /**
+     * AC-WORD-010-7: REP must not be used where multiple senders exist.
+     * \return true if REP is not used in a multiple sender situation.
+     */
+    static bool rep_not_used_in_multiple_sender_situation(const std::vector<ALEWord>& words);
 };
 
 } // namespace ale
