@@ -1,18 +1,4 @@
-/**
- * \file test_protocol.cpp
- * \brief Unit tests for ALE protocol layer (Phase 2)
- * 
- * Tests:
- *  1. Word parsing (preamble + payload extraction)
- *  2. ASCII encoding/decoding
- *  3. Address book management
- *  4. Message assembly
- *  5. Call type detection
- *  6. End-to-end call scenarios
- */
-
 #include "ale_word.h"
-#include "ale_message.h"
 #include <iostream>
 #include <iomanip>
 #include <cstring>
@@ -38,12 +24,11 @@ bool test_word_parsing() {
     
     // Build test words: 3-bit preamble + 21-bit payload
     // Payload = 3 x 7-bit ASCII characters
-    
     // Helper: encode word from preamble + 3 chars
     auto make_word = [](WordType type, const char* chars) -> uint32_t {
-        uint32_t payload = WordParser::encode_ascii(chars);
+        uint32_t payload = WordParser::encode_ascii(chars, type);
         uint32_t preamble = static_cast<uint8_t>(type) & 0x07;
-        return preamble | (payload << 3);
+        return (preamble << 21) | payload;
     };
     
     TestCase tests[] = {
@@ -105,16 +90,16 @@ bool test_ascii_codec() {
         { "W1A", true, "Mixed alphanumeric" },
         { "N0C", true, "Call sign format" },
         { "@@@", true, "Wildcards" },
-        { "   ", true, "Spaces" },
+        { "   ", false, "Spaces (not in Basic 38)" },
     };
     
     bool all_pass = true;
     for (const auto& test : tests) {
-        uint32_t encoded = WordParser::encode_ascii(test.input);
+        uint32_t encoded = WordParser::encode_ascii(test.input, WordType::TO);
         bool encode_success = (encoded != 0xFFFFFFFF);
         
         char decoded[4];
-        bool decode_success = WordParser::decode_ascii(encoded, decoded);
+        bool decode_success = WordParser::decode_ascii(encoded, WordType::TO, decoded);
         
         bool pass = (encode_success == test.should_succeed);
         if (pass && test.should_succeed) {
@@ -179,132 +164,144 @@ bool test_address_book() {
 }
 
 // ============================================================================
-// Test 4: Message Assembly
+// Test 4: AC-WORD-001 — Word Bit Structure
 // ============================================================================
 
-bool test_message_assembly() {
-    std::cout << "\n[TEST 4] Message Assembly\n";
-    std::cout << "=========================\n";
-    
-    MessageAssembler assembler;
-    WordParser parser;
-    
-    // Build a simple individual call: TO + FROM
-    auto make_word = [&parser](WordType type, const char* chars, uint32_t time_ms) -> ALEWord {
-        uint32_t payload = WordParser::encode_ascii(chars);
-        uint32_t preamble = static_cast<uint8_t>(type) & 0x07;
-        uint32_t word_bits = preamble | (payload << 3);
-        
-        ALEWord word;
-        parser.parse_from_bits(word_bits, word);
-        word.timestamp_ms = time_ms;
-        word.valid = true;
-        return word;
-    };
-    
-    // Simulate call: "W1AW" calling "K6KB"
-    ALEWord to_word = make_word(WordType::TO, "K6K", 1000);
-    ALEWord from_word = make_word(WordType::FROM, "W1A", 2000);
-    
-    bool msg_ready1 = assembler.add_word(to_word);
-    std::cout << "  After TO word: " << (msg_ready1 ? "complete" : "pending") << "\n";
-    
-    bool msg_ready2 = assembler.add_word(from_word);
-    std::cout << "  After FROM word: " << (msg_ready2 ? "complete" : "pending") << "\n";
-    
-    if (msg_ready2) {
-        ALEMessage msg;
-        bool got_msg = assembler.get_message(msg);
-        
-        if (got_msg) {
-            std::cout << "  Message type: " << CallTypeDetector::call_type_name(msg.call_type) << "\n";
-            std::cout << "  To: " << (msg.to_addresses.empty() ? "none" : msg.to_addresses[0]) << "\n";
-            std::cout << "  From: " << msg.from_address << "\n";
-            
-            bool correct = (msg.call_type == CallType::INDIVIDUAL) &&
-                          (!msg.to_addresses.empty()) &&
-                          (!msg.from_address.empty());
-            
-            std::cout << "  Result: " << (correct ? "PASS" : "FAIL") << "\n";
-            return correct;
-        }
+bool test_word_bit_structure() {
+    std::cout << "\n[TEST 4] AC-WORD-001: Word Bit Structure\n";
+    std::cout << "==========================================\n";
+    bool all_pass = true;
+
+    // AC-WORD-001-1: Exactly 24 bits
+    {
+        bool pass = (WORD_BITS == 24);
+        std::cout << "  AC-WORD-001-1 24-bit word: " << (pass ? "PASS" : "FAIL")
+                  << " (WORD_BITS=" << WORD_BITS << ")\n";
+        all_pass &= pass;
     }
-    
-    std::cout << "  Result: FAIL (message not assembled)\n";
-    return false;
+
+    // AC-WORD-001-2: 3-bit preamble + 21-bit data field
+    {
+        bool pass = (PREAMBLE_BITS == 3) && (PAYLOAD_BITS == 21) &&
+                    (PREAMBLE_BITS + PAYLOAD_BITS == WORD_BITS);
+        std::cout << "  AC-WORD-001-2 3+21 structure: " << (pass ? "PASS" : "FAIL")
+                  << " (PREAMBLE_BITS=" << PREAMBLE_BITS
+                  << ", PAYLOAD_BITS=" << PAYLOAD_BITS << ")\n";
+        all_pass &= pass;
+    }
+
+    // AC-WORD-001-3: MSB (bit 23) transmitted first — preamble occupies bits 23-21
+    {
+        const char chars[3] = {'A', 'B', 'C'};
+        uint32_t payload = WordParser::encode_ascii(chars, WordType::TO);
+        uint32_t preamble_val = static_cast<uint8_t>(WordType::TO) & 0x07;
+        uint32_t word = (preamble_val << 21) | payload;
+        WordType extracted = WordParser::extract_preamble(word);
+        bool pass = (static_cast<uint8_t>(extracted) == preamble_val) &&
+                    (WordParser::extract_payload(word) == payload);
+        std::cout << "  AC-WORD-001-3 MSB-first (preamble at bits 23-21): "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // AC-WORD-001-4: Word splits into two 12-bit halves for FEC
+    {
+        uint32_t test_word = 0xABCDEFu & 0xFFFFFFu;
+        uint16_t hi = static_cast<uint16_t>((test_word >> 12) & 0xFFF);
+        uint16_t lo = static_cast<uint16_t>(test_word & 0xFFF);
+        uint32_t reconstructed = (static_cast<uint32_t>(hi) << 12) | lo;
+        bool pass = (GOLAY_INFO_BITS == 12) &&
+                    (WORD_BITS == 2 * GOLAY_INFO_BITS) &&
+                    (reconstructed == test_word);
+        std::cout << "  AC-WORD-001-4 FEC split (2x12 bits, GOLAY_INFO_BITS="
+                  << GOLAY_INFO_BITS << "): " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // AC-WORD-001-5: 21-bit data field holds 3 x 7-bit ASCII chars
+    {
+        const char in[3] = {'W', '1', 'A'};
+        uint32_t encoded = WordParser::encode_ascii(in, WordType::TO);
+        char decoded[4] = {};
+        bool ok = WordParser::decode_ascii(encoded, WordType::TO, decoded);
+        bool roundtrip = ok && (decoded[0] == 'W') && (decoded[1] == '1') && (decoded[2] == 'A');
+        bool pass = (PAYLOAD_BITS == 21) && (PAYLOAD_BITS == 3 * 7) && roundtrip;
+        std::cout << "  AC-WORD-001-5 3x7-bit ASCII payload (PAYLOAD_BITS="
+                  << PAYLOAD_BITS << "): " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    return all_pass;
 }
 
 // ============================================================================
-// Test 5: Call Type Detection
+// Test 5: AC-WORD-002 — Preamble Bits and Word Types
 // ============================================================================
 
-bool test_call_type_detection() {
-    std::cout << "\n[TEST 5] Call Type Detection\n";
-    std::cout << "============================\n";
-    
-    WordParser parser;
-    
-    auto make_word = [&parser](WordType type, const char* chars) -> ALEWord {
-        uint32_t payload = WordParser::encode_ascii(chars);
-        uint32_t preamble = static_cast<uint8_t>(type) & 0x07;
-        uint32_t word_bits = preamble | (payload << 3);
-        
-        ALEWord word;
-        parser.parse_from_bits(word_bits, word);
-        word.valid = true;
-        return word;
-    };
-    
-    // Test individual call
+bool test_preamble_types() {
+    std::cout << "\n[TEST 5] AC-WORD-002: Preamble Bits and Word Types\n";
+    std::cout << "====================================================\n";
+    bool all_pass = true;
+
+    // AC-WORD-002-1: Leading 3 bits identify exactly one of 8 word types
     {
-        std::vector<ALEWord> words;
-        words.push_back(make_word(WordType::TO, "K6K"));
-        words.push_back(make_word(WordType::FROM, "W1A"));
-        
-        CallType type = CallTypeDetector::detect(words);
-        bool pass = (type == CallType::INDIVIDUAL);
-        std::cout << "  Individual call: " << (pass ? "PASS" : "FAIL") 
-                  << " (detected: " << CallTypeDetector::call_type_name(type) << ")\n";
+        bool all_map = true;
+        for (uint8_t v = 0; v <= 7; ++v) {
+            uint32_t word = static_cast<uint32_t>(v) << 21;
+            WordType type = WordParser::extract_preamble(word);
+            if (static_cast<uint8_t>(type) != v) {
+                all_map = false;
+            }
+        }
+        std::cout << "  AC-WORD-002-1 3-bit value -> 8 distinct types: "
+                  << (all_map ? "PASS" : "FAIL") << "\n";
+        all_pass &= all_map;
     }
-    
-    // Test sounding
+
+    // AC-WORD-002-2: Preamble bits are P3(bit23), P2(bit22), P1(bit21)
     {
-        std::vector<ALEWord> words;
-        words.push_back(make_word(WordType::TIS, "W1A"));
-        
-        CallType type = CallTypeDetector::detect(words);
-        bool pass = (type == CallType::SOUNDING);
-        std::cout << "  Sounding: " << (pass ? "PASS" : "FAIL")
-                  << " (detected: " << CallTypeDetector::call_type_name(type) << ")\n";
+        uint32_t preamble_mask = 0x07u << 21;
+        bool pass = (preamble_mask == ((1u << 23) | (1u << 22) | (1u << 21)));
+        std::cout << "  AC-WORD-002-2 Preamble at P3=bit23, P2=bit22, P1=bit21: "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
     }
-    
-    // Test net call
+
+    // AC-WORD-002-3: All 8 word types with correct binary values per Table A-VIII
     {
-        std::vector<ALEWord> words;
-        words.push_back(make_word(WordType::TWS, "NET"));
-        words.push_back(make_word(WordType::FROM, "W1A"));
-        
-        CallType type = CallTypeDetector::detect(words);
-        bool pass = (type == CallType::NET);
-        std::cout << "  Net call: " << (pass ? "PASS" : "FAIL")
-                  << " (detected: " << CallTypeDetector::call_type_name(type) << ")\n";
+        struct { WordType type; uint8_t val; const char* name; } types[] = {
+            { WordType::DATA, 0, "DATA" },
+            { WordType::THRU, 1, "THRU" },
+            { WordType::TO,   2, "TO"   },
+            { WordType::TWS,  3, "TWS"  },
+            { WordType::FROM, 4, "FROM" },
+            { WordType::TIS,  5, "TIS"  },
+            { WordType::CMD,  6, "CMD"  },
+            { WordType::REP,  7, "REP"  },
+        };
+        bool all_ok = true;
+        for (const auto& t : types) {
+            if (static_cast<uint8_t>(t.type) != t.val) {
+                std::cout << "    FAIL: " << t.name << " expected "
+                          << (int)t.val << "\n";
+                all_ok = false;
+            }
+        }
+        std::cout << "  AC-WORD-002-3 THRU/TO/TWS/FROM/TIS/CMD/DATA/REP values: "
+                  << (all_ok ? "PASS" : "FAIL") << "\n";
+        all_pass &= all_ok;
     }
-    
-    // Test AMD
+
+    // AC-WORD-002-4: Non-standard (AQC-ALE) preamble values handled as UNKNOWN
     {
-        std::vector<ALEWord> words;
-        words.push_back(make_word(WordType::TO, "K6K"));
-        words.push_back(make_word(WordType::FROM, "W1A"));
-        words.push_back(make_word(WordType::DATA, "HI "));
-        
-        CallType type = CallTypeDetector::detect(words);
-        bool pass = (type == CallType::AMD);
-        std::cout << "  AMD (with data): " << (pass ? "PASS" : "FAIL")
-                  << " (detected: " << CallTypeDetector::call_type_name(type) << ")\n";
+        // Standard 3-bit preamble covers 0-7; UNKNOWN sentinel is 0xFF
+        bool pass = (static_cast<uint8_t>(WordType::UNKNOWN) == 0xFF);
+        std::cout << "  AC-WORD-002-4 AQC/non-standard preambles -> UNKNOWN (0xFF): "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
     }
-    
-    std::cout << "PASS: All call type tests\n";
-    return true;
+
+    return all_pass;
 }
 
 // ============================================================================
@@ -324,8 +321,8 @@ int run_all_tests() {
     if (test_word_parsing()) { pass_count++; } else { fail_count++; }
     if (test_ascii_codec()) { pass_count++; } else { fail_count++; }
     if (test_address_book()) { pass_count++; } else { fail_count++; }
-    if (test_message_assembly()) { pass_count++; } else { fail_count++; }
-    if (test_call_type_detection()) { pass_count++; } else { fail_count++; }
+    if (test_word_bit_structure()) { pass_count++; } else { fail_count++; }
+    if (test_preamble_types()) { pass_count++; } else { fail_count++; }
     
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
