@@ -4,7 +4,7 @@
  */
 
 #include "ale_types.h"
-#include "tone_generator.h"
+#include "fsk/tone_generator.h"
 #include "fft_demodulator.h"
 #include <iostream>
 #include <iomanip>

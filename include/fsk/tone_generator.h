@@ -1,10 +1,10 @@
 /**
- * \file tone_generator.h
+ * \file fsk/tone_generator.h
  * \brief 8-FSK tone generator using NCO
- * 
+ *
  * Generates 8-FSK tones using a single continuous NCO phase accumulator.
  * Symbol boundaries are aligned to waveform extrema (slope zero).
- * 
+ *
  * Specification: MIL-STD-188-141B / ALE2G
  *  - Frequencies: 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500 Hz (Gray-coded by symbol value)
  *  - Sample rate: 8000 Hz
@@ -23,7 +23,7 @@ namespace ale {
 class ToneGenerator {
 public:
     ToneGenerator();
-    
+
     /**
      * Generate tone samples for given symbols
      * \param symbols Array of symbol values (0-7)
@@ -34,7 +34,7 @@ public:
      */
     uint32_t generate_symbols(const uint8_t* symbols, uint32_t num_symbols,
                                int16_t* output, float amplitude = 0.7f);
-    
+
     /**
      * Generate continuous tone (no modulation switching)
      * \param symbol_value FSK symbol (0-7)
@@ -45,36 +45,36 @@ public:
      */
     uint32_t generate_tone(uint8_t symbol_value, uint32_t num_samples,
                            int16_t* output, float amplitude = 0.7f);
-    
+
     /**
      * Reset generator state
      */
     void reset();
-    
+
 private:
     // Sine table for 256 samples per cycle
     static constexpr uint32_t SINE_TABLE_SIZE = 256;
     static constexpr uint32_t SAMPLES_PER_SYMBOL = SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD;
-    
+
     std::array<float, SINE_TABLE_SIZE> sine_table;
-    
+
     // One stream phase accumulator for the generated waveform.
     // The current symbol selects the phase increment only.
     uint32_t phase_;
-    
+
     // Phase increment per sample for each tone (32-bit phase accumulator, Q32)
     std::array<uint32_t, NUM_TONES> phase_increment;
-    
+
     /**
      * Initialize sine lookup table
      */
     void init_sine_table();
-    
+
     /**
      * Initialize phase increments for all tones
      */
     void init_phase_increments();
-    
+
     /**
      * Get sine value using table lookup with interpolation
      * \param phase Phase value (0 to 2^32, wraps at 2^32)

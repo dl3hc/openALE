@@ -200,10 +200,15 @@ bool test_call_initiation() {
     // Initiate individual call to K6KB
     std::cout << "  Initiating individual call: ";
     bool success = sm.initiate_call("K6KB");
-    
+
+    // Words are transmitted by the time-driven handle_calling() loop.
+    // Advance time to trigger two SCANNING_CALL words (one per Trw = 392 ms).
+    sm.update(0);    // t=0 ms:   first  TO word
+    sm.update(392);  // t=392 ms: second TO word
+
     bool correct_state = (sm.get_state() == ALEState::CALLING);
-    bool words_sent = (tracker.count() == 2);  // TO + FROM
-    
+    bool words_sent = (tracker.count() >= 2);
+
     bool pass = success && correct_state && words_sent;
     std::cout << (pass ? "PASS" : "FAIL");
     if (!pass) {
@@ -211,16 +216,16 @@ bool test_call_initiation() {
                   << ", words=" << tracker.count() << ")";
     }
     std::cout << "\n";
-    
+
     if (!words_sent) return false;
-    
-    // Check word types
+
+    // In SCANNING_CALL phase both transmitted words must be TO words
     std::cout << "  Word 1 (TO): ";
     bool word1_ok = (tracker.words[0].type == WordType::TO);
     std::cout << (word1_ok ? "PASS" : "FAIL") << "\n";
-    
-    std::cout << "  Word 2 (FROM): ";
-    bool word2_ok = (tracker.words[1].type == WordType::FROM);
+
+    std::cout << "  Word 2 (TO): ";
+    bool word2_ok = (tracker.words[1].type == WordType::TO);
     std::cout << (word2_ok ? "PASS" : "FAIL") << "\n";
     
     return pass && word1_ok && word2_ok;

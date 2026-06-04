@@ -278,33 +278,49 @@ Extensions     Data Link
 
 ```
 libale_fec.a
-    └─ Golay (24,12) encoder/decoder
-    └─ Used by: ale_fsk_core
+    ├─ fec/golay.cpp        — Golay (24,12) encoder/decoder
+    ├─ fec/interleaver.cpp  — Symbol-Interleaver (8×24 Block)
+    └─ fec/ale_fec_codec.cpp— FEC-Fassade: Golay + Interleaver
+    └─ Headers: include/fec/golay.h · include/fec/interleaver.h · include/fec/ale_fec_codec.h
 
 libale_fsk_core.a
-    └─ FFT demodulator, tone generator, symbol decoder
+    ├─ fsk/fft_demodulator.cpp  — 64-Punkt FFT, Peak-Detektor
+    ├─ fsk/tone_generator.cpp   — NCO-Tongenerator
+    ├─ fsk/symbol_decoder.cpp   — Symbol-Decoder, Majority-Vote
+    └─ core/types.cpp           — Timing-/Frequenz-Konstanten
+    └─ Headers: include/fft_demodulator.h · include/fsk/tone_generator.h
+                include/symbol_decoder.h · include/ale_types.h
     └─ Depends on: ale_fec
-    └─ Used by: ale_protocol
 
 libale_protocol.a
-    └─ ALEWord parser, ALEMessage assembly, Address book
+    ├─ protocol/ale_word.cpp    — word24, WordParser, AddressBook, FrameValidator
+    └─ protocol/ale_message.cpp — MessageAssembler, ALEMessage, CallTypeDetector
     └─ Depends on: ale_fsk_core, ale_fec
     └─ Used by: ale_link, ale_aqc
 
 libale_link.a
-    └─ ALEStateMachine (6 states, event-driven)
+    └─ link/ale_state_machine.cpp — ALEStateMachine (6 States, event-driven)
     └─ Depends on: ale_protocol, ale_fsk_core, ale_fec
     └─ Used by: Applications
 
 libale_aqc.a
-    └─ AQCParser, AQCCRC, SlotManager
+    └─ protocol/aqc_parser.cpp — AQCParser, AQCCRC
     └─ Depends on: ale_protocol, ale_fsk_core, ale_fec
     └─ Used by: Applications (optional)
 
 libale_fs1052.a
-    └─ FrameFormatter, FrameParser, VariableARQ
+    ├─ fs1052/frame_format.cpp — FS-1052 Frame-Format
+    └─ fs1052/fs1052_arq.cpp   — FS-1052 ARQ Protokoll
     └─ Depends on: ale_protocol, ale_fsk_core, ale_fec
     └─ Used by: Applications (optional)
+
+libale_lqa.a
+    ├─ lqa_database.cpp — LQA-Datenbank, Kanalqualitätsspeicher
+    ├─ lqa_metrics.cpp  — LQA-Metriken (SNR, BER, FEC-Fehler)
+    └─ lqa_analyzer.cpp — LQA-Analyse, Kanalauswahl
+    └─ Headers: include/ale/lqa_database.h · include/ale/lqa_metrics.h
+                include/ale/lqa_analyzer.h
+    └─ Depends on: ale_protocol, ale_fsk_core, ale_fec
 ```
 
 ### Platform Abstraction Layer Interfaces

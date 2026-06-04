@@ -25,7 +25,7 @@
 
 #include "ale_word.h"
 #include "symbol_decoder.h"
-#include "golay.h"
+#include "fec/ale_fec_codec.h"
 #include <cstring>
 #include <cctype>
 #include <algorithm>
@@ -53,7 +53,7 @@ bool WordParser::parse_word(const uint8_t symbols[SYMBOLS_PER_WORD],
 
     // Step 2: Apply Golay FEC (symbol-level error correction)
     uint16_t decoded_info = 0;
-    uint8_t  fec_errors   = Golay::decode(raw_word, decoded_info);
+    uint8_t  fec_errors   = ALEFECCodec::decode_word(raw_word, decoded_info);
 
     if (fec_errors == 0xFF) {
         output.valid = false;

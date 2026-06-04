@@ -37,6 +37,8 @@ target_include_directories(ale_fsk_core PUBLIC
 # FEC library
 add_library(ale_fec
     src/fec/golay.cpp
+    src/fec/interleaver.cpp
+    src/fec/ale_fec_codec.cpp
 )
 
 target_include_directories(ale_fec PUBLIC 

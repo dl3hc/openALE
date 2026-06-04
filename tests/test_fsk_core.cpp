@@ -11,10 +11,10 @@
  */
 
 #include "ale_types.h"
-#include "tone_generator.h"
+#include "fsk/tone_generator.h"
 #include "fft_demodulator.h"
 #include "symbol_decoder.h"
-#include "golay.h"
+#include "fec/golay.h"
 
 #include <iostream>
 #include <cmath>

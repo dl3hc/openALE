@@ -17,7 +17,7 @@
 
 #include "ale_state_machine.h"
 #include "ale_message.h"
-#include "tone_generator.h"
+#include "fsk/tone_generator.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>
