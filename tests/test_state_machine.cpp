@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file test_state_machine.cpp
  * \brief Unit tests for ALE state machine (Phase 3)
  * 
@@ -11,7 +11,7 @@
  *  6. Timeout handling
  */
 
-#include "ale_state_machine.h"
+#include "Protocol/ale_state_machine.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>

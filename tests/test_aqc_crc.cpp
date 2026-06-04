@@ -1,9 +1,9 @@
-/**
+﻿/**
  * \file test_aqc_crc.cpp
  * \brief Unit tests for AQC-ALE CRC calculation and validation
  */
 
-#include "aqc_protocol.h"
+#include "Protocol/aqc_protocol.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file example_ale_decoder.cpp
  * \brief Example: Complete ALE decoder using Phase 1 + Phase 2
  * 
@@ -6,10 +6,10 @@
  *  Audio samples → FFT demod → Symbols → Words → Messages
  */
 
-#include "fft_demodulator.h"
-#include "fsk/tone_generator.h"
-#include "ale_word.h"
-#include "ale_message.h"
+#include "FSK/fft_demodulator.h"
+#include "FSK/tone_generator.h"
+#include "Protocol/ale_word.h"
+#include "Protocol/ale_message.h"
 #include <iostream>
 #include <vector>
 

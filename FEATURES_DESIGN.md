@@ -75,7 +75,8 @@ PC-ALE CORE (Domain – Referenzimplementierung)
   │     OperatingParameters (ale_data_store.h/cpp)
   │
   ├── Protocol / Word Layer:
-  │     ALEWord, WordParser, AddressBook,
+  │     PreambleType, Word,
+  │       ALEWord, WordParser, AddressBook,
   │       FrameValidator    (ale_word.h / protocol/ale_word.cpp)
   │     ALEMessage, MessageAssembler,
   │       CallTypeDetector  (ale_message.h / protocol/ale_message.cpp)
@@ -99,7 +100,7 @@ PC-ALE CORE (Domain – Referenzimplementierung)
   │     Interleaver  (fec/interleaver.h   / fec/interleaver.cpp)
   │
   └── Modem / FSK:
-        ALE2GModem     (ale2gmodem.h/cpp)                              [geplant]
+        ALE2GModem     (fsk/ale_waveform.h / fsk/ale_waveform.cpp)    [geplant]
         ToneGenerator  (fsk/tone_generator.h / fsk/tone_generator.cpp)
         FFTDemodulator (fft_demodulator.h    / fsk/fft_demodulator.cpp)
         SymbolDecoder  (symbol_decoder.h     / fsk/symbol_decoder.cpp)
@@ -120,14 +121,14 @@ PLATFORM ADAPTERS (separate Projekte)
 
 | Modul | Verantwortung | Status | Features |
 |---|---|---|---|
-| `include/ale_types.h` / `src/core/types.cpp` | Konstanten: Frequenzen, Timings, Symboltabelle | implementiert | FEAT-WAVEFORM-001/003 |
+| `include/fsk/ale_waveform.h` / `src/fsk/ale_waveform.cpp` | Waveform-Parameter: Frequenzen, Timings, Symboltabelle, FFTBuffer | implementiert | FEAT-WAVEFORM-001/003 |
 | `include/fsk/tone_generator.h` / `src/fsk/tone_generator.cpp` | NCO-Tongenerator, Phasenkontinuität | implementiert | FEAT-WAVEFORM-002 |
 | `include/fft_demodulator.h` / `src/fsk/fft_demodulator.cpp` | FFT-Demodulator (64-Punkt), Peak-Detektor | implementiert | FEAT-SYNC-002 |
 | `include/symbol_decoder.h` / `src/fsk/symbol_decoder.cpp` | Symbol-Decoder, Majority-Vote (3×) | implementiert | FEAT-FEC-004 |
 | `include/fec/golay.h` / `src/fec/golay.cpp` | Golay (24,12) Encoder/Decoder | implementiert | FEAT-FEC-001/002 |
 | `include/fec/interleaver.h` / `src/fec/interleaver.cpp` | Symbol-Interleaver (8×24-Block) | implementiert | FEAT-FEC-003 |
 | `include/fec/ale_fec_codec.h` / `src/fec/ale_fec_codec.cpp` | FEC-Fassade: Golay + Interleaver | implementiert | FEAT-FEC-003–005 |
-| `include/ale_word.h` / `src/protocol/ale_word.cpp` | word24, WordParser, AddressBook, FrameValidator | implementiert | FEAT-WORD-001–003, FEAT-ADDR-001–005 |
+| `include/ale_word.h` / `src/protocol/ale_word.cpp` | PreambleType, Word, word24, WordParser, AddressBook, FrameValidator | implementiert | FEAT-WORD-001–003, FEAT-ADDR-001–005 |
 | `include/ale_message.h` / `src/protocol/ale_message.cpp` | MessageAssembler, ALEMessage, CallTypeDetector | implementiert | FEAT-FRAME-001 |
 | `include/aqc_protocol.h` / `src/protocol/aqc_parser.cpp` | AQC-ALE-Protokoll | implementiert | FEAT-GEN-010 |
 | `include/ale_state_machine.h` / `src/link/ale_state_machine.cpp` | Calling Cycle, Frame-Phasen, ALE-States, Sounding | implementiert | FEAT-FRAME-001–006, FEAT-SYNC-001, FEAT-LINK-001 |
@@ -156,9 +157,9 @@ PLATFORM ADAPTERS (separate Projekte)
 | FEAT-GEN-008 | Nachrichtenspeicher (Message Memory) | REQ-GEN-020 | ale_data_store.h/cpp | MUST | geplant |
 | FEAT-GEN-009 | ALE Betriebsregeln (Operational Rules) | REQ-GEN-021 | ale_state_machine.cpp | MUST | geplant |
 | FEAT-GEN-010 | AQC-ALE Protokoll | REQ-GEN-022–025 | ale_aqc.h/cpp | COULD | geplant |
-| FEAT-WAVEFORM-001 | Tone-Symbol-Mapping & Frequenztabelle | REQ-WAVEFORM-001–003 | ale_types.h | MUST | implementiert |
+| FEAT-WAVEFORM-001 | Tone-Symbol-Mapping & Frequenztabelle | REQ-WAVEFORM-001–003 | fsk/ale_waveform.h | MUST | implementiert |
 | FEAT-WAVEFORM-002 | NCO-Tongenerator mit Phasenkontinuität | REQ-WAVEFORM-004–005 | tone_generator.cpp | MUST | implementiert |
-| FEAT-WAVEFORM-003 | Timing-Konstanten & Wortgrenzen | REQ-WAVEFORM-006–010 | ale_types.h, ale2gmodem.cpp | MUST | implementiert |
+| FEAT-WAVEFORM-003 | Timing-Konstanten & Wortgrenzen | REQ-WAVEFORM-006–010 | fsk/ale_waveform.h, ale2gmodem.cpp | MUST | implementiert |
 | FEAT-WAVEFORM-004 | Genauigkeits-Verifikation | REQ-WAVEFORM-011–013 | tests/test_tone_accuracy.cpp | MUST | geplant |
 | FEAT-WORD-001 | word24 Bit-Layout Encoding/Decoding | REQ-WORD-001–002 | ale_word.cpp | MUST | implementiert |
 | FEAT-WORD-002 | Adresswörter (TO/TIS/TWAS/THRU/FROM) | REQ-WORD-003–007 | ale_word.cpp | MUST | implementiert |
@@ -1368,7 +1369,7 @@ public:
 ### FEAT-WAVEFORM-001 — Tone-Symbol-Mapping & Frequenztabelle
 
 **Setzt um:** REQ-WAVEFORM-001, REQ-WAVEFORM-002, REQ-WAVEFORM-003
-**Modul:** `include/ale_types.h`
+**Modul:** `include/fsk/ale_waveform.h`
 **Design-Entscheidungen:** DD-002
 **Status:** implementiert
 
@@ -1388,7 +1389,7 @@ constexpr std::array<uint8_t, 8>  FREQ_TO_SYMBOL = {0,1,3,2,6,7,5,4};
 #### Code-Referenz
 | Datei | Symbol | Hinweis |
 |---|---|---|
-| `include/ale_types.h` | `FREQ_TO_SYMBOL`, `TONE_FREQS_HZ` | static_assert Bijektivität |
+| `include/fsk/ale_waveform.h` | `FREQ_TO_SYMBOL`, `TONE_FREQS_HZ` | static_assert Bijektivität |
 
 ---
 
@@ -1522,7 +1523,7 @@ generate_tone(symbol, num_samples, output, amplitude):
 ### FEAT-WAVEFORM-003 — Timing-Konstanten & Wortgrenzen
 
 **Setzt um:** REQ-WAVEFORM-006–010
-**Modul:** `include/ale_types.h`, `include/ale_state_machine.h`
+**Modul:** `include/fsk/ale_waveform.h`, `include/ale_state_machine.h`
 **Design-Entscheidungen:** DD-006
 **Status:** implementiert
 
@@ -4326,9 +4327,9 @@ void ALEStateMachine::add_inlink_address_when_linked();
 | FEAT-GEN-008 | REQ-GEN-020 | ale_data_store.h/cpp (NEU) | geplant |
 | FEAT-GEN-009 | REQ-GEN-021 | ale_state_machine.cpp | geplant |
 | FEAT-GEN-010 | REQ-GEN-022–025 | ale_aqc.h/cpp (NEU) | geplant |
-| FEAT-WAVEFORM-001 | REQ-WAVEFORM-001–003 | include/ale_types.h | implementiert |
+| FEAT-WAVEFORM-001 | REQ-WAVEFORM-001–003 | include/fsk/ale_waveform.h | implementiert |
 | FEAT-WAVEFORM-002 | REQ-WAVEFORM-004–005 | tone_generator.cpp | implementiert |
-| FEAT-WAVEFORM-003 | REQ-WAVEFORM-006–010 | ale_types.h, ale_state_machine.h | implementiert |
+| FEAT-WAVEFORM-003 | REQ-WAVEFORM-006–010 | fsk/ale_waveform.h, ale_state_machine.h | implementiert |
 | FEAT-WAVEFORM-004 | REQ-WAVEFORM-011–013 | tests/test_tone_accuracy.cpp | geplant |
 | FEAT-WORD-001 | REQ-WORD-001–002 | ale_word.cpp | implementiert |
 | FEAT-WORD-002 | REQ-WORD-003–007 | ale_word.cpp | implementiert |

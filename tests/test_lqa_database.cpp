@@ -1,9 +1,9 @@
-/**
+﻿/**
  * @file test_lqa_database.cpp
  * @brief Unit tests for LQA Database
  */
 
-#include "ale/lqa_database.h"
+#include "LQA/lqa_database.h"
 #include <iostream>
 #include <cassert>
 #include <cmath>

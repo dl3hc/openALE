@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file test_ale_calling.cpp
  * \brief Acceptance tests for FEAT-WORD-002 — Address Words (TO/TIS/TWAS/THRU/FROM)
  *
@@ -16,8 +16,8 @@
  *     update(785) → conclusion fires (TIS self)
  */
 
-#include "ale_word.h"
-#include "ale_state_machine.h"
+#include "Protocol/ale_word.h"
+#include "Protocol/ale_state_machine.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file example_fs1052_transfer.cpp
  * \brief Example: Complete FS-1052 data transfer
  * 
@@ -6,7 +6,7 @@
  * Shows transmit side, receive side, and bidirectional communication.
  */
 
-#include "fs1052_arq.h"
+#include "FS1052/fs1052_arq.h"
 #include <iostream>
 #include <vector>
 #include <cstring>

@@ -1,9 +1,9 @@
-/**
+﻿/**
  * \file test_fs1052_arq.cpp
  * \brief Unit tests for FS-1052 ARQ state machine
  */
 
-#include "fs1052_arq.h"
+#include "FS1052/fs1052_arq.h"
 #include <cassert>
 #include <iostream>
 #include <vector>

@@ -1,10 +1,10 @@
-/**
+﻿/**
  * @file test_lqa_analyzer.cpp
  * @brief Unit tests for LQA Analyzer
  */
 
-#include "ale/lqa_analyzer.h"
-#include "ale/lqa_database.h"
+#include "LQA/lqa_analyzer.h"
+#include "LQA/lqa_database.h"
 #include <iostream>
 #include <cassert>
 #include <cmath>

@@ -1,10 +1,10 @@
-/**
+﻿/**
  * \file test_aqc_parser.cpp
  * \brief Unit tests for AQC-ALE parser and data element extraction
  */
 
-#include "aqc_protocol.h"
-#include "ale_word.h"
+#include "Protocol/aqc_protocol.h"
+#include "Protocol/ale_word.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>

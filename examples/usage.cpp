@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \example usage.cpp
  * \brief Example usage of PC-ALE 2.0 8-FSK modem core
  * 
@@ -9,11 +9,11 @@
  *  4. End-to-end modulation/demodulation
  */
 
-#include "ale_types.h"
-#include "fsk/tone_generator.h"
-#include "fft_demodulator.h"
-#include "symbol_decoder.h"
-#include "fec/golay.h"
+#include "FSK/ale_waveform.h"
+#include "FSK/tone_generator.h"
+#include "FSK/fft_demodulator.h"
+#include "FSK/symbol_decoder.h"
+#include "FEC/golay.h"
 
 #include <iostream>
 #include <vector>

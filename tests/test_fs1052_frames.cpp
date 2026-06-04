@@ -1,9 +1,9 @@
-/**
+﻿/**
  * \file test_fs1052_frames.cpp
  * \brief Unit tests for FS-1052 frame formatting and parsing
  */
 
-#include "fs1052_protocol.h"
+#include "FS1052/fs1052_protocol.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>

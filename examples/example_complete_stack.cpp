@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file example_complete_stack.cpp
  * \brief Complete ALE stack example (Phases 1-3)
  * 
@@ -15,9 +15,9 @@
  *   5. Sounding transmission
  */
 
-#include "ale_state_machine.h"
-#include "ale_message.h"
-#include "fsk/tone_generator.h"
+#include "Protocol/ale_state_machine.h"
+#include "Protocol/ale_message.h"
+#include "FSK/tone_generator.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>

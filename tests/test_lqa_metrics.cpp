@@ -1,10 +1,10 @@
-/**
+﻿/**
  * @file test_lqa_metrics.cpp
  * @brief Unit tests for LQA Metrics Collector
  */
 
-#include "ale/lqa_metrics.h"
-#include "ale/lqa_database.h"
+#include "LQA/lqa_metrics.h"
+#include "LQA/lqa_database.h"
 #include <iostream>
 #include <cassert>
 #include <cmath>

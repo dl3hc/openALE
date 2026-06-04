@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file test_fsk_core.cpp
  * \brief Unit tests for 8-FSK modem core
  * 
@@ -10,11 +10,11 @@
  *  5. End-to-end modulation/demodulation
  */
 
-#include "ale_types.h"
-#include "fsk/tone_generator.h"
-#include "fft_demodulator.h"
-#include "symbol_decoder.h"
-#include "fec/golay.h"
+#include "FSK/ale_waveform.h"
+#include "FSK/tone_generator.h"
+#include "FSK/fft_demodulator.h"
+#include "FSK/symbol_decoder.h"
+#include "FEC/golay.h"
 
 #include <iostream>
 #include <cmath>

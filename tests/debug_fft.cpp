@@ -1,11 +1,11 @@
-/**
+﻿/**
  * \file debug_fft.cpp
  * \brief Debug FFT bin detection
  */
 
-#include "ale_types.h"
-#include "fsk/tone_generator.h"
-#include "fft_demodulator.h"
+#include "FSK/ale_waveform.h"
+#include "FSK/tone_generator.h"
+#include "FSK/fft_demodulator.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>

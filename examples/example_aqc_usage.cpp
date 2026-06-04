@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file example_aqc_usage.cpp
  * \brief Example demonstrating AQC-ALE protocol extensions
  * 
@@ -9,8 +9,8 @@
  * - Use slotted response mechanism
  */
 
-#include "aqc_protocol.h"
-#include "ale_word.h"
+#include "Protocol/aqc_protocol.h"
+#include "Protocol/ale_word.h"
 #include <iostream>
 #include <iomanip>
 #include <cstring>
