@@ -1,0 +1,2989 @@
+# =============================================================================
+# IMPLEMENTATION BACKLOG — PC-ALE / PC-ALE-Win
+# =============================================================================
+#
+# Abgeleitet aus: REQUIREMENTS_INDEX.yml + FEATURES_DESIGN.md
+# Basis-Standard: MIL-STD-188-141B Appendix A
+#
+# WORKFLOW DES CODING AGENTS (ein Feature nach dem anderen):
+#   1. Erstes Feature mit status: todo und erfüllten depends_on wählen
+#   2. status → in-progress
+#   3. Existierenden Code lesen (module:), REQ in REQUIREMENTS_INDEX.yml lesen
+#   4. Feature implementieren — NUR was in acceptance_criteria steht
+#   5. Tests schreiben/aktualisieren — jedes AC braucht mind. einen Test
+#   6. Alle AC auf status: verified setzen wenn Test grün
+#   7. status → done, notes ausfüllen, Backlog zurückschreiben
+#   8. Weiter zu Schritt 1
+#
+# DONE-KRITERIUM:
+#   ☑ Alle acceptance_criteria.status: verified
+#   ☑ Alle Tests grün (ctest)
+#   ☑ Kein TODO/PLACEHOLDER im produzierten Code
+#   ☑ Kein Compiler-Warning (-W4)
+#
+# STATUS-WERTE:
+#   todo        → noch nicht begonnen, oder: zurückgesetzt für Neuverifikation
+#   validate    → Code existiert bereits, muss aber gegen Spec-Requirements
+#                 geprüft und ggf. korrigiert werden, bevor done gesetzt wird
+#   in-progress → aktuell in Arbeit (nur 1 Feature gleichzeitig)
+#   done        → implementiert + alle ACs verified + Tests grün
+#   blocked     → blockiert (reason: angeben)
+#   skip        → bewusst übersprungen (reason: angeben)
+#
+# VALIDATE-REGEL (wichtig!):
+#   validate bedeutet NICHT "bereits korrekt implementiert".
+#   Es bedeutet: "es gibt bereits Code dafür — dieser muss gegen die
+#   Requirements aus REQUIREMENTS_INDEX.yml geprüft werden."
+#   Der Agent muss jeden validate-Eintrag wie einen todo behandeln:
+#   bestehenden Code lesen → gegen ACs prüfen → Lücken schließen → done.
+#
+# EINE-FEATURE-REGEL:
+#   Niemals mehr als ein Feature gleichzeitig. Kein Scope Creep.
+#   Entdeckte Bugs → neues FEAT anlegen, nicht jetzt lösen.
+#
+# HINWEIS REQUIREMENTS_INDEX.yml:
+#   REQ-SOUND-xxx fehlte im Index (### statt #### im REQUIREMENTS.md).
+#   Bug in REQUIREMENTS.md beheben und Index neu generieren:
+#     python3 scripts/generate_requirements_index.py
+# =============================================================================
+
+metadata:
+  project: PC-ALE
+  standard: MIL-STD-188-141B Appendix A
+  last_updated: ''
+  total_features: 38
+  status_summary:
+    validate: 18
+    todo: 20
+features:
+- id: FEAT-WAVEFORM-001
+  title: Tone-Symbol-Mapping & Frequenztabelle
+  status: done
+  priority: MUST
+  implements:
+  - REQ-WAVEFORM-001
+  - REQ-WAVEFORM-002
+  - REQ-WAVEFORM-003
+  design_ref: FEAT-WAVEFORM-001
+  module:
+  - include/ale_types.h
+  depends_on: []
+  acceptance_criteria:
+  - id: AC-WAVEFORM-001-1
+    text: Die Waveform muss durch das Audiopassband von Standard-SSB-Funkgeräten hindurchgeleitet werden können
+    status: verified
+  - id: AC-WAVEFORM-001-2
+    text: Die Waveform muss selektives Rufen ermöglichen
+    status: verified
+  - id: AC-WAVEFORM-001-3
+    text: Die Waveform muss Datenübertragung ermöglichen
+    status: verified
+  - id: AC-WAVEFORM-002-1
+    text: Die Modulation muss FSK mit exakt 8 orthogonalen Tönen sein
+    status: verified
+  - id: AC-WAVEFORM-002-2
+    text: Pro Ton müssen exakt 3 Bits repräsentiert werden
+    status: verified
+  - id: AC-WAVEFORM-002-3
+    text: Es muss immer nur ein Ton zu einer Zeit übertragen werden
+    status: verified
+  - id: AC-WAVEFORM-003-1
+    text: Jede Frequenz muss exakt das zugewiesene 3-Bit-Muster repräsentieren
+    status: verified
+  tests:
+  - file: tests/test_fsk_core.cpp
+    description: Verifikation für FEAT-WAVEFORM-001
+  notes: FREQ_TO_SYMBOL[rank] und TONE_FREQS_HZ[rank] in ale_types.h. static_assert prüft Bijektivität.
+- id: FEAT-WAVEFORM-002
+  title: NCO-Tongenerator mit Phasenkontinuität
+  status: verified
+  priority: MUST
+  implements:
+  - REQ-WAVEFORM-004
+  - REQ-WAVEFORM-005
+  design_ref: FEAT-WAVEFORM-002
+  module:
+  - extern/PC-ALE/src/fsk/tone_generator.cpp
+  depends_on:
+  - FEAT-WAVEFORM-001
+  acceptance_criteria:
+  - id: AC-WAVEFORM-004-1
+    text: Die Bits müssen codiert und interleaved sein gemäß den in A.5.2.2 und A.5.2.3 definierten Verfahren (siehe OPEN-01,
+      O...
+    status: open
+  - id: AC-WAVEFORM-004-2
+    text: Jede Gruppe von Bits muss einem vollständigen ALE-Wort entsprechen.
+    status: open
+  - id: AC-WAVEFORM-005-1
+    text: Tonübergänge müssen phasenkontinuierlich sein
+    status: verified
+  - id: AC-WAVEFORM-005-2
+    text: Tonübergänge müssen an einem Punkt mit null Ableitung (Maxima oder Minima) erfolgen
+    status: validate
+  tests:
+  - file: tests/test_fsk_core.cpp
+    description: Verifikation für FEAT-WAVEFORM-002
+  notes: 32-Bit NCO, Init 0x40000000 (pi/2). Phasenkontinuität durch geteilten Akkumulator.
+- id: FEAT-WAVEFORM-003
+  title: Timing-Konstanten & Wortgrenzen
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-WAVEFORM-006
+  - REQ-WAVEFORM-007
+  - REQ-WAVEFORM-008
+  - REQ-WAVEFORM-009
+  - REQ-WAVEFORM-010
+  design_ref: FEAT-WAVEFORM-003
+  module:
+  - include/ale_types.h
+  - include/ale_state_machine.h
+  depends_on:
+  - FEAT-WAVEFORM-001
+  acceptance_criteria:
+  - id: AC-WAVEFORM-006-1
+    text: Die Tonrate muss exakt 125 Symbole/Sekunde sein
+    status: open
+  - id: AC-WAVEFORM-006-2
+    text: Die Periode pro Ton muss exakt 8 ms sein
+    status: open
+  - id: AC-WAVEFORM-007-1
+    text: Die übertragene Bitrate muss exakt 375 b/s sein
+    status: open
+  - id: AC-WAVEFORM-008-1
+    text: Wortübergänge müssen mit Tonübergängen synchronisiert sein
+    status: open
+  - id: AC-WAVEFORM-008-2
+    text: Es müssen exakt 49 Symbole pro redundantem Wort sein
+    status: open
+  - id: AC-WAVEFORM-009-1
+    text: Tw muss 130,66... ms betragen
+    status: open
+  - id: AC-WAVEFORM-009-2
+    text: Tw muss 16,33... Symbolen entsprechen
+    status: open
+  - id: AC-WAVEFORM-010-1
+    text: 3×Tw muss exakt 392 ms betragen
+    status: open
+  tests:
+  - file: tests/test_fsk_core.cpp
+    description: Verifikation für FEAT-WAVEFORM-003
+  notes: WORD_DURATION_MS=392, SAMPLES_PER_SYMBOL=64, SYMBOLS_PER_WORD=49 als Konstanten.
+- id: FEAT-WAVEFORM-004
+  title: Genauigkeits-Verifikation (Frequenz, Amplitude, Timing)
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-WAVEFORM-011
+  - REQ-WAVEFORM-012
+  - REQ-WAVEFORM-013
+  design_ref: FEAT-WAVEFORM-004
+  module:
+  - tests/test_tone_accuracy.cpp
+  depends_on:
+  - FEAT-WAVEFORM-002
+  - FEAT-WAVEFORM-003
+  acceptance_criteria:
+  - id: AC-WAVEFORM-011-1
+    text: Jeder erzeugte Ton muss innerhalb von ±1,0 Hz seines Sollwerts liegen
+    status: open
+  - id: AC-WAVEFORM-012-1
+    text: Alle übertragenen Töne müssen innerhalb von 2,0 dB Amplitude im HF-Bereich sein
+    status: open
+  - id: AC-WAVEFORM-013-1
+    text: Symbol-Timing muss innerhalb von 10 ppm sein
+    status: open
+  - id: AC-WAVEFORM-013-2
+    text: Bit-Rate muss innerhalb von 10 ppm sein
+    status: open
+  - id: AC-WAVEFORM-013-3
+    text: Wort-Rate muss innerhalb von 10 ppm sein
+    status: open
+  tests:
+  - file: tests/test_tone_accuracy.cpp
+    description: Verifikation für FEAT-WAVEFORM-004
+  notes: Goertzel-basierte Frequenzmessung +-1Hz; RMS-Vergleich aller 8 Symbole <=2dB; Timing 10ppm.
+- id: FEAT-WORD-001
+  title: word24 Bit-Layout Encoding/Decoding
+  status: in-progress
+  priority: MUST
+  implements:
+  - REQ-WORD-001
+  - REQ-WORD-002
+  design_ref: FEAT-WORD-001
+  module:
+  - src/ale_word.cpp
+  - include/ale_word.h
+  depends_on: []
+  acceptance_criteria:
+  - id: AC-WORD-001-1
+    text: Ein grundlegendes ALE-Wort enthält genau 24 Bit.
+    status: open
+  - id: AC-WORD-001-2
+    text: Das Wort ist in genau einen 3-Bit-Präambelteil und einen 21-Bit-Datenfeldteil unterteilt.
+    status: open
+  - id: AC-WORD-001-3
+    text: Das höchstwertige Bit wird zuerst übertragen.
+    status: open
+  - id: AC-WORD-001-4
+    text: Vor der Übertragung wird das Wort in zwei 12-Bit-Hälften für die FEC-Kodierung aufgeteilt.
+    status: open
+  - id: AC-WORD-001-5
+    text: Das Datenfeld kann drei 7-Bit-ASCII-Zeichen pro Wort enthalten.
+    status: open
+  - id: AC-WORD-002-1
+    text: Die führenden drei Bits eines ALE-Worts identifizieren genau einen von acht Worttypen.
+    status: open
+  - id: AC-WORD-002-2
+    text: Die Präambelbits werden als P3, P2 und P1 geführt.
+    status: open
+  - id: AC-WORD-002-3
+    text: Die Worttypen THRU, TO, CMD, FROM, TIS, TWAS, DATA und REP werden gemäß Standard unterstützt.
+    status: open
+  - id: AC-WORD-002-4
+    text: Optional definierte AQC-ALE-Preambles werden nur gemäß der dafür vorgesehenen Spezifikation verwendet.
+    status: open
+  tests:
+  - file: tests/test_protocol.cpp
+    description: Verifikation für FEAT-WORD-001
+  notes: W1=bit23 (MSB). Preamble [23:21], Char1 [20:14], Char2 [13:7], Char3 [6:0]. Raw 7-bit ASCII.
+- id: FEAT-WORD-002
+  title: Adresswörter (TO / TIS / TWAS / THRU / FROM)
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-WORD-003
+  - REQ-WORD-004
+  - REQ-WORD-005
+  - REQ-WORD-006
+  - REQ-WORD-007
+  design_ref: FEAT-WORD-002
+  module:
+  - src/ale_word.cpp
+  - include/ale_word.h
+  depends_on:
+  - FEAT-WORD-001
+  acceptance_criteria:
+  - id: AC-WORD-003-1
+    text: TO wird für Einzelrufe und Netrufe gemäß Standard verwendet.
+    status: open
+  - id: AC-WORD-003-2
+    text: Ein TO-Wort enthält die ersten drei Zeichen der Adresse.
+    status: open
+  - id: AC-WORD-003-3
+    text: Erweiterte Adressen werden unmittelbar durch abwechselnde DATA- und REP-Wörter fortgesetzt.
+    status: open
+  - id: AC-WORD-003-4
+    text: Die zulässige Adressfolge endet spätestens bei fünf Adresswörtern beziehungsweise 15 Zeichen.
+    status: open
+  - id: AC-WORD-004-1
+    text: TIS kennzeichnet die aktuell sendende Station.
+    status: open
+  - id: AC-WORD-004-2
+    text: TIS wird zur Beendigung des ALE-Frames und der Übertragung verwendet, außer wenn TWAS verwendet wird.
+    status: open
+  - id: AC-WORD-004-3
+    text: TIS kann Antworten oder Bestätigungen anfordern, veranlassen oder einladen.
+    status: open
+  - id: AC-WORD-004-4
+    text: TIS kennzeichnet den Call-Acceptance-Sound.
+    status: open
+  - id: AC-WORD-004-5
+    text: Ein TIS-Wort enthält die ersten drei Zeichen der Adresse der rufenden Station.
+    status: open
+  - id: AC-WORD-004-6
+    text: Erweiterte Adressen folgen unmittelbar in abwechselnden DATA- und REP-Wörtern.
+    status: open
+  - id: AC-WORD-004-7
+    text: Die gesamte Adresse wird nur im Schlussabschnitt des ALE-Frames verwendet oder bildet ein vollständiges Sound.
+    status: open
+  - id: AC-WORD-004-8
+    text: TIS und TWAS werden nicht im selben Frame verwendet.
+    status: open
+  - id: AC-WORD-005-1
+    text: TWAS kennzeichnet die Beendigung des ALE-Protokolls oder Handshakes.
+    status: open
+  - id: AC-WORD-005-2
+    text: TWAS weist Antworten oder Bestätigungen zurück, hemmt sie oder lädt sie nicht ein.
+    status: open
+  - id: AC-WORD-005-3
+    text: TWAS kennzeichnet den Call-Rejection-Sound.
+    status: open
+  - id: AC-WORD-005-4
+    text: TIS und TWAS werden nicht im selben Frame verwendet.
+    status: open
+  - id: AC-WORD-006-1
+    text: THRU wird nur im Scanning Call von Gruppenrufprotokollen verwendet.
+    status: open
+  - id: AC-WORD-006-2
+    text: THRU und REP alternieren in der vorgegebenen Sequenz.
+    status: open
+  - id: AC-WORD-006-3
+    text: Jedes mit THRU referenzierte erste Adresswort ist auf drei Zeichen begrenzt.
+    status: open
+  - id: AC-WORD-006-4
+    text: Ein Gruppenruf enthält höchstens fünf verschiedene erste Adresswörter.
+    status: open
+  - id: AC-WORD-006-5
+    text: THRU wird nicht für erweiterte Adressen verwendet.
+    status: open
+  - id: AC-WORD-006-6
+    text: Im Leading Call eines Gruppenrufs werden vollständige Adressen mit TO verwendet.
+    status: open
+  - id: AC-WORD-006-7
+    text: Stationskonforme Systeme ignorieren Calls, die ihre Adresse in einem THRU-Wort außerhalb des Scanning Calls verwenden.
+    status: open
+  - id: AC-WORD-006-8
+    text: Der THRU-Präambelwert ist für zukünftige indirekte und Relais-Protokolle reserviert.
+    status: open
+  - id: AC-WORD-006-9
+    text: Der THRU-Präambelwert ist auch für AQC-ALE reserviert.
+    status: open
+  - id: AC-WORD-007-1
+    text: FROM identifiziert die sendende Station ohne Verwendung einer Frame-Beendigung wie TIS oder TWAS.
+    status: open
+  - id: AC-WORD-007-2
+    text: FROM enthält die vollständige Adresse der sendenden Station.
+    status: open
+  - id: AC-WORD-007-3
+    text: Falls erforderlich, werden für eine erweiterte FROM-Adresse DATA- und REP-Wörter verwendet.
+    status: open
+  - id: AC-WORD-007-4
+    text: FROM erscheint höchstens einmal pro ALE-Frame.
+    status: open
+  - id: AC-WORD-007-5
+    text: FROM erscheint nur unmittelbar vor CMD im Message-Abschnitt.
+    status: open
+  - id: AC-WORD-007-6
+    text: FROM kann zur schnellen Identifikation bei verzögerter normaler Schlusssequenz verwendet werden.
+    status: open
+  - id: AC-WORD-007-7
+    text: Stationskonforme Systeme ignorieren Abschnitte von Calls, die FROM-Wörter in anderer als der unmittelbar vor CMD
+      steh...
+    status: open
+  - id: AC-WORD-007-8
+    text: Der FROM-Präambelwert ist für zukünftige indirekte und Relais-Protokolle reserviert.
+    status: open
+  - id: AC-WORD-007-9
+    text: Der FROM-Präambelwert ist auch für AQC-ALE reserviert.
+    status: open
+  tests:
+  - file: tests/test_protocol.cpp
+    description: Verifikation für FEAT-WORD-002
+  notes: Alle 5 Adress-Preambles implementiert. TWS/TWAS = Wert 3 (gleicher Bit-Wert).
+- id: FEAT-WORD-003
+  title: Message & Extension Words (CMD / DATA / REP)
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-WORD-008
+  - REQ-WORD-009
+  - REQ-WORD-010
+  design_ref: FEAT-WORD-003
+  module:
+  - src/ale_word.cpp
+  - include/ale_word.h
+  depends_on:
+  - FEAT-WORD-001
+  acceptance_criteria:
+  - id: AC-WORD-008-1
+    text: Jeder Message-Wort-Abschnitt beginnt mit CMD.
+    status: open
+  - id: AC-WORD-008-2
+    text: CMD unterstützt die im Standard genannten systemweiten Sonderzwecke.
+    status: open
+  - id: AC-WORD-008-3
+    text: CMD wird nur im Message-Abschnitt verwendet.
+    status: open
+  - id: AC-WORD-008-4
+    text: Ein CMD im Frame hat einen vorausgehenden Ruf und eine nachfolgende Schlusssequenz.
+    status: open
+  - id: AC-WORD-008-5
+    text: Das erste CMD beendet den Calling Cycle und markiert den Beginn des Message-Abschnitts.
+    status: open
+  - id: AC-WORD-008-6
+    text: Orderwire-Funktionen können über CMD allein oder in Kombination mit REP und DATA ausgelöst werden.
+    status: open
+  - id: AC-WORD-009-1
+    text: DATA erweitert ein vorheriges Wortfeld, sofern das vorherige Wort nicht DATA ist.
+    status: open
+  - id: AC-WORD-009-2
+    text: DATA kann Informationen in einer Nachricht transportieren.
+    status: open
+  - id: AC-WORD-009-3
+    text: Mit TO, FROM, TIS oder TWAS erweitert DATA Adressen in Vielfachen von drei Zeichen.
+    status: open
+  - id: AC-WORD-009-4
+    text: Die Adresserweiterung endet spätestens bei 15 Zeichen.
+    status: open
+  - id: AC-WORD-009-5
+    text: Mit CMD gilt die standarddefinierte Funktion für Message-Wörter.
+    status: open
+  - id: AC-WORD-010-1
+    text: REP dupliziert die vorherige Präambelfunktion oder Wortbedeutung bei verändertem Datenfeldinhalt.
+    status: open
+  - id: AC-WORD-010-2
+    text: Jede Änderung von Wort oder Datenfeldbit erfordert eine Änderung der Präambel.
+    status: open
+  - id: AC-WORD-010-3
+    text: Ein Wortwechsel wird auch dann durch eine geänderte Präambel angezeigt, wenn das Datenfeld unverändert bleibt.
+    status: open
+  - id: AC-WORD-010-4
+    text: REP ermöglicht in Verbindung mit TO die Spezifikation mehrerer Adressen.
+    status: open
+  - id: AC-WORD-010-5
+    text: REP darf zur Erweiterung von Adress-, Nachrichten-, Befehls- und Statusfeldern verwendet werden.
+    status: open
+  - id: AC-WORD-010-6
+    text: REP folgt nicht auf sich selbst sowie nicht auf TIS oder TWAS.
+    status: open
+  - id: AC-WORD-010-7
+    text: REP darf nur dort eingesetzt werden, wo keine Mehrfachsender-Situation entsteht.
+    status: open
+  tests:
+  - file: tests/test_protocol.cpp
+    description: Verifikation für FEAT-WORD-003
+  notes: 'REP darf nicht direkt auf TIS/TWAS folgen. Sequenzregel: TO, DATA, REP, DATA, REP.'
+- id: FEAT-FEC-001
+  title: Golay (24,12) Encoder
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-FEC-004
+  - REQ-FEC-005
+  - REQ-FEC-006
+  - REQ-FEC-007
+  - REQ-FEC-009
+  design_ref: FEAT-FEC-001
+  module:
+  - extern/PC-ALE/src/fec/golay.cpp
+  - extern/PC-ALE/include/ale/golay.h
+  depends_on:
+  - FEAT-WORD-001
+  acceptance_criteria:
+  - id: AC-FEC-004-1
+    text: Der Sendencoder muss FEC, Interleaving und Redundanz unterstützen
+    status: open
+  - id: AC-FEC-004-2
+    text: Der Empfangsdecoder muss FEC, Deinterleaving und Redundanzverarbeitung unterstützen
+    status: open
+  - id: AC-FEC-005-1
+    text: Der verwendete FEC-Code muss extended Golay (24, 12, 3) sein
+    status: open
+  - id: AC-FEC-005-2
+    text: Jeder codierte Block muss 24 Bits umfassen, wovon 12 Datenbits und 12 Paritybits bestehen
+    status: open
+  - id: AC-FEC-005-3
+    text: Der minimale Hamming-Abstand des Codes muss 3 betragen
+    status: open
+  - id: AC-FEC-006-1
+    text: Das Generator-Polynom muss dem im Standard definierten Wert entsprechen
+    status: open
+  - id: AC-FEC-007-1
+    text: Die Codewortstruktur muss der im Standard definierten systematischen Form des Golay (24,12)-Codes entsprechen.
+    status: open
+  - id: AC-FEC-009-1
+    text: Jedes 12-Bit-Datenwort muss in ein 24-Bit-Golay-Codewort kodiert werden.
+    status: open
+  - id: AC-FEC-009-2
+    text: Das Codewort muss dem vom Standard definierten Kodierverfahren entsprechen.
+    status: open
+  tests:
+  - file: tests/test_fsk_core.cpp
+    description: Verifikation für FEAT-FEC-001
+  notes: Systematischer Extended Golay (24,12,3). Polynom 0xAE3. Syndromtabelle 4096 Einträge.
+- id: FEAT-FEC-002
+  title: Golay (24,12) Decoder mit Fehlerkorrektur
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-FEC-010
+  - REQ-FEC-011
+  design_ref: FEAT-FEC-002
+  module:
+  - extern/PC-ALE/src/fec/golay.cpp
+  depends_on:
+  - FEAT-FEC-001
+  acceptance_criteria:
+  - id: AC-FEC-010-1
+    text: Das Dekodierverfahren muss dem vom Standard vorgeschriebenen Syndrom-basierten Golay-Dekodierverfahren entsprechen.
+    status: open
+  - id: AC-FEC-010-2
+    text: Jeder korrigierbare Fehlervektor muss eindeutig einem Syndromwert zugeordnet sein.
+    status: open
+  - id: AC-FEC-010-3
+    text: Das dekodierte 12-Bit-Datenwort muss dem gesendeten Original entsprechen, sofern die Fehleranzahl die Korrekturkapazi...
+    status: open
+  - id: AC-FEC-011-1
+    text: Ein Flag muss bei erfolgreicher Korrektur gesetzt werden
+    status: open
+  - id: AC-FEC-011-2
+    text: Ein Flag muss bei einem nicht korrigierbaren, aber erkennbaren Fehler gesetzt werden
+    status: open
+  tests:
+  - file: tests/test_fsk_core.cpp
+    description: Verifikation für FEAT-FEC-002
+  notes: Syndrom-basiert. Korrigiert <=3 Bit. Gibt 0xFF zurück wenn unkorrektierbar.
+- id: FEAT-FEC-003
+  title: Interleaving / Deinterleaving
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-FEC-012
+  - REQ-FEC-013
+  design_ref: FEAT-FEC-003
+  module:
+  - src/ale_fec_codec.cpp
+  - include/ale_fec_codec.h
+  depends_on:
+  - FEAT-FEC-001
+  - FEAT-FEC-002
+  acceptance_criteria:
+  - id: AC-FEC-012-1
+    text: Die Bits W1 bis W24 müssen gemäß dem Standard-Interleaving-Muster umgeordnet werden
+    status: open
+  - id: AC-FEC-012-2
+    text: Die Golay FEC-Bits G13 bis G24 müssen vor dem Interleaving invertiert werden
+    status: open
+  - id: AC-FEC-012-3
+    text: Das Deinterleaving am Empfänger muss umkehrbar und verlustfrei sein
+    status: open
+  - id: AC-FEC-013-1
+    text: Ein übertragenes Wort muss aus 48 Nutzbits und einem Stuff-Bit bestehen
+    status: open
+  - id: AC-FEC-013-2
+    text: Das Stuff-Bit S₄₉ muss den Wert 0 haben
+    status: open
+  - id: AC-FEC-013-3
+    text: Die Übertragungssequenz muss dem Muster A₁, B₁, A₂, B₂, ..., A₂₄, B₂₄, S₄₉ entsprechen
+    status: open
+  - id: AC-FEC-013-4
+    text: Das empfangene 49te Stuff-Bit muss ignoriert werden
+    status: open
+  tests:
+  - file: tests/test_fsk_core.cpp
+    description: Verifikation für FEAT-FEC-003
+  notes: Muster A1B1A2B2...A24B24+S49. G13..G24 invertiert. Coder A=W1..W12, B=W13..W24.
+- id: FEAT-FEC-004
+  title: 3x Redundanz mit Majority-Vote (RX)
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-FEC-014
+  - REQ-FEC-015
+  - REQ-FEC-016
+  - REQ-FEC-017
+  - REQ-FEC-018
+  design_ref: FEAT-FEC-004
+  module:
+  - src/ale_fec_codec.cpp
+  depends_on:
+  - FEAT-FEC-003
+  acceptance_criteria:
+  - id: AC-FEC-014-1
+    text: Jedes Wort muss exakt dreimal übertragen werden
+    status: open
+  - id: AC-FEC-014-2
+    text: Die redundante Übertragung muss dazu dienen, Fading, Interferenz und Rauschen zu reduzieren
+    status: open
+  - id: AC-FEC-015-1
+    text: Ein Scanning-Call-Wort muss solange wiederholt werden, bis der Empfang sichergestellt ist
+    status: open
+  - id: AC-FEC-015-2
+    text: Die Wiederholungsdauer muss dem im Scanning-Call definierten Zeitrahmen entsprechen
+    status: open
+  - id: AC-FEC-016-1
+    text: Das erste Routing-Wort im Group-Call muss THRU sein und dreimal wiederholt werden
+    status: open
+  - id: AC-FEC-016-2
+    text: Alle nachfolgenden Routing-Wörter müssen REP und THRU alternierend und jeweils dreimal wiederholt werden
+    status: open
+  - id: AC-FEC-016-3
+    text: Die Triple-Wörter müssen in Gruppen-Sequenz rotiert werden
+    status: open
+  - id: AC-FEC-017-1
+    text: Eine 2/3-Mehrheitsentscheidung muss auf Bit-Basis über drei Wörter durchgeführt werden
+    status: open
+  - id: AC-FEC-017-2
+    text: Die Entscheidung muss sowohl das aktuelle Bit als auch die vergangenen Bits berücksichtigen
+    status: open
+  - id: AC-FEC-018-1
+    text: Das Majority-Wort muss exakt 48 Bits umfassen
+    status: open
+  - id: AC-FEC-018-2
+    text: Das Majority-Wort muss an den Deinterleaver übergeben werden
+    status: open
+  - id: AC-FEC-018-3
+    text: Das Majority-Wort muss an den FEC-Decoder übergeben werden
+    status: open
+  tests:
+  - file: tests/test_fec_majority_vote.cpp
+    description: Verifikation für FEAT-FEC-004
+  notes: remove_redundancy_3x() aktuell Placeholder (nimmt erste Kopie). Muss 2/3-Voting implementieren. Bit 49 ignorieren.
+- id: FEAT-FEC-005
+  title: Unanimous-Votes-Erfassung
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-FEC-019
+  design_ref: FEAT-FEC-005
+  module:
+  - src/ale_fec_codec.cpp
+  - include/ale_fec_codec.h
+  depends_on:
+  - FEAT-FEC-004
+  acceptance_criteria:
+  - id: AC-FEC-019-1
+    text: Die Anzahl der einstimmigen Stimmen muss für die 48 Bits erfasst werden
+    status: open
+  - id: AC-FEC-019-2
+    text: Die erfassten Werte müssen temporär gespeichert werden
+    status: open
+  tests:
+  - file: tests/test_fec_majority_vote.cpp
+    description: Verifikation für FEAT-FEC-005
+  notes: Zählt einstimmige Votes (alle 3 gleich) über 48 Bits. Ergebnis temporär für FEAT-SYNC-003 speichern.
+- id: FEAT-FRAME-001
+  title: Frame-Grundstruktur & Wortbasis
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-FRAME-001
+  design_ref: FEAT-FRAME-001
+  module:
+  - src/ale_state_machine.cpp
+  - include/ale_state_machine.h
+  depends_on:
+  - FEAT-WORD-001
+  - FEAT-FEC-003
+  acceptance_criteria:
+  - id: AC-FRAME-001-1
+    text: Jede ALE-Aussendung verwendet ausschließlich Töne, Timing sowie Bit- und Wortstrukturen gemäß A.5.1 und A.5.2.3.
+    status: open
+  - id: AC-FRAME-001-2
+    text: Jeder Frame besteht ausschließlich aus fortlaufenden redundanten Wörtern in gültigen Sequenzen.
+    status: open
+  - id: AC-FRAME-001-3
+    text: Jeder Frame enthält die drei Abschnitte Calling Cycle, Message und Conclusion in genau dieser Reihenfolge (wobei
+      Mess...
+    status: open
+  - id: AC-FRAME-001-4
+    text: Die Konstruktion eines Frames entspricht den Vorgaben aus Figure A-14, Table A-VII und den Format-Beschreibungen
+      aus ...
+    status: open
+  tests:
+  - file: tests/ale_modem_integration_test.cpp
+    description: Verifikation für FEAT-FRAME-001
+  notes: Frame = Tcc + [Message] + Conclusion. Tc = wpa*Trw, Tlc = 2*Tc, Tsc = C*2*Trw.
+- id: FEAT-FRAME-002
+  title: Scanning Call (Tsc-Phase)
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-FRAME-002
+  - REQ-FRAME-003
+  - REQ-FRAME-005
+  - REQ-FRAME-006
+  design_ref: FEAT-FRAME-002
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-FRAME-001
+  - FEAT-ADDR-002
+  acceptance_criteria:
+  - id: AC-FRAME-002-1
+    text: Jeder Frame (außer Sounds) beginnt mit einem Calling Cycle.
+    status: open
+  - id: AC-FRAME-002-2
+    text: 'Der Calling Cycle besteht aus genau zwei Teilen: Scanning Call und Leading Call.'
+    status: open
+  - id: AC-FRAME-002-3
+    text: Der Calling Cycle endet mit dem Beginn des Message- oder, bei fehlendem Message-Abschnitt, des Conclusion-Abschnitts.
+    status: open
+  - id: AC-FRAME-003-1
+    text: Bei Individual- und Net-Calls enthält der Scanning Call ausschließlich TO-Wörter mit dem ersten Adresswort der gerufe...
+    status: open
+  - id: AC-FRAME-003-2
+    text: Bei Group Calls enthält der Scanning Call abwechselnd THRU- und REP-Wörter.
+    status: open
+  - id: AC-FRAME-003-3
+    text: Der Scanning Call enthält in beiden Fällen nur das jeweils erste Wort der Zieladresse, keine vollständige Adresse.
+    status: open
+  - id: AC-FRAME-003-4
+    text: Der Satz der Adress-Erstworte (Tcl) wird so oft wiederholt, bis die Suchlaufperiode (Ts) überschritten wird.
+    status: open
+  - id: AC-FRAME-003-5
+    text: Die Dauer des Scanning Call (Tsc) ist ≥ Ts.
+    status: open
+  - id: AC-FRAME-005-1
+    text: Der Sender fügt kein dediziertes Flag- oder Sync-Wort zur Frame-Synchronisation ein.
+    status: open
+  - id: AC-FRAME-005-2
+    text: Eine Empfangsstation ist in der Lage, das ALE-Signal an einem beliebigen Punkt nach Übertragungsbeginn zu synchronisi...
+    status: open
+  - id: AC-FRAME-006-1
+    text: Die Sendeleistung beträgt spätestens 2,5 ms nach dem ersten ALE-Ton mindestens 90 % der gewählten HF-Leistung.
+    status: open
+  - id: AC-FRAME-006-2
+    text: Die zulässige 2,5-ms-Verzögerung ist additiv zur Attackzeit aus 5.3.5.1.
+    status: open
+  - id: AC-FRAME-006-3
+    text: Die Einhaltung gilt auch dann als erfüllt, wenn das Verlinkungswahrscheinlichkeitskriterium gemäß Table A-I erfüllt
+      i...
+    status: open
+  tests:
+  - file: tests/ale_modem_integration_test.cpp
+    description: Verifikation für FEAT-FRAME-002
+  notes: 'INDIVIDUAL/NET: TO + erste 3 Chars, kein DATA/REP. GROUP: THRU/REP alternierend. tsc_slots = C*2.'
+- id: FEAT-FRAME-003
+  title: Leading Call (Tlc-Phase)
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-FRAME-004
+  design_ref: FEAT-FRAME-003
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-FRAME-002
+  - FEAT-ADDR-002
+  acceptance_criteria:
+  - id: AC-FRAME-004-1
+    text: Der Leading Call enthält die vollständige(n) Zieladresse(n) einschließlich aller Erweiterungswörter (DATA, REP).
+    status: open
+  - id: AC-FRAME-004-2
+    text: Der Leading Call beginnt mit dem Einleitungszeitpunkt des Leading Call und endet spätestens mit dem Beginn des Messag...
+    status: open
+  - id: AC-FRAME-004-3
+    text: Die Verwendung von DATA- und REP-Wörtern im Leading Call entspricht den Regeln aus A.5.2.4.
+    status: open
+  tests:
+  - file: tests/ale_modem_integration_test.cpp
+    description: Verifikation für FEAT-FRAME-003
+  notes: Vollständige Zieladresse 2x senden. Pro Trw-Slot 1 Wort. call_cycles_in_phase % seq.size() = aktuelles Wort.
+- id: FEAT-FRAME-004
+  title: Message-Abschnitt
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-FRAME-007
+  - REQ-FRAME-008
+  - REQ-FRAME-009
+  design_ref: FEAT-FRAME-004
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-FRAME-003
+  acceptance_criteria:
+  - id: AC-FRAME-007-1
+    text: Eine Quick-ID, sofern verwendet, steht ausschließlich an der ersten Position des Message-Abschnitts, nach dem Leading...
+    status: open
+  - id: AC-FRAME-007-2
+    text: Die Quick-ID besteht aus FROM- und möglicherweise REP- und DATA-Wörtern mit der vollständigen Senderadresse.
+    status: open
+  - id: AC-FRAME-007-3
+    text: Die Quick-ID wird höchstens einmal pro Frame verwendet, am Beginn der CMD-Message-Sequenz.
+    status: open
+  - id: AC-FRAME-007-4
+    text: Eine Quick-ID wird niemals ohne mindestens eine nachfolgende CMD-Message gesendet.
+    status: open
+  - id: AC-FRAME-007-5
+    text: Wird keine Quick-ID verwendet, beginnt der Message-Abschnitt direkt mit dem ersten CMD-Wort.
+    status: open
+  - id: AC-FRAME-008-1
+    text: Der Message-Abschnitt enthält — abgesehen von der optionalen Quick-ID — ausschließlich CMD-, REP- und DATA-Wörter.
+    status: open
+  - id: AC-FRAME-008-2
+    text: Der Message-Abschnitt beginnt immer mit dem ersten CMD-Wort oder, bei Quick-ID, mit dem FROM-Wort.
+    status: open
+  - id: AC-FRAME-008-3
+    text: Der Message-Abschnitt wird innerhalb eines Calls genau einmal gesendet (keine Wiederholung des gesamten Abschnitts).
+    status: open
+  - id: AC-FRAME-008-4
+    text: Der Message-Abschnitt erstreckt sich vom Ende des Calling Cycle bis zum Beginn des Conclusion-Abschnitts.
+    status: open
+  - id: AC-FRAME-009-1
+    text: Bei AQC-ALE steht der Message-Abschnitt nur im Link-Zustand zur Verfügung.
+    status: open
+  - id: AC-FRAME-009-2
+    text: Das Acknowledgement Leg (drittes Bein) eines Calls kann als Inlink-Entry-Bedingung verwendet werden.
+    status: open
+  tests:
+  - file: tests/test_message_section.cpp
+    description: Verifikation für FEAT-FRAME-004
+  notes: Optional nach Leading Call. Quick-ID, dann Wortsequenz. Tm max basic = 11.76s. AQC-ALE-Sonderregel beachten.
+- id: FEAT-FRAME-005
+  title: Conclusion
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-FRAME-010
+  - REQ-FRAME-011
+  design_ref: FEAT-FRAME-005
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-FRAME-003
+  acceptance_criteria:
+  - id: AC-FRAME-010-1
+    text: Die Conclusion enthält entweder ausschließlich TIS-Wörter oder ausschließlich TWAS-Wörter als Typ-Anker — niemals
+      bei...
+    status: open
+  - id: AC-FRAME-010-2
+    text: Die Conclusion kann zusätzlich DATA- und REP-Wörter enthalten.
+    status: open
+  - id: AC-FRAME-010-3
+    text: Die Conclusion enthält die vollständige Adresse der sendenden Station.
+    status: open
+  - id: AC-FRAME-010-4
+    text: Liegt kein Message-Abschnitt vor, beginnt die Conclusion unmittelbar nach dem Calling Cycle.
+    status: open
+  - id: AC-FRAME-010-5
+    text: Die Conclusion erstreckt sich bis zum Ende des Calls.
+    status: open
+  - id: AC-FRAME-011-1
+    text: Bei Sounds und Exception-Frames beginnt die Aussendung direkt mit TIS- oder TWAS-Wörtern.
+    status: open
+  - id: AC-FRAME-011-2
+    text: Ein REP-Wort folgt niemals unmittelbar auf ein TIS- oder TWAS-Wort.
+    status: open
+  tests:
+  - file: tests/ale_modem_integration_test.cpp
+    description: Verifikation für FEAT-FRAME-005
+  notes: TIS (Accept) oder TWS/TWAS (Reject) + vollst. eigene Adresse. RX öffnet am Trw-Grid-Boundary nach letztem Wort.
+- id: FEAT-FRAME-006
+  title: Gültige Sequenzen & Frame-Limits
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-FRAME-012
+  - REQ-FRAME-013
+  design_ref: FEAT-FRAME-006
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-FRAME-001
+  acceptance_criteria:
+  - id: AC-FRAME-012-1
+    text: Jede gesendete Wortsequenz in einem Frame oder einer Message entspricht den erlaubten Sequenzen aus Figure A-18,
+      Figu...
+    status: open
+  - id: AC-FRAME-012-2
+    text: Jede empfangene Wortsequenz wird gegen die erlaubten Sequenzen validiert; unzulässige Sequenzen werden verworfen.
+    status: open
+  - id: AC-FRAME-013-1
+    text: Die Adressgröße überschreitet nicht 5 Wörter (Ta max = 1960 ms).
+    status: open
+  - id: AC-FRAME-013-2
+    text: Die Call-Zeit (Tc, als halbe Tlc) überschreitet nicht 12 Wörter (4704 ms).
+    status: open
+  - id: AC-FRAME-013-3
+    text: Die maximale Suchlaufperiode (Ts max) überschreitet nicht 50 s.
+    status: open
+  - id: AC-FRAME-013-4
+    text: Die Basiszeit des Message-Abschnitts (Tm max basic) überschreitet nicht 11,76 s, sofern keine AMD-Extension, DTM
+      oder...
+    status: open
+  - id: AC-FRAME-013-5
+    text: Bei Verwendung von AMD (90 Zeichen) überschreitet die Message-Zeit nicht 11,76 s.
+    status: open
+  - id: AC-FRAME-013-6
+    text: Bei Verwendung von DTM (1053 Zeichen) überschreitet die Message-Zeit nicht 2,29 min (gesamter Datenblock).
+    status: open
+  - id: AC-FRAME-013-7
+    text: Bei Verwendung von DBM (37377 Zeichen) überschreitet die Message-Zeit nicht 23,26 min (gesamter tief-interleaved
+      Block).
+    status: open
+  tests:
+  - file: tests/test_frame_limits.cpp
+    description: Verifikation für FEAT-FRAME-006
+  notes: 'Ta max=1960ms, Tc max=4704ms (12 Wörter), Ts max=50s. Guard: call_cycles_in_phase>12 → Error-Log.'
+- id: FEAT-SYNC-001
+  title: Trw-Grid (Sendeseitiger Wortphasen-Anker)
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-SYNC-001
+  - REQ-SYNC-002
+  - REQ-SYNC-003
+  - REQ-SYNC-004
+  design_ref: FEAT-SYNC-001
+  module:
+  - src/ale_state_machine.cpp
+  - include/ale_state_machine.h
+  depends_on:
+  - FEAT-FRAME-001
+  acceptance_criteria:
+  - id: AC-SYNC-001-1
+    text: Das System erfordert keine systemweite externe Synchronisation und muss auch ohne diese korrekt arbeiten.
+    status: open
+  - id: AC-SYNC-001-2
+    text: Das System ist mit Verfahren zur systemweiten Synchronisation kompatibel, sofern solche eingesetzt werden.
+    status: open
+  - id: AC-SYNC-001-3
+    text: Die innerhalb eines Frames eingebettete Timing- und Strukturinformation wird zur Erzielung und Aufrechterhaltung
+      der ...
+    status: open
+  - id: AC-SYNC-002-1
+    text: Nach Beginn der ersten Übertragung hält der Sendemodulator die konstante Phasenbeziehung zwischen allen gesendeten
+      dr...
+    status: open
+  - id: AC-SYNC-002-2
+    text: Die Differenz der Ereigniszeitpunkte zweier dreifach-redundanter Wörter innerhalb einer Übertragung ist stets ein
+      gan...
+    status: open
+  - id: AC-SYNC-002-3
+    text: Die Phasenbeziehung wird bis zum Ende des letzten Frames der Übertragung gehalten.
+    status: open
+  - id: AC-SYNC-002-4
+    text: Die Phasenbeziehung wird innerhalb der in A.5.1.4 vorgeschriebenen Timing-Genauigkeit eingehalten.
+    status: open
+  - id: AC-SYNC-003-1
+    text: Das Word-Phase-Tracking ist auf die Dauer einer einzelnen Übertragung begrenzt.
+    status: open
+  - id: AC-SYNC-003-2
+    text: Zwischen zwei getrennten Übertragungen wird keine fortgesetzte Wortphasenbeziehung aufrechterhalten.
+    status: open
+  - id: AC-SYNC-004-1
+    text: Die Wortphasenreferenz des Sendemodulators ist zu keinem Zeitpunkt von der Empfängeraktivität abhängig.
+    status: open
+  - id: AC-SYNC-004-2
+    text: Der Sendemodulator arbeitet selbsttaktend innerhalb der in A.5.1.4 vorgeschriebenen Genauigkeit.
+    status: open
+  tests:
+  - file: tests/test_sync.cpp
+    description: Verifikation für FEAT-SYNC-001
+  notes: next_slot_ms = first_call_tx_ms + call_cycle_count * WORD_DURATION_MS. first_call_tx_ms nie ändern. Selbsttaktend.
+- id: FEAT-SYNC-002
+  title: Empfangsseitige Wortsynchronisation
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-SYNC-005
+  design_ref: FEAT-SYNC-002
+  module:
+  - src/ale2gmodem.cpp
+  depends_on:
+  - FEAT-SYNC-001
+  - FEAT-FEC-005
+  acceptance_criteria:
+  - id: AC-SYNC-005-1
+    text: Der Empfangsdemodulator akquiriert ALE-Signale aus dem Basisband-Audio.
+    status: open
+  - id: AC-SYNC-005-2
+    text: Der Empfangsdemodulator verfolgt (trackt) ALE-Signale und demoduliert sie.
+    status: open
+  - id: AC-SYNC-005-3
+    text: Der Empfangsdemodulator stellt die zurückgewonnenen digitalen Daten den Decodern bereit.
+    status: open
+  - id: AC-SYNC-005-4
+    text: Im DBM-Modus ist der Empfangsdemodulator in der Lage, einzelne Datenbits für das tiefe Deinterleaving und Dekodieren
+      ...
+    status: open
+  tests:
+  - file: tests/test_sync.cpp
+    description: Verifikation für FEAT-SYNC-002
+  notes: Sliding-Window oder Energy-Detector. Hängt von FEAT-LINK-001 ab. Wortphasengrenzen aus Energieübergängen.
+- id: FEAT-SYNC-003
+  title: Synchronisationskriterien & Schwellwerte
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-SYNC-006
+  - REQ-SYNC-007
+  design_ref: FEAT-SYNC-003
+  module:
+  - src/ale2gmodem.cpp
+  - src/ale_fec_codec.cpp
+  depends_on:
+  - FEAT-SYNC-002
+  - FEAT-FEC-005
+  acceptance_criteria:
+  - id: AC-SYNC-006-1
+    text: Alle neun der oben genannten Kriterien werden gemeinsam zur Diskriminierung und zum Lesen jedes ALE-Worts angewendet.
+    status: open
+  - id: AC-SYNC-006-2
+    text: Ein Wort wird nur dann akzeptiert, wenn sämtliche angewendeten Kriterien erfüllt sind.
+    status: open
+  - id: AC-SYNC-006-3
+    text: Der unanimous-vote-Schwellwert wird als leicht anpassbares BER-Signal-Qualitäts-Diskriminierungsmittel verwendet.
+    status: open
+  - id: AC-SYNC-006-4
+    text: Eine erfolgreiche Golay-Dekodierung zeigt an, dass alle erkannten Bitfehler innerhalb der Korrekturkapazität des
+      FEC-...
+    status: open
+  - id: AC-SYNC-006-5
+    text: Akzeptable Präambeln sind solche, die innerhalb der Grenzen dieses Standards liegen, wie in A.5.2.3.1.3 definiert.
+    status: open
+  - id: AC-SYNC-006-6
+    text: Akzeptable Zeichen bedeuten, dass jedes Zeichen innerhalb des zugehörigen ASCII-Subsets liegt.
+    status: open
+  - id: AC-SYNC-006-7
+    text: Alle drei Zeichen müssen innerhalb des Basic-38-ASCII-Subsets liegen, wenn eine Routing-Präambel (z. B. TO) dekodiert...
+    status: open
+  - id: AC-SYNC-006-8
+    text: Bei einem initialen REP ist eine beliebige Bitkombination bedingt akzeptabel; ohne die notwendige Kenntnis des vorher...
+    status: open
+  - id: AC-SYNC-007-1
+    text: Das System bietet die Möglichkeit, den unanimous-vote-Schwellwert zur Leistungsoptimierung einzustellen.
+    status: open
+  - id: AC-SYNC-007-2
+    text: 'Das System unterstützt alle vier Golay-Korrekturmodi: (3/4), (2/5), (1/6), (0/7).'
+    status: open
+  - id: AC-SYNC-007-3
+    text: Als Designziel (DO) wird eine automatische Anpassung von unanimous-vote-Schwellwert und Golay-Modus unter wechselnden...
+    status: open
+  - id: AC-SOUND-002-1
+    text: Sounding ist eine einseitige, einwegige Übertragung.
+    status: open
+  - id: AC-SOUND-002-2
+    text: Sounding wird in periodischen Intervallen auf unbesetzten Kanälen durchgeführt.
+    status: open
+  - id: AC-SOUND-002-3
+    text: Sounding ist keine interaktive, zweiseitige Technik.
+    status: open
+  - id: AC-SOUND-002-4
+    text: Die Identifizierung durch Hören des Sounding-Signals gibt eine hohe Wahrscheinlichkeit für zweiseitige Konnektivität.
+    status: open
+  - id: AC-SOUND-002-5
+    text: Sounding kann passiv am Empfänger erfolgen.
+    status: open
+  - id: AC-SOUND-002-6
+    text: Sounding verwendet die standardmäßige ALE-Signalisierung.
+    status: open
+  - id: AC-SOUND-002-7
+    text: Jede Station kann Sounding-Signale empfangen.
+    status: open
+  - id: AC-SOUND-002-8
+    text: Die Adresse-Information muss dem Bediener als Minimum angezeigt werden.
+    status: open
+  - id: AC-SOUND-002-9
+    text: Stationen mit Konnektivitäts- und LQA-Speichern müssen die Information speichern und später für den Linkaufbau verwen...
+    status: open
+  - id: AC-SOUND-002-10
+    text: Wenn eine Station kürzlich auf einem zum Sounding vorgesehenen Kanal gesendet hat, kann das erneute Senden entfallen,...
+    status: open
+  - id: AC-SOUND-002-11
+    text: Antworten eines abgehörten Netzes (oder einer Gruppe) dienen als Sounding-Signale für die anderen Netz-(oder Gruppen-...
+    status: open
+  - id: AC-SOUND-002-12
+    text: Alle Stationen müssen periodisches Sounding auf vorab vereinbarten Kanälen durchführen können.
+    status: open
+  - id: AC-SOUND-002-13
+    text: Die Sounding-Fähigkeit kann selektiv vom Bediener oder Controller aktiviert werden.
+    status: open
+  - id: AC-SOUND-002-14
+    text: Der Zeitraum zwischen den Sounds kann vom Bediener oder Controller einstellbar sein.
+    status: open
+  - id: AC-SOUND-002-15
+    text: Verfügbare Stationen müssen Adressen aller gehörter Stationen automatisch und temporär anzeigen, mit einem vom Bedien...
+    status: open
+  - id: AC-SOUND-003-1
+    text: Die Struktur des Sounds ist identisch mit dem Basic Call, mit Ausnahmen des Calling Cycles und des Message-Abschnitts.
+    status: open
+  - id: AC-SOUND-003-2
+    text: Der Conclusion (Terminator) muss gesendet werden, um die sendende Station zu identifizieren.
+    status: open
+  - id: AC-SOUND-003-3
+    text: Nur entweder TIS oder TWAS wird verwendet, niemals beide im selben Frame.
+    status: open
+  - id: AC-SOUND-003-4
+    text: Der Worttyp TIS zeigt an, dass potenzielle Anrufer ermutigt werden.
+    status: open
+  - id: AC-SOUND-003-5
+    text: Der Worttyp TWAS zeigt an, dass potenzielle Anrufer ignoriert werden sollen.
+    status: open
+  - id: AC-SOUND-004-1
+    text: Die minimale redundante Sounding-Zeit (Trs) muss 784 ms betragen.
+    status: open
+  - id: AC-SOUND-005-1
+    text: Alle Stationen besitzen die fundamentale Fähigkeit zum automatischen Single-Channel Sounding gemäß dem Standard-Proto...
+    status: open
+  - id: AC-SOUND-005-2
+    text: Stationen können optional das Protokoll für Single-Channel Sounding, Connectivity Tracking und Verfügbarkeitsübertrag...
+    status: open
+  - id: AC-SOUND-005-3
+    text: Das Basis-Sounding-Protokoll besteht nur aus dem Sound.
+    status: open
+  - id: AC-SOUND-005-4
+    text: Der Sound enthält die eigene Adresse der sendenden Station.
+    status: open
+  - id: AC-SOUND-005-5
+    text: Wenn eine Station Anrufer ermutigt und einen empfängt, folgt sie dem optionalen Handshake-Protokoll aus A.5.3.4.
+    status: open
+  - id: AC-SOUND-005-6
+    text: Wenn eine Station Anrufer ignorieren will, verwendet sie TWAS und kehrt sofort zu "available" zurück.
+    status: open
+  - id: AC-SOUND-005-7
+    text: Multikanal-Stationen können periodisch zu einem Single-Channel-Netz senden, um Aktivität und Verfügbarkeit zu melden.
+    status: open
+  - id: AC-SOUND-005-8
+    text: Bei Empfang eines Sounds müssen Empfänger die Adresse anzeigen und bei Verfügbarkeit Konnektivitätsinformation speich...
+    status: open
+  - id: AC-SOUND-006-1
+    text: Sounding ist mit dem Scanning-Timing kompatibel.
+    status: open
+  - id: AC-SOUND-006-2
+    text: Alle Stationen können Scanning-Sounding-Protokolle durchführen, auch auf fester Frequenz.
+    status: open
+  - id: AC-SOUND-006-3
+    text: Die Protokolle stellen einseitige Konnektivität auf jedem verfügbaren, gemeinsam abgetasteten Kanal sicher und bestät...
+    status: open
+  - id: AC-SOUND-006-4
+    text: Stationen verwenden die Protokolle für Multichannel Sounding, Connectivity Tracking und Verfügbarkeitsübertragung.
+    status: open
+  - id: AC-SOUND-007-1
+    text: Alle Timing-Betrachtungen und Berechnungen für individuelles Scanning Calling gelten auch für Scanning Sounding.
+    status: open
+  - id: AC-SOUND-007-2
+    text: Der Scanning Sound unterscheidet sich vom Single-Channel Sound durch die Erweiterung von Trs durch Tss zu Tsrs.
+    status: open
+  - id: AC-SOUND-007-3
+    text: 'Die Beziehung muss gelten: Tsrs = Tss + Trs.'
+    status: open
+  - id: AC-SOUND-007-4
+    text: Tss hat den gleichen Zweck wie Tsc für eine äquivalente Scanning-Situation.
+    status: open
+  - id: AC-SOUND-007-5
+    text: Kanal-Scanning-Sequenzen und Auswahlkriterien für Scanning Calling gelten auch für Scanning Sounding.
+    status: open
+  - id: AC-SOUND-007-6
+    text: Das "Sound Set" für sondierende Kanäle ist üblicherweise identisch mit dem "Scan Set".
+    status: open
+  - id: AC-SOUND-008-1
+    text: Bei geplantem Ignorieren von Anrufern muss das Call-Rejection Scanning Sounding Protocol verwendet werden.
+    status: open
+  - id: AC-SOUND-008-2
+    text: Die Station landet auf dem ersten Kanal im Scan Set und wartet (Twt), um die Kanalbelegung zu prüfen.
+    status: open
+  - id: AC-SOUND-008-3
+    text: Nach dem Abstimmen (Tt) geht die Station auf volle Leistung und initiiert den Scanning Sound Frame.
+    status: open
+  - id: AC-SOUND-008-4
+    text: Der Scanning Sound muss den Scan-Perioden der Empfänger-Stationen um mindestens Trs überschreiten, um Tdrw ≥ 784
+      ms s...
+    status: open
+  - id: AC-SOUND-008-5
+    text: '"TWAS A" wird redundant verwendet, um mitzuteilen, dass keine Anrufe erwartet werden.'
+    status: open
+  - id: AC-SOUND-008-6
+    text: Nach dem Scanning Sound Frame verlässt die Station sofort den Kanal und geht zum nächsten Kanal im Sound Set.
+    status: open
+  - id: AC-SOUND-008-7
+    text: Das Verfahren wiederholt sich, bis alle Kanäle gesendet oder übersprungen (bei Belegung) wurden.
+    status: open
+  - id: AC-SOUND-008-8
+    text: Nach Erschöpfung aller Sound Set Kanäle kehrt die Station automatisch zum "available" receive scan mode zurück.
+    status: open
+  - id: AC-SOUND-009-1
+    text: Das Timing von Sounding- und Scanning-Stationen ist vorab vereinbart, um mindestens eine Erfassungsmöglichkeit pro
+      Ka...
+    status: open
+  - id: AC-SOUND-009-2
+    text: Die scannende Station muss mindestens drei redundante Wörter des Sounding-Senders lesen können.
+    status: open
+  - id: AC-SOUND-009-3
+    text: Die scannende Station speichert die Konnektivitätsinformation und setzt das Scanning fort.
+    status: open
+  - id: AC-SOUND-010-1
+    text: Bei geplantem Begrüßen von Anrufern verwendet Station "A" seine normale Scanning Dwell Time (Td) oder Twt, whichever
+      ...
+    status: open
+  - id: AC-SOUND-010-2
+    text: Bei freiem Kanal initiiert "A" den Scanning Sound mit "TIS A".
+    status: open
+  - id: AC-SOUND-010-3
+    text: '"A" soundet für die gleiche Zeitdauer wie beim Call-Rejection Protocol.'
+    status: open
+  - id: AC-SOUND-010-4
+    text: Am Ende des Sounding Frame wartet "A" für Anrufe gemäß Twrt (z. B. 6 Tw für schnell-abstimmende Stationen).
+    status: open
+  - id: AC-SOUND-010-5
+    text: Während des Wartens hört "A" auf assoziierte und nicht-assozierte Anrufe sowie auf andere Sounds.
+    status: open
+  - id: AC-SOUND-010-6
+    text: Gehörte andere Sounds werden als Konnektivitätsinformation gespeichert, wenn die Station polling-fähig ist.
+    status: open
+  - id: AC-SOUND-010-7
+    text: Wenn keine Anrufe empfangen wurden, verlässt "A" den Kanal.
+    status: open
+  - id: AC-SOUND-011-1
+    text: Ein optionales Handshake kann unmittelbar nach einem Sounding mit einer gerufenen Station durchgeführt werden.
+    status: open
+  - id: AC-SOUND-011-2
+    text: Das Handshake-Protokoll ist identisch mit dem Single-Channel Individual Call Protocol, außer dem Trigger-Mechanismus.
+    status: open
+  - id: AC-SOUND-011-3
+    text: Das Handshake kann manuell oder automatisch (Bediener oder Controller) durch den Erwerb der Konnektivität vom Soundin...
+    status: open
+  - id: AC-SOUND-011-4
+    text: Wenn Stationen Scanning Sounding betreiben und für Anrufe empfänglich sind oder Kontakt erforderlich ist, sollte
+      das ...
+    status: open
+  - id: AC-SOUND-011-5
+    text: Die rufende Station sollte unverzüglich den Call initiieren, nachdem die gerufene Station ihre Übertragung beendet
+      hat.
+    status: open
+  - id: AC-SOUND-011-6
+    text: Eine Wait-Before-Transmit Time ist für das Handshake nach Sounding nicht erforderlich.
+    status: open
+  - id: AC-SOUND-011-7
+    text: Ein Empfänger, der den Sound einer gesuchten Station hört, kann unverzüglich mit dem einfachen Single-Channel Call
+      an...
+    status: open
+  - id: AC-SOUND-012-1
+    text: Sounding verwendet die standardmäßige ALE-Signalisierung.
+    status: open
+  - id: AC-SOUND-012-2
+    text: Sounding verwendet die gleichen Frequenzen wie das Scanning.
+    status: open
+  - id: AC-SOUND-012-3
+    text: Keine neuen Frequenzen oder speziellen Sounding-Kanäle werden benötigt.
+    status: open
+  - id: AC-SOUND-012-4
+    text: Das "Sound Set" ist üblicherweise identisch mit dem "Scan Set".
+    status: open
+  tests:
+  - file: tests/test_sync.cpp
+    description: Verifikation für FEAT-SYNC-003
+  notes: Unanimous-Vote-Schwellwert konfigurierbar. Golay-Modus 3/4,2/5,1/6,0/7 wählbar. Präambel+ASCII-Check kombiniert.
+- id: FEAT-SOUND-001
+  title: Single-Channel Sounding
+  status: todo
+  priority: COULD
+  implements:
+  - REQ-SOUND-002
+  - REQ-SOUND-003
+  - REQ-SOUND-004
+  design_ref: FEAT-SOUND-001
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-FRAME-005
+  - FEAT-ADDR-002
+  acceptance_criteria:
+  - id: AC-SOUND-002-1
+    text: Sounding ist eine einseitige, einwegige Übertragung.
+    status: open
+  - id: AC-SOUND-002-2
+    text: Sounding wird in periodischen Intervallen auf unbesetzten Kanälen durchgeführt.
+    status: open
+  - id: AC-SOUND-002-3
+    text: Sounding ist keine interaktive, zweiseitige Technik.
+    status: open
+  - id: AC-SOUND-002-4
+    text: Die Identifizierung durch Hören des Sounding-Signals gibt eine hohe Wahrscheinlichkeit für zweiseitige Konnektivität.
+    status: open
+  - id: AC-SOUND-002-5
+    text: Sounding kann passiv am Empfänger erfolgen.
+    status: open
+  - id: AC-SOUND-002-6
+    text: Sounding verwendet die standardmäßige ALE-Signalisierung.
+    status: open
+  - id: AC-SOUND-002-7
+    text: Jede Station kann Sounding-Signale empfangen.
+    status: open
+  - id: AC-SOUND-002-8
+    text: Die Adresse-Information muss dem Bediener als Minimum angezeigt werden.
+    status: open
+  - id: AC-SOUND-002-9
+    text: Stationen mit Konnektivitäts- und LQA-Speichern müssen die Information speichern und später für den Linkaufbau verwenden
+    status: open
+  - id: AC-SOUND-002-10
+    text: Wenn eine Station kürzlich auf einem zum Sounding vorgesehenen Kanal gesendet hat, kann das erneute Senden entfallen,
+      bi
+    status: open
+  - id: AC-SOUND-002-11
+    text: Antworten eines abgehörten Netzes (oder einer Gruppe) dienen als Sounding-Signale für die anderen Netz-(oder Gruppen-)Em
+    status: open
+  - id: AC-SOUND-002-12
+    text: Alle Stationen müssen periodisches Sounding auf vorab vereinbarten Kanälen durchführen können.
+    status: open
+  - id: AC-SOUND-002-13
+    text: Die Sounding-Fähigkeit kann selektiv vom Bediener oder Controller aktiviert werden.
+    status: open
+  - id: AC-SOUND-002-14
+    text: Der Zeitraum zwischen den Sounds kann vom Bediener oder Controller einstellbar sein.
+    status: open
+  - id: AC-SOUND-002-15
+    text: 'Verfügbare Stationen müssen Adressen aller gehörter Stationen automatisch und temporär anzeigen, mit einem vom
+      Bediener '
+    status: open
+  - id: AC-SOUND-003-1
+    text: Die Struktur des Sounds ist identisch mit dem Basic Call, mit Ausnahmen des Calling Cycles und des Message-Abschnitts.
+    status: open
+  - id: AC-SOUND-003-2
+    text: Der Conclusion (Terminator) muss gesendet werden, um die sendende Station zu identifizieren.
+    status: open
+  - id: AC-SOUND-003-3
+    text: Nur entweder TIS oder TWAS wird verwendet, niemals beide im selben Frame.
+    status: open
+  - id: AC-SOUND-003-4
+    text: Der Worttyp TIS zeigt an, dass potenzielle Anrufer ermutigt werden.
+    status: open
+  - id: AC-SOUND-003-5
+    text: Der Worttyp TWAS zeigt an, dass potenzielle Anrufer ignoriert werden sollen.
+    status: open
+  - id: AC-SOUND-004-1
+    text: Die minimale redundante Sounding-Zeit (Trs) muss 784 ms betragen.
+    status: open
+  tests:
+  - file: tests/test_sounding.cpp
+    description: Verifikation für FEAT-SOUND-001
+  notes: Nur Conclusion senden (TIS=Accept, TWAS=Reject). Kein Calling Cycle, kein Message. Intervall konfigurierbar.
+- id: FEAT-SOUND-002
+  title: Multi-Channel Sounding
+  status: todo
+  priority: COULD
+  implements:
+  - REQ-SOUND-005
+  - REQ-SOUND-006
+  - REQ-SOUND-007
+  - REQ-SOUND-008
+  - REQ-SOUND-009
+  design_ref: FEAT-SOUND-002
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-SOUND-001
+  acceptance_criteria:
+  - id: AC-SOUND-005-1
+    text: Alle Stationen besitzen die fundamentale Fähigkeit zum automatischen Single-Channel Sounding gemäß dem Standard-Protokol
+    status: open
+  - id: AC-SOUND-005-2
+    text: Stationen können optional das Protokoll für Single-Channel Sounding, Connectivity Tracking und Verfügbarkeitsübertragung
+    status: open
+  - id: AC-SOUND-005-3
+    text: Das Basis-Sounding-Protokoll besteht nur aus dem Sound.
+    status: open
+  - id: AC-SOUND-005-4
+    text: Der Sound enthält die eigene Adresse der sendenden Station.
+    status: open
+  - id: AC-SOUND-005-5
+    text: Wenn eine Station Anrufer ermutigt und einen empfängt, folgt sie dem optionalen Handshake-Protokoll aus A.5.3.4.
+    status: open
+  - id: AC-SOUND-005-6
+    text: Wenn eine Station Anrufer ignorieren will, verwendet sie TWAS und kehrt sofort zu "available" zurück.
+    status: open
+  - id: AC-SOUND-005-7
+    text: Multikanal-Stationen können periodisch zu einem Single-Channel-Netz senden, um Aktivität und Verfügbarkeit zu melden.
+    status: open
+  - id: AC-SOUND-005-8
+    text: Bei Empfang eines Sounds müssen Empfänger die Adresse anzeigen und bei Verfügbarkeit Konnektivitätsinformation speichern
+    status: open
+  - id: AC-SOUND-006-1
+    text: Sounding ist mit dem Scanning-Timing kompatibel.
+    status: open
+  - id: AC-SOUND-006-2
+    text: Alle Stationen können Scanning-Sounding-Protokolle durchführen, auch auf fester Frequenz.
+    status: open
+  - id: AC-SOUND-006-3
+    text: Die Protokolle stellen einseitige Konnektivität auf jedem verfügbaren, gemeinsam abgetasteten Kanal sicher und bestätige
+    status: open
+  - id: AC-SOUND-006-4
+    text: Stationen verwenden die Protokolle für Multichannel Sounding, Connectivity Tracking und Verfügbarkeitsübertragung.
+    status: open
+  - id: AC-SOUND-007-1
+    text: Alle Timing-Betrachtungen und Berechnungen für individuelles Scanning Calling gelten auch für Scanning Sounding.
+    status: open
+  - id: AC-SOUND-007-2
+    text: Der Scanning Sound unterscheidet sich vom Single-Channel Sound durch die Erweiterung von Trs durch Tss zu Tsrs.
+    status: open
+  - id: AC-SOUND-007-3
+    text: 'Die Beziehung muss gelten: Tsrs = Tss + Trs.'
+    status: open
+  - id: AC-SOUND-007-4
+    text: Tss hat den gleichen Zweck wie Tsc für eine äquivalente Scanning-Situation.
+    status: open
+  - id: AC-SOUND-007-5
+    text: Kanal-Scanning-Sequenzen und Auswahlkriterien für Scanning Calling gelten auch für Scanning Sounding.
+    status: open
+  - id: AC-SOUND-007-6
+    text: Das "Sound Set" für sondierende Kanäle ist üblicherweise identisch mit dem "Scan Set".
+    status: open
+  - id: AC-SOUND-008-1
+    text: Bei geplantem Ignorieren von Anrufern muss das Call-Rejection Scanning Sounding Protocol verwendet werden.
+    status: open
+  - id: AC-SOUND-008-2
+    text: Die Station landet auf dem ersten Kanal im Scan Set und wartet (Twt), um die Kanalbelegung zu prüfen.
+    status: open
+  - id: AC-SOUND-008-3
+    text: Nach dem Abstimmen (Tt) geht die Station auf volle Leistung und initiiert den Scanning Sound Frame.
+    status: open
+  - id: AC-SOUND-008-4
+    text: Der Scanning Sound muss den Scan-Perioden der Empfänger-Stationen um mindestens Trs überschreiten, um Tdrw ≥ 784
+      ms sich
+    status: open
+  - id: AC-SOUND-008-5
+    text: '"TWAS A" wird redundant verwendet, um mitzuteilen, dass keine Anrufe erwartet werden.'
+    status: open
+  - id: AC-SOUND-008-6
+    text: Nach dem Scanning Sound Frame verlässt die Station sofort den Kanal und geht zum nächsten Kanal im Sound Set.
+    status: open
+  - id: AC-SOUND-008-7
+    text: Das Verfahren wiederholt sich, bis alle Kanäle gesendet oder übersprungen (bei Belegung) wurden.
+    status: open
+  - id: AC-SOUND-008-8
+    text: Nach Erschöpfung aller Sound Set Kanäle kehrt die Station automatisch zum "available" receive scan mode zurück.
+    status: open
+  - id: AC-SOUND-009-1
+    text: Das Timing von Sounding- und Scanning-Stationen ist vorab vereinbart, um mindestens eine Erfassungsmöglichkeit pro
+      Kanal
+    status: open
+  - id: AC-SOUND-009-2
+    text: Die scannende Station muss mindestens drei redundante Wörter des Sounding-Senders lesen können.
+    status: open
+  - id: AC-SOUND-009-3
+    text: Die scannende Station speichert die Konnektivitätsinformation und setzt das Scanning fort.
+    status: open
+  tests:
+  - file: tests/test_sounding.cpp
+    description: Verifikation für FEAT-SOUND-002
+  notes: Sounding kompatibel mit Scanning-Receivern. Trs und Timing aus A.5.3.3. Design noch offen.
+- id: FEAT-SOUND-003
+  title: Optionales Handshake nach Sounding
+  status: todo
+  priority: COULD
+  implements:
+  - REQ-SOUND-010
+  - REQ-SOUND-011
+  - REQ-SOUND-012
+  design_ref: FEAT-SOUND-003
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-SOUND-001
+  acceptance_criteria:
+  - id: AC-SOUND-010-1
+    text: Bei geplantem Begrüßen von Anrufern verwendet Station "A" seine normale Scanning Dwell Time (Td) oder Twt, whichever
+      län
+    status: open
+  - id: AC-SOUND-010-2
+    text: Bei freiem Kanal initiiert "A" den Scanning Sound mit "TIS A".
+    status: open
+  - id: AC-SOUND-010-3
+    text: '"A" soundet für die gleiche Zeitdauer wie beim Call-Rejection Protocol.'
+    status: open
+  - id: AC-SOUND-010-4
+    text: Am Ende des Sounding Frame wartet "A" für Anrufe gemäß Twrt (z. B. 6 Tw für schnell-abstimmende Stationen).
+    status: open
+  - id: AC-SOUND-010-5
+    text: Während des Wartens hört "A" auf assoziierte und nicht-assozierte Anrufe sowie auf andere Sounds.
+    status: open
+  - id: AC-SOUND-010-6
+    text: Gehörte andere Sounds werden als Konnektivitätsinformation gespeichert, wenn die Station polling-fähig ist.
+    status: open
+  - id: AC-SOUND-010-7
+    text: Wenn keine Anrufe empfangen wurden, verlässt "A" den Kanal.
+    status: open
+  - id: AC-SOUND-011-1
+    text: Ein optionales Handshake kann unmittelbar nach einem Sounding mit einer gerufenen Station durchgeführt werden.
+    status: open
+  - id: AC-SOUND-011-2
+    text: Das Handshake-Protokoll ist identisch mit dem Single-Channel Individual Call Protocol, außer dem Trigger-Mechanismus.
+    status: open
+  - id: AC-SOUND-011-3
+    text: Das Handshake kann manuell oder automatisch (Bediener oder Controller) durch den Erwerb der Konnektivität vom Sounding
+      g
+    status: open
+  - id: AC-SOUND-011-4
+    text: Wenn Stationen Scanning Sounding betreiben und für Anrufe empfänglich sind oder Kontakt erforderlich ist, sollte
+      das opt
+    status: open
+  - id: AC-SOUND-011-5
+    text: Die rufende Station sollte unverzüglich den Call initiieren, nachdem die gerufene Station ihre Übertragung beendet
+      hat.
+    status: open
+  - id: AC-SOUND-011-6
+    text: Eine Wait-Before-Transmit Time ist für das Handshake nach Sounding nicht erforderlich.
+    status: open
+  - id: AC-SOUND-011-7
+    text: Ein Empfänger, der den Sound einer gesuchten Station hört, kann unverzüglich mit dem einfachen Single-Channel Call
+      antwo
+    status: open
+  - id: AC-SOUND-012-1
+    text: Sounding verwendet die standardmäßige ALE-Signalisierung.
+    status: open
+  - id: AC-SOUND-012-2
+    text: Sounding verwendet die gleichen Frequenzen wie das Scanning.
+    status: open
+  - id: AC-SOUND-012-3
+    text: Keine neuen Frequenzen oder speziellen Sounding-Kanäle werden benötigt.
+    status: open
+  - id: AC-SOUND-012-4
+    text: Das "Sound Set" ist üblicherweise identisch mit dem "Scan Set".
+    status: open
+  tests:
+  - file: tests/test_sounding.cpp
+    description: Verifikation für FEAT-SOUND-003
+  notes: Verbindungsaufbau ausgelöst durch Konnektivitäts-Erkennung beim Sounding per A.5.3.4.
+- id: FEAT-CHAN-001
+  title: LQA-Messung (BER, SINAD, MP)
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-CHAN-001
+  - REQ-CHAN-002
+  - REQ-CHAN-003
+  - REQ-CHAN-004
+  - REQ-CHAN-005
+  - REQ-CHAN-006
+  - REQ-CHAN-007
+  - REQ-CHAN-008
+  - REQ-CHAN-009
+  - REQ-CHAN-010
+  - REQ-CHAN-011
+  - REQ-CHAN-012
+  - REQ-CHAN-013
+  - REQ-CHAN-014
+  - REQ-CHAN-015
+  design_ref: FEAT-CHAN-001
+  module:
+  - src/ale_state_machine.cpp
+  - include/ale_state_machine.h
+  depends_on:
+  - FEAT-FEC-005
+  acceptance_criteria:
+  - id: AC-CHAN-001-1
+    text: Das System implementiert eine automatische Kanalauswahl aus einem vorab vereinbarten Kanalsatz.
+    status: open
+  - id: AC-CHAN-001-2
+    text: Die Kanalauswahl berücksichtigt gespeicherte Link-Quality-Daten.
+    status: open
+  - id: AC-CHAN-001-3
+    text: Die Kanalauswahl berücksichtigt die aktuelle Kanalbelegung.
+    status: open
+  - id: AC-CHAN-002-1
+    text: Das System leitet Qualitätsmessungen aus empfangenen ALE-Signalen ab.
+    status: open
+  - id: AC-CHAN-002-2
+    text: Die Messwerte werden im Link Quality Memory gespeichert.
+    status: open
+  - id: AC-CHAN-002-3
+    text: Die gespeicherten LQA-Daten bilden die Grundlage für die Kanalauswahl.
+    status: open
+  - id: AC-CHAN-003-1
+    text: LQA-Werte beeinflussen die Kanalauswahl für Calling und Kommunikation.
+    status: open
+  - id: AC-CHAN-004-1
+    text: Die Link-Qualität wird während der gesamten Kommunikation fortlaufend mit LQA überwacht.
+    status: open
+  - id: AC-CHAN-005-1
+    text: LQA-Werte sind auf Anfrage übertragbar.
+    status: open
+  - id: AC-CHAN-005-2
+    text: LQA-Werte sind nach Anweisung des Netzwerkmanagers übertragbar.
+    status: open
+  - id: AC-CHAN-006-1
+    text: CMD LQA-Wort wird auf Anfrage der handshaking Station eingefügt.
+    status: open
+  - id: AC-CHAN-006-2
+    text: CMD LQA-Wort wird bei vorheriger Netzvereinbarung eingefügt.
+    status: open
+  - id: AC-CHAN-006-3
+    text: CMD LQA-Wort wird bei protokollarischer Vorgabe eingefügt.
+    status: open
+  - id: AC-CHAN-006-4
+    text: Eine explizite Anweisung des Operators oder Controllers hebt diese Pflicht auf.
+    status: open
+  - id: AC-CHAN-007-1
+    text: Eine polling-fähige Station kann durch Setzen von KA1="1" einen LQA-Report anfordern.
+    status: open
+  - id: AC-CHAN-008-1
+    text: Nicht-polling-fähige Stationen setzen KA1="0" in gesendetem CMD LQA.
+    status: open
+  - id: AC-CHAN-009-1
+    text: Der aktive/ passive Modus von LQA wird durch Netzwerkmanagement gesteuert.
+    status: open
+  - id: AC-CHAN-010-1
+    text: Die Operator-Anzeige zeigt höhere Zahlenwerte für bessere Kanäle.
+    status: open
+  - id: AC-CHAN-011-1
+    text: BER wird durch Zählen nicht-einstimmiger Majority-Vote-Abstimmungen gemessen.
+    status: open
+  - id: AC-CHAN-011-2
+    text: Der Messbereich beträgt 0 bis 48.
+    status: open
+  - id: AC-CHAN-012-1
+    text: 'Bei fehlenden unkorrigierbaren Fehlern in beiden Hälften: nicht-einstimmige Abstimmungen zur Gesamtsumme addieren.'
+    status: open
+  - id: AC-CHAN-012-2
+    text: 'Bei unkorrigierbaren Fehlern in mindestens einer Hälfte: 48 zur Gesamtsumme addieren (nicht-einstimmige Abstimmungen
+      ...'
+    status: open
+  - id: AC-CHAN-012-3
+    text: Der Durchschnittswert (Gesamtsumme / Anzahl empfangener Words) wird im Link Quality Memory gespeichert.
+    status: open
+  - id: AC-CHAN-012-4
+    text: Der gespeicherte Wert wird der sendenden Station und dem tragenden Kanal zugeordnet.
+    status: open
+  - id: AC-CHAN-013-1
+    text: SINAD wird als (S+N+D)/(N+D)-Verhältnis gemessen.
+    status: open
+  - id: AC-CHAN-013-2
+    text: Die Messung erfolgt über die volle Dauer des empfangenen ALE-Signals.
+    status: open
+  - id: AC-CHAN-013-3
+    text: SINAD wird auf allen empfangenen ALE-Signalen gemessen.
+    status: open
+  - id: AC-CHAN-014-1
+    text: Eine Implementierung kann MP-Messung unterstützen oder unterlassen.
+    status: open
+  - id: AC-CHAN-015-1
+    text: SINAD-Werte werden dem Operator in dB angezeigt.
+    status: open
+  tests:
+  - file: tests/test_lqa_analyzer.cpp
+    description: Verifikation für FEAT-CHAN-001
+  notes: 'BER = (48 - unanimous_count)/48. SINAD = (S+N+D)/(N+D) in dB. MP optional. Scores: höher = besser für Operator-Anzeige.'
+- id: FEAT-CHAN-002
+  title: LQA CMD Reporting
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-CHAN-016
+  - REQ-CHAN-017
+  - REQ-CHAN-018
+  - REQ-CHAN-019
+  - REQ-CHAN-020
+  - REQ-CHAN-021
+  - REQ-CHAN-022
+  design_ref: FEAT-CHAN-002
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-CHAN-001
+  acceptance_criteria:
+  - id: AC-CHAN-016-1
+    text: Alle ALE-Stationen unterstützen die CMD LQA-Funktion.
+    status: open
+  - id: AC-CHAN-017-1
+    text: CMD LQA-Wort trägt BER-, SINAD- und MP-Informationen.
+    status: open
+  - id: AC-CHAN-017-2
+    text: Bei KA1="1" antwortet die empfangende Station mit einem LQA-Report.
+    status: open
+  - id: AC-CHAN-017-3
+    text: Bei KA1="0" ist kein LQA-Report erforderlich.
+    status: open
+  - id: AC-CHAN-018-1
+    text: BER-Messung und -Meldung ist verpflichtend.
+    status: open
+  - id: AC-CHAN-018-2
+    text: Das BER-Feld besteht aus 5 Bits.
+    status: open
+  - id: AC-CHAN-018-3
+    text: Die BER-Werte entsprechen Tabelle A-XIII.
+    status: open
+  - id: AC-CHAN-019-1
+    text: SINAD wird als 5-Bit-Feld dargestellt.
+    status: open
+  - id: AC-CHAN-019-2
+    text: Der Bereich erstreckt sich von 0 bis 30 dB in 1-dB-Schritten.
+    status: open
+  - id: AC-CHAN-019-3
+    text: Der Code 00000 repräsentiert 0 dB oder weniger.
+    status: open
+  - id: AC-CHAN-019-4
+    text: Der Code 11111 signalisiert "keine Messung verfügbar."
+    status: open
+  - id: AC-CHAN-020-1
+    text: MP wird in 3 Bits dargestellt (wenn implementiert).
+    status: open
+  - id: AC-CHAN-020-2
+    text: Der Wert in ms ist auf die nächste ganze Zahl gerundet.
+    status: open
+  - id: AC-CHAN-020-3
+    text: Werte größer als 6 ms werden als 6 gemeldet.
+    status: open
+  - id: AC-CHAN-020-4
+    text: Bei fehlender MP-Messung wird 7 gemeldet.
+    status: open
+  - id: AC-CHAN-021-1
+    text: Eine Implementierung kann den Local Noise Report CMD unterstützen oder unterlassen.
+    status: open
+  - id: AC-CHAN-021-2
+    text: Der Report enthält Mittel- und Maximalrauschleistung der vergangenen 60 Minuten.
+    status: open
+  - id: AC-CHAN-022-1
+    text: Einheiten sind dB relativ zu 0,1 µV / 3 kHz.
+    status: open
+  - id: AC-CHAN-022-2
+    text: Wert ≤ 0 dB wird als 0 gesendet.
+    status: open
+  - id: AC-CHAN-022-3
+    text: Wert 0–126 dB wird als gerundete ganze Zahl gesendet.
+    status: open
+  - id: AC-CHAN-022-4
+    text: Wert > 126 dB wird als 126 gesendet.
+    status: open
+  - id: AC-CHAN-022-5
+    text: Code 127 signalisiert "kein Report verfügbar."
+    status: open
+  tests:
+  - file: tests/test_lqa_database.cpp
+    description: Verifikation für FEAT-CHAN-002
+  notes: 'CMD-Wort: BER 5-Bit, SINAD 5-Bit (0-30dB), MP 3-Bit (0-6ms), KA1-Polling-Flag. Verpflichtendes Feature.'
+- id: FEAT-CHAN-003
+  title: Kanalauswahl-Algorithmen
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-CHAN-023
+  - REQ-CHAN-024
+  - REQ-CHAN-025
+  - REQ-CHAN-026
+  - REQ-CHAN-027
+  - REQ-CHAN-028
+  - REQ-CHAN-029
+  - REQ-CHAN-030
+  design_ref: FEAT-CHAN-003
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-CHAN-001
+  acceptance_criteria:
+  - id: AC-CHAN-023-1
+    text: Alle Stationen unterstützen die Kanalselektion für eine einzelne Station basierend auf LQA.
+    status: open
+  - id: AC-CHAN-024-1
+    text: Für Zwei-Wege-Link-Auswahl werden Messungen in beide Richtungen einbezogen.
+    status: open
+  - id: AC-CHAN-024-2
+    text: Der bilaterale Score ist die Summe der LQA-Werte beider Richtungen.
+    status: open
+  - id: AC-CHAN-025-1
+    text: Ein LQA-Wert von 0 repräsentiert ausgezeichnete Qualität.
+    status: open
+  - id: AC-CHAN-025-2
+    text: Ein LQA-Wert von 30 repräsentiert sehr schlechte Qualität.
+    status: open
+  - id: AC-CHAN-025-3
+    text: Der Wert "x" kennzeichnet einen gescheiterten Handshake-Versuch.
+    status: open
+  - id: AC-CHAN-025-4
+    text: Der Wert "-" kennzeichnet fehlende Verfügbarkeit ohne erfolgten Handshake-Versuch.
+    status: open
+  - id: AC-CHAN-026-1
+    text: Bei One-Way-Broadcast werden TO-Scores stärker gewichtet als FROM-Scores.
+    status: open
+  - id: AC-CHAN-027-1
+    text: Beim Abhören werden FROM-Scores stärker gewichtet als TO-Scores.
+    status: open
+  - id: AC-CHAN-028-1
+    text: Die Station unterstützt die Kanalselektion für mehrere Stationen.
+    status: open
+  - id: AC-CHAN-028-2
+    text: Die Auswahl basiert auf den LQA-Speicherwerten.
+    status: open
+  - id: AC-CHAN-029-1
+    text: Für Multi-Station Broadcast werden TO-Scores priorisiert.
+    status: open
+  - id: AC-CHAN-030-1
+    text: Für Multi-Station Listening werden FROM-Scores priorisiert.
+    status: open
+  tests:
+  - file: tests/test_lqa_analyzer.cpp
+    description: Verifikation für FEAT-CHAN-003
+  notes: Single+Multi-Station. TO-Scores für Link/Broadcast, FROM-Scores für Listening. Gewichtungsformel noch zu definieren.
+- id: FEAT-CHAN-004
+  title: Listen Before Transmit
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-CHAN-031
+  - REQ-CHAN-032
+  - REQ-CHAN-033
+  - REQ-CHAN-034
+  design_ref: FEAT-CHAN-004
+  module:
+  - src/ale_state_machine.cpp
+  - src/ale2gmodem.cpp
+  depends_on:
+  - FEAT-CHAN-001
+  acceptance_criteria:
+  - id: AC-CHAN-031-1
+    text: Vor jedem Call oder Sound wird für die Dauer Twt auf dem Kanal gelauscht.
+    status: open
+  - id: AC-CHAN-031-2
+    text: Bei erkannten Verkehr wird das Senden unterlassen.
+    status: open
+  - id: AC-CHAN-031-3
+    text: Ein aufgrund von Verkehr abgebrochener Sound wird erneut geplant.
+    status: open
+  - id: AC-CHAN-031-4
+    text: Ein aufgrund von Verkehr abgebrochener Call wählt einen anderen Kanal.
+    status: open
+  - id: AC-CHAN-032-1
+    text: Die Listen-Before-Transmit-Dauer ist programmierbar.
+    status: open
+  - id: AC-CHAN-032-2
+    text: 'Bei ALE-nur Kanälen: Pause ≥ 2 × Trw.'
+    status: open
+  - id: AC-CHAN-032-3
+    text: 'Bei anderen Kanälen: Pause ≥ 2 Sekunden.'
+    status: open
+  - id: AC-CHAN-032-4
+    text: Bereits verbrachte Hörzeit kann angerechnet werden.
+    status: open
+  - id: AC-CHAN-033-1
+    text: Verkehrserkennung erfolgt gemäß A.4.2.2.
+    status: open
+  - id: AC-CHAN-034-1
+    text: Der Operator kann die Listen-Before-Transmit-Pause überschreiben.
+    status: open
+  - id: AC-CHAN-034-2
+    text: Der Operator kann den Transmit-Lockout überschreiben.
+    status: open
+  tests:
+  - file: tests/test_channel_selection.cpp
+    description: Verifikation für FEAT-CHAN-004
+  notes: Pflichtpause vor TX. Dauer programmierbar. Erkennt ALE, DSB, AM, FSK, CW, SSB. Override möglich.
+- id: FEAT-LINK-001
+  title: FSK Symbol-Detektor (RX-Pfad)
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-LINK-004
+  design_ref: FEAT-LINK-001
+  module:
+  - src/ale2gmodem.cpp
+  - include/ale2gmodem.h
+  depends_on:
+  - FEAT-WAVEFORM-001
+  - FEAT-WAVEFORM-002
+  acceptance_criteria:
+  - id: AC-LINK-004-1
+    text: Ein sauber gesendetes Wort wird fehlerfrei zurückgewonnen (Loopback).
+    status: open
+  tests:
+  - file: tests/test_symbol_detector.cpp
+    description: Verifikation für FEAT-LINK-001
+  notes: Goertzel-Filter für 8 feste Frequenzen. k=round(64*freq/8000). Energiemaximum = Symbol. Aktuell Placeholder.
+- id: FEAT-LINK-002
+  title: Individual & Net Call TX
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-LINK-001
+  - REQ-LINK-002
+  design_ref: FEAT-LINK-002
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-FRAME-005
+  - FEAT-ADDR-002
+  acceptance_criteria:
+  - id: AC-LINK-001-1
+    text: 'Die gesendete Wortfolge entspricht: Scanning (TO-Erstwort), Leading (vollständige Adresse ×2), Conclusion (eigene
+      Adr...'
+    status: open
+  tests:
+  - file: tests/ale_modem_integration_test.cpp
+    description: Verifikation für FEAT-LINK-002
+  notes: Gleicher Ablauf SCANNING→LEADING→CONCLUSION→LISTENING. active_call_type unterscheidet nur intern.
+- id: FEAT-LINK-003
+  title: Group Call TX
+  status: todo
+  priority: SHOULD
+  implements:
+  - REQ-LINK-003
+  design_ref: FEAT-LINK-003
+  module:
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-LINK-002
+  - FEAT-ADDR-003
+  acceptance_criteria:
+  - id: AC-LINK-003-1
+    text: Jede Zieladresse erscheint im Leading-Call vollständig.
+    status: open
+  - id: AC-LINK-003-2
+    text: Die Scanning-Sequenz endet nicht mit einem Wiederholungswort.
+    status: open
+  tests:
+  - file: tests/test_link_establishment.cpp
+    description: Verifikation für FEAT-LINK-003
+  notes: 'group_targets statt active_call_to. Scanning: THRU/REP. Leading: geflattenet, zweites Ziel mit REP nicht TO.'
+- id: FEAT-LINK-004
+  title: End-of-Frame-Erkennung
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-LINK-005
+  design_ref: FEAT-LINK-004
+  module:
+  - src/ale2gmodem.cpp
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-LINK-001
+  - FEAT-FEC-004
+  acceptance_criteria:
+  - id: AC-LINK-005-1
+    text: Nach einer gültigen Conclusion plus definiertem Wartedelay gilt die Übertragung als beendet.
+    status: open
+  tests:
+  - file: tests/test_link_establishment.cpp
+    description: Verifikation für FEAT-LINK-004
+  notes: TIS/TWAS + konstante Wortphase + Tlww=392ms. Max 4 Folgewörter (DATA/REP). Kein weiteres Wort = Frame-Ende.
+- id: FEAT-LINK-005
+  title: Adress-Präfix-Matching
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-LINK-006
+  design_ref: FEAT-LINK-005
+  module:
+  - src/ale_word.cpp
+  - include/ale_word.h
+  depends_on:
+  - FEAT-WORD-001
+  acceptance_criteria:
+  - id: AC-LINK-006-1
+    text: Eine Station mit mehr als drei Adresszeichen erkennt einen Scanning-Call, der nur ihr erstes Adresswort enthält.
+    status: open
+  - id: AC-LINK-007-1
+    text: Der ALE-Controller unterstützt Notfallsteuerung durch den Operator.
+    status: open
+  - id: AC-LINK-007-2
+    text: Jeder ALE-Controller bietet manuelle Steuerungsfähigkeit für den Operator.
+    status: open
+  - id: AC-LINK-007-3
+    text: In Notfällen kann der Operator direkt das Basis-SSB-Radio steuern.
+    status: open
+  - id: AC-LINK-007-4
+    text: Während normaler Betrieb wird das Radio automatisch gesteuert.
+    status: open
+  - id: AC-LINK-007-5
+    text: Der Operator betreibt das Radio über seinen zugehörigen Controller.
+    status: open
+  - id: AC-LINK-007-6
+    text: Die „always listening“-Fähigkeit des Controllers wird nicht beeinträchtigt.
+    status: open
+  - id: AC-LINK-007-7
+    text: Die Anforderung zur manuellen PTT-Bedienung gemäß 4.2.2 bleibt unberührt.
+    status: open
+  - id: AC-LINK-008-1
+    text: Das dreifache Handshake-Protokoll ist ausreichend für eine Verbindung.
+    status: open
+  - id: AC-LINK-008-2
+    text: Slotted Responses ermöglichen die Verbindung einer Station mit mehreren Stationen.
+    status: open
+  - id: AC-LINK-008-3
+    text: Die Handshake-Protokolle sind identisch für Einzel- und Mehr-Station-Verbindungen.
+    status: open
+  - id: AC-LINK-009-1
+    text: Das System implementiert alle Timing-Funktionen gemäß Tabelle A-XV.
+    status: open
+  - id: AC-LINK-009-2
+    text: Alle Standard-Timing-Werte (Trw = 392 ms, Tw = 130,66… ms, Ts max = 50 s, etc.) werden eingehalten.
+    status: open
+  - id: AC-LINK-009-3
+    text: Ein verlängerter Message-Abschnitt (AMD/DTM/DBM) beginnt nicht vor dem Start des 30. Worts (11,368 s).
+    status: open
+  - id: AC-LINK-009-4
+    text: Der Message-Abschnitt endet am Ende des Orderwire-Protokolls ohne weitere Verlängerung.
+    status: open
+  - id: AC-LINK-009-5
+    text: Die Conclusion beginnt unmittelbar am Ende des Message-Abschnitts.
+    status: open
+  - id: AC-LINK-010-1
+    text: Der Controller kann sich in einem von drei Zuständen befinden.
+    status: open
+  - id: AC-LINK-010-2
+    text: Die Zustände sind konzeptionell definiert.
+    status: open
+  - id: AC-LINK-010-3
+    text: Die Abbildung A-28 zeigt die Zustände.
+    status: open
+  - id: AC-LINK-011-1
+    text: Die rufende Station sendet Aufrufe auf gescannten Kanälen in der durch den Kanal-Auswahl-Algorithmus bestimmten
+      Reihe...
+    status: open
+  - id: AC-LINK-011-2
+    text: Der Link wird auf dem ersten Kanal hergestellt, der einen erfolgreichen Handshake unterstützt.
+    status: open
+  - id: AC-LINK-012-1
+    text: Der Link wird beendet, wenn ein Kanal abgelehnt wird.
+    status: open
+  - id: AC-LINK-012-2
+    text: Die LQA-Daten werden aktualisiert.
+    status: open
+  - id: AC-LINK-012-3
+    text: Die Messungen stammen aus dem Verknüpfungsprozess.
+    status: open
+  - id: AC-LINK-013-1
+    text: Besetzte Kanäle werden übersprungen.
+    status: open
+  - id: AC-LINK-013-2
+    text: Störungen werden verhindert.
+    status: open
+  - id: AC-LINK-013-3
+    text: Zuvor besetzte Kanäle werden erneut durchsucht.
+    status: open
+  - id: AC-LINK-013-4
+    text: Aufruf wird gestartet, wenn Kanäle frei sind.
+    status: open
+  - id: AC-LINK-014-1
+    text: Der Link-Versuch wird beendet, wenn alle Kanäle erschöpft sind.
+    status: open
+  - id: AC-LINK-014-2
+    text: Der Zustand wechselt zum verfügbaren Scan-Modus.
+    status: open
+  - id: AC-LINK-014-3
+    text: Der Operator wird benachrichtigt.
+    status: open
+  - id: AC-LINK-014-4
+    text: Der Netzwerk-Controller wird benachrichtigt, falls vorhanden.
+    status: open
+  - id: AC-LINK-015-1
+    text: Das Ende eines empfangenen ALE-Signals wird durch Suche nach einer gültigen Conclusion (TIS oder TWAS, gefolgt von
+      ma...
+    status: open
+  - id: AC-LINK-015-2
+    text: Die Conclusion muss konstante redundante Wortphase innerhalb sich selbst (bei Sound) und gegenüber den vorangegangene...
+    status: open
+  - id: AC-LINK-015-3
+    text: Der Controller prüft jede aufeinanderfolgende Trw-Phase nach TIS/TWAS auf das erste (von bis zu vier) nicht lesbaren
+      ...
+    status: open
+  - id: AC-LINK-015-4
+    text: Fehlendes gültiges Wort, erkanntes ungültiges Wort oder Erkennung des letzten REP, plus Last-Word-Wait-Delay (Tlww
+      = ...
+    status: open
+  - id: AC-LINK-015-5
+    text: 'Die maximal akzeptable Abschlussfolge ist: TIS (oder TWAS), DATA, REP, DATA, REP.'
+    status: open
+  - id: AC-LINK-016-1
+    text: 'Das Protokoll zum Verbindungsaufbau besteht aus genau drei ALE-Frames: Aufruf (Call), Antwort (Response) und Bestätig...'
+    status: open
+  - id: AC-LINK-016-2
+    text: Kein Link gilt als hergestellt, bevor alle drei Frames erfolgreich ausgetauscht wurden.
+    status: open
+  - id: AC-LINK-016-3
+    text: Alle in A.5.5.3.1–A.5.5.3.4 definierten Zeitüberschreitungen (Twr, Twce, Tlww, Tmmax, Txmax) werden eingehalten.
+    status: open
+  - id: AC-LINK-017-1
+    text: Die rufende Station hört auf dem Kanal, bevor sie sendet (Listen-Before-Transmit).
+    status: open
+  - id: AC-LINK-017-2
+    text: Die rufende Station stimmt den Kanal ab, bevor sie sendet.
+    status: open
+  - id: AC-LINK-017-3
+    text: 'Bei bekanntem Einzelkanal-Hörer: Aufruf enthält nur Leading Call und Conclusion.'
+    status: open
+  - id: AC-LINK-017-4
+    text: 'Bei scannender Gegenstation: dem Leading Call ist ein Scanning Call vorangestellt.'
+    status: open
+  - id: AC-LINK-017-5
+    text: Die Dauer des Scanning Calls beträgt 2 Trw für jeden gescannten Kanal der gerufenen Station.
+    status: open
+  - id: AC-LINK-017-6
+    text: Der Scanning-Call-Abschnitt enthält ausschließlich das erste Adresswort der gerufenen Station (TO-Präambel).
+    status: open
+  - id: AC-LINK-017-7
+    text: Die vollständige Zieladresse wird im Leading Call zweimal übertragen.
+    status: open
+  - id: AC-LINK-017-8
+    text: Bei ausbleibender Antwort innerhalb Twr (Einzelkanal) oder Twrt (Mehrkanal) wird der nächste Kanal versucht oder
+      der ...
+    status: open
+  - id: AC-LINK-018-1
+    text: Erkennt die Station ALE-Signale und erreicht Word-Sync, prüft sie das empfangene Wort zur Aktionsbestimmung.
+    status: open
+  - id: AC-LINK-018-2
+    text: 'Bei Empfang von „To JOE“ (oder akzeptabler Entsprechung): Scan stoppen, Linking-Zustand eintreten, ALE-Wörter weiterl...'
+    status: open
+  - id: AC-LINK-018-3
+    text: 'Bei potenziellem Sound oder anderem Protokoll: Wort gemäß diesem Protokoll verarbeiten.'
+    status: open
+  - id: AC-LINK-018-4
+    text: 'Andernfalls: in vorherigen Zustand zurückehren (verfügbar oder gelinkt).'
+    status: open
+  - id: AC-LINK-018-5
+    text: 'Abbruchbedingung 1: Kein Start von Quick-ID, Message oder Conclusion innerhalb Twce; oder kein Conclusionstart
+      innerh...'
+    status: open
+  - id: AC-LINK-018-6
+    text: 'Abbruchbedingung 2: Ungültige Wortpräambel-Sequenz empfangen (Ausnahme: bis zu drei aufeinanderfolgende Wörter
+      mit un...'
+    status: open
+  - id: AC-LINK-018-7
+    text: 'Abbruchbedingung 3: Ende der Conclusion nicht innerhalb Tlww (plus etwaige Trw-Vielfache bei erweiterter Adresse)
+      nac...'
+    status: open
+  - id: AC-LINK-018-8
+    text: 'Bei erfolgreich empfangener TIS-Conclusion: Last-Word-Wait-Timeout Tlww = Trw starten und auf weitere Adresswörter
+      so...'
+    status: open
+  - id: AC-LINK-018-9
+    text: 'Bei empfangener TWAS-Conclusion: nicht antworten, sofort in vorherigen Zustand zurückehren.'
+    status: open
+  - id: AC-LINK-019-1
+    text: Die gerufene Station prüft die Kanalbelegung, bevor sie antwortet.
+    status: open
+  - id: AC-LINK-019-2
+    text: 'Bei freiem Kanal: abstimmen, Antwort senden (Figure A-30), Timer Twr starten.'
+    status: open
+  - id: AC-LINK-019-3
+    text: 'Bei belegtem Kanal: Aufruf ignorieren, in vorherigen Zustand zurückkehren.'
+    status: open
+  - id: AC-LINK-019-4
+    text: Twr gilt für Einzelkanal; Twrt gilt, wenn Bestätigung auf anderem Kanal erwartet wird.
+    status: open
+  - id: AC-LINK-019-5
+    text: SAM verarbeitet die Response mit denselben Prüfungen und Timeouts wie beim Empfang des Calls.
+    status: open
+  - id: AC-LINK-019-6
+    text: 'SAM-Abbruchbedingung 1: kein „TO SAM" innerhalb Twr/Twrt.'
+    status: open
+  - id: AC-LINK-019-7
+    text: 'SAM-Abbruchbedingung 2: ungültige Wortpräambel-Sequenz.'
+    status: open
+  - id: AC-LINK-019-8
+    text: 'SAM-Abbruchbedingung 3: keine Conclusion „TIS JOE" innerhalb Tlc (+Tm max).'
+    status: open
+  - id: AC-LINK-019-9
+    text: 'SAM-Abbruchbedingung 4: Ende der Conclusion nicht innerhalb Tlww erkannt.'
+    status: open
+  - id: AC-LINK-019-10
+    text: 'Bei „TWAS JOE": SAM bricht Verbindungsaufbau ab und informiert den Operator.'
+    status: open
+  - id: AC-LINK-020-1
+    text: SAM sendet ACK, wechselt in den Linked-Zustand mit JOE, schaltet den Lautsprecher ein und startet Timer Twa (Standard...
+    status: open
+  - id: AC-LINK-020-2
+    text: 'SAM-Abbruchbedingung 1: kein passender ACK-Calling-Cycle „To JOE“ innerhalb Twr.'
+    status: open
+  - id: AC-LINK-020-3
+    text: 'SAM-Abbruchbedingung 2: ungültige Wortpräambel-Sequenz.'
+    status: open
+  - id: AC-LINK-020-4
+    text: 'SAM-Abbruchbedingung 3: keine Conclusion innerhalb Tlc (+Tm max) nach Framestart.'
+    status: open
+  - id: AC-LINK-020-5
+    text: 'SAM-Abbruchbedingung 4: Ende der Conclusion nicht innerhalb Tlww erkannt.'
+    status: open
+  - id: AC-LINK-020-6
+    text: 'JOE liest ACK mit denselben Prüfungen wie beim Call; bei TIS SAM: Linked-Zustand eintreten, Operator und Network-Cont...'
+    status: open
+  - id: AC-LINK-020-7
+    text: 'Bei TWAS SAM im ACK: JOE kehrt in den Pre-Linking-Zustand zurück.'
+    status: open
+  - id: AC-LINK-020-8
+    text: Kommt SAMs ACK nach Ablauf von JOEs Twr, behandelt JOE es als neuen Einzelruf (nicht als Duplikat).
+    status: open
+  - id: AC-LINK-021-1
+    text: Der Link wird durch TWAS beendet.
+    status: open
+  - id: AC-LINK-021-2
+    text: Alle verknüpften Stationen werden benachrichtigt.
+    status: open
+  - id: AC-LINK-021-3
+    text: Der Lautsprecher wird ausgeschaltet.
+    status: open
+  - id: AC-LINK-021-4
+    text: Die Station kehrt in den verfügbaren Zustand zurück.
+    status: open
+  - id: AC-LINK-021-5
+    text: Verknüpfungen mit anderen Stationen bleiben erhalten.
+    status: open
+  - id: AC-LINK-022-1
+    text: Der Operator kann manuell eine Station zurücksetzen.
+    status: open
+  - id: AC-LINK-022-2
+    text: Der Lautsprecher wird stummgeschaltet.
+    status: open
+  - id: AC-LINK-022-3
+    text: Der Controller kehrt in den verfügbaren Zustand zurück.
+    status: open
+  - id: AC-LINK-022-4
+    text: TWAS wird gesendet.
+    status: open
+  - id: AC-LINK-022-5
+    text: Andere Links bleiben erhalten.
+    status: open
+  - id: AC-LINK-023-1
+    text: Der Timer Twa wird gestartet.
+    status: open
+  - id: AC-LINK-023-2
+    text: Bei Aktivitätszeitüberschreitung wird der Link beendet.
+    status: open
+  - id: AC-LINK-023-3
+    text: Der Lautsprecher wird ausgeschaltet.
+    status: open
+  - id: AC-LINK-023-4
+    text: Die Station kehrt in den verfügbaren Zustand zurück.
+    status: open
+  - id: AC-LINK-023-5
+    text: Der Timer kann vom Operator deaktiviert werden.
+    status: open
+  - id: AC-LINK-023-6
+    text: Es wird empfohlen, TWAS zu senden.
+    status: open
+  - id: AC-LINK-023-7
+    text: Die Station kehrt in den verfügbaren Zustand zurück.
+    status: open
+  - id: AC-LINK-024-1
+    text: Die Kontinuität des Signals kann verloren gehen.
+    status: open
+  - id: AC-LINK-024-2
+    text: Unkorrigierbare Fehler werden erkannt.
+    status: open
+  - id: AC-LINK-024-3
+    text: Das Wort-Sync wird wiederhergestellt.
+    status: open
+  - id: AC-LINK-024-4
+    text: Bei neuer Wortphase wird eine Kollision angezeigt.
+    status: open
+  - id: AC-LINK-024-5
+    text: Das unterbrochene Frame wird verworfen.
+    status: open
+  - id: AC-LINK-024-6
+    text: Das unterbrechende Signal wird als neuer Frame verarbeitet.
+    status: open
+  - id: AC-LINK-025-1
+    text: Eine Station kann gleichzeitig mit mehreren Stationen verknüpfen.
+    status: open
+  - id: AC-LINK-025-2
+    text: Die Protokolle sind beschrieben.
+    status: open
+  - id: AC-LINK-026-1
+    text: Das Handshake-Protokoll kann nicht für Mehr-Wege-Aufrufe verwendet werden.
+    status: open
+  - id: AC-LINK-026-2
+    text: Ein TDMA-Schema wird verwendet.
+    status: open
+  - id: AC-LINK-026-3
+    text: Jede Station sendet ihre Antwort in einem Zeitfenster.
+    status: open
+  - id: AC-LINK-026-4
+    text: Die WRTT wird gesetzt.
+    status: open
+  - id: AC-LINK-026-5
+    text: Die WRTTs der gerufenen Stationen werden begrenzt.
+    status: open
+  - id: AC-LINK-026-6
+    text: Die Wartezeit wird auf Twan = Twrn + 2 Trw gesetzt.
+    status: open
+  - id: AC-LINK-026-7
+    text: Jede Station setzt einen Slot-Warte-Timer.
+    status: open
+  - id: AC-LINK-026-8
+    text: Die Stationen tunen während des Slots 0.
+    status: open
+  - id: AC-LINK-026-9
+    text: Bei Ablauf des Slot-Warte-Timers wird die Antwort gesendet.
+    status: open
+  - id: AC-LINK-026-10
+    text: Bei Ablauf des WRTT-Timers wird der Verbindungsaufbau abgebrochen.
+    status: open
+  - id: AC-LINK-027-1
+    text: Slotted Response Frames sind identisch mit Einzelruf-Antworten.
+    status: open
+  - id: AC-LINK-027-2
+    text: Die Frames enthalten führenden Aufruf, optionalen Nachrichtenabschnitt und Frame-Schlussfolge.
+    status: open
+  - id: AC-LINK-027-3
+    text: Die Antwort wird mit TIS oder TWAS abgeschlossen.
+    status: open
+  - id: AC-LINK-027-4
+    text: Bei einwortiger Adresse sind die Slots 14 Tw.
+    status: open
+  - id: AC-LINK-028-1
+    text: Alle Slots sind 14 Tw lang, sofern nicht anders angegeben.
+    status: open
+  - id: AC-LINK-028-2
+    text: Die Slots ermöglichen Durchquerung der Welt.
+    status: open
+  - id: AC-LINK-028-3
+    text: Erweiterte Slots werden entsprechend verzögert.
+    status: open
+  - id: AC-LINK-028-4
+    text: Die aufrufende Stationsadresse erweitert Slots.
+    status: open
+  - id: AC-LINK-028-5
+    text: Die gerufene Stationsadresse erweitert Slots.
+    status: open
+  - id: AC-LINK-028-6
+    text: Nachrichtenabschnitt erweitert Slots.
+    status: open
+  - id: AC-LINK-029-1
+    text: Die Formel zur Bestimmung der Zeit für slotted Responses ist definiert.
+    status: open
+  - id: AC-LINK-029-2
+    text: Die Slotnummer SN wird berücksichtigt.
+    status: open
+  - id: AC-LINK-029-3
+    text: Die Formel berücksichtigt die Adresslänge der aufrufenden Station.
+    status: open
+  - id: AC-LINK-029-4
+    text: Die Formel berücksichtigt den optionalen Nachrichtenabschnitt.
+    status: open
+  - id: AC-LINK-029-5
+    text: Die Formel berücksichtigt die Adresslänge der gerufenen Station.
+    status: open
+  - id: AC-LINK-029-6
+    text: Die Formel für Twrn ist definiert.
+    status: open
+  - id: AC-LINK-029-7
+    text: Die Formel für Twan ist definiert.
+    status: open
+  - id: AC-LINK-030-1
+    text: Das Beispiel ist in Abb. A-33 gezeigt.
+    status: open
+  - id: AC-LINK-030-2
+    text: Die Beispieldarstellung ist korrekt.
+    status: open
+  - id: AC-LINK-031-1
+    text: Eine Net-Adresse wird einem Satz von Net-Mitglied-Stationen zugewiesen.
+    status: open
+  - id: AC-LINK-031-2
+    text: Die Slotnummer und Adresse sind vorab bekannt.
+    status: open
+  - id: AC-LINK-031-3
+    text: Die Informationen sind für alle Net-Mitglieder verfügbar.
+    status: open
+  - id: AC-LINK-032-1
+    text: Ein Star-Net-Aufruf ist identisch mit einem Einzelruf.
+    status: open
+  - id: AC-LINK-032-2
+    text: Die gerufene Stationsadresse ist eine Net-Adresse.
+    status: open
+  - id: AC-LINK-032-3
+    text: Die aufrufende Stationsadresse ist individuell.
+    status: open
+  - id: AC-LINK-033-1
+    text: Die Station empfängt einen Aufruf an eine Net-Adresse.
+    status: open
+  - id: AC-LINK-033-2
+    text: Die Station verarbeitet den Aufruf mit Einzelruf-Prüfungen.
+    status: open
+  - id: AC-LINK-033-3
+    text: Die Station antwortet gemäß A.5.5.4.1.
+    status: open
+  - id: AC-LINK-033-4
+    text: Die Antwort verwendet die zugewiesene Net-Mitglied-Adresse und Slotnummer.
+    status: open
+  - id: AC-LINK-034-1
+    text: Das Bestätigungsprotokoll ist identisch mit Einzelruf-Bestätigung.
+    status: open
+  - id: AC-LINK-034-2
+    text: Die gerufene Stationsadresse ist eine Net-Adresse.
+    status: open
+  - id: AC-LINK-034-3
+    text: Der Wartezeit-Timer Twan wird verwendet.
+    status: open
+  - id: AC-LINK-034-4
+    text: TWAS kehrt die Station in ihren vorherigen Zustand zurück.
+    status: open
+  - id: AC-LINK-034-5
+    text: TIS wechselt in den verknüpften Zustand.
+    status: open
+  - id: AC-LINK-034-6
+    text: Der Operator wird benachrichtigt.
+    status: open
+  - id: AC-LINK-034-7
+    text: Der Lautsprecher wird eingeschaltet.
+    status: open
+  - id: AC-LINK-034-8
+    text: Der Timer Twa wird gesetzt.
+    status: open
+  - id: AC-LINK-035-1
+    text: Das Gruppenrufprotokoll erweitert Mehr-Wege-Rufen.
+    status: open
+  - id: AC-LINK-035-2
+    text: Die Gruppe ist ad-hoc.
+    status: open
+  - id: AC-LINK-035-3
+    text: Es muss nichts über die Stationen außer ihren Adressen und Frequenzen bekannt sein.
+    status: open
+  - id: AC-LINK-035-4
+    text: Gruppenmitgliedschaft ist begrenzt.
+    status: open
+  - id: AC-LINK-035-5
+    text: Die Gesamtlänge darf 12 Wörter nicht überschreiten.
+    status: open
+  - id: AC-LINK-035-6
+    text: Die Menge der einzigartigen ersten Adresswörter darf fünf Wörter nicht überschreiten.
+    status: open
+  - id: AC-LINK-036-1
+    text: Eine Gruppenadresse wird durch Kombination individueller Adressen erzeugt.
+    status: open
+  - id: AC-LINK-036-2
+    text: Beim Scanning-Aufruf werden nur die ersten Wörter gesendet.
+    status: open
+  - id: AC-LINK-036-3
+    text: Die ersten Adresswörter werden in Rotation gesendet.
+    status: open
+  - id: AC-LINK-036-4
+    text: Die Adresswörter wechseln zwischen THRU und REP.
+    status: open
+  - id: AC-LINK-036-5
+    text: Die Adresswörter sind in Abb. A-35 gezeigt.
+    status: open
+  - id: AC-LINK-037-1
+    text: Die vollständigen Adressen werden gesendet.
+    status: open
+  - id: AC-LINK-037-2
+    text: Die Adressen werden mit TO-Preambles gesendet.
+    status: open
+  - id: AC-LINK-037-3
+    text: Bis zu 12 Adresswörter sind erlaubt.
+    status: open
+  - id: AC-LINK-037-4
+    text: Tlc dauert bis zu 24 Trw.
+    status: open
+  - id: AC-LINK-037-5
+    text: TO-Wörter werden korrekt behandelt.
+    status: open
+  - id: AC-LINK-038-1
+    text: Der Nachrichtenabschnitt ist optional.
+    status: open
+  - id: AC-LINK-038-2
+    text: Die Schlussfolge folgt A.5.2.5.3.
+    status: open
+  - id: AC-LINK-038-3
+    text: Die Vorgaben sind korrekt.
+    status: open
+  - id: AC-LINK-039-1
+    text: Slots werden abgeleitet.
+    status: open
+  - id: AC-LINK-039-2
+    text: Die Station liest THRU- oder REP-Preambles.
+    status: open
+  - id: AC-LINK-039-3
+    text: Die Station prüft auf Übereinstimmung.
+    status: open
+  - id: AC-LINK-039-4
+    text: Die Station kehrt in den verfügbaren Zustand zurück.
+    status: open
+  - id: AC-LINK-039-5
+    text: Tlc wird geprüft.
+    status: open
+  - id: AC-LINK-039-6
+    text: Der Slot-Zähler wird gesetzt und inkrementiert.
+    status: open
+  - id: AC-LINK-039-7
+    text: Die Nachrichtenabschnitt und Schlussfolge werden verarbeitet.
+    status: open
+  - id: AC-LINK-039-8
+    text: Bei spätem Eintreffen wird ein Standardwert verwendet.
+    status: open
+  - id: AC-LINK-040-1
+    text: Slotted Responses werden gemäß A.5.5.4.1 gesendet.
+    status: open
+  - id: AC-LINK-040-2
+    text: Slotted Responses werden überprüft.
+    status: open
+  - id: AC-LINK-040-3
+    text: Die abgeleiteten Slot-Nummern werden verwendet.
+    status: open
+  - id: AC-LINK-040-4
+    text: Die eigene Adresse wird verwendet.
+    status: open
+  - id: AC-LINK-041-1
+    text: Die Bestätigung ist an Subset gerichtet.
+    status: open
+  - id: AC-LINK-041-2
+    text: Die führende Aufruf-Adresse wird zweimal gesendet.
+    status: open
+  - id: AC-LINK-041-3
+    text: Die Bestätigung wird verarbeitet gemäß A.5.5.3.4.
+    status: open
+  - id: AC-LINK-041-4
+    text: Der Twan-Wert wird verwendet.
+    status: open
+  - id: AC-LINK-041-5
+    text: Selbstadressen werden durchsucht.
+    status: open
+  - id: AC-LINK-041-6
+    text: TWAS kehrt die Station in ihren vorherigen Zustand zurück.
+    status: open
+  - id: AC-LINK-041-7
+    text: TIS wechselt in den verknüpften Zustand.
+    status: open
+  - id: AC-LINK-041-8
+    text: Der Operator wird benachrichtigt.
+    status: open
+  - id: AC-LINK-041-9
+    text: Der Lautsprecher wird eingeschaltet.
+    status: open
+  - id: AC-LINK-041-10
+    text: Der Timer Twa wird gesetzt.
+    status: open
+  - id: AC-LINK-042-1
+    text: Die Beispielgruppe ist in Abb. A-35 gezeigt.
+    status: open
+  - id: AC-LINK-042-2
+    text: Die Slot-Zeiten sind korrekt.
+    status: open
+  - id: AC-LINK-042-3
+    text: Die Bestätigung wird korrekt gesendet.
+    status: open
+  - id: AC-LINK-043-1
+    text: Eine Station antwortet auf mehrere Adressen.
+    status: open
+  - id: AC-LINK-043-2
+    text: Die Tatsache, dass die Station mehrere Adressen hat, ist dem Aufrufer nicht bekannt.
+    status: open
+  - id: AC-LINK-043-3
+    text: Konflikte können nach erfolgreicher Verknüpfung aufgelöst werden.
+    status: open
+  - id: AC-LINK-044-1
+    text: Ein AllCall fordert Stationen auf, zu hören.
+    status: open
+  - id: AC-LINK-044-2
+    text: Ein AllCall fordert keine Antworten an.
+    status: open
+  - id: AC-LINK-044-3
+    text: Die AllCall-Adresse wird nur in TO-Wörtern verwendet.
+    status: open
+  - id: AC-LINK-044-4
+    text: Selektive AllCalls verwenden Gruppenadressierung.
+    status: open
+  - id: AC-LINK-044-5
+    text: Die Station wird identifiziert.
+    status: open
+  - id: AC-LINK-044-6
+    text: Die Pause wird gestartet.
+    status: open
+  - id: AC-LINK-044-7
+    text: Bei Quick-ID wird die Pause erweitert.
+    status: open
+  - id: AC-LINK-044-8
+    text: Bei Nachricht wird eine Zeit für das Lesen verwendet.
+    status: open
+  - id: AC-LINK-044-9
+    text: Bei Schlussfolge wird eine Zeit für das Lesen verwendet.
+    status: open
+  - id: AC-LINK-044-10
+    text: Bei TIS wird der Zustand gewechselt.
+    status: open
+  - id: AC-LINK-044-11
+    text: Bei TWAS kehrt die Station zum Scanning zurück.
+    status: open
+  - id: AC-LINK-044-12
+    text: Der Operator kann einen Handshake initiieren.
+    status: open
+  - id: AC-LINK-044-13
+    text: AllCall-Adresse wird nicht verwendet.
+    status: open
+  - id: AC-LINK-044-14
+    text: Controller können AllCalls ignorieren.
+    status: open
+  - id: AC-LINK-044-15
+    text: AllCall-Verarbeitung sollte aktiviert sein.
+    status: open
+  - id: AC-LINK-045-1
+    text: Ein AnyCall fordert Antworten an.
+    status: open
+  - id: AC-LINK-045-2
+    text: Die Verwendung der AnyCall-Adresse ist identisch mit AllCall.
+    status: open
+  - id: AC-LINK-045-3
+    text: Die Station prüft den Aufruf wie bei AllCall.
+    status: open
+  - id: AC-LINK-045-4
+    text: Bei TIS wird ein Link-Zustand gewechselt.
+    status: open
+  - id: AC-LINK-045-5
+    text: Die Station generiert eine slotted Antwort.
+    status: open
+  - id: AC-LINK-045-6
+    text: Die Station wählt zufällig eine Slot-Nummer.
+    status: open
+  - id: AC-LINK-045-7
+    text: Die Slot-Breite wird berechnet.
+    status: open
+  - id: AC-LINK-045-8
+    text: Slot 0 wird für das Tunen verwendet.
+    status: open
+  - id: AC-LINK-045-9
+    text: Die Antwort wird gesendet.
+    status: open
+  - id: AC-LINK-045-10
+    text: Kollisionen werden erwartet und toleriert.
+    status: open
+  - id: AC-LINK-045-11
+    text: Die aufrufende Station liest die beste Antwort.
+    status: open
+  - id: AC-LINK-045-12
+    text: Die aufrufende Station sendet eine ACK.
+    status: open
+  - id: AC-LINK-045-13
+    text: Die AnyCall-Adresse wird nicht verwendet.
+    status: open
+  - id: AC-LINK-045-14
+    text: Controller können AnyCalls ignorieren.
+    status: open
+  - id: AC-LINK-045-15
+    text: AnyCall-Verarbeitung sollte aktiviert sein.
+    status: open
+  - id: AC-LINK-046-1
+    text: Wildcard-Adressen sind die einzigen Mitglieder des Aufrufs.
+    status: open
+  - id: AC-LINK-046-2
+    text: Wildcard-Adressen werden nicht in anderen Adressfeldern verwendet.
+    status: open
+  - id: AC-LINK-046-3
+    text: Der Umfang der Wildcards ist begrenzt.
+    status: open
+  - id: AC-LINK-046-4
+    text: Aufrufe mit TWAS werden wie AllCall verarbeitet.
+    status: open
+  - id: AC-LINK-046-5
+    text: Antworten mit TIS werden in pseudozufälligen Slots gesendet.
+    status: open
+  - id: AC-LINK-046-6
+    text: Die Verarbeitung kann ignoriert werden.
+    status: open
+  - id: AC-LINK-046-7
+    text: Wildcard-Aufruf-Verarbeitung sollte aktiviert sein.
+    status: open
+  tests:
+  - file: tests/test_protocol.cpp
+    description: Verifikation für FEAT-LINK-005
+  notes: 'matches_address_prefix(): trailing ''@'' abstreifen, dann startswith(prefix). W1AWJ erkennt W1A.'
+- id: FEAT-ADDR-001
+  title: Basic-38-Zeichensatz & Adressvalidierung
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-ADDR-001
+  - REQ-ADDR-002
+  - REQ-ADDR-016
+  design_ref: FEAT-ADDR-001
+  module:
+  - src/ale_word.cpp
+  - include/ale_word.h
+  depends_on:
+  - FEAT-WORD-001
+  acceptance_criteria:
+  - id: AC-ADDR-001-1
+    text: Das System verwendet eine digitale Adressstruktur auf Basis des 24-Bit-Worts und des Basic-38-Zeichensatzes.
+    status: open
+  - id: AC-ADDR-001-2
+    text: Eine Station kann mit einer oder mehreren vorab vereinbarten oder bedarfsabhängigen Stationen verlinken oder vernetzen.
+    status: open
+  - id: AC-ADDR-001-3
+    text: Das System kann mindestens 20 eigene Adressen verwalten.
+    status: open
+  - id: AC-ADDR-001-4
+    text: Jede dieser eigenen Adressen kann bis zu 15 Zeichen lang sein.
+    status: open
+  - id: AC-ADDR-001-5
+    text: Das System unterstützt Einzelstation-, Mehrfachstation- und Sondermodi der Adressierung.
+    status: open
+  - id: AC-ADDR-001-6
+    text: Adresskombinationen mit Sonderbedeutung werden kontrolliert oder eingeschränkt behandelt.
+    status: open
+  - id: AC-ADDR-002-1
+    text: Der Basic-38-ASCII-Zeichensatz umfasst A bis Z, 0 bis 9, „@“ und „?“.
+    status: open
+  - id: AC-ADDR-002-2
+    text: Der Basic-38-ASCII-Zeichensatz wird für alle grundlegenden Adressierungsfunktionen verwendet.
+    status: open
+  - id: AC-ADDR-002-3
+    text: Eine gültige Basisadresse enthält ein Routing-Präambelwort und drei Zeichen aus dem Basic-38-ASCII-Zeichensatz.
+    status: open
+  - id: AC-ADDR-002-4
+    text: Die Sonderzeichen „@“ und „?“ werden für spezielle Funktionen verwendet.
+    status: open
+  - id: AC-ADDR-002-5
+    text: Die Erkennung von Basic-38-Zeichen darf nicht allein auf den drei höchstwertigen Bits beruhen.
+    status: open
+  - id: AC-ADDR-016-1
+    text: Empfangene Adressen werden gegen den Basic-38-Zeichensatz und die definierten Adressstrukturen validiert.
+    status: open
+  - id: AC-ADDR-016-2
+    text: Reservierte oder unbekannte Adressmuster werden als ungültig verworfen.
+    status: open
+  - id: AC-ADDR-016-3
+    text: Das System arbeitet rückwärtskompatibel mit Implementierungen, die nur Basisadressen unterstützen.
+    status: open
+  tests:
+  - file: tests/test_protocol.cpp
+    description: Verifikation für FEAT-ADDR-001
+  notes: A-Z, 0-9, '@', '?'. Raw 7-bit ASCII. is_valid_ale_char(). Validierung bei encode und decode.
+- id: FEAT-ADDR-002
+  title: Adress-Chunking, Stuffing & Erweiterung
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-ADDR-003
+  - REQ-ADDR-004
+  - REQ-ADDR-005
+  - REQ-ADDR-006
+  - REQ-ADDR-007
+  design_ref: FEAT-ADDR-002
+  module:
+  - src/ale_word.cpp
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-ADDR-001
+  acceptance_criteria:
+  - id: AC-ADDR-003-1
+    text: Nicht durch drei teilbare Adresslängen werden durch Auffüllen der nachlaufenden Positionen mit „@“ in standardisierte...
+    status: open
+  - id: AC-ADDR-003-2
+    text: Stuff-1 und Stuff-2 werden nur im letzten Wort einer Adresse verwendet.
+    status: open
+  - id: AC-ADDR-003-3
+    text: Stuff-1 und Stuff-2 erscheinen nur im führenden Ruf des Calling Cycles.
+    status: open
+  - id: AC-ADDR-004-1
+    text: Eine individuelle Stationsadresse basiert auf genau einem Routing-Wort mit drei Zeichen.
+    status: open
+  - id: AC-ADDR-004-2
+    text: Eine einer einzelnen Station zugeordnete Adresse wird als individuelle Adresse bezeichnet.
+    status: open
+  - id: AC-ADDR-004-3
+    text: Eine einwortige individuelle Adresse wird als Basisgröße bezeichnet.
+    status: open
+  - id: AC-ADDR-004-4
+    text: Eine mehr als ein Wort umfassende individuelle Adresse wird als erweiterte Größe bezeichnet.
+    status: open
+  - id: AC-ADDR-004-5
+    text: Das grundlegende Adresswort kann für Intranet- und Slotted-Betrieb verwendet werden.
+    status: open
+  - id: AC-ADDR-004-6
+    text: Das grundlegende Adresswort kann für Internet- und allgemeinen Gebrauch erweitert werden.
+    status: open
+  - id: AC-ADDR-005-1
+    text: Nicht dargestellte Muster werden als reserviert und ungültig behandelt, bis sie standardisiert sind.
+    status: open
+  - id: AC-ADDR-005-2
+    text: „@“ wird als Utility-Zeichen behandelt.
+    status: open
+  - id: AC-ADDR-005-3
+    text: „?“ wird als Wildcard-Zeichen behandelt.
+    status: open
+  - id: AC-ADDR-005-4
+    text: A, B, C und D stehen nur für Zeichen aus dem Basic-38-ASCII-Zeichensatz, die weder „@“ noch „?“ sind.
+    status: open
+  - id: AC-ADDR-006-1
+    text: Eine Basisadresse besteht aus einem Routing-Präambelwort und drei Adresszeichen.
+    status: open
+  - id: AC-ADDR-006-2
+    text: Eine dreistellige Einzelwortadresse ist die minimale Struktur.
+    status: open
+  - id: AC-ADDR-006-3
+    text: Für die dreistellige individuelle Adresse ist eine Basic-38-Adresskapazität von 46.656 gegeben.
+    status: open
+  - id: AC-ADDR-006-4
+    text: Alle eigenen Adressen sind mit spezifischen Zeit- und Steuerinformationen verknüpft.
+    status: open
+  - id: AC-ADDR-006-5
+    text: Jede ALE-Station besitzt mindestens eine einwortige Adresse für einwortige Adressprotokolle.
+    status: open
+  - id: AC-ADDR-006-6
+    text: Längere Adressen werden durch das Design nicht ausgeschlossen.
+    status: open
+  - id: AC-ADDR-007-1
+    text: Erweiterte Adressen können länger als ein Wort sein.
+    status: open
+  - id: AC-ADDR-007-2
+    text: Erweiterte Adressen überschreiten nicht fünf Wörter.
+    status: open
+  - id: AC-ADDR-007-3
+    text: Erweiterte Adressen überschreiten nicht 15 Zeichen.
+    status: open
+  - id: AC-ADDR-007-4
+    text: Eine erweiterte Adresse beginnt mit einem Basisadresswort wie TO oder TIS.
+    status: open
+  - id: AC-ADDR-007-5
+    text: Weitere Zeichen werden über zusätzliche Wörter in der Folge DATA, REP, DATA, REP aufgenommen.
+    status: open
+  - id: AC-ADDR-007-6
+    text: Alle Adresszeichen stammen aus dem Basic-38-ASCII-Zeichensatz.
+    status: open
+  tests:
+  - file: tests/test_protocol.cpp
+    description: Verifikation für FEAT-ADDR-002
+  notes: 'chunk_address(): i+=3, ''@''-Pad. Max 15 Zeichen = 5 Wörter. Sequenz TO→DATA→REP→DATA→REP.'
+- id: FEAT-ADDR-003
+  title: Net, Group, AllCall, AnyCall Adressen
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-ADDR-008
+  - REQ-ADDR-009
+  - REQ-ADDR-010
+  - REQ-ADDR-011
+  design_ref: FEAT-ADDR-003
+  module:
+  - src/ale_state_machine.cpp
+  - src/ale_word.cpp
+  depends_on:
+  - FEAT-ADDR-002
+  acceptance_criteria:
+  - id: AC-ADDR-008-1
+    text: Ein Netzruf verwendet eine einzige gemeinsam zugewiesene Netadresse.
+    status: open
+  - id: AC-ADDR-008-2
+    text: Die rufende Station verwendet eine Adressstruktur, die der individuellen Stationsadresse entspricht.
+    status: open
+  - id: AC-ADDR-008-3
+    text: Eine Netmitgliedsstation besitzt je Netadresse einen Response-Slot-Identifikator.
+    status: open
+  - id: AC-ADDR-008-4
+    text: Ein Slot-Width-Modifikator ist vorhanden, wenn das Standardprotokoll dies vorgibt.
+    status: open
+  - id: AC-ADDR-008-5
+    text: Zusätzliche Informationen zu zugewiesenen Response-Slots und deren Größe sind verfügbar.
+    status: open
+  - id: AC-ADDR-008-6
+    text: Das Mischen von individuellen, Netz- und Gruppenadressen sowie -rufen ist eingeschränkt.
+    status: open
+  - id: AC-ADDR-009-1
+    text: Ein Gruppenruf verwendet mehrere nicht vorab vereinbarte Stationsadressen in einer kompakten Kombination.
+    status: open
+  - id: AC-ADDR-009-2
+    text: Die rufende Station verwendet die tatsächlichen individuellen Stationsadressen der gerufenen Stationen.
+    status: open
+  - id: AC-ADDR-009-3
+    text: Die Reihenfolge folgt dem spezifischen Standardprotokoll.
+    status: open
+  - id: AC-ADDR-009-4
+    text: Eine Stationsadresse erscheint in einer Gruppenruf-Folge nicht mehr als einmal, außer wenn das Gruppenrufprotokoll
+      di...
+    status: open
+  - id: AC-ADDR-010-1
+    text: Ein AllCall fordert keine Antworten an.
+    status: open
+  - id: AC-ADDR-010-2
+    text: Ein AllCall bezeichnet keine spezifische Adresse.
+    status: open
+  - id: AC-ADDR-010-3
+    text: Die globale AllCall-Adresse ist „@?@“.
+    status: open
+  - id: AC-ADDR-010-4
+    text: Ein selective AllCall legt das letzte einzelne Zeichen der Zieladressen fest.
+    status: open
+  - id: AC-ADDR-010-5
+    text: Bei mehr als einer Teilmenge darf die selective-AllCall-Adressierung eine THRU/REP-Folge verwenden.
+    status: open
+  - id: AC-ADDR-010-6
+    text: Die ausgewählten Zeichen bestimmen, welche Stationen das Scannen beenden und zuhören.
+    status: open
+  - id: AC-ADDR-011-1
+    text: Ein AnyCall fordert Antworten an.
+    status: open
+  - id: AC-ADDR-011-2
+    text: Ein AnyCall benennt keine bestimmten Empfänger.
+    status: open
+  - id: AC-ADDR-011-3
+    text: Die globale AnyCall-Adresse ist „@@?“.
+    status: open
+  - id: AC-ADDR-011-4
+    text: Ein selective AnyCall legt das letzte einzelne Zeichen der Zieladressen fest.
+    status: open
+  - id: AC-ADDR-011-5
+    text: Ein double selective AnyCall legt die letzten zwei Zeichen der Zieladressen fest.
+    status: open
+  - id: AC-ADDR-011-6
+    text: Ein double selective AnyCall wird verwendet, wenn engere Akzeptanz- und Antwortkriterien erforderlich sind.
+    status: open
+  tests:
+  - file: tests/test_protocol.cpp
+    description: Verifikation für FEAT-ADDR-003
+  notes: AllCall='@?@', AnyCall='@@?'. Netz-Adresse mit TO. Group nutzt THRU/REP. Slot-Identifikatoren für Netz.
+- id: FEAT-ADDR-004
+  title: Wildcard-Matching
+  status: validate
+  priority: MUST
+  implements:
+  - REQ-ADDR-012
+  design_ref: FEAT-ADDR-004
+  module:
+  - src/ale_word.cpp
+  depends_on:
+  - FEAT-ADDR-001
+  acceptance_criteria:
+  - id: AC-ADDR-012-1
+    text: Ein Wildcard-Zeichen kann Mehrstationsadressen mit einer einzigen Rufadresse ansprechen.
+    status: open
+  - id: AC-ADDR-012-2
+    text: Empfänger akzeptieren das Wildcard-Zeichen als Ersatz für jedes alphanumerische Zeichen an derselben Position.
+    status: open
+  - id: AC-ADDR-012-3
+    text: Jedes Wildcard-Zeichen steht für eines von 36 Zeichen des Basic-38-Satzes.
+    status: open
+  - id: AC-ADDR-012-4
+    text: Die Länge der rufenden und der gerufenen Adresse ist gleich.
+    status: open
+  - id: AC-ADDR-012-5
+    text: Das spezielle Wildcard-Zeichen ist „?“.
+    status: open
+  tests:
+  - file: tests/test_protocol.cpp
+    description: Verifikation für FEAT-ADDR-004
+  notes: 'match_wildcard(): ''?'' = ein beliebiges alphanumerisches Zeichen. Muster- und Adresslänge müssen gleich sein.'
+- id: FEAT-ADDR-005
+  title: Self, Null, In-Link Adressen
+  status: todo
+  priority: MUST
+  implements:
+  - REQ-ADDR-013
+  - REQ-ADDR-014
+  - REQ-ADDR-015
+  design_ref: FEAT-ADDR-005
+  module:
+  - src/ale_word.cpp
+  - src/ale_state_machine.cpp
+  depends_on:
+  - FEAT-ADDR-002
+  acceptance_criteria:
+  - id: AC-ADDR-013-1
+    text: Stationen können ihre eigenen Adressen in Rufen verwenden.
+    status: open
+  - id: AC-ADDR-013-2
+    text: Selbstadressierung wird für Selbsttest, Wartung und andere Zwecke unterstützt.
+    status: open
+  - id: AC-ADDR-013-3
+    text: Spezifisch adressierte Calling Cycles sind zulässig, sofern sie kein AllCall und kein AnyCall sind.
+    status: open
+  - id: AC-ADDR-013-4
+    text: Eine Station darf eine oder mehrere ihrer eigenen Rufadressen in den Calling Cycle einsetzen oder hinzufügen.
+    status: open
+  - id: AC-ADDR-014-1
+    text: Eine Null-Adresse ist weder adressiert noch angenommen noch beantwortet.
+    status: open
+  - id: AC-ADDR-014-2
+    text: Die spezielle Null-Adress-Form ist „TO @@@“ oder „REP @@@“ unter der angegebenen Folgebedingung.
+    status: open
+  - id: AC-ADDR-014-3
+    text: Die Null-Adresse verwendet nur TO oder REP.
+    status: open
+  - id: AC-ADDR-014-4
+    text: Die Null-Adresse wird nur im Calling Cycle verwendet.
+    status: open
+  - id: AC-ADDR-014-5
+    text: In Gruppenrufen erscheint die Null-Adresse nur im führenden Ruf und nicht im Scanning Call.
+    status: open
+  - id: AC-ADDR-014-6
+    text: Null-Adressen werden niemals in der Schlusssequenz verwendet.
+    status: open
+  - id: AC-ADDR-014-7
+    text: Ein gruppenrufbezogener Slot bleibt leer, wenn eine Null-Adresse dort verwendet wird.
+    status: open
+  - id: AC-ADDR-015-1
+    text: Die In-Link-Adresse gilt für alle Mitglieder des etablierten Links.
+    status: open
+  - id: AC-ADDR-015-2
+    text: Die In-Link-Adresse ist „?@?“.
+    status: open
+  - id: AC-ADDR-015-3
+    text: Ein Funkgerät erweitert im verknüpften Zustand seine als eigene Adressen erkannten Adressen um die In-Link-Adresse.
+    status: open
+  - id: AC-ADDR-015-4
+    text: Ein Frame mit In-Link-Adresse adressiert alle Mitglieder öffentlich.
+    status: open
+  - id: AC-ADDR-015-5
+    text: Ein Frame mit TWAS-Präambel signalisiert allen Mitgliedern, dass die sendende Station den Link verlassen hat.
+    status: open
+  tests:
+  - file: tests/test_protocol.cpp
+    description: Verifikation für FEAT-ADDR-005
+  notes: 'Null=''@@@'' (nur TO/REP im Calling Cycle). In-Link=''?@?'' (alle Link-Mitglieder). Self: mehrere Adressen möglich.'

@@ -4,7 +4,7 @@
  */
 
 #define _USE_MATH_DEFINES
-#include "fsk/tone_generator.h"
+#include "FSK/tone_generator.h"
 #include <cmath>
 #include <algorithm>
 

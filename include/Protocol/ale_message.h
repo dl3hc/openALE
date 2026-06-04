@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file ale_message.h
  * \brief ALE message assembly and call type recognition
  * 
@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "ale_word.h"
+#include "Protocol/ale_word.h"
 #include <vector>
 #include <string>
 #include <cstdint>

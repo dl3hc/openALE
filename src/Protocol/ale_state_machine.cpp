@@ -1,9 +1,9 @@
-/**
+﻿/**
  * \file ale_state_machine.cpp
  * \brief Implementation of ALE state machine
  */
 
-#include "ale_state_machine.h"
+#include "Protocol/ale_state_machine.h"
 #include <algorithm>
 #include <cstring>
 #include <iostream>

@@ -1,0 +1,10 @@
+^E:\REPOS\PC-ALE\BUILD\CMAKEFILES\B23E11E492C9A2ED0F4B6463838FD30D\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/repos/PC-ALE -BE:/repos/PC-ALE/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file E:/repos/PC-ALE/build/ALE-Clean-Room.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

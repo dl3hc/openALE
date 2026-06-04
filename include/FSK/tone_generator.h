@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include "ale_types.h"
+#include "FSK/ale_waveform.h"
 #include <array>
 #include <cstdint>
 

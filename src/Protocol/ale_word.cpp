@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file ale_word.cpp
  * \brief Implementation of ALE word parser
  *
@@ -23,9 +23,9 @@
  *                not a Kleene-star.
  */
 
-#include "ale_word.h"
-#include "symbol_decoder.h"
-#include "fec/ale_fec_codec.h"
+#include "Protocol/ale_word.h"
+#include "FSK/symbol_decoder.h"
+#include "FEC/ale_fec_codec.h"
 #include <cstring>
 #include <cctype>
 #include <algorithm>

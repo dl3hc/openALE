@@ -17,12 +17,53 @@
 
 #pragma once
 
-#include "ale_types.h"
+#include "FSK/ale_waveform.h"
 #include <string>
 #include <cstdint>
 #include <vector>
 
 namespace ale {
+
+// Word bit-field structure (MIL-STD-188-141B A.5.1.2)
+constexpr uint32_t PREAMBLE_BITS = 3;
+constexpr uint32_t PAYLOAD_BITS  = 21;
+constexpr uint32_t WORD_BITS     = PREAMBLE_BITS + PAYLOAD_BITS;
+
+// Golay (24,12) FEC parameters
+constexpr uint32_t GOLAY_CODEWORD_BITS = 24;
+constexpr uint32_t GOLAY_INFO_BITS     = 12;
+constexpr uint32_t GOLAY_PARITY_BITS   = 12;
+constexpr uint32_t MAX_GOLAY_ERRORS    = 3;
+
+/**
+ * \enum PreambleType
+ * Word preamble types per MIL-STD-188-141B (low-level encoding layer)
+ */
+enum class PreambleType : uint8_t {
+    DATA = 0,
+    THRU = 1,
+    TO   = 2,
+    TWS  = 3,
+    FROM = 4,
+    TIS  = 5,
+    CMD  = 6,
+    REP  = 7,
+    UNKNOWN = 0xFF
+};
+
+/**
+ * \struct Word
+ * Low-level decoded ALE word with raw bits and FEC metadata
+ */
+struct Word {
+    uint32_t     raw_bits;
+    uint32_t     corrected_bits;
+    PreambleType preamble;
+    uint32_t     payload;
+    uint8_t      error_count;
+    bool         crc_valid;
+    uint32_t     word_index;
+};
 
 /**
  * \enum WordType

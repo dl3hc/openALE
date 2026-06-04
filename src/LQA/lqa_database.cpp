@@ -1,9 +1,9 @@
-/**
+﻿/**
  * @file lqa_database.cpp
  * @brief Implementation of LQA Database
  */
 
-#include "ale/lqa_database.h"
+#include "LQA/lqa_database.h"
 #include <chrono>
 #include <fstream>
 #include <algorithm>

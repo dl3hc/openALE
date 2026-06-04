@@ -1,9 +1,9 @@
-/**
+﻿/**
  * @file lqa_metrics.cpp
  * @brief Implementation of LQA Metrics Collector
  */
 
-#include "ale/lqa_metrics.h"
+#include "LQA/lqa_metrics.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>

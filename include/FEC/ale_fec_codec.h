@@ -12,8 +12,8 @@
 
 #pragma once
 
-#include "fec/golay.h"
-#include "fec/interleaver.h"
+#include "FEC/golay.h"
+#include "FEC/interleaver.h"
 #include <cstdint>
 
 namespace ale {

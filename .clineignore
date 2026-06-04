@@ -1,0 +1,10 @@
+/build/
+generate_requirements_index.py
+/prompts/
+/.obisidan/
+/.frozen/
+/ALE-Clean-Room/
+/docs/
+README.MD
+QUICKSTART.MD
+BUILD_REPORT.MD

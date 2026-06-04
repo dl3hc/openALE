@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file lqa_metrics.h
  * @brief LQA Metrics Collection for PC-ALE 2.0
  * 
@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include "ale/lqa_database.h"
+#include "LQA/lqa_database.h"
 #include <cstdint>
 #include <vector>
 #include <functional>

@@ -3,7 +3,7 @@
  * \brief ALE FEC codec implementation
  */
 
-#include "fec/ale_fec_codec.h"
+#include "FEC/ale_fec_codec.h"
 
 namespace ale {
 

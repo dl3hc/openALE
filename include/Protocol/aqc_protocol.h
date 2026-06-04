@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file aqc_protocol.h
  * \brief AQC-ALE (Advanced Quick Call ALE) protocol extensions
  * 
@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "ale_word.h"
+#include "Protocol/ale_word.h"
 #include <cstdint>
 #include <string>
 

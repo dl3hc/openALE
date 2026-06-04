@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file fs1052_arq.h
  * \brief FS-1052 ARQ State Machine - Variable ARQ Mode
  * 
@@ -18,7 +18,7 @@
 #ifndef FS1052_ARQ_H
 #define FS1052_ARQ_H
 
-#include "fs1052_protocol.h"
+#include "FS1052/fs1052_protocol.h"
 #include <vector>
 #include <queue>
 #include <cstdint>

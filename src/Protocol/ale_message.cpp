@@ -1,9 +1,9 @@
-/**
+﻿/**
  * \file ale_message.cpp
  * \brief Implementation of ALE message assembly
  */
 
-#include "ale_message.h"
+#include "Protocol/ale_message.h"
 #include <algorithm>
 
 namespace ale {

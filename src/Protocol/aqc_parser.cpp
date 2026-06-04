@@ -1,9 +1,9 @@
-/**
+﻿/**
  * \file aqc_parser.cpp
  * \brief Implementation of AQC-ALE parser and data element extraction
  */
 
-#include "aqc_protocol.h"
+#include "Protocol/aqc_protocol.h"
 #include <cstring>
 #include <algorithm>
 

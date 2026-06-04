@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file lqa_analyzer.h
  * @brief LQA Analyzer for Sounding and Channel Selection
  * 
@@ -10,8 +10,8 @@
 
 #pragma once
 
-#include "ale/lqa_database.h"
-#include "ale/lqa_metrics.h"
+#include "LQA/lqa_database.h"
+#include "LQA/lqa_metrics.h"
 #include <cstdint>
 #include <string>
 #include <vector>

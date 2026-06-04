@@ -3,7 +3,7 @@
  * \brief Symbol-level block interleaver implementation
  */
 
-#include "fec/interleaver.h"
+#include "FEC/interleaver.h"
 #include <array>
 #include <cstring>
 

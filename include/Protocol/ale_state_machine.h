@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file ale_state_machine.h
  * \brief ALE link state machine
  *
@@ -13,8 +13,8 @@
 
 #pragma once
 
-#include "ale_message.h"
-#include "ale_word.h"
+#include "Protocol/ale_message.h"
+#include "Protocol/ale_word.h"
 #include <cstdint>
 #include <vector>
 #include <string>

@@ -1,9 +1,9 @@
-/**
+﻿/**
  * @file lqa_analyzer.cpp
  * @brief Implementation of LQA Analyzer
  */
 
-#include "ale/lqa_analyzer.h"
+#include "LQA/lqa_analyzer.h"
 #include <algorithm>
 #include <chrono>
 #include <sstream>

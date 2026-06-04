@@ -1,9 +1,9 @@
-/**
+﻿/**
  * \file fs1052_arq.cpp
  * \brief FS-1052 Variable ARQ Implementation
  */
 
-#include "fs1052_arq.h"
+#include "FS1052/fs1052_arq.h"
 #include <cstring>
 #include <algorithm>
 

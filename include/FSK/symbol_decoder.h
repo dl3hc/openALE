@@ -13,7 +13,7 @@
 
 #pragma once
 
-#include "ale_types.h"
+#include "FSK/ale_waveform.h"
 #include <array>
 #include <cstdint>
 
@@ -63,7 +63,7 @@ static uint8_t bin_to_symbol(uint32_t bin_index);
 private:
     // Lookup table: FFT bin -> symbol value (not used anymore, kept for API compatibility)
     // Bins 6-22 (every 2): 6->0, 8->1, 10->2, 12->3, 14->4, 16->5, 18->6, 20->7, 22->0xFF
-    // Note: This is now superseded by FREQ_TO_SYMBOL lookup in ale_types.h
+    // Note: This is now superseded by FREQ_TO_SYMBOL lookup in fsk/ale_waveform.h
     static constexpr std::array<uint8_t, 32> BIN_TO_SYMBOL_TABLE = {
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0xFF, 1, 0xFF,
         2, 0xFF, 3, 0xFF, 4, 0xFF, 5, 0xFF, 6, 0xFF,

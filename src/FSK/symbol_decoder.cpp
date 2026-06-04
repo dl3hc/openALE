@@ -1,9 +1,9 @@
-/**
+﻿/**
  * \file symbol_decoder.cpp
  * \brief Implementation of FSK symbol detection and decoding
  */
 
-#include "symbol_decoder.h"
+#include "FSK/symbol_decoder.h"
 #include <algorithm>
 #include <cmath>
 

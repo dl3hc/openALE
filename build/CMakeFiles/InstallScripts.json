@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"E:/repos/PC-ALE/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

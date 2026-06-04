@@ -1,10 +1,10 @@
-/**
+﻿/**
  * \file fft_demodulator.cpp
  * \brief Implementation of FFT-based 8-FSK demodulator
  */
 
-#include "fft_demodulator.h"
-#include "symbol_decoder.h"
+#include "FSK/fft_demodulator.h"
+#include "FSK/symbol_decoder.h"
 #include <algorithm>
 #include <cmath>
 

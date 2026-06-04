@@ -1,0 +1,856 @@
+Start testing: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+----------------------------------------------------------
+1/11 Testing: FSKCore
+1/11 Test: FSKCore
+Command: "E:/repos/PC-ALE/build/Release/test_fsk_core.exe"
+Directory: E:/repos/PC-ALE/build
+"FSKCore" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+
+╔════════════════════════════════════════════════════════════╗
+║  PC-ALE 2.0 Clean-Room - 8-FSK Modem Unit Tests          ║
+║  MIL-STD-188-141B Implementation                          ║
+╚════════════════════════════════════════════════════════════╝
+
+[TEST 1] Tone Generation
+========================
+Generated: 512 samples
+Expected:  512 samples
+Symbol 0 block: generated=[22936 ... 19071], expected=[22936 ... 19071]  PASS
+Symbol 1 block: generated=[22936 ... 16218], expected=[22936 ... 16218]  PASS
+Symbol 2 block: generated=[22936 ... 8777], expected=[22936 ... 8777]  PASS
+Symbol 3 block: generated=[22936 ... 12743], expected=[22936 ... 12743]  PASS
+Symbol 4 block: generated=[22936 ... -8777], expected=[22936 ... -8777]  PASS
+Symbol 5 block: generated=[22936 ... -4474], expected=[22936 ... -4474]  PASS
+Symbol 6 block: generated=[22936 ... 4474], expected=[22936 ... 4474]  PASS
+Symbol 7 block: generated=[22936 ... 0], expected=[22936 ... 0]  PASS
+
+Boundary continuity checks:
+  0 -> 1 | one-shot: prev=19071, curr=22936, jump=3865 | chunked: prev=19071, curr=22936, jump=3865
+  1 -> 2 | one-shot: prev=16218, curr=22936, jump=6718 | chunked: prev=16218, curr=22936, jump=6718
+  2 -> 3 | one-shot: prev=8777, curr=22936, jump=14159 | chunked: prev=8777, curr=22936, jump=14159
+  3 -> 4 | one-shot: prev=12743, curr=22936, jump=10193 | chunked: prev=12743, curr=22936, jump=10193
+  4 -> 5 | one-shot: prev=-8777, curr=22936, jump=31713 | chunked: prev=-8777, curr=22936, jump=31713
+  5 -> 6 | one-shot: prev=-4474, curr=22936, jump=27410 | chunked: prev=-4474, curr=22936, jump=27410
+  6 -> 7 | one-shot: prev=4474, curr=22936, jump=18462 | chunked: prev=4474, curr=22936, jump=18462
+
+PASS: Tone generation
+
+[TEST 2] Symbol Detection
+========================
+  Symbol 0: detected as 0 (SNR: 36.9 dB)
+  Symbol 1: detected as 1 (SNR: 36.9 dB)
+  Symbol 2: detected as 2 (SNR: 36.9 dB)
+  Symbol 3: detected as 3 (SNR: 36.9 dB)
+  Symbol 4: detected as 4 (SNR: 36.9 dB)
+  Symbol 5: detected as 5 (SNR: 36.9 dB)
+  Symbol 6: detected as 6 (SNR: 36.9 dB)
+  Symbol 7: detected as 7 (SNR: 36.9 dB)
+PASS: Symbol detection for all tones
+
+[TEST 3] Majority Voting
+========================
+  All zeros: PASS
+  All ones: PASS
+  2-of-3 zeros: PASS
+  2-of-3 ones: PASS
+  2-of-3 ones (different order): PASS
+
+[TEST 4a] Majority vote API
+--------------------------------
+  input {0,0,0} -> 0
+  input {1,1,1} -> 1
+  input {1,0,1} -> 1
+PASS
+
+[TEST 4b] ALE decode path (SymbolDecoder + Golay)
+--------------------------------
+  symbol stream pattern: i % 8 (deterministic)
+  total symbols per word: 147
+  word[0] decoded=0x70ee2a errors=20
+  word[1] decoded=0x70ee2a errors=20
+  word[2] decoded=0x70ee2a errors=20
+  word[3] decoded=0x70ee2a errors=20
+  word[4] decoded=0x70ee2a errors=20
+  word[5] decoded=0x70ee2a errors=20
+  word[6] decoded=0x70ee2a errors=20
+  word[7] decoded=0x70ee2a errors=20
+  word[8] decoded=0x70ee2a errors=20
+  word[9] decoded=0x70ee2a errors=20
+PASS
+
+[TEST 4c] Golay codec minimal
+--------------------------------
+  reference word: 0x123
+  encoded codeword: 0x12310b
+  clean decode -> 0x123 errors=0
+  testing error masks: 2325
+  corrected cases: 2325/2325
+PASS
+
+[TEST 5] End-to-End Modem
+=========================
+  Generated 512 audio samples
+  Detected 8 symbols
+PASS: End-to-end modem test
+
+[TEST 6] Timing Constants
+========================
+PASS: SYMBOL_RATE_BAUD = 125 symbols/sec
+PASS: SYMBOL_DURATION_MS = 8 ms
+PASS: Bit rate = 375 b/s
+PASS: SYMBOLS_PER_WORD = 49 (word transitions synchronized with tone transitions)
+PASS: 49 symbols per redundant word
+PASS: TW_MS = 130.7 ms (130.667 ms)
+PASS: Tw corresponds to 16.3 symbols
+PASS: TRW_MS = 392 ms (exactly 392 ms)
+PASS: All timing acceptance criteria
+
+╔════════════════════════════════════════════════════════════╗
+║  Test Results                                              ║
+║  Passed:  8  Failed:  0                                    ║
+╚════════════════════════════════════════════════════════════╝
+
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"FSKCore" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"FSKCore" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/11 Testing: Protocol
+2/11 Test: Protocol
+Command: "E:/repos/PC-ALE/build/Release/test_protocol.exe"
+Directory: E:/repos/PC-ALE/build
+"Protocol" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+
+╔════════════════════════════════════════════════════════════╗
+║  PC-ALE 2.0 Phase 2 - Protocol Layer Unit Tests          ║
+║  MIL-STD-188-141B Word Structure & Message Assembly       ║
+╚════════════════════════════════════════════════════════════╝
+
+[TEST 1] Word Parsing (Preamble + Payload)
+==========================================
+  TO address: PASS (type=TO, addr="W1A")
+  FROM address: PASS (type=FROM, addr="K6K")
+  TIS (sounding): PASS (type=TIS, addr="N0C")
+  DATA word: PASS (type=DATA, addr="ABC")
+  Net call (TWS): PASS (type=TWS, addr="NET")
+
+[TEST 2] ASCII Encoding/Decoding
+=================================
+  Valid uppercase ("ABC"): PASS ("ABC")
+  Valid digits ("123"): PASS ("123")
+  Mixed alphanumeric ("W1A"): PASS ("W1A")
+  Call sign format ("N0C"): PASS ("N0C")
+  Wildcards ("@@@"): PASS ("@@@")
+  Spaces (not in Basic 38) ("   "): PASS (rejected as expected)
+
+[TEST 3] Address Book
+=====================
+  Set self address: PASS
+  Check is_self: PASS
+  Known station check: PASS
+  Net address check: PASS
+  Wildcard matching: PASS
+
+[TEST 4] AC-WORD-001: Word Bit Structure
+==========================================
+  AC-WORD-001-1 24-bit word: PASS (WORD_BITS=24)
+  AC-WORD-001-2 3+21 structure: PASS (PREAMBLE_BITS=3, PAYLOAD_BITS=21)
+  AC-WORD-001-3 MSB-first (preamble at bits 23-21): PASS
+  AC-WORD-001-4 FEC split (2x12 bits, GOLAY_INFO_BITS=12): PASS
+  AC-WORD-001-5 3x7-bit ASCII payload (PAYLOAD_BITS=21): PASS
+
+[TEST 5] AC-WORD-002: Preamble Bits and Word Types
+====================================================
+  AC-WORD-002-1 3-bit value -> 8 distinct types: PASS
+  AC-WORD-002-2 Preamble at P3=bit23, P2=bit22, P1=bit21: PASS
+  AC-WORD-002-3 THRU/TO/TWS/FROM/TIS/CMD/DATA/REP values: PASS
+  AC-WORD-002-4 AQC/non-standard preambles -> UNKNOWN (0xFF): PASS
+
+[TEST 6] CMD/DATA/REP Frame Validation
+===================================
+  AC-WORD-008-1 Message sections begin with CMD: PASS
+  AC-WORD-008-5 First CMD begins message section: PASS
+  AC-WORD-010-6 Valid sequence (DATA, REP, DATA): PASS
+  AC-WORD-010-6 Invalid sequence (REP, REP): PASS
+  AC-WORD-010-6 Invalid sequence (TIS, REP): PASS
+  AC-WORD-010-6 Invalid sequence (TWAS, REP): PASS
+  AC-WORD-009-1 DATA extends previous word field: PASS
+  AC-WORD-009-2 DATA carries message information: PASS
+  AC-WORD-010-1 REP duplicates previous preamble with modified data: PASS
+  AC-WORD-010-4 REP with TO enables multiple addresses: PASS
+
+╔════════════════════════════════════════════════════════════╗
+║  Test Results                                              ║
+║  Passed:  6  Failed:  0                                    ║
+╚════════════════════════════════════════════════════════════╝
+
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"Protocol" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"Protocol" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/11 Testing: StateMachine
+3/11 Test: StateMachine
+Command: "E:/repos/PC-ALE/build/Release/test_state_machine.exe"
+Directory: E:/repos/PC-ALE/build
+"StateMachine" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+
+╔════════════════════════════════════════════════════════════╗
+║  PC-ALE 2.0 Phase 3 - Link State Machine Tests           ║
+║  MIL-STD-188-141B Link Establishment                      ║
+╚════════════════════════════════════════════════════════════╝
+
+[TEST 1] State Transitions
+==========================
+  IDLE -> SCANNING: PASS
+  SCANNING -> IDLE: PASS
+  IDLE -> CALLING: PASS
+  CALLING -> LINKED: PASS
+  LINKED -> IDLE: PASS
+PASS: All state transitions
+
+[TEST 2] Channel Scanning
+=========================
+  Configured 3 channels: PASS
+  Channel hopping count: 5 PASS
+
+[TEST 3] Call Initiation
+========================
+  Initiating individual call: [TRACE] t=0 phase=SCANNING_CALL elapsed=0 cycles=0 total_words=0 addr=K6KB
+[TRACE] t=392 phase=SCANNING_CALL elapsed=392 cycles=1 total_words=1 addr=K6KB
+PASS
+  Word 1 (TO): PASS
+  Word 2 (TO): PASS
+
+[TEST 4] Incoming Call Detection
+=================================
+  State: SCANNING
+  Receiving TO word for W1A: PASS (state=HANDSHAKE)
+
+[TEST 5] Link Quality Analysis
+===============================
+  Best channel selection: PASS (7100000 Hz, score=100)
+
+[TEST 6] Timeout Handling
+=========================
+  Call timeout: PASS (final state: IDLE)
+
+[TEST 7] Sounding Transmission
+==============================
+  Initiating sounding: PASS (state=SOUNDING, words=0)
+  Sounding complete: PASS
+
+╔════════════════════════════════════════════════════════════╗
+║  Test Results                                              ║
+║  Passed:  7  Failed:  0                                    ║
+╚════════════════════════════════════════════════════════════╝
+
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"StateMachine" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"StateMachine" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/11 Testing: AQCParser
+4/11 Test: AQCParser
+Command: "E:/repos/PC-ALE/build/Release/test_aqc_parser.exe"
+Directory: E:/repos/PC-ALE/build
+"AQCParser" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+========================================
+AQC-ALE Parser Tests
+========================================
+
+Test: Extract Data Elements from 21-bit payload...
+  ✓ DE2 (slot): 5
+  ✓ DE3 (traffic): PSK_MSG
+  ✓ DE4 (LQA): 20
+  ✓ DE9 (transaction): ACK_LAST
+  PASSED
+
+Test: Traffic Class Names...
+  ✓ All traffic class names correct
+  PASSED
+
+Test: Transaction Code Names...
+  ✓ All transaction code names correct
+  PASSED
+
+Test: Parse AQC Call Probe...
+  ✓ TO address: ABC
+  ✓ TERM address: XYZ
+  PASSED
+
+Test: Parse AQC Call Handshake...
+  ✓ TO address: ABC
+  ✓ FROM address: XYZ
+  ✓ Slot: 0
+  PASSED
+
+Test: Parse AQC Inlink...
+  ✓ TO address: NET
+  ✓ TERM address: STA
+  ✓ Net call: YES
+  PASSED
+
+Test: Parse AQC Orderwire (AMD)...
+  ✓ Message: "HELLO"
+  ✓ CRC: 0xabcd
+  PASSED
+
+Test: Slot Assignment...
+  ✓ Slot for 'ABC': 6
+  ✓ Slot for 'XYZ123': 1
+  PASSED
+
+Test: Slot Timing Calculation...
+  ✓ Slot 0 time: 1000 ms
+  ✓ Slot 3 time: 1600 ms
+  ✓ Slot 7 time: 2400 ms
+  PASSED
+
+========================================
+All AQC Parser tests PASSED! ✓
+========================================
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"AQCParser" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"AQCParser" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/11 Testing: AQCCRC
+5/11 Test: AQCCRC
+Command: "E:/repos/PC-ALE/build/Release/test_aqc_crc.exe"
+Directory: E:/repos/PC-ALE/build
+"AQCCRC" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+========================================
+AQC-ALE CRC Tests
+========================================
+
+Test: CRC-8 Calculation...
+  ✓ CRC-8 for 'HELLO': 0x35
+  ✓ CRC-8 for 'WORLD': 0x14
+  ✓ CRC values are deterministic
+  PASSED
+
+Test: CRC-16 Calculation...
+  ✓ CRC-16 for 'HELLO': 0x49d6
+  ✓ CRC-16 for 'WORLD': 0xa9d7
+  ✓ CRC values are deterministic
+  PASSED
+
+Test: CRC-8 Validation (Valid)...
+  ✓ Message: 'ABC'
+  ✓ CRC: 0x52
+  ✓ Validation: PASSED
+  PASSED
+
+Test: CRC-8 Validation (Corrupted)...
+  ✓ Message corrupted: 'A' + (B^0x01) + 'C'
+  ✓ Validation: FAILED (as expected)
+  PASSED
+
+Test: CRC-16 Validation (Valid)...
+  ✓ Message: 'TESTING'
+  ✓ CRC: 0x2278
+  ✓ Validation: PASSED
+  PASSED
+
+Test: CRC-16 Validation (Corrupted)...
+  ✓ Message corrupted (byte 3 flipped)
+  ✓ Validation: FAILED (as expected)
+  PASSED
+
+Test: CRC Error Detection Sensitivity...
+  ✓ CRC-8 detects single-bit errors
+  ✓ CRC-16 detects single-bit errors
+  PASSED
+
+Test: CRC with Empty Message...
+  ✓ CRC-8 for empty: 0x0
+  ✓ CRC-16 for empty: 0xffff
+  PASSED
+
+Test: CRC-16 CCITT Known Values...
+  ✓ CRC-16 for '123456789': 0x29b1
+  ✓ (Implementation-specific value)
+  PASSED
+
+========================================
+All AQC CRC tests PASSED! ✓
+========================================
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"AQCCRC" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"AQCCRC" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/11 Testing: FS1052Frames
+6/11 Test: FS1052Frames
+Command: "E:/repos/PC-ALE/build/Release/test_fs1052_frames.exe"
+Directory: E:/repos/PC-ALE/build
+"FS1052Frames" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+========================================
+FS-1052 Frame Format Tests
+========================================
+
+Test: CRC-32 Calculation...
+  ✓ CRC-32 for 'TEST DATA FOR CRC': 0x7d99f07a
+  ✓ CRC-32 for 'DIFFERENT DATA': 0xcc5afce7
+  ✓ CRC values are deterministic
+  PASSED
+
+Test: Control Frame Formatting...
+  ✓ Frame formatted: 13 bytes
+  ✓ Header byte: 0x3
+  PASSED
+
+Test: Data Frame Formatting...
+  ✓ Frame formatted: 28 bytes
+  ✓ Sequence number: 42
+  ✓ Payload: 15 bytes
+  PASSED
+
+Test: Control Frame Round-Trip...
+  ✓ Format + Parse successful
+  ✓ All fields match
+  PASSED
+
+Test: Data Frame Round-Trip...
+  ✓ Format + Parse successful
+  ✓ Sequence: 123
+  ✓ Offset: 4096
+  ✓ Data matches (41 bytes)
+  PASSED
+
+Test: CRC Corruption Detection...
+  ✓ Valid frame parses successfully
+  ✓ Corrupted frame rejected
+  PASSED
+
+Test: Frame Type Detection...
+  ✓ Control frame detected
+  ✓ Data frame detected
+  PASSED
+
+Test: Utility Functions...
+  ✓ ARQ mode names correct
+  ✓ Data rate names correct
+  ✓ Rate conversions correct
+  PASSED
+
+Test: Sequence Number Wrapping...
+  ✓ Sequence 253, 254, 255 OK
+  ✓ Sequence 0, 1 (after wrap) OK
+  PASSED
+
+========================================
+All FS-1052 Frame tests PASSED! ✓
+========================================
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"FS1052Frames" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"FS1052Frames" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/11 Testing: FS1052ARQ
+7/11 Test: FS1052ARQ
+Command: "E:/repos/PC-ALE/build/Release/test_fs1052_arq.exe"
+Directory: E:/repos/PC-ALE/build
+"FS1052ARQ" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+========================================
+FS-1052 ARQ State Machine Tests
+========================================
+
+Test: Initial State...
+  ✓ Initial state is IDLE
+  ✓ Transfer complete flag set
+  ✓ Statistics zeroed
+  PASSED
+
+Test: State Transitions...
+  ✓ IDLE → TX_DATA transition
+  ✓ Reset returns to IDLE
+  PASSED
+
+Test: Simple Data Transmission...
+  ✓ Transmission started
+  ✓ Data frame sent
+  ✓ Sequence number 0
+  ✓ Correct payload length
+  PASSED
+
+Test: Multi-Block Transmission...
+  ✓ Multiple blocks sent: 3
+  ✓ Sequence numbers sequential
+  ✓ Window size respected
+  PASSED
+
+Test: ACK Processing...
+  ✓ ACK frame processed
+  ✓ Statistics updated
+  PASSED
+
+Test: Timeout Handling...
+  ✓ Timeout detected
+  ✓ State changed appropriately
+  PASSED
+
+Test: Data Reception...
+  ✓ RX mode activated
+  ✓ Data frame received
+  ✓ Statistics updated
+  PASSED
+
+Test: Sequence Number Wrapping...
+  ✓ Large data handled
+  ✓ No crashes on sequence wrap
+  PASSED
+
+Test: Statistics Tracking...
+  ✓ Blocks sent: 1
+  ✓ Statistics tracked correctly
+  PASSED
+
+Test: Utility Functions...
+  ✓ State name functions
+  ✓ Event name functions
+  PASSED
+
+========================================
+All FS-1052 ARQ tests PASSED! ✓
+========================================
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"FS1052ARQ" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"FS1052ARQ" time elapsed: 00:00:00
+----------------------------------------------------------
+
+8/11 Testing: LQADatabase
+8/11 Test: LQADatabase
+Command: "E:/repos/PC-ALE/build/Release/test_lqa_database.exe"
+Directory: E:/repos/PC-ALE/build
+"LQADatabase" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+=== LQA Database Tests ===
+Test: Database creation...
+  PASS
+Test: Basic entry update...
+  PASS
+Test: Time-weighted averaging...
+  PASS
+Test: Extended metrics update...
+  PASS
+Test: Multiple stations...
+  PASS
+Test: Score computation...
+  Score: 29.4907
+  PASS
+Test: Prune stale entries...
+  PASS
+Test: Save and load database...
+  PASS
+Test: Export to CSV...
+  PASS
+Test: Get all entries...
+  PASS
+Test: Configuration...
+  PASS
+
+=== All LQA Database Tests Passed ===
+<end of output>
+Test time =   0.16 sec
+----------------------------------------------------------
+Test Passed.
+"LQADatabase" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"LQADatabase" time elapsed: 00:00:00
+----------------------------------------------------------
+
+9/11 Testing: LQAMetrics
+9/11 Test: LQAMetrics
+Command: "E:/repos/PC-ALE/build/Release/test_lqa_metrics.exe"
+Directory: E:/repos/PC-ALE/build
+"LQAMetrics" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+=== LQA Metrics Tests ===
+Test: Metrics collector creation...
+  PASS
+Test: Add metrics sample...
+  PASS
+Test: Averaging window...
+  PASS
+Test: BER estimation...
+  BER estimates: 0, 0.00416667, 0.0208333
+  PASS
+Test: SINAD calculation...
+  SINAD values: 30, 10.41
+  PASS
+Test: Multipath detection...
+  Multipath scores: 0.024944, 1
+  PASS
+Test: Noise floor measurement...
+  Noise floor: -122 dBm
+  PASS
+Test: Database integration...
+  Database entry - SNR: 22, SINAD: 22.023, Score: 26.1125
+  PASS
+Test: Averaged sample...
+  Average SNR: 22 dB
+  PASS
+Test: Reset metrics...
+  PASS
+Test: Multiple frequencies...
+  PASS
+Test: Configuration...
+  PASS
+
+=== All LQA Metrics Tests Passed ===
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"LQAMetrics" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"LQAMetrics" time elapsed: 00:00:00
+----------------------------------------------------------
+
+10/11 Testing: LQAAnalyzer
+10/11 Test: LQAAnalyzer
+Command: "E:/repos/PC-ALE/build/Release/test_lqa_analyzer.exe"
+Directory: E:/repos/PC-ALE/build
+"LQAAnalyzer" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+=== LQA Analyzer Tests ===
+Test: Analyzer creation...
+  PASS
+Test: Process sounding...
+  PASS
+Test: Process sounding extended...
+  PASS
+Test: Best channel for station...
+  Best channel: 14107000 Hz, Score: 29.4953
+  PASS
+Test: Best overall channel...
+  Best channel: 10142000 Hz, Score: 27.9953
+  PASS
+Test: Rank all channels...
+  Ranked channels:
+    14107000 Hz: 27.9953
+    7073000 Hz: 26.4907
+    10142000 Hz: 24.407
+  PASS
+Test: Rank channels for specific station...
+  PASS
+Test: Sounding due detection...
+  PASS
+Test: Channels needing sounding...
+  Channels needing sounding: 2
+  PASS
+Test: Quality summary...
+  Summary: Excellent (SNR: 25.0dB, Score: 28)
+  PASS
+Test: Station quality summary...
+  Summary: Excellent (SNR: 22.0dB, BER: 1.00e-03, Score: 26)
+  PASS
+Test: Minimum acceptable score threshold...
+  PASS
+Test: Sounding callback...
+  Sounding requests: 1
+  PASS
+Test: Configuration...
+  PASS
+
+=== All LQA Analyzer Tests Passed ===
+<end of output>
+Test time =   0.43 sec
+----------------------------------------------------------
+Test Passed.
+"LQAAnalyzer" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"LQAAnalyzer" time elapsed: 00:00:00
+----------------------------------------------------------
+
+11/11 Testing: ALECalling
+11/11 Test: ALECalling
+Command: "E:/repos/PC-ALE/build/Release/test_ale_calling.exe"
+Directory: E:/repos/PC-ALE/build
+"ALECalling" start time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+Output:
+----------------------------------------------------------
+
+╔════════════════════════════════════════════════════════════╗
+║  FEAT-WORD-002 — Address Words: TO/TIS/TWAS/THRU/FROM    ║
+║  MIL-STD-188-141B A.5.2.3.2 Acceptance Tests             ║
+╚════════════════════════════════════════════════════════════╝
+
+[AC-WORD-003-1] TO in individual-call scanning phase
+[TRACE] t=0 phase=SCANNING_CALL elapsed=0 cycles=0 total_words=0 addr=N1XYZ
+  scanning first word = TO: PASS (got TO)
+
+[AC-WORD-003-1] TO word type encodes net address (word level)
+  encode/decode "NET" as TO: PASS
+
+[AC-WORD-003-2] TO word = first 3 chars of the address
+  addr="N1XYZ" → TO[0..2]="N1X": PASS
+  addr="NET123" → TO[0..2]="NET": PASS
+  addr="MIAMI" → TO[0..2]="MIA": PASS
+  addr="ABC" → TO[0..2]="ABC": PASS
+  addr="W1ABCDEFG" → TO[0..2]="W1A": PASS
+[TRACE] t=0 phase=SCANNING_CALL elapsed=0 cycles=0 total_words=0 addr=N1XYZ
+  SM scanning word addr = "N1X": PASS (got "N1X")
+
+[AC-WORD-003-3] Extended addresses: TO, DATA, REP, DATA, REP
+[TRACE] t=0 phase=LEADING_CALL elapsed=0 cycles=0 total_words=0 addr=ABC
+[TRACE] LEADING_CALL seq 0 tx (next_tx=0ms)
+  addr="ABC" (len=3) → 1 word(s) [TO]: PASS
+[TRACE] t=0 phase=LEADING_CALL elapsed=0 cycles=0 total_words=0 addr=K6KBCD
+[TRACE] LEADING_CALL seq 0 tx (next_tx=0ms)
+  addr="K6KBCD" (len=6) → 2 word(s) [TO,DATA]: PASS
+[TRACE] t=0 phase=LEADING_CALL elapsed=0 cycles=0 total_words=0 addr=CALLSIGNX
+[TRACE] LEADING_CALL seq 0 tx (next_tx=0ms)
+  addr="CALLSIGNX" (len=9) → 3 word(s) [TO,DATA,REP]: PASS
+[TRACE] t=0 phase=LEADING_CALL elapsed=0 cycles=0 total_words=0 addr=LONGERCALLXY
+[TRACE] LEADING_CALL seq 0 tx (next_tx=0ms)
+  addr="LONGERCALLXY" (len=12) → 4 word(s) [TO,DATA,REP,DATA]: PASS
+[TRACE] t=0 phase=LEADING_CALL elapsed=0 cycles=0 total_words=0 addr=VERYLONGCALLSIG
+[TRACE] LEADING_CALL seq 0 tx (next_tx=0ms)
+  addr="VERYLONGCALLSIG" (len=15) → 5 word(s) [TO,DATA,REP,DATA,REP]: PASS
+
+[REQ-WORD-004] TIS in conclusion phase
+[TRACE] t=0 phase=LEADING_CALL elapsed=0 cycles=0 total_words=0 addr=ABC
+[TRACE] LEADING_CALL seq 0 tx (next_tx=0ms)
+[TRACE] t=392 phase=LEADING_CALL elapsed=392 cycles=1 total_words=1 addr=ABC
+[TRACE] LEADING_CALL seq 1 tx (next_tx=392ms)
+[TRACE] t=784 phase=LEADING_CALL elapsed=784 cycles=2 total_words=2 addr=ABC
+[TRACE] LEADING_CALL → CONCLUSION (tlc=784ms)
+[TRACE] t=785 phase=CONCLUSION elapsed=1 cycles=0 total_words=2 addr=ABC
+[TRACE] CONCLUSION tx
+  conclusion first word = TIS: PASS (got TIS)
+  TIS address = "SAM": PASS (got "SAM")
+
+[REQ-WORD-004] TIS + DATA + REP for own address > 3 chars
+[TRACE] t=0 phase=LEADING_CALL elapsed=0 cycles=0 total_words=0 addr=ABC
+[TRACE] LEADING_CALL seq 0 tx (next_tx=0ms)
+[TRACE] t=392 phase=LEADING_CALL elapsed=392 cycles=1 total_words=1 addr=ABC
+[TRACE] LEADING_CALL seq 1 tx (next_tx=392ms)
+[TRACE] t=784 phase=LEADING_CALL elapsed=784 cycles=2 total_words=2 addr=ABC
+[TRACE] LEADING_CALL → CONCLUSION (tlc=784ms)
+[TRACE] t=785 phase=CONCLUSION elapsed=1 cycles=0 total_words=2 addr=ABC
+[TRACE] CONCLUSION tx
+  TIS+DATA+REP for "SAMUELB": PASS (words=3 [TIS,DATA,REP])
+
+[REQ-WORD-005] TWAS (WordType::TWS) encode/decode
+  encode/decode "REJ" as TWS (TWAS): PASS
+  TWS uses Basic 38: PASS
+
+[REQ-WORD-005] TIS and TWAS have distinct preamble bits
+  TIS=5 TWAS=3 distinct: PASS
+  TIS  round-trip: PASS
+  TWAS round-trip: PASS
+
+[REQ-WORD-006] THRU encode/decode (word level)
+  encode/decode "ABC" as THRU: PASS
+  THRU uses Basic 38: PASS
+  THRU preamble == 1: PASS
+
+[REQ-WORD-006] THRU rejects non-Basic-38 characters
+  lowercase chars rejected: PASS
+
+[REQ-WORD-007] FROM encode/decode (word level)
+  encode/decode "W1A" as FROM: PASS
+  FROM uses Basic 38: PASS
+  FROM preamble == 4: PASS
+
+[REQ-WORD-007] FROM extended address uses DATA/REP (same as TO)
+  FROM "ABC": PASS
+  DATA "DEF": PASS
+
+[WORD-002] All routing preambles use Basic 38 character set
+  TO uses Basic 38: PASS
+  TIS uses Basic 38: PASS
+  TWS uses Basic 38: PASS
+  THRU uses Basic 38: PASS
+  FROM uses Basic 38: PASS
+
+[AC-WORD-006-8/9, AC-WORD-007-8/9] THRU/FROM preamble values reserved
+  THRU preamble == 1 (relay/AQC reserved): PASS
+  FROM preamble == 4 (relay/AQC reserved): PASS
+  THRU round-trip: PASS
+  FROM round-trip: PASS
+
+[AC-WORD-007-4] FROM appears at most once per ALE frame
+  no FROM: PASS
+  one FROM: PASS
+  two FROM rejected: PASS
+
+[AC-WORD-007-5/7] FROM appears only immediately before CMD
+  FROM, CMD: PASS
+  FROM, DATA, CMD: PASS
+  FROM, TIS (no CMD) rejected: PASS
+  orphan FROM rejected: PASS
+  no FROM: PASS
+
+[AC-WORD-006-1/7] THRU only in scanning section
+  THRU, REP, TO: PASS
+  THRU after TO rejected: PASS
+  THRU after TIS rejected: PASS
+  THRU after TWS rejected: PASS
+  scanning only (THRU, REP pairs): PASS
+
+[AC-WORD-006-2] THRU and REP alternate in scanning section
+  THRU, REP: PASS
+  THRU, REP, THRU, REP: PASS
+  lone THRU rejected: PASS
+  REP before THRU rejected: PASS
+  THRU, THRU rejected: PASS
+  empty: PASS
+
+[AC-WORD-006-4] Group call has at most 5 different THRU targets
+  5 distinct targets: PASS
+  6 distinct targets rejected: PASS
+  4 words, 3 distinct (1 repeat) accepted: PASS
+
+╔════════════════════════════════════════════════════════════╗
+║  Test Results                                              ║
+║  Passed: 19  Failed:  0                                    ║
+╚════════════════════════════════════════════════════════════╝
+
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"ALECalling" end time: Jun 04 15:22 Mitteleurop�ische Sommerzeit
+"ALECalling" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Jun 04 15:22 Mitteleurop�ische Sommerzeit

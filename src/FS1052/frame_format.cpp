@@ -1,9 +1,9 @@
-/**
+﻿/**
  * \file frame_format.cpp
  * \brief FS-1052 frame formatting and parsing implementation
  */
 
-#include "fs1052_protocol.h"
+#include "FS1052/fs1052_protocol.h"
 #include <cstring>
 
 namespace fs1052 {
