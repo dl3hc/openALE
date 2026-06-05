@@ -107,6 +107,7 @@ target_link_libraries(ale_lqa ale_protocol ale_fsk_core ale_fec)
 # Data stores [geplant]
 add_library(ale_stores
     src/Stores/ale_data_store.cpp
+    src/Stores/address_book.cpp
 )
 
 target_include_directories(ale_stores PUBLIC
