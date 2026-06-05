@@ -63,8 +63,9 @@ static uint8_t bin_to_symbol(uint32_t bin_index);
      * Each symbol value (0-7) contributes its LSB as the transmitted bit.
      *
      * \param symbols      Buffer of SYMBOLS_PER_WORD * SYMBOL_REPETITION symbols
-     * \param output_word  [out] 49-bit transmitted word after majority voting
-     * \return             Number of positions where votes were not unanimous
+     * \param output_word  [out] 49-bit transmitted word after majority voting (bit 48 = 0)
+     * \return             Number of unanimous votes among the 48 voted bit positions
+     *                     (A.5.2.6.3); range 0..48.  Threshold: VOTE_THRESHOLD_BAD.
      */
     static uint32_t decode_word_with_voting(const uint8_t symbols[],
                                             uint64_t& output_word);

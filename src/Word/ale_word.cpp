@@ -48,8 +48,9 @@ bool WordParser::parse_word(const uint8_t symbols[SYMBOLS_PER_WORD],
                              uint32_t timestamp_ms)
 {
     // Step 1: majority voting across 3 word repetitions → 49-bit transmitted word
+    // unanimous_votes retained per A.5.2.6.3 for sync threshold evaluation.
     uint64_t transmitted = 0;
-    SymbolDecoder::decode_word_with_voting(symbols, transmitted);
+    output.unanimous_votes = SymbolDecoder::decode_word_with_voting(symbols, transmitted);
 
     // Step 2: deinterleave per A.5.2.2.3 + Golay error correction → 24-bit ALE word
     Golay::DecodeResult fec;

@@ -86,15 +86,16 @@ enum class WordType : uint8_t {
  * Decoded ALE word with preamble and payload
  */
 struct ALEWord {
-    WordType type;        ///< Preamble type (3 bits)
-    char     address[4];  ///< 3 decoded characters + null terminator
-    uint32_t raw_payload; ///< Raw 21-bit payload
-    uint8_t  fec_errors;  ///< Golay errors corrected
-    bool     valid;       ///< Word passed FEC and character validation
-    uint32_t timestamp_ms;///< Reception timestamp (ms)
+    WordType type;           ///< Preamble type (3 bits)
+    char     address[4];     ///< 3 decoded characters + null terminator
+    uint32_t raw_payload;    ///< Raw 21-bit payload
+    uint8_t  fec_errors;     ///< Golay errors corrected
+    uint32_t unanimous_votes;///< 2/3-voter unanimous count 0..48 (A.5.2.6.3)
+    bool     valid;          ///< Word passed FEC and character validation
+    uint32_t timestamp_ms;   ///< Reception timestamp (ms)
 
     ALEWord() : type(WordType::UNKNOWN), raw_payload(0), fec_errors(0),
-                valid(false), timestamp_ms(0) {
+                unanimous_votes(0), valid(false), timestamp_ms(0) {
         address[0] = address[1] = address[2] = address[3] = '\0';
     }
 };

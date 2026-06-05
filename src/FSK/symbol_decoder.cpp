@@ -66,14 +66,14 @@ uint8_t SymbolDecoder::majority_vote(const uint8_t bits[3]) {
 
 uint32_t SymbolDecoder::decode_word_with_voting(const uint8_t symbols[],
                                                 uint64_t& output_word) {
-    // MIL-STD-188-141B A.5.2.2.3: each of the 49 transmitted-word bits is sent
-    // SYMBOL_REPETITION times.  Bit k occupies symbol positions k, k+49, k+98.
-    // Each symbol value (0-7) contributes its LSB as the transmitted bit.
+    // MIL-STD-188-141B A.5.2.2.4: bit k occupies positions k, k+49, k+98.
+    // Only bits 0..47 are voted (the 48 "possible votes" per spec A.5.2.6.3).
+    // Bit 48 (S49) is always 0 and is excluded from the unanimous-vote count.
 
     uint64_t word = 0;
-    uint32_t non_unanimous = 0;
+    uint32_t unanimous_count = 0;
 
-    for (uint32_t bit_idx = 0; bit_idx < SYMBOLS_PER_WORD; ++bit_idx) {
+    for (uint32_t bit_idx = 0; bit_idx < VOTE_BUFFER_LENGTH; ++bit_idx) {
         uint8_t bit_copies[SYMBOL_REPETITION];
 
         for (uint32_t rep = 0; rep < SYMBOL_REPETITION; ++rep) {
@@ -85,12 +85,13 @@ uint32_t SymbolDecoder::decode_word_with_voting(const uint8_t symbols[],
         const uint8_t voted = majority_vote(bit_copies);
         if (voted) word |= (1ULL << bit_idx);
 
-        if (bit_copies[0] != bit_copies[1] || bit_copies[1] != bit_copies[2])
-            ++non_unanimous;
+        if (bit_copies[0] == bit_copies[1] && bit_copies[1] == bit_copies[2])
+            ++unanimous_count;
     }
+    // bit 48 (S49) stays 0 in output_word — not voted, not counted
 
     output_word = word;
-    return non_unanimous;
+    return unanimous_count;
 }
 
 } // namespace ale
