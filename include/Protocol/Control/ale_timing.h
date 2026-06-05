@@ -105,3 +105,16 @@ constexpr double Tta_tt_slot1_ms = 2100.0;                 // Tta+Tt limit slot 
 constexpr double Tta_tt_other_ms = 1500.0;                 // Tta+Tt limit other slots = 1500 ms
 
 } // namespace ale
+
+// ── ALETimingConstants — named aliases for the state machine and tests ────────
+//
+// Defined in the global namespace so ale-internal code can write
+// ALETimingConstants::Trw_ms without ambiguity with ale::TRW_MS.
+// Twr_ms uses Twr_fast_int (solid-state equipment, 5×Tw ≈ 653 ms).
+namespace ALETimingConstants {
+    constexpr uint32_t Trw_ms          = ale::TRW_MS;          // 392 ms
+    constexpr double   Tw_ms           = ale::TW_MS;            // 130.666... ms
+    constexpr uint32_t Twr_ms          = ale::Twr_fast_int;     // 653 ms (fast equip.)
+    constexpr uint32_t Twa_ms          = ale::Twa_ms;           // 30 000 ms
+    constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;  // 120 000 ms
+}
