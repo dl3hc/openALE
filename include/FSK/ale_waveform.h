@@ -28,11 +28,6 @@ constexpr uint32_t NUM_TONES           = 8;
 constexpr uint32_t BITS_PER_SYMBOL     = 3;
 constexpr uint32_t BANDWIDTH_HZ        = 1750;
 constexpr uint32_t SYMBOL_DURATION_MS  = 8;
-constexpr uint32_t TRW_MS              = 392;
-constexpr double   TW_MS               = 392.0 / 3.0;
-static_assert(TRW_MS == 392,         "TRW must be exactly 392 ms");
-static_assert(TW_MS * 3 == TRW_MS,  "3 × TW must equal TRW");
-
 // Word timing (number of symbols that form one ALE word on the air)
 constexpr uint32_t SYMBOLS_PER_WORD    = 49;
 
@@ -65,11 +60,6 @@ constexpr uint32_t FFT_SIZE        = 64;
 constexpr uint32_t FFT_BIN_OFFSET  = 6;
 constexpr uint32_t FFT_BIN_STEP    = 2;
 constexpr uint32_t FFT_BIN_SPAN    = 15;
-
-// Redundancy parameters
-constexpr uint32_t SYMBOL_REPETITION  = 3;
-constexpr uint32_t VOTE_BUFFER_LENGTH = 48;
-constexpr uint32_t VOTE_THRESHOLD_BAD = 25;
 
 using ComplexFloat  = std::complex<float>;
 using ComplexDouble = std::complex<double>;

@@ -17,6 +17,11 @@
 #include <array>
 #include <cstdint>
 
+// FEC (Forward Error Correction) parameters per MIL-STD-188-141B
+constexpr uint32_t SYMBOL_REPETITION  = 3;   // Triple redundant word transmission
+constexpr uint32_t VOTE_BUFFER_LENGTH = 48;  // Symbol voting window size
+constexpr uint32_t VOTE_THRESHOLD_BAD = 25;  // Min votes for valid symbol detection
+
 namespace ale {
 
 class SymbolDecoder {
