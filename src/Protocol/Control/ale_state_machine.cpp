@@ -688,8 +688,14 @@ void ALEStateMachine::build_conclusion_words() {
 }
 
 void ALEStateMachine::transmit_word(const ALEWord& word) {
-    if (transmit_callback)
-        transmit_callback(word);
+    // A.5.2.2.4: every word is sent three times.  Each copy occupies one
+    // Tw = ALETimingConstants::Tw_ms ≈ 130.7 ms on-air; the physical layer
+    // must transmit each callback invocation for exactly that duration before
+    // starting the next, so the three copies together fill one Trw = 392 ms.
+    if (!transmit_callback) return;
+    transmit_callback(word);
+    transmit_callback(word);
+    transmit_callback(word);
 }
 
 } // namespace ale

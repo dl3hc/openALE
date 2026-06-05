@@ -56,13 +56,13 @@ bool test_golay_ale_word_decode() {
     std::cout << "  total symbols per word: "
               << SYMBOLS_PER_WORD * SYMBOL_REPETITION << "\n";
 
-    uint64_t word  = 0;
-    uint32_t errors = SymbolDecoder::decode_word_with_voting(dummy_symbols, word);
+    uint64_t word     = 0;
+    uint32_t unanimous = SymbolDecoder::decode_word_with_voting(dummy_symbols, word);
 
     std::cout << "  decoded=0x" << std::hex << word << std::dec
-              << " non-unanimous=" << errors << "\n";
+              << " unanimous_votes=" << unanimous << "/" << VOTE_BUFFER_LENGTH << "\n";
 
-    if (word == 0 && errors == 0) {
+    if (word == 0 && unanimous == 0) {
         std::cout << "FAIL: invalid decode result\n";
         return false;
     }

@@ -12,6 +12,7 @@
  */
 
 #include "Protocol/Control/ale_state_machine.h"
+#include "FSK/symbol_decoder.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>
@@ -202,32 +203,34 @@ bool test_call_initiation() {
     bool success = sm.initiate_call("K6KB");
 
     // Words are transmitted by the time-driven handle_calling() loop.
-    // Advance time to trigger two SCANNING_CALL words (one per Trw = 3×Tw = 392 ms).
-    sm.update(0);                           // t=0:   first  TO word fires
-    sm.update(ALETimingConstants::Trw_ms);  // t=Trw: second TO word fires
+    // A.5.2.2.4: each logical word is sent SYMBOL_REPETITION=3 times.
+    // Advance time to trigger two SCANNING_CALL logical words (one per Trw).
+    sm.update(0);                           // t=0:   first  TO word fires (3 raw callbacks)
+    sm.update(ALETimingConstants::Trw_ms);  // t=Trw: second TO word fires (3 raw callbacks)
 
     bool correct_state = (sm.get_state() == ALEState::CALLING);
-    bool words_sent = (tracker.count() >= 2);
+    // Expect 2 logical words × SYMBOL_REPETITION raw callbacks each
+    bool words_sent = (tracker.count() >= 2 * SYMBOL_REPETITION);
 
     bool pass = success && correct_state && words_sent;
     std::cout << (pass ? "PASS" : "FAIL");
     if (!pass) {
         std::cout << " (state=" << ALEStateMachine::state_name(sm.get_state())
-                  << ", words=" << tracker.count() << ")";
+                  << ", raw_words=" << tracker.count() << ")";
     }
     std::cout << "\n";
 
     if (!words_sent) return false;
 
-    // In SCANNING_CALL phase both transmitted words must be TO words
-    std::cout << "  Word 1 (TO): ";
+    // First copy of each logical word must be TO (indices 0 and SYMBOL_REPETITION)
+    std::cout << "  Logical word 1 (TO): ";
     bool word1_ok = (tracker.words[0].type == WordType::TO);
     std::cout << (word1_ok ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "  Word 2 (TO): ";
-    bool word2_ok = (tracker.words[1].type == WordType::TO);
+    std::cout << "  Logical word 2 (TO): ";
+    bool word2_ok = (tracker.words[SYMBOL_REPETITION].type == WordType::TO);
     std::cout << (word2_ok ? "PASS" : "FAIL") << "\n";
-    
+
     return pass && word1_ok && word2_ok;
 }
 
