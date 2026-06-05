@@ -43,7 +43,7 @@ enum class PreambleType : uint8_t {
     DATA = 0,
     THRU = 1,
     TO   = 2,
-    TWS  = 3,
+    TWAS = 3,
     FROM = 4,
     TIS  = 5,
     CMD  = 6,
@@ -73,7 +73,7 @@ enum class WordType : uint8_t {
     DATA = 0,    ///< Data word  — uses Expanded 64 character set
     THRU = 1,    ///< Through word (repeater) — uses Basic 38
     TO   = 2,    ///< To address  — uses Basic 38
-    TWS  = 3,    ///< To With Self — uses Basic 38
+    TWAS = 3,    ///< Terminator and identification quitting — uses Basic 38
     FROM = 4,    ///< From address — uses Basic 38
     TIS  = 5,    ///< This Is Self — uses Basic 38
     CMD  = 6,    ///< Command word — uses Basic 38
@@ -103,7 +103,7 @@ struct ALEWord {
  * \class WordParser
  * Parse ALE words from decoded symbols.
  *
- * Character-set selection is automatic: routing preambles (TO, TWS, FROM,
+ * Character-set selection is automatic: routing preambles (TO, TWAS, FROM,
  * TIS, THRU, CMD) validate against Basic 38; DATA and REP words validate
  * against Expanded 64.
  */
@@ -150,7 +150,7 @@ public:
      * Decode a 21-bit payload to 3 characters.
      *
      * The character set used for validation depends on the word type:
-     *  - Basic 38   for routing preambles (TO, FROM, TWS, TIS, THRU, CMD)
+     *  - Basic 38   for routing preambles (TO, FROM, TWAS, TIS, THRU, CMD)
      *  - Expanded 64 for data words (DATA, REP)
      *
      * \param payload     21-bit payload
@@ -247,9 +247,9 @@ public:
     /**
      * AC-WORD-006-1/7: THRU must not appear after the scanning section ends.
      * The scanning section is the initial portion before any leading/conclusion
-     * word (TO, TIS, TWS, FROM, CMD).  Conformant receivers ignore calls that
+     * word (TO, TIS, TWAS, FROM, CMD).  Conformant receivers ignore calls that
      * use the local address in a THRU word outside the scanning section.
-     * \return true if all THRU words appear before the first TO/TIS/TWS/FROM/CMD.
+     * \return true if all THRU words appear before the first TO/TIS/TWAS/FROM/CMD.
      */
     static bool thru_in_scanning_section_only(const std::vector<ALEWord>& words);
 

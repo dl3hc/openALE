@@ -34,7 +34,7 @@ namespace ale {
 
 // Word type names per MIL-STD-188-141B Table A-II
 static const char* WORD_TYPE_NAMES[] = {
-    "DATA", "THRU", "TO", "TWS", "FROM", "TIS", "CMD", "REP", "UNKNOWN"
+    "DATA", "THRU", "TO", "TWAS", "FROM", "TIS", "CMD", "REP", "UNKNOWN"
 };
 
 // ============================================================================
@@ -225,7 +225,7 @@ bool FrameValidator::thru_in_scanning_section_only(const std::vector<ALEWord>& w
         switch (w.type) {
             case WordType::TO:
             case WordType::TIS:
-            case WordType::TWS:
+            case WordType::TWAS:
             case WordType::FROM:
             case WordType::CMD:
                 past_scanning = true;
@@ -290,7 +290,7 @@ bool FrameValidator::message_sections_begin_with_cmd(const std::vector<ALEWord>&
             // CMD can start a new message section
             in_message_section = true;
         } else if (in_message_section && 
-                   (word.type == WordType::TO || word.type == WordType::TWS || 
+                   (word.type == WordType::TO || word.type == WordType::TWAS || 
                     word.type == WordType::FROM || word.type == WordType::TIS ||
                     word.type == WordType::DATA || word.type == WordType::REP)) {
             // Continue in message section - valid word types
@@ -341,7 +341,7 @@ bool FrameValidator::rep_not_followed_by_self_tis_twas(const std::vector<ALEWord
             // Check if previous word is REP, TIS, or TWAS
             if (words[i-1].type == WordType::REP ||
                 words[i-1].type == WordType::TIS ||
-                words[i-1].type == WordType::TWS) {
+                words[i-1].type == WordType::TWAS) {
                 return false;
             }
         }

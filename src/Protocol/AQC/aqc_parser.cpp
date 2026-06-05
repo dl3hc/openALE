@@ -109,7 +109,7 @@ bool AQCParser::parse_call_probe(const ALEWord* words, size_t count, AQCCallProb
     // Word 1: Terminator (FROM)
     
     // Extract TO address
-    if (words[0].type == WordType::TO || words[0].type == WordType::TWS) {
+    if (words[0].type == WordType::TO || words[0].type == WordType::TWAS) {
         probe.to_address = words[0].address;
         
         // Check if AQC-enhanced
@@ -185,9 +185,9 @@ bool AQCParser::parse_inlink(const ALEWord* words, size_t count, AQCInlink& inli
     // Optional: Additional AQC control words
     
     // Extract TO address
-    if (words[0].type == WordType::TO || words[0].type == WordType::TWS) {
+    if (words[0].type == WordType::TO || words[0].type == WordType::TWAS) {
         inlink.to_address = words[0].address;
-        inlink.net_address_flag = (words[0].type == WordType::TWS);
+        inlink.net_address_flag = (words[0].type == WordType::TWAS);
         
         // Extract AQC data elements
         if (is_aqc_format(words[0])) {

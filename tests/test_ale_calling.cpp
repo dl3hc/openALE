@@ -300,29 +300,29 @@ bool test_tis_extended_address()
 }
 
 // ============================================================================
-// REQ-WORD-005 — TWAS: preamble 3 (WordType::TWS), Basic 38, distinct from TIS
+// REQ-WORD-005 — TWAS: preamble 3 (WordType::TWAS), Basic 38, distinct from TIS
 // TIS and TWAS must not be used in the same frame (different preamble bits).
 // ============================================================================
 
 bool test_twas_word_encoding()
 {
-    std::cout << "\n[REQ-WORD-005] TWAS (WordType::TWS) encode/decode\n";
+    std::cout << "\n[REQ-WORD-005] TWAS (WordType::TWAS) encode/decode\n";
 
     const char chars[3] = { 'R', 'E', 'J' };
-    uint32_t payload = WordParser::encode_ascii(chars, WordType::TWS);
+    uint32_t payload = WordParser::encode_ascii(chars, WordType::TWAS);
     bool enc_ok = (payload != 0xFFFFFFFF);
     char decoded[4] = {};
-    bool dec_ok = WordParser::decode_ascii(payload, WordType::TWS, decoded);
+    bool dec_ok = WordParser::decode_ascii(payload, WordType::TWAS, decoded);
     bool match = dec_ok && strncmp(decoded, "REJ", 3) == 0;
 
     bool pass = enc_ok && match;
-    std::cout << "  encode/decode \"REJ\" as TWS (TWAS): " << (pass ? "PASS" : "FAIL");
+    std::cout << "  encode/decode \"REJ\" as TWAS: " << (pass ? "PASS" : "FAIL");
     if (!match) std::cout << " (got \"" << decoded << "\")";
     std::cout << "\n";
 
-    // TWS uses Basic 38 character set
-    bool basic38 = WordParser::uses_basic38(WordType::TWS);
-    std::cout << "  TWS uses Basic 38: " << (basic38 ? "PASS" : "FAIL") << "\n";
+    // TWAS uses Basic 38 character set
+    bool basic38 = WordParser::uses_basic38(WordType::TWAS);
+    std::cout << "  TWAS uses Basic 38: " << (basic38 ? "PASS" : "FAIL") << "\n";
 
     return pass && basic38;
 }
@@ -331,9 +331,9 @@ bool test_tis_twas_different_preambles()
 {
     std::cout << "\n[REQ-WORD-005] TIS and TWAS have distinct preamble bits\n";
 
-    // Per Table A-II: TIS = preamble 5, TWS/TWAS = preamble 3
+    // Per Table A-II: TIS = preamble 5, TWAS = preamble 3
     uint8_t tis_bits  = static_cast<uint8_t>(WordType::TIS);
-    uint8_t twas_bits = static_cast<uint8_t>(WordType::TWS);
+    uint8_t twas_bits = static_cast<uint8_t>(WordType::TWAS);
     bool distinct = (tis_bits != twas_bits);
     std::cout << "  TIS=" << static_cast<int>(tis_bits)
               << " TWAS=" << static_cast<int>(twas_bits)
@@ -348,9 +348,9 @@ bool test_tis_twas_different_preambles()
     ALEWord tis_w, twas_w;
     WordParser p;
     p.parse_from_bits(make_word(WordType::TIS, abc),  tis_w);
-    p.parse_from_bits(make_word(WordType::TWS, abc), twas_w);
+    p.parse_from_bits(make_word(WordType::TWAS, abc), twas_w);
     bool tis_rt  = (tis_w.type  == WordType::TIS);
-    bool twas_rt = (twas_w.type == WordType::TWS);
+    bool twas_rt = (twas_w.type == WordType::TWAS);
     std::cout << "  TIS  round-trip: " << (tis_rt  ? "PASS" : "FAIL") << "\n";
     std::cout << "  TWAS round-trip: " << (twas_rt ? "PASS" : "FAIL") << "\n";
 
@@ -466,7 +466,7 @@ bool test_all_routing_preambles_use_basic38()
     std::cout << "\n[WORD-002] All routing preambles use Basic 38 character set\n";
 
     const WordType routing_types[] = {
-        WordType::TO, WordType::TIS, WordType::TWS,
+        WordType::TO, WordType::TIS, WordType::TWAS,
         WordType::THRU, WordType::FROM
     };
 
@@ -648,13 +648,13 @@ bool test_thru_in_scanning_only()
     bool v3 = !FrameValidator::thru_in_scanning_section_only(seq_after_tis);
     std::cout << "  THRU after TIS rejected: " << (v3 ? "PASS" : "FAIL") << "\n";
 
-    // THRU after TWS → invalid
+    // THRU after TWAS → invalid
     std::vector<ALEWord> seq_after_tws = {
-        WordParser::make_word(WordType::TWS,  sam),
+        WordParser::make_word(WordType::TWAS,  sam),
         WordParser::make_word(WordType::THRU, abc),
     };
     bool v4 = !FrameValidator::thru_in_scanning_section_only(seq_after_tws);
-    std::cout << "  THRU after TWS rejected: " << (v4 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  THRU after TWAS rejected: " << (v4 ? "PASS" : "FAIL") << "\n";
 
     // Scanning only (no leading/conclusion) → valid
     std::vector<ALEWord> seq_scan_only = {
@@ -796,8 +796,8 @@ int run_all_tests()
     run("REQ-WORD-004 TIS extended address → TIS+DATA+REP",
         test_tis_extended_address());
 
-    // REQ-WORD-005: TWAS (TWS)
-    run("REQ-WORD-005 TWAS (TWS) encode/decode",
+    // REQ-WORD-005: TWAS
+    run("REQ-WORD-005 TWAS encode/decode",
         test_twas_word_encoding());
     run("REQ-WORD-005 TIS and TWAS have distinct preambles",
         test_tis_twas_different_preambles());

@@ -141,7 +141,7 @@ LQA Score = SNR(dB) * 10
 
 ```
 1. User calls initiate_net_call("NET1")
-2. Transmit: TWS NET1 (to-all-within-net)
+2. Transmit: TWAS NET1 (to-all-within-net)
 3. Wait for multiple responses
 4. State: CALLING → LINKED (first responder)
 ```
@@ -265,7 +265,7 @@ This implementation follows MIL-STD-188-141B Appendix A for:
 ✅ **Call timeout**: 30 seconds for call establishment  
 ✅ **Link timeout**: 2 minutes idle before disconnect  
 ✅ **Scan dwell**: 500ms minimum per channel  
-✅ **Preamble types**: TO, FROM, TIS, TWS, THRU, DATA  
+✅ **Preamble types**: TO, FROM, TIS, TWAS, THRU, DATA  
 ✅ **State machine**: IDLE, SCANNING, CALLING, HANDSHAKE, LINKED, SOUNDING  
 ✅ **LQA system**: SNR-based channel quality tracking  
 

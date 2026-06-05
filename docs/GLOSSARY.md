@@ -112,7 +112,7 @@ Time spent listening on each channel during scanning. Default is 200ms. Shorter 
 Exchange of messages establishing a link:
 1. Caller sends TO + FROM + TIS
 2. Called station responds with TIS
-3. Caller confirms with TWS
+3. Caller confirms with TWAS
 
 ### **LQA** (Link Quality Analysis)
 Measurement of channel quality (0-31 scale). Based on SNR and BER. Stored per-channel to guide frequency selection.
@@ -127,7 +127,7 @@ Group of stations sharing common address. Net calls reach all members. Example: 
 - `010` = TO
 - `011` = FROM
 - `100` = TIS (This Is)
-- `101` = TWS (This Was)
+- `101` = TWAS (This Was)
 - `110` = CMD
 - `111` = REP
 
@@ -140,7 +140,7 @@ Transmission of TIS words on multiple channels to measure channel quality. Allow
 ### **TIS** (This Is)
 ALE word identifying a station. Used in handshakes and soundings. Contains station address.
 
-### **TWS** (This Was)
+### **TWAS** (This Was)
 ALE word confirming link establishment. Sent by caller after receiving TIS from called station.
 
 ### **Wildcard Address**
@@ -154,7 +154,7 @@ Address pattern using `*` (match any characters) or `?` (match single character)
 State machine state where station is transmitting a call (TO + FROM + TIS sequence). Waiting for TIS response.
 
 ### **HANDSHAKE State**
-State where station is responding to incoming call with TIS. Will transition to LINKED if caller sends TWS.
+State where station is responding to incoming call with TIS. Will transition to LINKED if caller sends TWAS.
 
 ### **IDLE State**
 Initial state. Not scanning or calling. Waiting for command.
@@ -347,7 +347,7 @@ Modern Windows audio API. Provides lower latency than DirectSound. Supported in 
 | QAM | Quadrature Amplitude Modulation | Advanced modulation (188-110A) |
 | SNR | Signal-to-Noise Ratio | Signal quality metric (dB) |
 | TIS | This Is | ALE identification word |
-| TWS | This Was | ALE confirmation word |
+| TWAS | This Was | ALE confirmation word |
 
 ---
 

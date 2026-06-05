@@ -178,7 +178,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation.
 
 ### Protocol Layer
 - Word structure parser (preamble + 21-bit payload)
-- Preamble types: DATA, THRU, TO, TWS, FROM, TIS, CMD, REP
+- Preamble types: DATA, THRU, TO, TWAS, FROM, TIS, CMD, REP
 - ASCII-64 character encoding/decoding
 - Address book with wildcard matching
 - Message assembly and call type detection

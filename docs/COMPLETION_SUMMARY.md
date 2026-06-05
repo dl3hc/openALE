@@ -245,7 +245,7 @@ ctest --verbose          # Run all tests
 The 8-FSK modem core is complete and tested. Ready for Phase 2:
 
 **Phase 2: Word Structure & Protocol (Next Level)**
-- [ ] Word preamble type detection (DATA, THRU, TO, TWS, FROM, TIS, CMD, REP)
+- [ ] Word preamble type detection (DATA, THRU, TO, TWAS, FROM, TIS, CMD, REP)
 - [ ] 24-bit word structure parser
 - [ ] CRC/checksum computation
 - [ ] Address field extraction

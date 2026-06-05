@@ -37,7 +37,7 @@ bool test_word_parsing() {
         { make_word(WordType::FROM, "K6K"), WordType::FROM, "K6K", "FROM address" },
         { make_word(WordType::TIS, "N0C"), WordType::TIS, "N0C", "TIS (sounding)" },
         { make_word(WordType::DATA, "ABC"), WordType::DATA, "ABC", "DATA word" },
-        { make_word(WordType::TWS, "NET"), WordType::TWS, "NET", "Net call (TWS)" },
+        { make_word(WordType::TWAS, "NET"), WordType::TWAS, "NET", "Net call (TWAS)" },
     };
     
     bool all_pass = true;
@@ -274,7 +274,7 @@ bool test_preamble_types() {
             { WordType::DATA, 0, "DATA" },
             { WordType::THRU, 1, "THRU" },
             { WordType::TO,   2, "TO"   },
-            { WordType::TWS,  3, "TWS"  },
+            { WordType::TWAS,  3, "TWAS" },
             { WordType::FROM, 4, "FROM" },
             { WordType::TIS,  5, "TIS"  },
             { WordType::CMD,  6, "CMD"  },
@@ -288,7 +288,7 @@ bool test_preamble_types() {
                 all_ok = false;
             }
         }
-        std::cout << "  AC-WORD-002-3 THRU/TO/TWS/FROM/TIS/CMD/DATA/REP values: "
+        std::cout << "  AC-WORD-002-3 THRU/TO/TWAS/FROM/TIS/CMD/DATA/REP values: "
                   << (all_ok ? "PASS" : "FAIL") << "\n";
         all_pass &= all_ok;
     }
@@ -372,7 +372,7 @@ bool test_cmd_data_rep_validation() {
         
         // Invalid sequence: TWAS, REP
         std::vector<ALEWord> invalid_words3;
-        invalid_words3.push_back(WordParser::make_word(WordType::TWS, "ABC"));
+        invalid_words3.push_back(WordParser::make_word(WordType::TWAS, "ABC"));
         invalid_words3.push_back(WordParser::make_word(WordType::REP, "DEF"));
         
         bool invalid3_pass = !FrameValidator::rep_not_followed_by_self_tis_twas(invalid_words3);

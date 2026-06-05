@@ -201,7 +201,7 @@ private:
 
     // ── Calling sub-state (MIL-STD A.5.5.3.1) ────────────────────────────
     CallingPhase calling_phase;          ///< Current phase within CALLING
-    bool         active_call_is_net;     ///< true = net call (TWS), false = individual (TO)
+    bool         active_call_is_net;     ///< true = net call (TWAS), false = individual (TO)
     uint32_t     call_phase_start_ms;    ///< Timestamp of current phase entry
     uint32_t     first_call_tx_ms;       ///< Phase reference — set once, never changes
     uint32_t     call_cycle_count;       ///< Total words sent across all phases
@@ -298,7 +298,7 @@ private:
 
     /**
      * Transmit all words for one complete address sequence.
-     * first_type : WordType::TO, TWS, or TIS for the first word.
+     * first_type : WordType::TO, TWAS, or TIS for the first word.
      * Subsequent words alternate DATA / REP per A.5.2.3.2.1 / A.5.2.3.2.2.
      *
      * REP note: per spec, REP must not follow TIS/TWAS directly — the sequence

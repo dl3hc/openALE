@@ -160,8 +160,8 @@ void test_parse_inlink() {
     
     ALEWord words[2];
     
-    // Word 0: TWS (net call)
-    words[0].type = WordType::TWS;
+    // Word 0: TWAS (net call)
+    words[0].type = WordType::TWAS;
     strcpy(words[0].address, "NET");
     
     // Payload with DE fields

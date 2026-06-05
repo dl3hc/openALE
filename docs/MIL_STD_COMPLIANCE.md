@@ -20,7 +20,7 @@ This document details PC-ALE 2.0's compliance with relevant military and federal
 | Triple redundancy | A.3.2 | ✅ Complete | Majority voting in decoder | Reduces BER |
 | **Word Structure** |
 | 24-bit word format | A.4.1 | ✅ Complete | Phase 2: `ALEWord` | 3-bit preamble + 21-bit payload |
-| Preamble types | A.4.2 | ✅ Complete | `PreambleType` enum | DATA, THRU, TO, FROM, TIS, TWS, CMD, REP |
+| Preamble types | A.4.2 | ✅ Complete | `PreambleType` enum | DATA, THRU, TO, FROM, TIS, TWAS, CMD, REP |
 | ASCII-64 encoding | A.4.3 | ✅ Complete | Character encoding functions | 64-character subset |
 | **Call Types** |
 | Individual call | A.5.1 | ✅ Complete | Phase 3: `make_call()` | TO + FROM + TIS sequence |
@@ -32,7 +32,7 @@ This document details PC-ALE 2.0's compliance with relevant military and federal
 | Scanning procedure | A.6.1 | ✅ Complete | Phase 3: SCANNING state | Channel hopping with dwell time |
 | Call detection | A.6.2 | ✅ Complete | Word sequence parsing | Detects TO words for self |
 | Handshake procedure | A.6.3 | ✅ Complete | HANDSHAKE state | TIS response to valid calls |
-| Link confirmation | A.6.4 | ✅ Complete | LINKED state | TWS confirmation |
+| Link confirmation | A.6.4 | ✅ Complete | LINKED state | TWAS confirmation |
 | **Link Quality Analysis** |
 | LQA measurement | A.7.1 | ✅ Complete | Phase 3: `LQATracker` | SNR-based scoring (0-31) |
 | LQA storage | A.7.2 | ✅ Complete | Per-channel LQA table | Tracks quality per frequency |

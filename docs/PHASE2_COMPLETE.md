@@ -20,7 +20,7 @@
   - DATA (0) - Data content
   - THRU (1) - Repeater/relay
   - TO (2) - Destination address
-  - TWS (3) - To With Self (net call including sender)
+  - TWAS (3) - To With Self (net call including sender)
   - FROM (4) - Source address
   - TIS (5) - This Is Self (station ID/sounding)
   - CMD (6) - Command word
@@ -49,11 +49,11 @@
   - Collect ALE words into complete messages
   - Timeout handling (5 seconds default)
   - Sequence completion detection
-  - Address extraction (TO/FROM/TWS/TIS)
+  - Address extraction (TO/FROM/TWAS/TIS)
   - Data content extraction
 - **Call type detection:**
   - Individual call (TO + FROM)
-  - Net call (TWS + FROM)
+  - Net call (TWAS + FROM)
   - Sounding (TIS)
   - AMD - Automatic Message Display (TO + FROM + DATA)
   - Group call support
@@ -81,7 +81,7 @@
   ✓ FROM address extraction
   ✓ TIS (sounding) parsing
   ✓ DATA word parsing
-  ✓ Net call (TWS) parsing
+  ✓ Net call (TWAS) parsing
 
 [TEST 2] ASCII Encoding/Decoding
   ✓ Valid uppercase letters
@@ -108,7 +108,7 @@
 [TEST 5] Call Type Detection
   ✓ Individual call (TO + FROM)
   ✓ Sounding (TIS)
-  ✓ Net call (TWS + FROM)
+  ✓ Net call (TWAS + FROM)
   ✓ AMD (TO + FROM + DATA)
 ```
 
@@ -230,7 +230,7 @@ if (book.match_wildcard("W@AW", "W1AW")) {
 
 ### Call Types
 ✅ Individual call (TO + FROM)  
-✅ Net call (TWS + FROM)  
+✅ Net call (TWAS + FROM)  
 ✅ Sounding (TIS)  
 ✅ AMD (TO + FROM + DATA)  
 ✅ Group call support  

@@ -490,8 +490,8 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
     switch (current_state) {
 
         case ALEState::SCANNING:
-            // Incoming call: TO or TWS addressed to us
-            if (word.type == WordType::TO || word.type == WordType::TWS) {
+            // Incoming call: TO or TWAS addressed to us
+            if (word.type == WordType::TO || word.type == WordType::TWAS) {
                 if (address_book.is_self(addr)) {
                     active_call_to = addr;
                     process_event(ALEEvent::CALL_DETECTED);
@@ -512,7 +512,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                         active_call_from = addr;
                         process_event(ALEEvent::HANDSHAKE_COMPLETE);
                     }
-                } else if (word.type == WordType::TWS) {
+                } else if (word.type == WordType::TWAS) {
                     // Called station explicitly rejected the call
                     if (address_book.is_self(addr))
                         process_event(ALEEvent::LINK_TIMEOUT);
@@ -619,7 +619,7 @@ void ALEStateMachine::transmit_address_words(WordType first_type,
     const auto chunks = chunk_address(addr);
 
     // Word type sequence per A.5.2.3.2.1 / A.5.2.3.2.2:
-    //   chunk[0] → first_type       (TO / TIS / TWS)
+    //   chunk[0] → first_type       (TO / TIS / TWAS)
     //   chunk[1] → DATA             (A.5.2.3.4.1: extends previous word type)
     //   chunk[2] → REP              (A.5.2.3.4.2: duplicates preamble, new data)
     //   chunk[3] → DATA
@@ -671,7 +671,7 @@ void ALEStateMachine::build_leading_call_word(const std::string& to_addr,
                                               bool is_net) {
     // Per A.5.5.3.1: "entire called station address shall be used in
     // leading call section" — full DATA/REP chain for addresses > 3 chars.
-    const WordType first = is_net ? WordType::TWS : WordType::TO;
+    const WordType first = is_net ? WordType::TWAS : WordType::TO;
     transmit_address_words(first, to_addr);
 }
 

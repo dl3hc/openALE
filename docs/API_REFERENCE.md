@@ -214,7 +214,7 @@ enum class PreambleType {
     THRU  = 1,  // THRU (pass through)
     TO    = 2,  // TO address
     TIS   = 3,  // TIS (This Is)
-    TWS   = 4,  // TWS (This Was)
+    TWAS  = 4,  // TWAS (terminator and identification quitting)
     FROM  = 5,  // FROM address
     CMD   = 6,  // Command
     REP   = 7   // Repeat

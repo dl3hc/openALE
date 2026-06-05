@@ -97,7 +97,7 @@ bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
     for (const auto& word : words) {
         switch (word.type) {
             case WordType::TO:
-            case WordType::TWS:
+            case WordType::TWAS:
                 has_to = true;
                 break;
             case WordType::FROM:
@@ -127,7 +127,7 @@ bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
 
 void MessageAssembler::extract_addresses(const std::vector<ALEWord>& words, ALEMessage& msg) {
     for (const auto& word : words) {
-        if (word.type == WordType::TO || word.type == WordType::TWS) {
+        if (word.type == WordType::TO || word.type == WordType::TWAS) {
             std::string addr(word.address, 3);
             // Trim trailing spaces
             addr.erase(addr.find_last_not_of(' ') + 1);
@@ -205,15 +205,15 @@ bool CallTypeDetector::is_individual_call(const std::vector<ALEWord>& words) {
 }
 
 bool CallTypeDetector::is_net_call(const std::vector<ALEWord>& words) {
-    bool has_tws = false;
+    bool has_twas = false;
     bool has_from = false;
     
     for (const auto& word : words) {
-        if (word.type == WordType::TWS) has_tws = true;
+        if (word.type == WordType::TWAS) has_twas = true;
         if (word.type == WordType::FROM) has_from = true;
     }
     
-    return has_tws && has_from;
+    return has_twas && has_from;
 }
 
 bool CallTypeDetector::is_sounding(const std::vector<ALEWord>& words) {
