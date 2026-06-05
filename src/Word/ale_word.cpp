@@ -278,6 +278,58 @@ bool FrameValidator::group_call_target_count_valid(const std::vector<ALEWord>& s
 // CMD/DATA/REP Frame Validation
 // ============================================================================
 
+bool FrameValidator::cmd_not_before_address_section(const std::vector<ALEWord>& words)
+{
+    // AC-WORD-008-3: CMD must only appear after the address section has started.
+    // Any CMD that precedes the first TO/FROM/TIS/TWAS word is a violation.
+    bool address_seen = false;
+    for (const auto& word : words) {
+        switch (word.type) {
+            case WordType::TO:
+            case WordType::FROM:
+            case WordType::TIS:
+            case WordType::TWAS:
+                address_seen = true;
+                break;
+            case WordType::CMD:
+                if (!address_seen) return false;
+                break;
+            default:
+                break;
+        }
+    }
+    return true;
+}
+
+bool FrameValidator::cmd_has_call_and_conclusion(const std::vector<ALEWord>& words)
+{
+    // AC-WORD-008-4: a frame with CMD must have a preceding call and a following
+    // conclusion.  Find the first CMD and check both sides.
+    size_t cmd_idx = words.size();
+    for (size_t i = 0; i < words.size(); ++i) {
+        if (words[i].type == WordType::CMD) { cmd_idx = i; break; }
+    }
+    if (cmd_idx == words.size()) return true;  // no CMD — no constraint
+
+    bool has_call = false;
+    for (size_t i = 0; i < cmd_idx; ++i) {
+        if (words[i].type == WordType::TO   ||
+            words[i].type == WordType::FROM  ||
+            words[i].type == WordType::TIS   ||
+            words[i].type == WordType::TWAS) {
+            has_call = true;
+            break;
+        }
+    }
+    if (!has_call) return false;
+
+    for (size_t i = cmd_idx + 1; i < words.size(); ++i) {
+        if (words[i].type == WordType::TIS || words[i].type == WordType::TWAS)
+            return true;
+    }
+    return false;
+}
+
 bool FrameValidator::message_sections_begin_with_cmd(const std::vector<ALEWord>& words)
 {
     // AC-WORD-008-1: THRU must not appear inside the message section (after CMD).
@@ -325,6 +377,16 @@ bool FrameValidator::rep_not_preceded_by_self_tis_twas(const std::vector<ALEWord
                 return false;
             }
         }
+    }
+    return true;
+}
+
+bool FrameValidator::no_consecutive_same_preamble(const std::vector<ALEWord>& words)
+{
+    // AC-WORD-010-2/3: consecutive words must have different preamble types so
+    // receivers can distinguish data changes from repeated transmissions.
+    for (size_t i = 1; i < words.size(); ++i) {
+        if (words[i].type == words[i-1].type) return false;
     }
     return true;
 }

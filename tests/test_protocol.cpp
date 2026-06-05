@@ -475,6 +475,118 @@ bool test_cmd_data_rep_validation() {
 }
 
 // ============================================================================
+// Test 7: Phase 3 — AC-WORD-008-3, AC-WORD-008-4, AC-WORD-010-2/3
+// ============================================================================
+
+bool test_phase3_validators() {
+    std::cout << "\n[TEST 7] Frame Validators\n";
+    std::cout << "=========================\n";
+
+    bool all_pass = true;
+
+    // AC-WORD-008-3: CMD must not appear before the address section.
+    {
+        // Valid: address word before CMD
+        std::vector<ALEWord> valid1;
+        valid1.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
+        valid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
+        bool v1 = FrameValidator::cmd_not_before_address_section(valid1);
+        std::cout << "  AC-WORD-008-3 Valid (TO, CMD): "
+                  << (v1 ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: CMD before any address word
+        std::vector<ALEWord> invalid1;
+        invalid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
+        invalid1.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
+        bool i1 = !FrameValidator::cmd_not_before_address_section(invalid1);
+        std::cout << "  AC-WORD-008-3 Invalid (CMD, TO): "
+                  << (i1 ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: CMD in scanning section (THRU present, no address word yet)
+        std::vector<ALEWord> invalid2;
+        invalid2.push_back(WordParser::make_word(WordType::THRU, "XYZ"));
+        invalid2.push_back(WordParser::make_word(WordType::CMD,  "MSG"));
+        bool i2 = !FrameValidator::cmd_not_before_address_section(invalid2);
+        std::cout << "  AC-WORD-008-3 Invalid (THRU, CMD): "
+                  << (i2 ? "PASS" : "FAIL") << "\n";
+
+        all_pass &= (v1 && i1 && i2);
+    }
+
+    // AC-WORD-008-4: Frame with CMD must have preceding call and following conclusion.
+    {
+        // Valid: TO → CMD → TIS
+        std::vector<ALEWord> valid1;
+        valid1.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
+        valid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
+        valid1.push_back(WordParser::make_word(WordType::TIS, "ABC"));
+        bool v1 = FrameValidator::cmd_has_call_and_conclusion(valid1);
+        std::cout << "  AC-WORD-008-4 Valid (TO, CMD, TIS): "
+                  << (v1 ? "PASS" : "FAIL") << "\n";
+
+        // Valid: TO → FROM → CMD → TWAS
+        std::vector<ALEWord> valid2;
+        valid2.push_back(WordParser::make_word(WordType::TO,   "XYZ"));
+        valid2.push_back(WordParser::make_word(WordType::FROM, "ABC"));
+        valid2.push_back(WordParser::make_word(WordType::CMD,  "MSG"));
+        valid2.push_back(WordParser::make_word(WordType::TWAS, "NET"));
+        bool v2 = FrameValidator::cmd_has_call_and_conclusion(valid2);
+        std::cout << "  AC-WORD-008-4 Valid (TO, FROM, CMD, TWAS): "
+                  << (v2 ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: CMD without preceding call
+        std::vector<ALEWord> invalid1;
+        invalid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
+        invalid1.push_back(WordParser::make_word(WordType::TIS, "ABC"));
+        bool i1 = !FrameValidator::cmd_has_call_and_conclusion(invalid1);
+        std::cout << "  AC-WORD-008-4 Invalid (CMD, TIS — no call): "
+                  << (i1 ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: CMD without following conclusion
+        std::vector<ALEWord> invalid2;
+        invalid2.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
+        invalid2.push_back(WordParser::make_word(WordType::CMD, "MSG"));
+        bool i2 = !FrameValidator::cmd_has_call_and_conclusion(invalid2);
+        std::cout << "  AC-WORD-008-4 Invalid (TO, CMD — no conclusion): "
+                  << (i2 ? "PASS" : "FAIL") << "\n";
+
+        all_pass &= (v1 && v2 && i1 && i2);
+    }
+
+    // AC-WORD-010-2/3: Consecutive words must have different preamble types.
+    {
+        // Valid: alternating TO, DATA, REP
+        std::vector<ALEWord> valid1;
+        valid1.push_back(WordParser::make_word(WordType::TO,   "ABC"));
+        valid1.push_back(WordParser::make_word(WordType::DATA, "DEF"));
+        valid1.push_back(WordParser::make_word(WordType::REP,  "GHI"));
+        bool v1 = FrameValidator::no_consecutive_same_preamble(valid1);
+        std::cout << "  AC-WORD-010-2/3 Valid (TO, DATA, REP): "
+                  << (v1 ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: two consecutive DATA words
+        std::vector<ALEWord> invalid1;
+        invalid1.push_back(WordParser::make_word(WordType::DATA, "ABC"));
+        invalid1.push_back(WordParser::make_word(WordType::DATA, "DEF"));
+        bool i1 = !FrameValidator::no_consecutive_same_preamble(invalid1);
+        std::cout << "  AC-WORD-010-2/3 Invalid (DATA, DATA): "
+                  << (i1 ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: two consecutive REP words
+        std::vector<ALEWord> invalid2;
+        invalid2.push_back(WordParser::make_word(WordType::REP, "ABC"));
+        invalid2.push_back(WordParser::make_word(WordType::REP, "DEF"));
+        bool i2 = !FrameValidator::no_consecutive_same_preamble(invalid2);
+        std::cout << "  AC-WORD-010-2/3 Invalid (REP, REP): "
+                  << (i2 ? "PASS" : "FAIL") << "\n";
+
+        all_pass &= (v1 && i1 && i2);
+    }
+
+    return all_pass;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -494,6 +606,7 @@ int run_all_tests() {
     if (test_word_bit_structure()) { pass_count++; } else { fail_count++; }
     if (test_preamble_types()) { pass_count++; } else { fail_count++; }
     if (test_cmd_data_rep_validation()) { pass_count++; } else { fail_count++; }
+    if (test_phase3_validators())       { pass_count++; } else { fail_count++; }
     
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

@@ -626,10 +626,16 @@ void ALEStateMachine::transmit_address_words(WordType first_type,
     //   chunk[4] → REP              (maximum — 15 chars total)
     //
     // REP must not follow TIS/TWAS directly — DATA is always the first extension.
-    static const WordType extension_types[] = {
+    // AC-WORD-010-2/3: preamble must differ between consecutive words — enforced
+    // here by the alternating DATA/REP pattern.
+    static constexpr WordType extension_types[] = {
         WordType::DATA, WordType::REP,
         WordType::DATA, WordType::REP
     };
+    static_assert(extension_types[0] != extension_types[1] &&
+                  extension_types[1] != extension_types[2] &&
+                  extension_types[2] != extension_types[3],
+                  "Extension word preambles must alternate (AC-WORD-010-2/3)");
 
     for (size_t i = 0; i < chunks.size(); ++i) {
         ALEWord word = ALEWord();

@@ -278,6 +278,20 @@ public:
     static bool message_sections_begin_with_cmd(const std::vector<ALEWord>& words);
 
     /**
+     * AC-WORD-008-3: CMD is only used in the Message section — it must not
+     * appear before the address section (TO/FROM/TIS/TWAS) has started.
+     * \return true if no CMD precedes the first address-section word.
+     */
+    static bool cmd_not_before_address_section(const std::vector<ALEWord>& words);
+
+    /**
+     * AC-WORD-008-4: A frame containing CMD must have a preceding call
+     * (TO/FROM/TIS/TWAS before CMD) and a following conclusion (TIS/TWAS after CMD).
+     * \return true if every CMD in the frame satisfies both conditions.
+     */
+    static bool cmd_has_call_and_conclusion(const std::vector<ALEWord>& words);
+
+    /**
      * AC-WORD-008-5: The first CMD in a frame ends the Calling Cycle and
      * marks the beginning of the Message section.
      * \return true if no calling-section word types (TO, FROM, TIS, THRU) appear
@@ -300,6 +314,14 @@ public:
      * \return true if no REP word is immediately preceded by REP, TIS, or TWAS.
      */
     static bool rep_not_preceded_by_self_tis_twas(const std::vector<ALEWord>& words);
+
+    /**
+     * AC-WORD-010-2/3: Consecutive words in a frame must have different preamble
+     * types. Any data change requires a preamble change; a preamble change is also
+     * required even when the data field is identical.
+     * \return true if no two adjacent words share the same preamble type.
+     */
+    static bool no_consecutive_same_preamble(const std::vector<ALEWord>& words);
 
     /**
      * AC-WORD-010-7: REP must not be used where multiple senders exist.
