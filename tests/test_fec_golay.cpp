@@ -3,7 +3,8 @@
  * \brief Unit tests for Extended Golay (24,12) FEC codec
  *
  * Covers: AC-FEC-004-1/2, AC-FEC-005-1/2/3, AC-FEC-006-1,
- *         AC-FEC-007-1, AC-FEC-009-1/2
+ *         AC-FEC-007-1, AC-FEC-009-1/2,
+ *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2
  * Spec: MIL-STD-188-141B A.5.2.2
  */
 
@@ -207,6 +208,108 @@ bool test_golay_decode_flags() {
     return true;
 }
 
+// FEAT-FEC-002 — Golay (24,12) Decoder mit Fehlerkorrektur
+// REQ-FEC-008 / REQ-FEC-010 / REQ-FEC-011
+bool test_feat_fec_002_decoder_acs() {
+    std::cout << "\n[TEST FEC-5] FEAT-FEC-002 — Decoder ACs (REQ-FEC-008/010/011)\n";
+    std::cout << "-----------------------------------------------------------------\n";
+
+    // AC-FEC-008-1: Golay-Prüfverfahren — s = yH^T mod 2
+    //   Gültiges Codewort → DECODE_OK (Syndrom = 0)
+    //   Fehler im Codewort → Syndrom ≠ 0 (wird erkannt)
+    {
+        const uint16_t ref = 0xABC;
+        uint32_t cw = Golay::encode(ref);
+        uint16_t out = 0;
+        Golay::DecodeResult r = Golay::decode(cw, out);
+        if (r.flag != Golay::DECODE_OK || out != ref) {
+            std::cout << "FAIL AC-FEC-008-1: valid codeword must yield DECODE_OK\n";
+            return false;
+        }
+        // Alle 24 Einzelbitfehler müssen erkannt werden (s ≠ 0)
+        for (int bit = 0; bit < 24; ++bit) {
+            uint16_t d = 0;
+            Golay::DecodeResult rd = Golay::decode(cw ^ (1u << bit), d);
+            if (rd.flag != Golay::DECODE_CORRECTED) {
+                std::cout << "FAIL AC-FEC-008-1: bit " << bit << " error not detected\n";
+                return false;
+            }
+        }
+        std::cout << "  AC-FEC-008-1: syndrome=0 fuer gueltiges CW;"
+                     " alle 24 Einzelbitfehler erkannt OK\n";
+    }
+
+    // AC-FEC-010-1: Syndrom-basiertes Dekodierverfahren (syndrome_table[s] → Fehlervektor)
+    // AC-FEC-010-2: Jeder korrigierbare Fehlervektor eindeutig einem Syndromwert zugeordnet
+    // AC-FEC-010-3: Dekodiertes Datenwort = gesendetes Original (Fehler ≤ 3)
+    //   Verifikation: alle 2325 Fehlermuster (Gewicht 0..3) auf Referenzwort 0xABC
+    //   Wenn ein Syndrom-Kollision existierte, würde mind. ein Muster fehlschlagen.
+    {
+        const uint16_t ref = 0xABC;
+        uint32_t cw = Golay::encode(ref);
+        const auto masks = make_golay_error_masks_upto_3();
+        uint32_t corrected_count = 0;
+        for (uint32_t m : masks) {
+            uint16_t decoded = 0;
+            Golay::decode(cw ^ m, decoded);
+            if (decoded != ref) {
+                std::cout << "FAIL AC-FEC-010-2/3: mask=0x" << std::hex << m
+                          << " decoded=0x" << decoded
+                          << " expected=0x" << ref << std::dec << "\n";
+                return false;
+            }
+            ++corrected_count;
+        }
+        if (corrected_count != static_cast<uint32_t>(masks.size())) {
+            std::cout << "FAIL AC-FEC-010-2: nur " << corrected_count
+                      << "/" << masks.size() << " Fehlermuster korrigiert\n";
+            return false;
+        }
+        std::cout << "  AC-FEC-010-1/2/3: alle " << corrected_count
+                  << " Fehlermuster (Gew. 0..3) eindeutig dekodiert OK\n";
+    }
+
+    // AC-FEC-011-1: Flag DECODE_CORRECTED bei erfolgreicher Korrektur
+    //   errors_corrected muss der tatsächlichen Fehleranzahl (1-3) entsprechen
+    {
+        const uint16_t ref = 0x7E1;
+        uint32_t cw = Golay::encode(ref);
+        struct { uint32_t mask; uint8_t wt; } cases[] = {
+            {0x000001u, 1}, {0x000003u, 2}, {0x000007u, 3},
+        };
+        for (auto& c : cases) {
+            uint16_t out = 0;
+            Golay::DecodeResult r = Golay::decode(cw ^ c.mask, out);
+            if (r.flag != Golay::DECODE_CORRECTED || r.errors_corrected != c.wt || out != ref) {
+                std::cout << "FAIL AC-FEC-011-1: wt=" << (int)c.wt
+                          << " flag=0x" << std::hex << (int)r.flag
+                          << " errors_corrected=" << std::dec << (int)r.errors_corrected << "\n";
+                return false;
+            }
+        }
+        std::cout << "  AC-FEC-011-1: DECODE_CORRECTED + errors_corrected fuer Gew. 1/2/3 OK\n";
+    }
+
+    // AC-FEC-011-2: Flag DECODE_DETECTED bei erkennbarem, nicht korrigierbarem Fehler
+    //   Fehlergewicht 4 liegt über der Korrekturkapazität (min. Dist. 8 → kein CW-Konflikt)
+    {
+        const uint16_t ref = 0x7E1;
+        uint32_t cw = Golay::encode(ref);
+        uint32_t mask4 = 0x0000000Fu;   // Bits 0-3 gesetzt, Gewicht 4
+        uint16_t out = 0;
+        Golay::DecodeResult r = Golay::decode(cw ^ mask4, out);
+        if (r.flag != Golay::DECODE_DETECTED) {
+            std::cout << "FAIL AC-FEC-011-2: Gewicht-4-Fehler muss DECODE_DETECTED liefern,"
+                      << " erhalten flag=0x" << std::hex << (int)r.flag << std::dec << "\n";
+            return false;
+        }
+        std::cout << "  AC-FEC-011-2: DECODE_DETECTED fuer Gewicht-4-Fehler OK\n";
+    }
+
+    std::cout << "PASS\n";
+    return true;
+}
+
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "===========================================\n";
@@ -217,10 +320,11 @@ int run_all_tests() {
     int pass_count = 0;
     int fail_count = 0;
 
-    if (test_golay_ale_word_decode())  { pass_count++; } else { fail_count++; }
-    if (test_golay_codec_minimal())    { pass_count++; } else { fail_count++; }
-    if (test_golay_spec_compliance())  { pass_count++; } else { fail_count++; }
-    if (test_golay_decode_flags())     { pass_count++; } else { fail_count++; }
+    if (test_golay_ale_word_decode())       { pass_count++; } else { fail_count++; }
+    if (test_golay_codec_minimal())         { pass_count++; } else { fail_count++; }
+    if (test_golay_spec_compliance())       { pass_count++; } else { fail_count++; }
+    if (test_golay_decode_flags())          { pass_count++; } else { fail_count++; }
+    if (test_feat_fec_002_decoder_acs())    { pass_count++; } else { fail_count++; }
 
     std::cout << "\n===========================================\n";
     std::cout << "  Passed: " << pass_count
