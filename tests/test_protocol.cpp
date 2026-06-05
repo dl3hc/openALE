@@ -329,15 +329,45 @@ bool test_cmd_data_rep_validation() {
         all_pass &= pass;
     }
     
-    // Test for AC-WORD-008-5: First CMD begins message section
+    // Test for AC-WORD-008-5: First CMD marks boundary — calling-section words must
+    // not appear after it.
     {
-        std::vector<ALEWord> words;
-        words.push_back(WordParser::make_word(WordType::CMD, "ABC"));  // First CMD in frame
-        
-        bool pass = FrameValidator::first_cmd_begins_message_section(words);
-        std::cout << "  AC-WORD-008-5 First CMD begins message section: " 
-                  << (pass ? "PASS" : "FAIL") << "\n";
-        all_pass &= pass;
+        // Valid: typical frame — address words precede CMD, message content follows
+        std::vector<ALEWord> valid1;
+        valid1.push_back(WordParser::make_word(WordType::TO,   "XYZ"));
+        valid1.push_back(WordParser::make_word(WordType::FROM, "ABC"));
+        valid1.push_back(WordParser::make_word(WordType::CMD,  "MSG"));
+        valid1.push_back(WordParser::make_word(WordType::DATA, "HI!"));
+        bool v1 = FrameValidator::first_cmd_begins_message_section(valid1);
+        std::cout << "  AC-WORD-008-5 Valid (TO,FROM,CMD,DATA): "
+                  << (v1 ? "PASS" : "FAIL") << "\n";
+
+        // Valid: CMD followed by TWAS conclusion (no calling-section words after CMD)
+        std::vector<ALEWord> valid2;
+        valid2.push_back(WordParser::make_word(WordType::TO,   "XYZ"));
+        valid2.push_back(WordParser::make_word(WordType::CMD,  "MSG"));
+        valid2.push_back(WordParser::make_word(WordType::TWAS, "ABC"));
+        bool v2 = FrameValidator::first_cmd_begins_message_section(valid2);
+        std::cout << "  AC-WORD-008-5 Valid (TO,CMD,TWAS): "
+                  << (v2 ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: TO appears after CMD — calling section bled into message section
+        std::vector<ALEWord> invalid1;
+        invalid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
+        invalid1.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
+        bool i1 = !FrameValidator::first_cmd_begins_message_section(invalid1);
+        std::cout << "  AC-WORD-008-5 Invalid (CMD,TO): "
+                  << (i1 ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: TIS appears after CMD
+        std::vector<ALEWord> invalid2;
+        invalid2.push_back(WordParser::make_word(WordType::CMD, "MSG"));
+        invalid2.push_back(WordParser::make_word(WordType::TIS, "ABC"));
+        bool i2 = !FrameValidator::first_cmd_begins_message_section(invalid2);
+        std::cout << "  AC-WORD-008-5 Invalid (CMD,TIS): "
+                  << (i2 ? "PASS" : "FAIL") << "\n";
+
+        all_pass &= (v1 && v2 && i1 && i2);
     }
     
     // Test for AC-WORD-010-6: REP must not follow itself, TIS, or TWAS
@@ -348,7 +378,7 @@ bool test_cmd_data_rep_validation() {
         valid_words.push_back(WordParser::make_word(WordType::REP, "DEF"));
         valid_words.push_back(WordParser::make_word(WordType::DATA, "GHI"));
         
-        bool valid_pass = FrameValidator::rep_not_followed_by_self_tis_twas(valid_words);
+        bool valid_pass = FrameValidator::rep_not_preceded_by_self_tis_twas(valid_words);
         std::cout << "  AC-WORD-010-6 Valid sequence (DATA, REP, DATA): " 
                   << (valid_pass ? "PASS" : "FAIL") << "\n";
         
@@ -357,7 +387,7 @@ bool test_cmd_data_rep_validation() {
         invalid_words1.push_back(WordParser::make_word(WordType::REP, "ABC"));
         invalid_words1.push_back(WordParser::make_word(WordType::REP, "DEF"));
         
-        bool invalid1_pass = !FrameValidator::rep_not_followed_by_self_tis_twas(invalid_words1);
+        bool invalid1_pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(invalid_words1);
         std::cout << "  AC-WORD-010-6 Invalid sequence (REP, REP): " 
                   << (invalid1_pass ? "PASS" : "FAIL") << "\n";
         
@@ -366,7 +396,7 @@ bool test_cmd_data_rep_validation() {
         invalid_words2.push_back(WordParser::make_word(WordType::TIS, "ABC"));
         invalid_words2.push_back(WordParser::make_word(WordType::REP, "DEF"));
         
-        bool invalid2_pass = !FrameValidator::rep_not_followed_by_self_tis_twas(invalid_words2);
+        bool invalid2_pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(invalid_words2);
         std::cout << "  AC-WORD-010-6 Invalid sequence (TIS, REP): " 
                   << (invalid2_pass ? "PASS" : "FAIL") << "\n";
         
@@ -375,7 +405,7 @@ bool test_cmd_data_rep_validation() {
         invalid_words3.push_back(WordParser::make_word(WordType::TWAS, "ABC"));
         invalid_words3.push_back(WordParser::make_word(WordType::REP, "DEF"));
         
-        bool invalid3_pass = !FrameValidator::rep_not_followed_by_self_tis_twas(invalid_words3);
+        bool invalid3_pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(invalid_words3);
         std::cout << "  AC-WORD-010-6 Invalid sequence (TWAS, REP): " 
                   << (invalid3_pass ? "PASS" : "FAIL") << "\n";
         

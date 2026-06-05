@@ -280,17 +280,18 @@ public:
     /**
      * AC-WORD-008-5: The first CMD in a frame ends the Calling Cycle and
      * marks the beginning of the Message section.
-     * \return true if the first CMD word is at the beginning of the frame.
+     * \return true if no calling-section word types (TO, FROM, TIS, THRU) appear
+     *         after the first CMD in the frame.
      */
     static bool first_cmd_begins_message_section(const std::vector<ALEWord>& words);
 
     // ── REQ-WORD-010 (REP sequence rules) ──────────────────────
 
     /**
-     * AC-WORD-010-6: REP must not follow itself, TIS, or TWAS.
-     * \return true if REP is not directly preceded by itself, TIS, or TWAS.
+     * AC-WORD-010-6: REP must not be directly preceded by itself, TIS, or TWAS.
+     * \return true if no REP word is immediately preceded by REP, TIS, or TWAS.
      */
-    static bool rep_not_followed_by_self_tis_twas(const std::vector<ALEWord>& words);
+    static bool rep_not_preceded_by_self_tis_twas(const std::vector<ALEWord>& words);
 
     /**
      * AC-WORD-010-7: REP must not be used where multiple senders exist.
