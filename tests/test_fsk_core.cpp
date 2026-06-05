@@ -15,6 +15,7 @@
 #include "FSK/fft_demodulator.h"
 #include "FSK/symbol_decoder.h"
 #include "FEC/golay.h"
+#include "Protocol/Control/ale_timing.h"
 
 #include <iostream>
 #include <cmath>
@@ -141,6 +142,12 @@ bool test_tone_generation() {
     //
     //    We print the boundary samples so the continuity behavior is visible.
     // ------------------------------------------------------------------------
+    // Large 'jump' values between the last sample of the outgoing tone and the
+    // first sample of the incoming tone are expected and correct. The outgoing
+    // carrier reaches its maximum exactly AT the mathematical transition point
+    // (t = N × 8 ms, between samples), not necessarily at the preceding sample.
+    // The incoming carrier also starts at that same maximum, so the continuous
+    // waveform has no discontinuity even when adjacent samples differ widely.
     std::cout << "\nBoundary continuity checks:\n";
 
     for (uint32_t sym = 0; sym < NUM_TONES - 1; ++sym) {
@@ -176,7 +183,31 @@ bool test_tone_generation() {
     }
 
     // ------------------------------------------------------------------------
-    // 5) Full-buffer exact equality
+    // 5) AC-WAVEFORM-005-2: every symbol must start at the waveform maximum.
+    //    phase_ wraps to 0x40000000 (pi/2, sin=+1, slope=0) at each 8 ms
+    //    boundary because all ALE carriers complete an exact integer number of
+    //    cycles per symbol period. Failure here means reset() sets a wrong
+    //    initial phase or a frequency was changed to a non-250 Hz multiple.
+    // ------------------------------------------------------------------------
+    std::cout << "\nAC-WAVEFORM-005-2 slope-zero boundary check:\n";
+    {
+        const int16_t expected_peak = samples_one_shot[0];
+        bool slope_zero_ok = true;
+        for (uint32_t sym = 1; sym < NUM_TONES; ++sym) {
+            int16_t first = samples_one_shot[sym * SAMPLES_PER_SYMBOL];
+            if (first != expected_peak) {
+                std::cout << "  FAIL: symbol " << sym << " starts at " << first
+                          << ", expected peak " << expected_peak << "\n";
+                slope_zero_ok = false;
+            }
+        }
+        if (!slope_zero_ok) return false;
+        std::cout << "  All " << NUM_TONES << " symbols start at peak value "
+                  << expected_peak << " — slope zero confirmed\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // 6) Full-buffer exact equality
     //    This is the strongest streaming-continuity check.
     // ------------------------------------------------------------------------
     if (std::memcmp(samples_one_shot.data(),
