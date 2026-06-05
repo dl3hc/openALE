@@ -6,7 +6,7 @@
  * Can correct up to 3 bit errors per 24-bit codeword.
  */
 
-#include "FEC/golay.h"
+#include "golay.h"
 #include <cstring>
 #include <algorithm>
 
@@ -580,45 +580,47 @@ uint16_t Golay::compute_syndrome(uint32_t codeword) {
     return syndrome;
 }
 
-uint8_t Golay::decode(uint32_t codeword, uint16_t& output) {
+Golay::DecodeResult Golay::decode(uint32_t codeword, uint16_t& output) {
     // Initialize syndrome table if needed
     if (!syndrome_table_initialized) {
         init_syndrome_table();
     }
-    
-    // Compute syndrome
+
+    // Compute syndrome s = yH^T  (MIL-STD-188-141B A.5.2.2.2.2)
     uint16_t syndrome = compute_syndrome(codeword);
-    
+
     if (syndrome == 0) {
         // No errors detected
         output = (codeword >> 12) & 0xFFF;
-        return 0;
+        return {DECODE_OK, 0};
     }
-    
+
     // Look up error pattern in syndrome table
     uint32_t error_pattern = syndrome_table[syndrome];
-    
+
     if (error_pattern == 0xFFFFFFFFU) {
-        // Uncorrectable error
-        output = (codeword >> 12) & 0xFFF;
-        return 0xFF;
+        // Syndrome is non-zero but no correctable error pattern exists.
+        // Per MIL-STD-188-141B A.5.2.2.2.2: "If s is not equal to 0 and e
+        // contains more ones than the number of errors being corrected by
+        // decoding mode, a detected error is indicated and the appropriate
+        // flag is set."  → DECODE_DETECTED (distinct from DECODE_CORRECTED).
+        output = (codeword >> 12) & 0xFFF;   // raw, uncorrected info field
+        return {DECODE_DETECTED, 0};
     }
-    
-    // Correct the codeword
+
+    // Correct the codeword: x_hat = y XOR e
     uint32_t corrected = codeword ^ error_pattern;
     output = (corrected >> 12) & 0xFFF;
-    
-    // Count number of errors corrected
-    uint8_t error_count = compute_parity(error_pattern);
-    // Count set bits to get actual error count
-    uint32_t bits_set = 0;
+
+    // Count the number of bit errors corrected (weight of error pattern)
+    uint8_t errors_corrected = 0;
     uint32_t temp = error_pattern;
     while (temp) {
-        bits_set += (temp & 1);
+        errors_corrected += (temp & 1);
         temp >>= 1;
     }
-    
-    return bits_set;
+
+    return {DECODE_CORRECTED, errors_corrected};
 }
 
 uint16_t Golay::extract_info(uint32_t codeword) {
