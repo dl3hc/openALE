@@ -11,7 +11,7 @@
  *  6. Timeout handling
  */
 
-#include "Protocol/ale_state_machine.h"
+#include "Protocol/Control/ale_state_machine.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>

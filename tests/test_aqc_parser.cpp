@@ -3,8 +3,8 @@
  * \brief Unit tests for AQC-ALE parser and data element extraction
  */
 
-#include "Protocol/aqc_protocol.h"
-#include "Protocol/ale_word.h"
+#include "Protocol/AQC/aqc_protocol.h"
+#include "Word/ale_word.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>

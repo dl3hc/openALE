@@ -10,7 +10,7 @@
 #include "FSK/tone_generator.h"
 #include "Word/ale_word.h"
 #include "Stores/address_book.h"
-#include "Protocol/ale_message.h"
+#include "Protocol/Message/ale_message.h"
 #include <iostream>
 #include <vector>
 

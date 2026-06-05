@@ -3,7 +3,7 @@
  * \brief Implementation of ALE message assembly
  */
 
-#include "Protocol/ale_message.h"
+#include "Protocol/Message/ale_message.h"
 #include <algorithm>
 
 namespace ale {

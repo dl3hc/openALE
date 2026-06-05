@@ -12,7 +12,7 @@ uint32_t ALEFECCodec::encode_word(uint16_t info)
     return Golay::encode(info);
 }
 
-uint8_t ALEFECCodec::decode_word(uint32_t codeword, uint16_t& output)
+Golay::DecodeResult ALEFECCodec::decode_word(uint32_t codeword, uint16_t& output)
 {
     return Golay::decode(codeword, output);
 }

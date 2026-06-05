@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "Protocol/ale_word.h"
+#include "Word/ale_word.h"
 #include <vector>
 #include <string>
 #include <cstdint>

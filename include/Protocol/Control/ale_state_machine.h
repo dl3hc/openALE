@@ -13,15 +13,14 @@
 
 #pragma once
 
-#include "Protocol/ale_message.h"
-#include "Protocol/ale_word.h"
+#include "Protocol/Message/ale_message.h"
+#include "Word/ale_word.h"
 #include "Stores/address_book.h"
+#include "Protocol/Control/ale_timing.h"
 #include <cstdint>
 #include <vector>
 #include <string>
 #include <functional>
-
-#include "Protocol/ale_timing.h"
 
 namespace ale {
 enum class ALEState {
@@ -308,7 +307,5 @@ private:
      */
     void transmit_address_words(WordType first_type, const std::string& addr);
 };
-
-#include "Protocol/ale_timing.h"
 
 } // namespace ale

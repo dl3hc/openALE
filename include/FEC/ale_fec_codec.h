@@ -33,9 +33,10 @@ public:
      *
      * \param codeword  24-bit received codeword (after majority voting)
      * \param output    [out] 12-bit corrected information word
-     * \return Number of bit errors corrected (0-3), or 0xFF if uncorrectable
+     * \return          DecodeResult with flag (DECODE_OK / DECODE_CORRECTED / DECODE_DETECTED)
+     *                  and errors_corrected count
      */
-    static uint8_t decode_word(uint32_t codeword, uint16_t& output);
+    static Golay::DecodeResult decode_word(uint32_t codeword, uint16_t& output);
 
     /**
      * Interleave symbol bursts for data channel protection.

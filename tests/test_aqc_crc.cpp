@@ -3,7 +3,7 @@
  * \brief Unit tests for AQC-ALE CRC calculation and validation
  */
 
-#include "Protocol/aqc_protocol.h"
+#include "Protocol/AQC/aqc_protocol.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>

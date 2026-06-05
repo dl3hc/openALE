@@ -9,8 +9,8 @@
  * - Use slotted response mechanism
  */
 
-#include "Protocol/aqc_protocol.h"
-#include "Protocol/ale_word.h"
+#include "Protocol/AQC/aqc_protocol.h"
+#include "Word/ale_word.h"
 #include <iostream>
 #include <iomanip>
 #include <cstring>

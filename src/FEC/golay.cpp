@@ -6,7 +6,7 @@
  * Can correct up to 3 bit errors per 24-bit codeword.
  */
 
-#include "golay.h"
+#include "FEC/golay.h"
 #include <cstring>
 #include <algorithm>
 

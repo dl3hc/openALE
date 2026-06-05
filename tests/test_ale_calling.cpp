@@ -16,8 +16,8 @@
  *     update(2*Trw_ms+1) → conclusion fires (TIS self)
  */
 
-#include "Protocol/ale_word.h"
-#include "Protocol/ale_state_machine.h"
+#include "Word/ale_word.h"
+#include "Protocol/Control/ale_state_machine.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>

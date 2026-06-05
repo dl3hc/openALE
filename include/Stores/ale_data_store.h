@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "Protocol/ale_message.h"
+#include "Protocol/Message/ale_message.h"
 #include "LQA/lqa_database.h"
 #include <cstdint>
 #include <string>

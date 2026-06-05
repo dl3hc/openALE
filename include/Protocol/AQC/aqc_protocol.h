@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "Protocol/ale_word.h"
+#include "Word/ale_word.h"
 #include <cstdint>
 #include <string>
 

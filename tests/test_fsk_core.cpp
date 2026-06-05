@@ -377,12 +377,12 @@ bool test_golay_codec_minimal() {
     std::cout << "  encoded codeword: 0x" << std::hex << cw << std::dec << "\n";
 
     uint16_t out = 0;
-    uint8_t err = Golay::decode(cw, out);
+    Golay::DecodeResult res = Golay::decode(cw, out);
 
     std::cout << "  clean decode -> 0x" << std::hex << out
-              << " errors=" << std::dec << (int)err << "\n";
+              << " errors=" << std::dec << (int)res.errors_corrected << "\n";
 
-    if (out != u || err != 0) {
+    if (out != u || res.flag != Golay::DECODE_OK) {
         std::cout << "FAIL: clean decode\n";
         return false;
     }

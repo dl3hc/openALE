@@ -47,8 +47,8 @@ target_include_directories(ale_fec PUBLIC
 
 # Protocol / Word layer
 add_library(ale_protocol
-    src/Protocol/ale_word.cpp
-    src/Protocol/ale_message.cpp
+    src/Word/ale_word.cpp
+    src/Protocol/Message/ale_message.cpp
 )
 
 target_include_directories(ale_protocol PUBLIC
@@ -59,7 +59,7 @@ target_link_libraries(ale_protocol ale_fsk_core ale_fec)
 
 # AQC protocol extension
 add_library(ale_aqc
-    src/Protocol/aqc_parser.cpp
+    src/Protocol/AQC/aqc_parser.cpp
 )
 
 target_include_directories(ale_aqc PUBLIC
@@ -70,14 +70,14 @@ target_link_libraries(ale_aqc ale_protocol ale_fsk_core ale_fec)
 
 # ALE state machine (link layer)
 add_library(ale_link
-    src/Protocol/ale_state_machine.cpp
+    src/Protocol/Control/ale_state_machine.cpp
 )
 
 target_include_directories(ale_link PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(ale_link ale_protocol ale_fsk_core ale_fec)
+target_link_libraries(ale_link ale_stores ale_protocol ale_fsk_core ale_fec)
 
 # FS-1052 ARQ
 add_library(ale_fs1052
@@ -118,7 +118,7 @@ target_link_libraries(ale_stores ale_lqa ale_protocol ale_fsk_core ale_fec)
 
 # Channel selection [geplant]
 add_library(ale_channel
-    src/Protocol/ale_channel_selector.cpp
+    src/Protocol/Control/ale_channel_selector.cpp
 )
 
 target_include_directories(ale_channel PUBLIC
@@ -137,7 +137,7 @@ target_include_directories(test_fsk_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
 add_test(NAME FSKCore COMMAND test_fsk_core)
 
 add_executable(test_protocol tests/test_protocol.cpp)
-target_link_libraries(test_protocol ale_protocol ale_fsk_core ale_fec)
+target_link_libraries(test_protocol ale_stores ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME Protocol COMMAND test_protocol)
 
@@ -195,7 +195,7 @@ target_include_directories(debug_fft PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
 option(BUILD_EXAMPLES "Build example programs" ON)
 if(BUILD_EXAMPLES)
     add_executable(example_ale_decoder examples/example_ale_decoder.cpp)
-    target_link_libraries(example_ale_decoder ale_protocol ale_fsk_core ale_fec)
+    target_link_libraries(example_ale_decoder ale_stores ale_protocol ale_fsk_core ale_fec)
     target_include_directories(example_ale_decoder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
     add_executable(example_complete_stack examples/example_complete_stack.cpp)

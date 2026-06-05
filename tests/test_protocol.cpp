@@ -1,4 +1,4 @@
-﻿#include "Protocol/ale_word.h"
+﻿#include "Word/ale_word.h"
 #include "Stores/address_book.h"
 #include <iostream>
 #include <iomanip>

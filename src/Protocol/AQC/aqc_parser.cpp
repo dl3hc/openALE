@@ -3,7 +3,7 @@
  * \brief Implementation of AQC-ALE parser and data element extraction
  */
 
-#include "Protocol/aqc_protocol.h"
+#include "Protocol/AQC/aqc_protocol.h"
 #include <cstring>
 #include <algorithm>
 

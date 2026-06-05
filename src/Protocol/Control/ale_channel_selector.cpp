@@ -3,7 +3,7 @@
  * \brief ChannelSelector and ListenBeforeTransmit implementations
  */
 
-#include "Protocol/ale_channel_selector.h"
+#include "Protocol/Control/ale_channel_selector.h"
 #include <algorithm>
 
 namespace ale {

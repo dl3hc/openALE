@@ -23,7 +23,7 @@
  *                not a Kleene-star.
  */
 
-#include "Protocol/ale_word.h"
+#include "Word/ale_word.h"
 #include "FSK/symbol_decoder.h"
 #include "FEC/ale_fec_codec.h"
 #include <cstring>
@@ -53,14 +53,14 @@ bool WordParser::parse_word(const uint8_t symbols[SYMBOLS_PER_WORD],
 
     // Step 2: Apply Golay FEC (symbol-level error correction)
     uint16_t decoded_info = 0;
-    uint8_t  fec_errors   = ALEFECCodec::decode_word(raw_word, decoded_info);
+    Golay::DecodeResult fec = ALEFECCodec::decode_word(raw_word, decoded_info);
 
-    if (fec_errors == 0xFF) {
+    if (fec.flag == Golay::DECODE_DETECTED) {
         output.valid = false;
         return false;
     }
 
-    output.fec_errors = fec_errors;
+    output.fec_errors = fec.errors_corrected;
 
     // Step 3: The 24 voted bits ARE the ALE word; parse preamble + payload
     return parse_from_bits(raw_word & 0x00FFFFFF, output, timestamp_ms);

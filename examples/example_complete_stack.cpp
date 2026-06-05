@@ -15,8 +15,8 @@
  *   5. Sounding transmission
  */
 
-#include "Protocol/ale_state_machine.h"
-#include "Protocol/ale_message.h"
+#include "Protocol/Control/ale_state_machine.h"
+#include "Protocol/Message/ale_message.h"
 #include "FSK/tone_generator.h"
 #include <iostream>
 #include <iomanip>
