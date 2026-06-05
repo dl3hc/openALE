@@ -14,6 +14,7 @@
 
 #include "FEC/golay.h"
 #include "FEC/interleaver.h"
+#include "FEC/word_interleaver.h"
 #include <cstdint>
 
 namespace ale {
@@ -55,6 +56,30 @@ public:
      * \param count    Total number of symbols
      */
     static void deinterleave_symbols(uint8_t* symbols, uint32_t count);
+
+    /**
+     * Interleave a 24-bit ALE word into a 49-bit transmitted word (A.5.2.2.3).
+     *
+     * Computes Golay parity from bits 23..12 (W1..W12) internally.
+     * Bit 48 of the result is the stuff bit S49 = 0.
+     *
+     * \param ale_word  24-bit ALE word [W1=bit23 .. W24=bit0]
+     * \return          49-bit transmitted word [A1,B1, ..., A24,B24, S49]
+     */
+    static uint64_t interleave_word(uint32_t ale_word);
+
+    /**
+     * Deinterleave a 49-bit transmitted word and apply Golay error correction.
+     *
+     * W1..W12 are corrected using the extracted Golay parity.
+     * W13..W24 are passed through unchanged.
+     * Bit 48 (S49) is ignored.
+     *
+     * \param transmitted  49-bit received word
+     * \param fec_out      [out] Golay decode result (flag + errors_corrected)
+     * \return             24-bit corrected ALE word
+     */
+    static uint32_t deinterleave_word(uint64_t transmitted, Golay::DecodeResult& fec_out);
 };
 
 } // namespace ale

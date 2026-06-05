@@ -64,54 +64,33 @@ uint8_t SymbolDecoder::majority_vote(const uint8_t bits[3]) {
     return (sum >= 2) ? 1 : 0;
 }
 
-uint32_t SymbolDecoder::decode_word_with_voting(const uint8_t symbols[SYMBOLS_PER_WORD],
-                                                uint32_t& output_word) {
-    // MIL-STD-188-141B uses 3x redundancy:
-    // Each data bit is transmitted at positions k, k+49, k+98 (mod 147)
-    // Extract 24-bit word = 3-bit preamble + 21-bit payload
-    
-    uint32_t word = 0;
-    uint32_t errors_corrected = 0;
-    
-    // Decode 24 data bits using triple voting
-    for (uint32_t bit_idx = 0; bit_idx < WORD_BITS; ++bit_idx) {
-        // Get three copies of this bit
-        uint8_t bit_copies[3];
-        
+uint32_t SymbolDecoder::decode_word_with_voting(const uint8_t symbols[],
+                                                uint64_t& output_word) {
+    // MIL-STD-188-141B A.5.2.2.3: each of the 49 transmitted-word bits is sent
+    // SYMBOL_REPETITION times.  Bit k occupies symbol positions k, k+49, k+98.
+    // Each symbol value (0-7) contributes its LSB as the transmitted bit.
+
+    uint64_t word = 0;
+    uint32_t non_unanimous = 0;
+
+    for (uint32_t bit_idx = 0; bit_idx < SYMBOLS_PER_WORD; ++bit_idx) {
+        uint8_t bit_copies[SYMBOL_REPETITION];
+
         for (uint32_t rep = 0; rep < SYMBOL_REPETITION; ++rep) {
-            uint32_t sym_idx = bit_idx + rep * SYMBOLS_PER_WORD;
-            if (sym_idx >= SYMBOLS_PER_WORD * SYMBOL_REPETITION) {
-                break;  // Not enough symbols
-            }
-            
-            uint8_t symbol = symbols[sym_idx];
-            if (symbol >= 8) {
-                bit_copies[rep] = 0xFF;  // Invalid
-            } else {
-                // Extract bit at position bit_idx from symbol
-                // Need to convert symbol (0-7) to bit value
-                // Symbols contain 3 bits each, so bit_idx within symbol
-                uint8_t bit_in_symbol = bit_idx % BITS_PER_SYMBOL;
-                bit_copies[rep] = (symbol >> bit_in_symbol) & 1;
-            }
+            const uint32_t sym_idx = bit_idx + rep * SYMBOLS_PER_WORD;
+            const uint8_t  symbol  = symbols[sym_idx];
+            bit_copies[rep] = (symbol < NUM_TONES) ? (symbol & 1u) : 0u;
         }
-        
-        // Majority vote
-        uint8_t final_bit = majority_vote(bit_copies);
-        
-        // Check for single-bit errors (when not unanimous)
-        if ((bit_copies[0] != bit_copies[1]) ||
-            (bit_copies[1] != bit_copies[2]) ||
-            (bit_copies[0] != bit_copies[2])) {
-            errors_corrected++;
-        }
-        
-        // Set bit in output word
-        word |= (final_bit << bit_idx);
+
+        const uint8_t voted = majority_vote(bit_copies);
+        if (voted) word |= (1ULL << bit_idx);
+
+        if (bit_copies[0] != bit_copies[1] || bit_copies[1] != bit_copies[2])
+            ++non_unanimous;
     }
-    
+
     output_word = word;
-    return errors_corrected;
+    return non_unanimous;
 }
 
 } // namespace ale

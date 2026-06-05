@@ -33,4 +33,14 @@ void ALEFECCodec::deinterleave_symbols(uint8_t* symbols, uint32_t count)
     }
 }
 
+uint64_t ALEFECCodec::interleave_word(uint32_t ale_word)
+{
+    return WordInterleaver::interleave(ale_word);
+}
+
+uint32_t ALEFECCodec::deinterleave_word(uint64_t transmitted, Golay::DecodeResult& fec_out)
+{
+    return WordInterleaver::deinterleave(transmitted, fec_out);
+}
+
 } // namespace ale

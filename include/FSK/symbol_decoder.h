@@ -56,14 +56,18 @@ static uint8_t bin_to_symbol(uint32_t bin_index);
     static uint8_t majority_vote(const uint8_t bits[3]);
     
     /**
-     * Decode word using triple redundancy voting
-     * 
-     * \param symbols Array of 49 detected symbols
-     * \param output_word [out] 24-bit decoded word
-     * \return Number of bit errors corrected
+     * Decode word using triple redundancy voting.
+     *
+     * Votes across SYMBOL_REPETITION copies of the 49-bit transmitted word.
+     * The caller must supply SYMBOLS_PER_WORD * SYMBOL_REPETITION symbols.
+     * Each symbol value (0-7) contributes its LSB as the transmitted bit.
+     *
+     * \param symbols      Buffer of SYMBOLS_PER_WORD * SYMBOL_REPETITION symbols
+     * \param output_word  [out] 49-bit transmitted word after majority voting
+     * \return             Number of positions where votes were not unanimous
      */
-    static uint32_t decode_word_with_voting(const uint8_t symbols[SYMBOLS_PER_WORD],
-                                            uint32_t& output_word);
+    static uint32_t decode_word_with_voting(const uint8_t symbols[],
+                                            uint64_t& output_word);
     
 private:
     // Lookup table: FFT bin -> symbol value (not used anymore, kept for API compatibility)

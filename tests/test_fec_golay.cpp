@@ -1,14 +1,17 @@
 /**
  * \file test_fec_golay.cpp
- * \brief Unit tests for Extended Golay (24,12) FEC codec
+ * \brief Unit tests for Extended Golay (24,12) FEC codec and word interleaver
  *
  * Covers: AC-FEC-004-1/2, AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
- *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2
- * Spec: MIL-STD-188-141B A.5.2.2
+ *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
+ *         AC-FEC-012-1/2/3, AC-FEC-013-1/2/3/4
+ * Spec: MIL-STD-188-141B A.5.2.2, A.5.2.2.3
  */
 
 #include "FEC/golay.h"
+#include "FEC/ale_fec_codec.h"
+#include "FEC/word_interleaver.h"
 #include "FSK/symbol_decoder.h"
 
 #include <iostream>
@@ -44,7 +47,6 @@ bool test_golay_ale_word_decode() {
     std::cout << "\n[TEST FEC-1] ALE decode path (SymbolDecoder + Golay)\n";
     std::cout << "-------------------------------------------------------\n";
 
-    static constexpr uint32_t TEST_WORDS = 10;
     uint8_t dummy_symbols[SYMBOLS_PER_WORD * SYMBOL_REPETITION];
 
     for (uint32_t i = 0; i < SYMBOLS_PER_WORD * SYMBOL_REPETITION; ++i)
@@ -54,18 +56,15 @@ bool test_golay_ale_word_decode() {
     std::cout << "  total symbols per word: "
               << SYMBOLS_PER_WORD * SYMBOL_REPETITION << "\n";
 
-    for (uint32_t i = 0; i < TEST_WORDS; ++i) {
-        uint32_t word  = 0;
-        uint32_t errors = SymbolDecoder::decode_word_with_voting(dummy_symbols, word);
+    uint64_t word  = 0;
+    uint32_t errors = SymbolDecoder::decode_word_with_voting(dummy_symbols, word);
 
-        std::cout << "  word[" << i << "] decoded=0x"
-                  << std::hex << word << std::dec
-                  << " errors=" << errors << "\n";
+    std::cout << "  decoded=0x" << std::hex << word << std::dec
+              << " non-unanimous=" << errors << "\n";
 
-        if (word == 0 && errors == 0) {
-            std::cout << "FAIL: invalid decode result\n";
-            return false;
-        }
+    if (word == 0 && errors == 0) {
+        std::cout << "FAIL: invalid decode result\n";
+        return false;
     }
 
     std::cout << "PASS\n";
@@ -310,6 +309,118 @@ bool test_feat_fec_002_decoder_acs() {
     return true;
 }
 
+// ============================================================================
+// FEAT-FEC-003 — Interleaving / Deinterleaving (REQ-FEC-012, REQ-FEC-013)
+// ============================================================================
+
+// AC-FEC-012-1/3, AC-FEC-013-1: Roundtrip interleave → deinterleave
+// Tests that deinterleave(interleave(w)) == w for all 4096 representative words.
+bool test_feat_fec_003_roundtrip() {
+    std::cout << "\n[TEST FEC-6] FEAT-FEC-003 — Roundtrip interleave/deinterleave (AC-FEC-012-1/3, AC-FEC-013-1)\n";
+    std::cout << "--------------------------------------------------------------------------------------------\n";
+
+    // Sweep all 12-bit info fields (W1..W12), fix W13..W24 = 0xA5A
+    uint32_t fail_count = 0;
+    for (uint32_t info = 0; info < 4096; ++info) {
+        const uint32_t ale_word = ((info & 0xFFF) << 12) | 0xA5A;
+        const uint64_t transmitted = ALEFECCodec::interleave_word(ale_word);
+
+        Golay::DecodeResult fec;
+        const uint32_t recovered = ALEFECCodec::deinterleave_word(transmitted, fec);
+
+        if (recovered != ale_word || fec.flag != Golay::DECODE_OK) {
+            std::cout << "FAIL: info=0x" << std::hex << info
+                      << " ale=0x" << ale_word
+                      << " recovered=0x" << recovered
+                      << " fec.flag=0x" << (int)fec.flag << std::dec << "\n";
+            if (++fail_count >= 5) break;
+        }
+    }
+    if (fail_count) { std::cout << "FAIL\n"; return false; }
+    std::cout << "  all 4096 info words roundtrip losslessly OK\n";
+    std::cout << "PASS\n";
+    return true;
+}
+
+// AC-FEC-013-2: Stuff bit S49 must be 0
+bool test_feat_fec_003_stuff_bit() {
+    std::cout << "\n[TEST FEC-7] FEAT-FEC-003 — Stuff-Bit S49 = 0 (AC-FEC-013-2)\n";
+    std::cout << "----------------------------------------------------------------\n";
+
+    // Check S49 for a range of ALE words
+    static const uint32_t probe_words[] = {
+        0x000000u, 0xFFFFFFu, 0xABC123u, 0x123ABCu,
+        0x5A5A5Au, 0xA5A5A5u, 0x800000u, 0x000001u
+    };
+    for (uint32_t w : probe_words) {
+        const uint64_t transmitted = ALEFECCodec::interleave_word(w);
+        if ((transmitted >> 48) & 1u) {
+            std::cout << "FAIL: S49 != 0 for ale_word=0x" << std::hex << w << std::dec << "\n";
+            return false;
+        }
+    }
+    std::cout << "  S49 = 0 for all probe words OK\n";
+    std::cout << "PASS\n";
+    return true;
+}
+
+// AC-FEC-012-2: G13..G24 (B-channel parity, odd positions 25..47) must be
+//               the bitwise inverses of G1..G12 (A-channel parity, even positions 24..46).
+bool test_feat_fec_003_parity_inversion() {
+    std::cout << "\n[TEST FEC-8] FEAT-FEC-003 — Paritaets-Inversion G13..G24 (AC-FEC-012-2)\n";
+    std::cout << "--------------------------------------------------------------------------\n";
+
+    static const uint32_t probe_words[] = {
+        0x000000u, 0xFFFFFFu, 0xABC123u, 0x5A5A5Au, 0x123456u
+    };
+    for (uint32_t w : probe_words) {
+        const uint64_t t = ALEFECCodec::interleave_word(w);
+        // Positions 24..46 (even) = G A-channel; 25..47 (odd) = G B-channel (inverted)
+        for (int k = 12; k < 24; ++k) {
+            const uint8_t a = (t >> (2 * k))     & 1u;  // A channel = G normal
+            const uint8_t b = (t >> (2 * k + 1)) & 1u;  // B channel = G inverted
+            if (a == b) {
+                std::cout << "FAIL: parity at k=" << k
+                          << " A=" << (int)a << " B=" << (int)b
+                          << " (expected B = ~A) for word=0x" << std::hex << w << std::dec << "\n";
+                return false;
+            }
+        }
+    }
+    std::cout << "  B-channel parity = ~A-channel parity for all probe words OK\n";
+    std::cout << "PASS\n";
+    return true;
+}
+
+// AC-FEC-013-4: The 49th bit (S49) must be ignored on receive.
+// Flip bit 48 and verify the decoded ALE word is identical to the clean decode.
+bool test_feat_fec_003_stuff_bit_ignored() {
+    std::cout << "\n[TEST FEC-9] FEAT-FEC-003 — S49 ignoriert beim Empfang (AC-FEC-013-4)\n";
+    std::cout << "------------------------------------------------------------------------\n";
+
+    static const uint32_t probe_words[] = {
+        0x000000u, 0xFFFFFFu, 0xABC123u, 0x5A5A5Au
+    };
+    for (uint32_t w : probe_words) {
+        const uint64_t clean = ALEFECCodec::interleave_word(w);
+        const uint64_t flipped = clean ^ (1ULL << 48);  // flip S49
+
+        Golay::DecodeResult fec_clean, fec_flipped;
+        const uint32_t result_clean   = ALEFECCodec::deinterleave_word(clean, fec_clean);
+        const uint32_t result_flipped = ALEFECCodec::deinterleave_word(flipped, fec_flipped);
+
+        if (result_clean != result_flipped || fec_flipped.flag != Golay::DECODE_OK) {
+            std::cout << "FAIL: S49-flip changed decode for word=0x" << std::hex << w
+                      << " clean=0x" << result_clean << " flipped=0x" << result_flipped
+                      << " fec.flag=0x" << (int)fec_flipped.flag << std::dec << "\n";
+            return false;
+        }
+    }
+    std::cout << "  Flipping S49 does not affect decoded word OK\n";
+    std::cout << "PASS\n";
+    return true;
+}
+
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "===========================================\n";
@@ -320,11 +431,15 @@ int run_all_tests() {
     int pass_count = 0;
     int fail_count = 0;
 
-    if (test_golay_ale_word_decode())       { pass_count++; } else { fail_count++; }
-    if (test_golay_codec_minimal())         { pass_count++; } else { fail_count++; }
-    if (test_golay_spec_compliance())       { pass_count++; } else { fail_count++; }
-    if (test_golay_decode_flags())          { pass_count++; } else { fail_count++; }
-    if (test_feat_fec_002_decoder_acs())    { pass_count++; } else { fail_count++; }
+    if (test_golay_ale_word_decode())         { pass_count++; } else { fail_count++; }
+    if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
+    if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
+    if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }
+    if (test_feat_fec_002_decoder_acs())      { pass_count++; } else { fail_count++; }
+    if (test_feat_fec_003_roundtrip())        { pass_count++; } else { fail_count++; }
+    if (test_feat_fec_003_stuff_bit())        { pass_count++; } else { fail_count++; }
+    if (test_feat_fec_003_parity_inversion()) { pass_count++; } else { fail_count++; }
+    if (test_feat_fec_003_stuff_bit_ignored()) { pass_count++; } else { fail_count++; }
 
     std::cout << "\n===========================================\n";
     std::cout << "  Passed: " << pass_count

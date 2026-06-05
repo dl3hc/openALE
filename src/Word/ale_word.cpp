@@ -47,13 +47,13 @@ bool WordParser::parse_word(const uint8_t symbols[SYMBOLS_PER_WORD],
                              ALEWord& output,
                              uint32_t timestamp_ms)
 {
-    // Step 1: Decode 49 symbols with majority voting → 24-bit word
-    uint32_t raw_word = 0;
-    SymbolDecoder::decode_word_with_voting(symbols, raw_word);
+    // Step 1: majority voting across 3 word repetitions → 49-bit transmitted word
+    uint64_t transmitted = 0;
+    SymbolDecoder::decode_word_with_voting(symbols, transmitted);
 
-    // Step 2: Apply Golay FEC (symbol-level error correction)
-    uint16_t decoded_info = 0;
-    Golay::DecodeResult fec = ALEFECCodec::decode_word(raw_word, decoded_info);
+    // Step 2: deinterleave per A.5.2.2.3 + Golay error correction → 24-bit ALE word
+    Golay::DecodeResult fec;
+    const uint32_t ale_word = ALEFECCodec::deinterleave_word(transmitted, fec);
 
     if (fec.flag == Golay::DECODE_DETECTED) {
         output.valid = false;
@@ -62,8 +62,8 @@ bool WordParser::parse_word(const uint8_t symbols[SYMBOLS_PER_WORD],
 
     output.fec_errors = fec.errors_corrected;
 
-    // Step 3: The 24 voted bits ARE the ALE word; parse preamble + payload
-    return parse_from_bits(raw_word & 0x00FFFFFF, output, timestamp_ms);
+    // Step 3: parse preamble + payload from the corrected ALE word
+    return parse_from_bits(ale_word, output, timestamp_ms);
 }
 
 bool WordParser::parse_from_bits(uint32_t word_bits,
