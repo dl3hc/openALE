@@ -338,4 +338,62 @@ bool FrameValidator::rep_not_used_in_multiple_sender_situation(const std::vector
     return true;
 }
 
+bool FrameValidator::data_not_after_data(const std::vector<ALEWord>& words)
+{
+    // AC-WORD-009-1: DATA must not extend a DATA word (only non-DATA words may be extended).
+    for (size_t i = 1; i < words.size(); ++i) {
+        if (words[i].type == WordType::DATA && words[i-1].type == WordType::DATA)
+            return false;
+    }
+    return true;
+}
+
+// Strip trailing '@' padding characters (A.5.2.4.3) from a 3-char address field.
+static std::string strip_padding(const char* addr)
+{
+    std::string s(addr);
+    while (!s.empty() && s.back() == '@')
+        s.pop_back();
+    return s;
+}
+
+std::vector<std::string> FrameValidator::reconstruct_to_addresses(const std::vector<ALEWord>& words)
+{
+    // REP repeats the function of the previous non-REP word:
+    //   last_non_rep == TO   → REP acts as TO   → new recipient
+    //   last_non_rep == DATA → REP acts as DATA → extend current address
+    std::vector<std::string> addresses;
+    std::string current;
+    WordType last_non_rep = WordType::UNKNOWN;
+
+    for (const auto& word : words) {
+        switch (word.type) {
+            case WordType::TO:
+                if (!current.empty()) addresses.push_back(current);
+                current = strip_padding(word.address);
+                last_non_rep = WordType::TO;
+                break;
+            case WordType::DATA:
+                current += strip_padding(word.address);
+                last_non_rep = WordType::DATA;
+                break;
+            case WordType::REP:
+                if (last_non_rep == WordType::TO) {
+                    addresses.push_back(current);
+                    current = strip_padding(word.address);
+                    // last_non_rep stays TO: next REP would also be a new recipient
+                } else {
+                    current += strip_padding(word.address);
+                    // last_non_rep stays DATA: REP after DATA acts as DATA
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (!current.empty()) addresses.push_back(current);
+    return addresses;
+}
+
 } // namespace ale

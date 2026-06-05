@@ -285,6 +285,14 @@ public:
      */
     static bool first_cmd_begins_message_section(const std::vector<ALEWord>& words);
 
+    // ── REQ-WORD-009 (DATA sequence rules) ─────────────────────
+
+    /**
+     * AC-WORD-009-1: DATA must not directly follow another DATA word.
+     * \return true if no DATA word is immediately preceded by DATA.
+     */
+    static bool data_not_after_data(const std::vector<ALEWord>& words);
+
     // ── REQ-WORD-010 (REP sequence rules) ──────────────────────
 
     /**
@@ -298,6 +306,22 @@ public:
      * \return true if REP is not used in a multiple sender situation.
      */
     static bool rep_not_used_in_multiple_sender_situation(const std::vector<ALEWord>& words);
+
+    // ── Address reconstruction ──────────────────────────────────
+
+    /**
+     * Reconstruct destination addresses from a TO / DATA / REP word sequence.
+     *
+     * Encoding rules (A.5.2.3.2.1 / A.5.2.3.4):
+     *  - TO starts a new recipient address (3 chars).
+     *  - DATA after any non-DATA word extends the current address (+3 chars).
+     *  - REP directly after TO (no DATA since last TO) → new recipient.
+     *  - REP after DATA → extends current address (repeats DATA function).
+     *  - '@' padding characters (A.5.2.4.3) are stripped from each result.
+     *
+     * \return Ordered list of reconstructed address strings.
+     */
+    static std::vector<std::string> reconstruct_to_addresses(const std::vector<ALEWord>& words);
 };
 
 } // namespace ale

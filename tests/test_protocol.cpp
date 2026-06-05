@@ -412,58 +412,61 @@ bool test_cmd_data_rep_validation() {
         all_pass &= (valid_pass && invalid1_pass && invalid2_pass && invalid3_pass);
     }
     
-    // Test for AC-WORD-009-1: DATA extends previous word field (when not DATA itself)
+    // AC-WORD-009-1: DATA must not extend another DATA word.
     {
-        // Test DATA word following TO word (should be valid)
-        std::vector<ALEWord> words;
-        words.push_back(WordParser::make_word(WordType::TO, "ABC"));
-        words.push_back(WordParser::make_word(WordType::DATA, "DEF"));
-        
-        // This test is more about parsing than validation, but we can verify the words are parsed correctly
-        bool pass = true;
-        if (words.size() >= 2) {
-            pass = (words[0].type == WordType::TO && words[1].type == WordType::DATA);
-        }
-        std::cout << "  AC-WORD-009-1 DATA extends previous word field: " 
-                  << (pass ? "PASS" : "FAIL") << "\n";
-        all_pass &= pass;
+        // Valid: TO → DATA (DATA extends TO)
+        std::vector<ALEWord> valid;
+        valid.push_back(WordParser::make_word(WordType::TO,   "ABC"));
+        valid.push_back(WordParser::make_word(WordType::DATA, "DEF"));
+        bool pos = FrameValidator::data_not_after_data(valid);
+        std::cout << "  AC-WORD-009-1 Valid (TO, DATA): "
+                  << (pos ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: DATA → DATA (DATA cannot extend DATA)
+        std::vector<ALEWord> invalid;
+        invalid.push_back(WordParser::make_word(WordType::DATA, "ABC"));
+        invalid.push_back(WordParser::make_word(WordType::DATA, "DEF"));
+        bool neg = !FrameValidator::data_not_after_data(invalid);
+        std::cout << "  AC-WORD-009-1 Invalid (DATA, DATA): "
+                  << (neg ? "PASS" : "FAIL") << "\n";
+
+        all_pass &= (pos && neg);
     }
-    
-    // Test for AC-WORD-009-2: DATA can carry information in messages
+
+    // AC-WORD-009-2: DATA carries Expanded-64 content in messages.
     {
-        // Test that DATA words can be parsed and contain valid characters
         std::vector<ALEWord> words;
         words.push_back(WordParser::make_word(WordType::DATA, "ABC"));
-        
-        bool pass = (words[0].type == WordType::DATA && 
+        bool pass = (words[0].type == WordType::DATA &&
                      std::string(words[0].address) == "ABC");
-        std::cout << "  AC-WORD-009-2 DATA carries message information: " 
+        std::cout << "  AC-WORD-009-2 DATA carries message information: "
                   << (pass ? "PASS" : "FAIL") << "\n";
         all_pass &= pass;
     }
-    
-    // Test for AC-WORD-010-1: REP duplicates previous preamble function with modified data
+
+    // AC-WORD-010-1: REP after DATA extends the address (REP repeats DATA function).
+    // [TO "ABC", DATA "DEF", REP "GHI"] must reconstruct to one address "ABCDEFGHI".
     {
-        // Test that REP can be parsed and has correct type
         std::vector<ALEWord> words;
-        words.push_back(WordParser::make_word(WordType::DATA, "ABC"));
-        words.push_back(WordParser::make_word(WordType::REP, "DEF"));
-        
-        bool pass = (words[1].type == WordType::REP);
-        std::cout << "  AC-WORD-010-1 REP duplicates previous preamble with modified data: " 
+        words.push_back(WordParser::make_word(WordType::TO,   "ABC"));
+        words.push_back(WordParser::make_word(WordType::DATA, "DEF"));
+        words.push_back(WordParser::make_word(WordType::REP,  "GHI"));
+        auto addrs = FrameValidator::reconstruct_to_addresses(words);
+        bool pass = (addrs.size() == 1 && addrs[0] == "ABCDEFGHI");
+        std::cout << "  AC-WORD-010-1 REP extends address (TO,DATA,REP -> \"ABCDEFGHI\"): "
                   << (pass ? "PASS" : "FAIL") << "\n";
         all_pass &= pass;
     }
-    
-    // Test for AC-WORD-010-4: REP with TO enables multiple addresses
+
+    // AC-WORD-010-4: REP directly after TO specifies a second recipient address.
+    // [TO "ABC", REP "DEF"] must reconstruct to two addresses {"ABC", "DEF"}.
     {
-        // Test that REP can be used with TO (this is more of a parsing test)
         std::vector<ALEWord> words;
-        words.push_back(WordParser::make_word(WordType::TO, "ABC"));
+        words.push_back(WordParser::make_word(WordType::TO,  "ABC"));
         words.push_back(WordParser::make_word(WordType::REP, "DEF"));
-        
-        bool pass = (words[0].type == WordType::TO && words[1].type == WordType::REP);
-        std::cout << "  AC-WORD-010-4 REP with TO enables multiple addresses: " 
+        auto addrs = FrameValidator::reconstruct_to_addresses(words);
+        bool pass = (addrs.size() == 2 && addrs[0] == "ABC" && addrs[1] == "DEF");
+        std::cout << "  AC-WORD-010-4 REP after TO = two recipients (\"ABC\", \"DEF\"): "
                   << (pass ? "PASS" : "FAIL") << "\n";
         all_pass &= pass;
     }
