@@ -278,7 +278,7 @@ void ALEStateMachine::handle_calling() {
         // Slot width = 1 × Trw.  Duration: Tsc = C × 2 × Trw.
         case CallingPhase::SCANNING_CALL: {
             const uint32_t tsc = target_scan_channels
-                               * 2 * ALETimingConstants::WORD_DURATION_MS;
+                               * 2 * ALETimingConstants::Trw_ms;
 
             // Transition first — prevents extra word at phase boundary
             if (phase_elapsed >= tsc) {
@@ -292,7 +292,7 @@ void ALEStateMachine::handle_calling() {
 
             const uint32_t next_tx = call_phase_start_ms
                                    + call_cycles_in_phase
-                                   * ALETimingConstants::WORD_DURATION_MS;
+                                   * ALETimingConstants::Trw_ms;
 
             if (current_time_ms >= next_tx) {
                 build_scanning_word(active_call_to);
@@ -313,7 +313,7 @@ void ALEStateMachine::handle_calling() {
         // seq 1 is *triggered*, before it has been on air — timing short by tc_ms.
         case CallingPhase::LEADING_CALL: {
             const uint32_t wpa   = words_for_address(active_call_to);
-            const uint32_t tc_ms = wpa * ALETimingConstants::WORD_DURATION_MS;
+            const uint32_t tc_ms = wpa * ALETimingConstants::Trw_ms;
 
             // Guard: should never exceed 2 sequences in leading call
             if (call_cycles_in_phase > 2) {
@@ -362,7 +362,7 @@ void ALEStateMachine::handle_calling() {
             // Use actual word count × Trw, not a fixed single-word constant.
             const uint32_t conclusion_air_ms =
                 words_for_address(address_book.get_self_address())
-                * ALETimingConstants::WORD_DURATION_MS;
+                * ALETimingConstants::Trw_ms;
 
             if (phase_elapsed >= conclusion_air_ms) {
                 std::cout << "[TRACE] CONCLUSION → LISTENING"
@@ -384,9 +384,9 @@ void ALEStateMachine::handle_calling() {
         // will fire it exactly once.
         // TODO: multi-channel → hop to next channel and restart from SCANNING_CALL.
         case CallingPhase::LISTENING: {
-            if (phase_elapsed >= ALETimingConstants::CALLING_RX_PHASE_MS) {
+            if (phase_elapsed >= ALETimingConstants::Twr_ms) {
                 std::cout << "[TRACE] LISTENING timeout → LINK_TIMEOUT"
-                          << " (twr=" << ALETimingConstants::CALLING_RX_PHASE_MS
+                          << " (twr=" << ALETimingConstants::Twr_ms
                           << "ms)\n";
                 process_event(ALEEvent::LINK_TIMEOUT);
             }
@@ -410,7 +410,7 @@ void ALEStateMachine::handle_linked() {
 
 void ALEStateMachine::handle_sounding() {
     uint32_t elapsed = current_time_ms - state_entry_time_ms;
-    if (elapsed > ALETimingConstants::WORD_DURATION_MS)
+    if (elapsed > ALETimingConstants::Trw_ms)
         process_event(ALEEvent::SOUNDING_COMPLETE);
 }
 
@@ -569,7 +569,7 @@ bool ALEStateMachine::check_link_timeout() {
     uint32_t timeout_ms = 0;
     switch (current_state) {
         case ALEState::CALLING:
-        case ALEState::HANDSHAKE: timeout_ms = ALETimingConstants::CALL_TIMEOUT_MS; break;
+        case ALEState::HANDSHAKE: timeout_ms = ALETimingConstants::Twa_ms; break;
         case ALEState::LINKED:    timeout_ms = ALETimingConstants::LINK_TIMEOUT_MS; break;
         default: return false;
     }

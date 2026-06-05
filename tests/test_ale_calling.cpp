@@ -10,10 +10,10 @@
  *
  *   With set_target_scan_channels(0) the CALLING state enters LEADING_CALL
  *   directly. For a 3-char address addr = "ABC", tc_ms = 1 × Trw = 392 ms:
- *     update(  0) → leading seq 1 fires (TO "ABC")
- *     update(392) → leading seq 2 fires (TO "ABC")
- *     update(784) → phase_elapsed >= 2×tc → transition to CONCLUSION (no tx)
- *     update(785) → conclusion fires (TIS self)
+ *     update(      0) → leading seq 1 fires (TO "ABC")
+ *     update(  Trw_ms) → leading seq 2 fires (TO "ABC")
+ *     update(2*Trw_ms) → phase_elapsed >= 2×tc → transition to CONCLUSION (no tx)
+ *     update(2*Trw_ms+1) → conclusion fires (TIS self)
  */
 
 #include "Protocol/ale_word.h"
@@ -57,7 +57,7 @@ static ALEStateMachine make_sm(WordCapture& cap,
 static void advance_to_conclusion(ALEStateMachine& sm, WordCapture& cap)
 {
     // tc_ms = 392 (3-char address → 1 word → 1 × Trw)
-    const uint32_t Trw = ALETimingConstants::WORD_DURATION_MS;
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
     sm.update(0);          // seq 1
     sm.update(Trw);        // seq 2
     sm.update(2 * Trw);    // phase_elapsed == 2×tc → transition (no tx)
@@ -278,9 +278,9 @@ bool test_tis_extended_address()
     ALEStateMachine sm = make_sm(cap, "SAMUELB", 0);
     sm.initiate_call("ABC");
 
-    // tc_ms for "ABC" = 392. Drive to conclusion.
-    sm.update(0); sm.update(392); sm.update(784); cap.clear();
-    sm.update(785);  // conclusion fires
+    // tc_ms for "ABC" = 1 × Trw. Drive to conclusion.
+    sm.update(0); sm.update(ALETimingConstants::Trw_ms); sm.update(2 * ALETimingConstants::Trw_ms); cap.clear();
+    sm.update(2 * ALETimingConstants::Trw_ms + 1);  // conclusion fires
 
     // Own address is 7 chars → 3 words: TIS + DATA + REP
     bool count_ok = cap.size() >= 3;

@@ -202,9 +202,9 @@ bool test_call_initiation() {
     bool success = sm.initiate_call("K6KB");
 
     // Words are transmitted by the time-driven handle_calling() loop.
-    // Advance time to trigger two SCANNING_CALL words (one per Trw = 392 ms).
-    sm.update(0);    // t=0 ms:   first  TO word
-    sm.update(392);  // t=392 ms: second TO word
+    // Advance time to trigger two SCANNING_CALL words (one per Trw = 3×Tw = 392 ms).
+    sm.update(0);                           // t=0:   first  TO word fires
+    sm.update(ALETimingConstants::Trw_ms);  // t=Trw: second TO word fires
 
     bool correct_state = (sm.get_state() == ALEState::CALLING);
     bool words_sent = (tracker.count() >= 2);
@@ -344,7 +344,7 @@ bool test_timeouts() {
     sm.process_event(ALEEvent::CALL_REQUEST);
     
     // Simulate timeout
-    uint32_t timeout = ALETimingConstants::CALL_TIMEOUT_MS + 1000;
+    uint32_t timeout = ALETimingConstants::Twa_ms + 1000;
     sm.update(timeout);
     
     bool timed_out = (sm.get_state() == ALEState::IDLE);
@@ -389,7 +389,7 @@ bool test_sounding() {
     }
     
     // Simulate sounding complete
-    sm.update(ALETimingConstants::WORD_DURATION_MS + 100);
+    sm.update(ALETimingConstants::Trw_ms + 100);
     
     std::cout << "  Sounding complete: ";
     bool returned_to_scan = (sm.get_state() == ALEState::SCANNING);

@@ -20,12 +20,9 @@
 #include <string>
 #include <functional>
 
-namespace ale {
+#include "Protocol/ale_timing.h"
 
-/**
- * \enum ALEState
- * ALE state machine states per MIL-STD-188-141B
- */
+namespace ale {
 enum class ALEState {
     IDLE,
     SCANNING,
@@ -311,53 +308,6 @@ private:
     void transmit_address_words(WordType first_type, const std::string& addr);
 };
 
-/**
- * \class ALETimingConstants
- * Timing constants per MIL-STD-188-141B Table A-XV
- */
-class ALETimingConstants {
-public:
-    // ── Basic word timing ─────────────────────────────────────────────────
-    /// Trw = 49 symbols × 8ms
-    static constexpr uint32_t WORD_DURATION_MS   = 392;
-    static constexpr uint32_t SYMBOL_DURATION_MS = 8;
-
-    // ── Scanning ──────────────────────────────────────────────────────────
-    /// Td(5) min — 5 channels per second
-    static constexpr uint32_t SCAN_DWELL_MS      = 200;
-    /// Ts max
-    static constexpr uint32_t SCAN_PERIOD_MAX_MS = 50000;
-
-    // ── Calling TX phases ─────────────────────────────────────────────────
-    /// Tlc = 2 × Tc.  Tc = words_for_address × Trw.
-    /// For single-word address: Tlc = 2 × Trw = 784ms.
-    /// For multi-word addresses Tlc grows proportionally — computed at runtime.
-    static constexpr uint32_t LEADING_CALL_TIME_MS =
-        2 * WORD_DURATION_MS;  // 784ms (single-word baseline, informational only)
-
-    // ── Calling RX phase (Twr) ────────────────────────────────────────────
-    /// Tld = Tw = 130.66ms — Late Detect Delay (Table A-XV)
-    /// Protokollterm, kein Hardware-Term.
-    static constexpr uint32_t LATE_DETECT_DELAY_MS = 131;
-
-    /// Twr conservative (Ttd=Tp=Tta=Trd=0, kein Hardware modelliert):
-    ///   Tlww      = Trw             = 392ms  (Last Word Wait Delay)
-    ///   Tld       = Tw              = 131ms  (Late Detect Delay)
-    ///   Trwp_max  = Trw             = 392ms  (Redundant Word Phase Delay)
-    ///   ─────────────────────────────────────
-    ///   Twr                         = 915ms
-    static constexpr uint32_t CALLING_RX_PHASE_MS =
-        WORD_DURATION_MS          // Tlww
-        + LATE_DETECT_DELAY_MS    // Tld
-        + WORD_DURATION_MS;       // Trwp_max
-                                  // = 915ms
-
-    // ── Timeouts ──────────────────────────────────────────────────────────
-    /// Sicherheits-Abort — Single-Channel: eine Sequenz + Puffer.
-    /// TODO: Multi-Channel → Ts_max + Twr_conservative anpassen.
-    static constexpr uint32_t CALL_TIMEOUT_MS      = 30000;
-    static constexpr uint32_t LINK_TIMEOUT_MS      = 120000;
-    static constexpr uint32_t SOUNDING_INTERVAL_MS = 60000;
-};
+#include "Protocol/ale_timing.h"
 
 } // namespace ale

@@ -4,6 +4,7 @@
  */
 
 #include "FSK/symbol_decoder.h"
+#include "Protocol/ale_word.h"
 #include <algorithm>
 #include <cmath>
 

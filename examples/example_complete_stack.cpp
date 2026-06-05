@@ -275,7 +275,7 @@ private:
             std::cout << "Sounding transmitted\n";
             
             // Simulate completion
-            state_machine.update(ALETimingConstants::WORD_DURATION_MS + 100);
+            state_machine.update(ALETimingConstants::Trw_ms + 100);
             std::cout << "Returned to scanning\n";
         }
         
