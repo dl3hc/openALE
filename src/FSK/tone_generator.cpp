@@ -23,7 +23,7 @@ void ToneGenerator::init_sine_table() {
     // Pre-compute sine table for one complete cycle
     for (uint32_t i = 0; i < SINE_TABLE_SIZE; ++i) {
         double angle = 2.0 * M_PI * i / SINE_TABLE_SIZE;
-        sine_table[i] = std::sin(angle);
+        sine_table[i] = static_cast<float>(std::sin(angle));
     }
 }
 

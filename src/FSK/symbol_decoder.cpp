@@ -53,7 +53,7 @@ uint8_t SymbolDecoder::bin_to_symbol(uint32_t bin_index) {
         return 0xFF;  // Invalid bin
     }
     
-    uint8_t symbol = bin_index - 6;  // 6->0, 7->1, ..., 13->7
+    uint8_t symbol = static_cast<uint8_t>(bin_index - 6);  // 6->0, 7->1, ..., 13->7
     return symbol;
 }
 
@@ -79,7 +79,7 @@ uint32_t SymbolDecoder::decode_word_with_voting(const uint8_t symbols[],
         for (uint32_t rep = 0; rep < SYMBOL_REPETITION; ++rep) {
             const uint32_t sym_idx = bit_idx + rep * SYMBOLS_PER_WORD;
             const uint8_t  symbol  = symbols[sym_idx];
-            bit_copies[rep] = (symbol < NUM_TONES) ? (symbol & 1u) : 0u;
+            bit_copies[rep] = static_cast<uint8_t>((symbol < NUM_TONES) ? (symbol & 1u) : 0u);
         }
 
         const uint8_t voted = majority_vote(bit_copies);

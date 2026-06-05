@@ -22,8 +22,8 @@ FFTBuffer::FFTBuffer()
 
     for (uint32_t k = 0; k < FFT_SIZE; ++k) {
         double angle = 2.0 * M_PI * k / FFT_SIZE;
-        fft_cs_twiddle[k] = std::cos(angle);
-        fft_ss_twiddle[k] = std::sin(angle);
+        fft_cs_twiddle[k] = static_cast<float>(std::cos(angle));
+        fft_ss_twiddle[k] = static_cast<float>(std::sin(angle));
     }
 }
 

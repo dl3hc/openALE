@@ -3,8 +3,15 @@ project(ALE-Clean-Room VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -W4 -bigobj")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -bigobj")
+
+if(MSVC)
+    # MSVC sets /Od /Zi (Debug) and /O2 /DNDEBUG (Release) automatically per build type.
+    # /bigobj is required for large translation units; /W4 enables high-level warnings.
+    add_compile_options(/bigobj /W4)
+else()
+    set(CMAKE_CXX_FLAGS_DEBUG  "-g -O0 -Wall -Wextra")
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+endif()
 
 # Set default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -38,6 +45,7 @@ target_include_directories(ale_fsk_core PUBLIC
 add_library(ale_fec
     src/FEC/golay.cpp
     src/FEC/interleaver.cpp
+    src/FEC/word_interleaver.cpp
     src/FEC/ale_fec_codec.cpp
 )
 
