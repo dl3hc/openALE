@@ -136,6 +136,11 @@ target_link_libraries(test_fsk_core ale_fsk_core ale_fec)
 target_include_directories(test_fsk_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FSKCore COMMAND test_fsk_core)
 
+add_executable(test_fec_golay tests/test_fec_golay.cpp)
+target_link_libraries(test_fec_golay ale_fec ale_fsk_core)
+target_include_directories(test_fec_golay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME FECGolay COMMAND test_fec_golay)
+
 add_executable(test_protocol tests/test_protocol.cpp)
 target_link_libraries(test_protocol ale_stores ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

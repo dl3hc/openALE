@@ -14,7 +14,7 @@ namespace ale {
 
 // Initialize static members
 std::array<uint32_t, Golay::SYNDROME_TABLE_SIZE> Golay::syndrome_table = {};
-bool Golay::syndrome_table_initialized = false;
+std::once_flag Golay::syndrome_init_flag;
 
 // Full 4096-entry encode table for Extended Golay (24,12).
 // Indexed by 12-bit information word; value is the 12-bit parity.
@@ -581,10 +581,7 @@ uint16_t Golay::compute_syndrome(uint32_t codeword) {
 }
 
 Golay::DecodeResult Golay::decode(uint32_t codeword, uint16_t& output) {
-    // Initialize syndrome table if needed
-    if (!syndrome_table_initialized) {
-        init_syndrome_table();
-    }
+    std::call_once(syndrome_init_flag, init_syndrome_table);
 
     // Compute syndrome s = yH^T  (MIL-STD-188-141B A.5.2.2.2.2)
     uint16_t syndrome = compute_syndrome(codeword);
@@ -631,7 +628,7 @@ uint16_t Golay::extract_parity(uint32_t codeword) {
     return codeword & 0xFFF;
 }
 
-bool Golay::init_syndrome_table() {
+void Golay::init_syndrome_table() {
     // Build syndrome table: syndrome -> error pattern
     // For each possible 24-bit error pattern with weight <= 3,
     // compute its syndrome and store the pattern
@@ -678,8 +675,6 @@ bool Golay::init_syndrome_table() {
         }
     }
     
-    syndrome_table_initialized = true;
-    return true;
 }
 
 } // namespace ale

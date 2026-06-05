@@ -14,7 +14,6 @@
 #include "FSK/tone_generator.h"
 #include "FSK/fft_demodulator.h"
 #include "FSK/symbol_decoder.h"
-#include "FEC/golay.h"
 #include "Protocol/Control/ale_timing.h"
 
 #include <iostream>
@@ -305,31 +304,6 @@ bool test_majority_voting() {
 
 
 // --------------------------------------------------------------------------
-// Test 4: Golay + ALE word decoding (SPEC aligned)
-// --------------------------------------------------------------------------
-
-static std::vector<uint32_t> make_golay_error_masks_upto_3() {
-    std::vector<uint32_t> masks;
-    masks.reserve(1 + 24 + 276 + 2024);
-
-    masks.push_back(0u);
-
-    for (int i = 0; i < 24; ++i)
-        masks.push_back(1u << i);
-
-    for (int i = 0; i < 24; ++i)
-        for (int j = i + 1; j < 24; ++j)
-            masks.push_back((1u << i) | (1u << j));
-
-    for (int i = 0; i < 24; ++i)
-        for (int j = i + 1; j < 24; ++j)
-            for (int k = j + 1; k < 24; ++k)
-                masks.push_back((1u << i) | (1u << j) | (1u << k));
-
-    return masks;
-}
-
-// --------------------------------------------------------------------------
 // Test 4a: majority vote API correctness
 // --------------------------------------------------------------------------
 bool test_majority_vote_api() {
@@ -352,90 +326,6 @@ bool test_majority_vote_api() {
         return false;
     }
 
-    std::cout << "PASS\n";
-    return true;
-}
-
-// --------------------------------------------------------------------------
-// Test 4b: ALE decode path
-// --------------------------------------------------------------------------
-bool test_golay_ale_word_decode() {
-    std::cout << "\n[TEST 4b] ALE decode path (SymbolDecoder + Golay)\n";
-    std::cout << "--------------------------------\n";
-
-    static constexpr uint32_t TEST_WORDS = 10;
-
-    uint8_t dummy_symbols[SYMBOLS_PER_WORD * SYMBOL_REPETITION];
-
-    for (uint32_t i = 0; i < SYMBOLS_PER_WORD * SYMBOL_REPETITION; ++i)
-        dummy_symbols[i] = i % 8;
-
-    std::cout << "  symbol stream pattern: i % 8 (deterministic)\n";
-    std::cout << "  total symbols per word: "
-              << SYMBOLS_PER_WORD * SYMBOL_REPETITION << "\n";
-
-    for (uint32_t i = 0; i < TEST_WORDS; ++i) {
-
-        uint32_t word = 0;
-        uint32_t errors =
-            SymbolDecoder::decode_word_with_voting(dummy_symbols, word);
-
-        std::cout << "  word[" << i << "] decoded=0x"
-                  << std::hex << word << std::dec
-                  << " errors=" << errors << "\n";
-
-        if (word == 0 && errors == 0) {
-            std::cout << "FAIL: invalid decode result\n";
-            return false;
-        }
-    }
-
-    std::cout << "PASS\n";
-    return true;
-}
-
-// --------------------------------------------------------------------------
-// Test 4c: Golay correctness (minimal spec check)
-// --------------------------------------------------------------------------
-bool test_golay_codec_minimal() {
-    std::cout << "\n[TEST 4c] Golay codec minimal\n";
-    std::cout << "--------------------------------\n";
-
-    uint16_t u = 0x123;
-    std::cout << "  reference word: 0x" << std::hex << u << std::dec << "\n";
-
-    uint32_t cw = Golay::encode(u);
-    std::cout << "  encoded codeword: 0x" << std::hex << cw << std::dec << "\n";
-
-    uint16_t out = 0;
-    Golay::DecodeResult res = Golay::decode(cw, out);
-
-    std::cout << "  clean decode -> 0x" << std::hex << out
-              << " errors=" << std::dec << (int)res.errors_corrected << "\n";
-
-    if (out != u || res.flag != Golay::DECODE_OK) {
-        std::cout << "FAIL: clean decode\n";
-        return false;
-    }
-
-    const auto masks = make_golay_error_masks_upto_3();
-    std::cout << "  testing error masks: " << masks.size() << "\n";
-
-    uint32_t passed = 0;
-
-    for (uint32_t m : masks) {
-        uint16_t d = 0;
-        Golay::decode(cw ^ m, d);
-
-        if (d == u) {
-            ++passed;
-        } else {
-            std::cout << "FAIL mask=0x" << std::hex << m << std::dec << "\n";
-            return false;
-        }
-    }
-
-    std::cout << "  corrected cases: " << passed << "/" << masks.size() << "\n";
     std::cout << "PASS\n";
     return true;
 }
@@ -586,8 +476,6 @@ int run_all_tests() {
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }
     if (test_majority_vote_api()) { pass_count++; } else { fail_count++; }
-    if (test_golay_ale_word_decode()) { pass_count++; } else { fail_count++; }
-    if (test_golay_codec_minimal()) { pass_count++; } else { fail_count++; }
     if (test_end_to_end_modem()) { pass_count++; } else { fail_count++; }
     if (test_timing_constants()) { pass_count++; } else { fail_count++; }
     

@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <array>
+#include <mutex>
 
 namespace ale {
 
@@ -106,11 +107,11 @@ private:
     static uint8_t compute_parity(uint32_t value);
     
     /**
-     * Initialize syndrome table once at startup
+     * Initialize syndrome table (invoked once via std::call_once)
      */
-    static bool init_syndrome_table();
-    
-    static bool syndrome_table_initialized;
+    static void init_syndrome_table();
+
+    static std::once_flag syndrome_init_flag;
     
 };
 
