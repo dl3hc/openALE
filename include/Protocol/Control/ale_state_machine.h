@@ -15,6 +15,7 @@
 
 #include "Protocol/ale_message.h"
 #include "Protocol/ale_word.h"
+#include "Stores/address_book.h"
 #include <cstdint>
 #include <vector>
 #include <string>
