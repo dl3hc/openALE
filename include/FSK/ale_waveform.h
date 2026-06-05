@@ -37,6 +37,16 @@ constexpr std::array<uint32_t, NUM_TONES> TONE_FREQS_HZ = {
     750, 1000, 1250, 1500, 1750, 2000, 2250, 2500
 };
 
+// All frequencies must be multiples of TONE_SPACING_HZ so that each carrier
+// completes an exact integer number of cycles per symbol period (64 samples at
+// 8 kHz). This guarantees 64*phase_inc ≡ 0 (mod 2^32) for every tone —
+// the precondition for slope-zero symbol boundaries (REQ-WAVEFORM-005).
+static_assert([]() constexpr {
+    for (auto f : TONE_FREQS_HZ)
+        if (f % TONE_SPACING_HZ != 0) return false;
+    return true;
+}(), "All ALE tone frequencies must be multiples of TONE_SPACING_HZ");
+
 // (2) MIL-STD-188-141B A.5.1.2 symbol assignment: frequency rank -> symbol value.
 //     Single source of truth for the Gray-coded tone-to-symbol mapping.
 constexpr std::array<uint8_t, NUM_TONES> FREQ_TO_SYMBOL = {
