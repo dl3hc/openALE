@@ -8,7 +8,8 @@
 
 #include "FSK/fft_demodulator.h"
 #include "FSK/tone_generator.h"
-#include "Protocol/ale_word.h"
+#include "Word/ale_word.h"
+#include "Stores/address_book.h"
 #include "Protocol/ale_message.h"
 #include <iostream>
 #include <vector>
@@ -149,14 +150,14 @@ void example_address_book() {
     std::cout << "  K6KB is known: " << (book.is_known_station("K6KB") ? "Yes" : "No") << "\n";
     std::cout << "  MARS is net: " << (book.is_known_net("MARS") ? "Yes" : "No") << "\n";
     
-    // Wildcard matching
+    // Wildcard matching — '?' per A.5.2.4.9
     std::cout << "\nWildcard matching:\n";
-    std::cout << "  W@AW matches W1AW: " 
-              << (AddressBook::match_wildcard("W@AW", "W1AW") ? "Yes" : "No") << "\n";
-    std::cout << "  W@AW matches W2AW: " 
-              << (AddressBook::match_wildcard("W@AW", "W2AW") ? "Yes" : "No") << "\n";
-    std::cout << "  W@AW matches K6KB: " 
-              << (AddressBook::match_wildcard("W@AW", "K6KB") ? "Yes" : "No") << "\n";
+    std::cout << "  W?AW matches W1AW: "
+              << (AddressBook::match_wildcard("W?AW", "W1AW") ? "Yes" : "No") << "\n";
+    std::cout << "  W?AW matches W2AW: "
+              << (AddressBook::match_wildcard("W?AW", "W2AW") ? "Yes" : "No") << "\n";
+    std::cout << "  W?AW matches K6KB: "
+              << (AddressBook::match_wildcard("W?AW", "K6KB") ? "Yes" : "No") << "\n";
 }
 
 /**

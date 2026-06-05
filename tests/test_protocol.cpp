@@ -1,4 +1,5 @@
 ﻿#include "Protocol/ale_word.h"
+#include "Stores/address_book.h"
 #include <iostream>
 #include <iomanip>
 #include <cstring>
@@ -152,10 +153,10 @@ bool test_address_book() {
     bool is_net = book.is_known_net("MARS");
     std::cout << "  Net address check: " << (is_net ? "PASS" : "FAIL") << "\n";
     
-    // Test 5: Wildcard matching
-    bool match1 = AddressBook::match_wildcard("W@AW", "W1AW");
-    bool match2 = AddressBook::match_wildcard("W@AW", "W2AW");
-    bool no_match = !AddressBook::match_wildcard("W@AW", "K1AB");
+    // Test 5: Wildcard matching — '?' per A.5.2.4.9
+    bool match1 = AddressBook::match_wildcard("W?AW", "W1AW");
+    bool match2 = AddressBook::match_wildcard("W?AW", "W2AW");
+    bool no_match = !AddressBook::match_wildcard("W?AW", "K1AB");
     
     std::cout << "  Wildcard matching: " 
               << (match1 && match2 && no_match ? "PASS" : "FAIL") << "\n";
