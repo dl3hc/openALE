@@ -12,7 +12,6 @@
  */
 
 #include "Protocol/Control/ale_state_machine.h"
-#include "FSK/symbol_decoder.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>
@@ -205,30 +204,29 @@ bool test_call_initiation() {
     // Words are transmitted by the time-driven handle_calling() loop.
     // A.5.2.2.4: each logical word is sent SYMBOL_REPETITION=3 times.
     // Advance time to trigger two SCANNING_CALL logical words (one per Trw).
-    sm.update(0);                           // t=0:   first  TO word fires (3 raw callbacks)
-    sm.update(ALETimingConstants::Trw_ms);  // t=Trw: second TO word fires (3 raw callbacks)
+    // SM fires one logical word per Trw slot; 3× repetition is ALE2GModem's responsibility.
+    sm.update(0);                           // t=0:   1st logical TO word → transmit_callback(word)
+    sm.update(ALETimingConstants::Trw_ms);  // t=Trw: 2nd logical TO word → transmit_callback(word)
 
     bool correct_state = (sm.get_state() == ALEState::CALLING);
-    // Expect 2 logical words × SYMBOL_REPETITION raw callbacks each
-    bool words_sent = (tracker.count() >= 2 * SYMBOL_REPETITION);
+    bool words_sent = (tracker.count() >= 2);
 
     bool pass = success && correct_state && words_sent;
     std::cout << (pass ? "PASS" : "FAIL");
     if (!pass) {
         std::cout << " (state=" << ALEStateMachine::state_name(sm.get_state())
-                  << ", raw_words=" << tracker.count() << ")";
+                  << ", words=" << tracker.count() << ")";
     }
     std::cout << "\n";
 
     if (!words_sent) return false;
 
-    // First copy of each logical word must be TO (indices 0 and SYMBOL_REPETITION)
-    std::cout << "  Logical word 1 (TO): ";
+    std::cout << "  Word 1 (TO): ";
     bool word1_ok = (tracker.words[0].type == WordType::TO);
     std::cout << (word1_ok ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "  Logical word 2 (TO): ";
-    bool word2_ok = (tracker.words[SYMBOL_REPETITION].type == WordType::TO);
+    std::cout << "  Word 2 (TO): ";
+    bool word2_ok = (tracker.words[1].type == WordType::TO);
     std::cout << (word2_ok ? "PASS" : "FAIL") << "\n";
 
     return pass && word1_ok && word2_ok;

@@ -18,7 +18,6 @@
 
 #include "Word/ale_word.h"
 #include "Protocol/Control/ale_state_machine.h"
-#include "FSK/symbol_decoder.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>
@@ -37,18 +36,6 @@ struct WordCapture {
     void clear() { words.clear(); }
     size_t size() const { return words.size(); }
     bool empty() const { return words.empty(); }
-
-    // Return only the first copy of each logical word (deduplicate 3× copies).
-    // A.5.2.2.4: every transmitted word is sent SYMBOL_REPETITION times.
-    std::vector<ALEWord> logical() const {
-        std::vector<ALEWord> result;
-        for (size_t i = 0; i < words.size(); i += SYMBOL_REPETITION)
-            result.push_back(words[i]);
-        return result;
-    }
-
-    // Number of logical (deduplicated) words.
-    size_t logical_size() const { return words.size() / SYMBOL_REPETITION; }
 };
 
 static ALEStateMachine make_sm(WordCapture& cap,
@@ -219,11 +206,10 @@ bool test_ac_003_3_extended_address_data_rep_sequence()
         sm.initiate_call(c.addr);
         sm.update(0);  // seq 1 fires immediately
 
-        const auto logical = cap.logical();
-        bool count_ok = (logical.size() >= c.expected_word_count);
+        bool count_ok = (cap.size() >= c.expected_word_count);
         bool types_ok = true;
-        for (size_t i = 0; i < c.expected_word_count && i < logical.size(); ++i) {
-            if (logical[i].type != c.expected_types[i]) {
+        for (size_t i = 0; i < c.expected_word_count && i < cap.size(); ++i) {
+            if (cap.words[i].type != c.expected_types[i]) {
                 types_ok = false;
                 break;
             }
@@ -240,13 +226,12 @@ bool test_ac_003_3_extended_address_data_rep_sequence()
         }
         std::cout << "]: " << (pass ? "PASS" : "FAIL");
         if (!count_ok)
-            std::cout << " (got " << logical.size() << " logical words, "
-                      << cap.size() << " raw)";
+            std::cout << " (got " << cap.size() << " words)";
         if (count_ok && !types_ok) {
             std::cout << " (got [";
-            for (size_t i = 0; i < logical.size() && i < 5; ++i) {
+            for (size_t i = 0; i < cap.size() && i < 5; ++i) {
                 if (i) std::cout << ",";
-                std::cout << WordParser::word_type_name(logical[i].type);
+                std::cout << WordParser::word_type_name(cap.words[i].type);
             }
             std::cout << "])";
         }
@@ -297,19 +282,18 @@ bool test_tis_extended_address()
     sm.update(0); sm.update(ALETimingConstants::Trw_ms); sm.update(2 * ALETimingConstants::Trw_ms); cap.clear();
     sm.update(2 * ALETimingConstants::Trw_ms + 1);  // conclusion fires
 
-    // Own address is 7 chars → 3 logical words: TIS + DATA + REP (each sent 3×)
-    const auto logical = cap.logical();
-    bool count_ok = logical.size() >= 3;
-    bool type_tis  = count_ok && logical[0].type == WordType::TIS;
-    bool type_data = count_ok && logical[1].type == WordType::DATA;
-    bool type_rep  = count_ok && logical[2].type == WordType::REP;
+    // Own address is 7 chars → 3 logical words: TIS + DATA + REP
+    bool count_ok = cap.size() >= 3;
+    bool type_tis  = count_ok && cap.words[0].type == WordType::TIS;
+    bool type_data = count_ok && cap.words[1].type == WordType::DATA;
+    bool type_rep  = count_ok && cap.words[2].type == WordType::REP;
     bool pass = type_tis && type_data && type_rep;
 
     std::cout << "  TIS+DATA+REP for \"SAMUELB\": " << (pass ? "PASS" : "FAIL");
-    std::cout << " (logical=" << logical.size() << " [";
-    for (size_t i = 0; i < logical.size() && i < 3; ++i) {
+    std::cout << " (" << cap.size() << " words [";
+    for (size_t i = 0; i < cap.size() && i < 3; ++i) {
         if (i) std::cout << ",";
-        std::cout << WordParser::word_type_name(logical[i].type);
+        std::cout << WordParser::word_type_name(cap.words[i].type);
     }
     std::cout << "])\n";
     return pass;

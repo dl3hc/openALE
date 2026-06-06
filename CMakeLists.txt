@@ -76,6 +76,17 @@ target_include_directories(ale_aqc PUBLIC
 
 target_link_libraries(ale_aqc ale_protocol ale_fsk_core ale_fec)
 
+# ALE 2G Modem — word-level TX with 3× redundancy (A.5.2.2.4)
+add_library(ale_modem
+    src/Modem/ale2g_modem.cpp
+)
+
+target_include_directories(ale_modem PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(ale_modem ale_protocol ale_fsk_core ale_fec)
+
 # ALE state machine (link layer)
 add_library(ale_link
     src/Protocol/Control/ale_state_machine.cpp

@@ -688,14 +688,12 @@ void ALEStateMachine::build_conclusion_words() {
 }
 
 void ALEStateMachine::transmit_word(const ALEWord& word) {
-    // A.5.2.2.4: every word is sent three times.  Each copy occupies one
-    // Tw = ALETimingConstants::Tw_ms ≈ 130.7 ms on-air; the physical layer
-    // must transmit each callback invocation for exactly that duration before
-    // starting the next, so the three copies together fill one Trw = 392 ms.
-    if (!transmit_callback) return;
-    transmit_callback(word);
-    transmit_callback(word);
-    transmit_callback(word);
+    // A.5.2.2.4: each logical word must be sent three times (3× redundancy).
+    // The physical layer (ALE2GModem) is responsible for the repetition:
+    // it calls on_tw_tick() once per Tw ≈ 130.7 ms and sends one copy per
+    // tick, so three ticks fill exactly one Trw = 392 ms.
+    if (transmit_callback)
+        transmit_callback(word);
 }
 
 } // namespace ale
