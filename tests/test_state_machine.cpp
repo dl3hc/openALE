@@ -201,12 +201,12 @@ bool test_call_initiation() {
     std::cout << "  Initiating individual call: ";
     bool success = sm.initiate_call("K6KB");
 
-    // Words are transmitted by the time-driven handle_calling() loop.
-    // A.5.2.2.4: each logical word is sent SYMBOL_REPETITION=3 times.
-    // Advance time to trigger two SCANNING_CALL logical words (one per Trw).
-    // SM fires one logical word per Trw slot; 3× repetition is ALE2GModem's responsibility.
-    sm.update(0);                           // t=0:   1st logical TO word → transmit_callback(word)
-    sm.update(ALETimingConstants::Trw_ms);  // t=Trw: 2nd logical TO word → transmit_callback(word)
+    // Callback-driven model (DD-013): on_word_complete() must be called after
+    // each Trw-slot so call_cycle_count advances and the next slot can fire.
+    sm.update(0);                           // t=0:   1st TO word → transmit_callback
+    sm.on_word_complete();                  // ack slot 0 → call_cycle_count=1
+    sm.update(ALETimingConstants::Trw_ms);  // t=Trw: 2nd TO word → transmit_callback
+    sm.on_word_complete();                  // ack slot 1
 
     bool correct_state = (sm.get_state() == ALEState::CALLING);
     bool words_sent = (tracker.count() >= 2);

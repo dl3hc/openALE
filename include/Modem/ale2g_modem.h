@@ -38,6 +38,7 @@
 #include "Word/ale_word.h"
 #include <functional>
 #include <array>
+#include <queue>
 #include <cstdint>
 
 namespace ale {
@@ -56,8 +57,10 @@ public:
 
     /**
      * Enqueue one logical word for 3× transmission (A.5.2.2.4).
-     * Typically called by the state machine via transmit_callback inside sm.update().
-     * The first copy is sent on the very next modem.update() call.
+     * If the modem is idle, transmission starts on the next modem.update() call.
+     * If the modem is busy, the word is appended to the internal queue and sent
+     * after all preceding words have completed — preserving word order.
+     * done_cb_ fires once per word after all 3 copies have been sent.
      */
     void enqueue_word(const ALEWord& word);
 
@@ -86,6 +89,7 @@ private:
     uint8_t  copies_remaining_ = 0;
     bool     word_enqueued_    = false;  // first copy not yet sent
     uint32_t next_copy_ms_     = 0;
+    std::queue<ALEWord> word_queue_;
 
     std::array<uint8_t, SYMBOLS_PER_WORD> symbol_buf_;
     std::array<int16_t, SAMPLES_PER_COPY> sample_buf_;
@@ -99,6 +103,9 @@ private:
 
     // Generate and deliver one word copy via tx_cb_.
     void send_one_copy();
+
+    // Pop the next word from word_queue_ and start it; no-op if queue empty.
+    void advance_queue_();
 };
 
 } // namespace ale

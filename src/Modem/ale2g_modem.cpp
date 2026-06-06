@@ -5,6 +5,7 @@
 
 #include "Modem/ale2g_modem.h"
 #include "FEC/ale_fec_codec.h"
+#include <cassert>
 
 namespace ale {
 
@@ -16,6 +17,15 @@ ALE2GModem::ALE2GModem()
 }
 
 void ALE2GModem::enqueue_word(const ALEWord& word) {
+    if (copies_remaining_ > 0) {
+        // Modem busy — queue for later (normal for multi-word address sequences).
+        // Max queue depth: 5 words/addr × 2 sequences (leading call) = 10 words.
+        assert(word_queue_.size() < 10 &&
+               "ALE2GModem queue overflow — SM enqueued more words than one "
+               "full leading-call sequence (max 10); likely a loop or double-transmit bug");
+        word_queue_.push(word);
+        return;
+    }
     pending_word_     = word;
     copies_remaining_ = SYMBOL_REPETITION;  // 3 per A.5.2.2.4
     word_enqueued_    = true;
@@ -50,8 +60,10 @@ void ALE2GModem::update(uint32_t current_time_ms) {
         word_enqueued_ = false;
         next_copy_ms_  = current_time_ms + TW_INT_MS;
         send_one_copy();
-        if (--copies_remaining_ == 0 && done_cb_)
-            done_cb_();
+        if (--copies_remaining_ == 0) {
+            if (done_cb_) done_cb_();
+            advance_queue_();
+        }
         return;
     }
 
@@ -60,8 +72,19 @@ void ALE2GModem::update(uint32_t current_time_ms) {
     // Scheduled copy (2nd or 3rd)
     next_copy_ms_ += TW_INT_MS;
     send_one_copy();
-    if (--copies_remaining_ == 0 && done_cb_)
-        done_cb_();
+    if (--copies_remaining_ == 0) {
+        if (done_cb_) done_cb_();
+        advance_queue_();
+    }
+}
+
+void ALE2GModem::advance_queue_() {
+    if (word_queue_.empty()) return;
+    pending_word_     = word_queue_.front();
+    word_queue_.pop();
+    copies_remaining_ = SYMBOL_REPETITION;
+    word_enqueued_    = true;
+    build_symbols();
 }
 
 } // namespace ale

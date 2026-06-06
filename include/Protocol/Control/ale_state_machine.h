@@ -156,6 +156,21 @@ public:
     void update_link_quality(const LinkQuality& lq);
     const Channel* select_best_channel() const;
 
+    /**
+     * Called by ALE2GModem (via done_cb_) after all 3 copies of one logical
+     * word have been sent.  Increments call_cycle_count and call_cycles_in_phase
+     * by 1 and handles inner-state transitions (DD-009, DD-013).
+     * Must be wired up by the integration layer:
+     *   modem.set_word_done_callback([&sm]{ sm.on_word_complete(); });
+     */
+    void on_word_complete();
+
+    // ── Test / inspection getters ─────────────────────────────────────────
+    uint32_t     get_call_cycle_count()     const { return call_cycle_count; }
+    uint32_t     get_call_cycles_in_phase() const { return call_cycles_in_phase; }
+    CallingPhase get_calling_phase()        const { return calling_phase; }
+    uint32_t     get_words_pending()        const { return words_pending; }
+
     // ── Callbacks ────────────────────────────────────────────────────────
 
     /** Called on every state transition: (from, to) */
@@ -202,10 +217,11 @@ private:
     // ── Calling sub-state (MIL-STD A.5.5.3.1) ────────────────────────────
     CallingPhase calling_phase;          ///< Current phase within CALLING
     bool         active_call_is_net;     ///< true = net call (TWAS), false = individual (TO)
-    uint32_t     call_phase_start_ms;    ///< Timestamp of current phase entry
-    uint32_t     first_call_tx_ms;       ///< Phase reference — set once, never changes
-    uint32_t     call_cycle_count;       ///< Total words sent across all phases
-    uint32_t     call_cycles_in_phase;   ///< Word sequences sent within current phase
+    uint32_t     first_call_tx_ms;       ///< Global Trw-grid anchor (DD-006): set once on CALLING entry, never modified
+    uint32_t     call_cycle_count;       ///< Total Trw-slots completed (incremented in on_word_complete() only)
+    uint32_t     call_cycles_in_phase;   ///< Trw-slots completed within current inner phase (reset on transition)
+    uint32_t     words_pending;          ///< Words enqueued but not yet acked by on_word_complete()
+    uint32_t     listening_start_ms;     ///< Timestamp when LISTENING phase began (for Twr timeout)
     uint32_t     target_scan_channels;   ///< Assumed scan channels of target (for Tsc)
 
     // ── Timing ────────────────────────────────────────────────────────────

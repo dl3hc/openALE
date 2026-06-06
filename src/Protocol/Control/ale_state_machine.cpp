@@ -31,10 +31,11 @@ ALEStateMachine::ALEStateMachine()
       last_word_time_ms(0),
       calling_phase(CallingPhase::SCANNING_CALL),
       active_call_is_net(false),
-      call_phase_start_ms(0),
       first_call_tx_ms(0),
       call_cycle_count(0),
       call_cycles_in_phase(0),
+      words_pending(0),
+      listening_start_ms(0),
       target_scan_channels(1),
       state_entry_time_ms(0),
       last_scan_hop_time_ms(0),
@@ -156,10 +157,11 @@ void ALEStateMachine::enter_state(ALEState new_state) {
 
         case ALEState::CALLING:
             link_start_time_ms   = current_time_ms;
-            first_call_tx_ms     = current_time_ms;  // Phasenreferenz — bleibt konstant
+            first_call_tx_ms     = current_time_ms;  // DD-006: global Trw-grid anchor — never modified after this
             call_cycle_count     = 0;
             call_cycles_in_phase = 0;
-            call_phase_start_ms  = current_time_ms;
+            words_pending        = 0;
+            listening_start_ms   = 0;
 
             // Net calls: go directly to net call stub.
             // Individual calls: start with scanning call if target may be scanning,
@@ -255,141 +257,81 @@ void ALEStateMachine::handle_scanning() {
  *  NET_CALL_STUB:
  *    TODO: implement per A.5.5.x
  */
+/**
+ * handle_calling — time-driven TX trigger per MIL-STD-188-141B A.5.5.3.1
+ *
+ * Responsibility: decide WHEN to start the next word transmission.
+ * Counter updates and phase transitions are handled exclusively in
+ * on_word_complete() (DD-009, DD-013).
+ *
+ * Slot schedule (DD-006):
+ *   next_tx = first_call_tx_ms + call_cycle_count × Trw_ms
+ *
+ * Guard: words_pending > 0 means ALE2GModem is busy with a previous word
+ * (or has queued words not yet acked). No new transmission is started.
+ */
 void ALEStateMachine::handle_calling() {
-    uint32_t phase_elapsed = current_time_ms - call_phase_start_ms;
-
     // ── Diagnostic trace ─────────────────────────────────────────────────
     static const char* PHASE_NAMES[] = {
         "SCANNING_CALL", "LEADING_CALL", "CONCLUSION", "LISTENING", "NET_CALL_STUB"
     };
     std::cout << "[TRACE] t=" << current_time_ms
               << " phase=" << PHASE_NAMES[static_cast<int>(calling_phase)]
-              << " elapsed=" << phase_elapsed
+              << " pending=" << words_pending
               << " cycles=" << call_cycles_in_phase
-              << " total_words=" << call_cycle_count
+              << " total=" << call_cycle_count
               << " addr=" << active_call_to
               << "\n";
 
     switch (calling_phase) {
 
         // ── SCANNING_CALL ─────────────────────────────────────────────────
-        // Per A.5.2.5.1: scanning call contains only the FIRST WORD of each
-        // address — one TO per slot, no DATA/REP extension (A.5.2.4.3).
-        // Slot width = 1 × Trw.  Duration: Tsc = C × 2 × Trw.
+        // One TO word per slot, no DATA/REP extension (A.5.2.5.1, A.5.2.4.3).
+        // Slot width = 1 × Trw.  Phase transitions in on_word_complete().
         case CallingPhase::SCANNING_CALL: {
-            const uint32_t tsc = target_scan_channels
-                               * 2 * ALETimingConstants::Trw_ms;
-
-            // Transition first — prevents extra word at phase boundary
-            if (phase_elapsed >= tsc) {
-                std::cout << "[TRACE] SCANNING_CALL → LEADING_CALL"
-                          << " (tsc=" << tsc << "ms)\n";
-                calling_phase        = CallingPhase::LEADING_CALL;
-                call_phase_start_ms  = current_time_ms;
-                call_cycles_in_phase = 0;
-                break;
-            }
-
-            const uint32_t next_tx = call_phase_start_ms
-                                   + call_cycles_in_phase
-                                   * ALETimingConstants::Trw_ms;
-
-            if (current_time_ms >= next_tx) {
+            if (words_pending > 0) break;
+            const uint32_t next_tx = first_call_tx_ms
+                                   + call_cycle_count * ALETimingConstants::Trw_ms;
+            if (current_time_ms >= next_tx)
                 build_scanning_word(active_call_to);
-                ++call_cycles_in_phase;
-                ++call_cycle_count;
-            }
             break;
         }
 
         // ── LEADING_CALL ──────────────────────────────────────────────────
-        // Per A.5.5.3.1 + Figure A-29: full TO address, sent exactly twice.
-        // Tlc = 2 × Tc.  Tc = words_for_address × Trw.
-        // call_cycles_in_phase counts complete address sequences (0 → 1 → 2).
-        //
-        // Transition guard: phase_elapsed >= 2 × tc_ms, NOT call_cycles >= 2.
-        // Seq 1 fires at tc_ms; its last word finishes at 2 × tc_ms = Tlc.
-        // Transitioning on call_cycles >= 2 would move to CONCLUSION the moment
-        // seq 1 is *triggered*, before it has been on air — timing short by tc_ms.
+        // Full TO address, sent exactly twice (Tlc = 2 × Tc).
+        // Each address sequence is wpa words; slot 0 of seq N starts at
+        // first_call_tx_ms + call_cycle_count × Trw_ms.
+        // Phase transitions in on_word_complete().
         case CallingPhase::LEADING_CALL: {
-            const uint32_t wpa   = words_for_address(active_call_to);
-            const uint32_t tc_ms = wpa * ALETimingConstants::Trw_ms;
-
-            // Guard: should never exceed 2 sequences in leading call
-            if (call_cycles_in_phase > 2) {
-                std::cout << "[ERROR] LEADING_CALL OVER-EMISSION:"
-                          << " call_cycles_in_phase=" << call_cycles_in_phase
-                          << " (expected 0..2)\n";
-            }
-
-            // Trigger each sequence at its scheduled slot
-            const uint32_t next_tx = call_phase_start_ms
-                                   + call_cycles_in_phase * tc_ms;
-            if (current_time_ms >= next_tx && call_cycles_in_phase < 2) {
-                std::cout << "[TRACE] LEADING_CALL seq " << call_cycles_in_phase
-                          << " tx (next_tx=" << next_tx << "ms)\n";
+            if (words_pending > 0) break;
+            const uint32_t next_tx = first_call_tx_ms
+                                   + call_cycle_count * ALETimingConstants::Trw_ms;
+            if (current_time_ms >= next_tx)
                 build_leading_call_word(active_call_to, active_call_is_net);
-                ++call_cycles_in_phase;
-                call_cycle_count += wpa;
-            }
-
-            // Wait until the last sequence has fully been on air (Tlc = 2 × Tc)
-            if (phase_elapsed >= 2 * tc_ms) {
-                std::cout << "[TRACE] LEADING_CALL → CONCLUSION"
-                          << " (tlc=" << 2 * tc_ms << "ms)\n";
-                calling_phase        = CallingPhase::CONCLUSION;
-                call_phase_start_ms  = current_time_ms;
-                call_cycles_in_phase = 0;
-            }
             break;
         }
 
         // ── CONCLUSION ────────────────────────────────────────────────────
-        // Per A.5.2.3.2.2: TIS SAM — identifies caller, invites response.
-        // Full address including DATA/REP if own address > 3 chars.
-        // Sent once, then open RX window after last word is on air.
+        // TIS with full own address — sent once.
+        // RX window opens after last word acked in on_word_complete().
         case CallingPhase::CONCLUSION: {
+            if (words_pending > 0) break;
             if (call_cycles_in_phase == 0) {
-                std::cout << "[TRACE] CONCLUSION tx\n";
                 build_conclusion_words();
-                const uint32_t wpa = words_for_address(
-                                         address_book.get_self_address());
-                call_cycles_in_phase = 1;
-                call_cycle_count    += wpa;
-            }
-
-            // Open RX window after full conclusion sequence has been on air.
-            // Use actual word count × Trw, not a fixed single-word constant.
-            const uint32_t conclusion_air_ms =
-                words_for_address(address_book.get_self_address())
-                * ALETimingConstants::Trw_ms;
-
-            if (phase_elapsed >= conclusion_air_ms) {
-                std::cout << "[TRACE] CONCLUSION → LISTENING"
-                          << " (air=" << conclusion_air_ms << "ms)\n";
-                calling_phase       = CallingPhase::LISTENING;
-                call_phase_start_ms = current_time_ms;
-                if (rx_enabled_callback)
-                    rx_enabled_callback(true);
             }
             break;
         }
 
         // ── LISTENING ─────────────────────────────────────────────────────
-        // Twr: wait for called station's TIS (accept) or TWAS (reject).
-        // Response arrives via process_received_word() → HANDSHAKE_COMPLETE.
-        // Timeout: channel attempt failed.
-        // NOTE: do NOT call rx_enabled_callback(false) here explicitly —
-        // process_event(LINK_TIMEOUT) → transition_to(IDLE) → exit_state(CALLING)
-        // will fire it exactly once.
-        // TODO: multi-channel → hop to next channel and restart from SCANNING_CALL.
+        // Pure time-based RX window: wait Twr_ms for response.
+        // Response: process_received_word() → HANDSHAKE_COMPLETE.
+        // Timeout: LINK_TIMEOUT → IDLE (single channel).
+        // NOTE: rx_enabled_callback(false) is fired by exit_state(CALLING),
+        // not here, to avoid double-firing on process_event() → transition path.
+        // TODO: multi-channel → hop to next channel, restart from SCANNING_CALL.
         case CallingPhase::LISTENING: {
-            if (phase_elapsed >= ALETimingConstants::Twr_ms) {
-                std::cout << "[TRACE] LISTENING timeout → LINK_TIMEOUT"
-                          << " (twr=" << ALETimingConstants::Twr_ms
-                          << "ms)\n";
+            if ((current_time_ms - listening_start_ms) >= ALETimingConstants::Twr_ms)
                 process_event(ALEEvent::LINK_TIMEOUT);
-            }
             break;
         }
 
@@ -688,12 +630,69 @@ void ALEStateMachine::build_conclusion_words() {
 }
 
 void ALEStateMachine::transmit_word(const ALEWord& word) {
-    // A.5.2.2.4: each logical word must be sent three times (3× redundancy).
-    // The physical layer (ALE2GModem) is responsible for the repetition:
-    // it calls on_tw_tick() once per Tw ≈ 130.7 ms and sends one copy per
-    // tick, so three ticks fill exactly one Trw = 392 ms.
+    // Enqueues one logical word into ALE2GModem via transmit_callback.
+    // ALE2GModem sends it 3× (A.5.2.2.4, DD-013), then fires done_cb_
+    // which the integration layer wires to on_word_complete().
+    ++words_pending;
     if (transmit_callback)
         transmit_callback(word);
+}
+
+// ============================================================================
+// on_word_complete — fired by ALE2GModem after all 3 copies of one word sent
+// ============================================================================
+
+void ALEStateMachine::on_word_complete() {
+    if (current_state != ALEState::CALLING) return;
+
+    --words_pending;
+    ++call_cycle_count;
+    ++call_cycles_in_phase;
+
+    switch (calling_phase) {
+
+        case CallingPhase::SCANNING_CALL: {
+            // Tsc = C × 2 Trw-slots; transition when all slots done
+            const uint32_t tsc_slots = target_scan_channels * 2;
+            if (call_cycles_in_phase >= tsc_slots) {
+                std::cout << "[TRACE] on_word_complete: SCANNING_CALL → LEADING_CALL"
+                          << " (tsc_slots=" << tsc_slots << ")\n";
+                calling_phase        = CallingPhase::LEADING_CALL;
+                call_cycles_in_phase = 0;
+            }
+            break;
+        }
+
+        case CallingPhase::LEADING_CALL: {
+            // Tlc = 2 × Tc = 2 × wpa Trw-slots; transition when all words done
+            const uint32_t tlc_slots = 2 * words_for_address(active_call_to);
+            if (call_cycles_in_phase >= tlc_slots) {
+                std::cout << "[TRACE] on_word_complete: LEADING_CALL → CONCLUSION"
+                          << " (tlc_slots=" << tlc_slots << ")\n";
+                calling_phase        = CallingPhase::CONCLUSION;
+                call_cycles_in_phase = 0;
+            }
+            break;
+        }
+
+        case CallingPhase::CONCLUSION: {
+            // Conclusion = wpa_self Trw-slots; open RX window when done
+            const uint32_t conclusion_slots =
+                words_for_address(address_book.get_self_address());
+            if (call_cycles_in_phase >= conclusion_slots) {
+                std::cout << "[TRACE] on_word_complete: CONCLUSION → LISTENING\n";
+                calling_phase      = CallingPhase::LISTENING;
+                listening_start_ms = current_time_ms;
+                call_cycles_in_phase = 0;
+                if (rx_enabled_callback)
+                    rx_enabled_callback(true);
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
 }
 
 } // namespace ale
