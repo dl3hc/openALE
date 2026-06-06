@@ -34,14 +34,16 @@ constexpr double Tm_max_ms  = 30.0 * TRW_MS;              // Max message section
 
 // ── Individual Calling (Annex B) ──
 
-constexpr double T1ww_ms    = static_cast<double>(TRW_MS); // Last word wait = Trw = 392 ms
-constexpr double T1d_ms     = TW_MS;                       // Late detect word = Tw = 130.66... ms
+constexpr double Tlww_ms    = static_cast<double>(TRW_MS); // Last word wait delay = Trw = 392 ms
+constexpr double Tld_ms     = TW_MS;                       // Late detect delay = Tw = 130.66... ms
 constexpr double Tlrw_ms    = 2.0 * TRW_MS;               // Leading redundant words = 2×Trw = 784 ms
-constexpr double Tsc_min_ms = 20.0 * TRW_MS;              // Scanning call min (C=10, Td=Tdrw example)
-
-// Minimum for single one-word address (Annex B p.222):
-constexpr double Trc_min_ms = 3.0 * TRW_MS;               // Trc min = 2×Trw + Trw = 3×Trw = 1176 ms
-constexpr double Tcc_min_ms = Tsc_min_ms + 2.0 * TRW_MS;  // Tcc min = 22×Trw = 8624 ms (C=10, 1-word)
+// Example values for C=10 channels, single one-word address (Annex B p.222):
+// Tsc and Tcc are variable formulas (Table A-XV), not fixed constants.
+//   Tsc(n) = n × Tcl  (Tcl per channel, ≥ Ts)
+//   Tcc(n) = Tsc(n) + Tlc  (Tlc = 2 × wpa × Trw, grows with address length)
+constexpr double Tsc_c10_1word_ms = 20.0 * TRW_MS;              // Tsc example: C=10, 1-word addr = 20×Trw
+constexpr double Trc_min_ms       = 3.0  * TRW_MS;              // Trc min = 2×Trw + Trw = 3×Trw = 1176 ms
+constexpr double Tcc_c10_1word_ms = Tsc_c10_1word_ms + 2.0 * TRW_MS; // Tcc example: C=10, 1-word = 22×Trw
 
 // Fast equipment (solid-state tuner, Annex B):
 constexpr double Twr_fast_ms  = 5.0 * TW_MS;              // Wait for reply = 5×Tw = 653.33 ms
@@ -65,6 +67,7 @@ constexpr double Ts_max_ms = 50000.0;                     // Max scan period = 5
 constexpr double Td_min_ms = 100.0;                       // Min dwell = 100 ms (10 chps, DO)
 constexpr double TD5_MS    = 200.0;                       // Td(5) = 200 ms (5 chps basic)
 constexpr double TD2_MS    = 500.0;                       // Td(2) = 500 ms (2 chps min)
+constexpr double Tds_ms    = TD5_MS;                      // Detect signaling period ≤ Td(5) = 200 ms
 constexpr double Tdrw_ms   = 2.0 * TRW_MS;               // Detect redundant word = 2×Trw = 784 ms
 constexpr double Tdrrw_ms  = 3.0 * TRW_MS;               // Detect rotating redundant word = 3×Trw = 1176 ms
 
@@ -77,7 +80,11 @@ constexpr double Trs_min_ms = 2.0 * TRW_MS;              // Trs min = 2×Trw = 7
 // ── Operational Timing (non-standard, conservative defaults) ──
 
 constexpr uint32_t Twa_ms     = 30000;                   // Activity timeout = 30 s (Table A-XV)
-constexpr uint32_t Twce_ms    = 5 * TRW_MS;              // Channel exclusion ≈ 5×Trw (conservative)
+// Twce = 2 × own_Ts (Table A-XV).  own_Ts = n_channels × Tdrw_ms.
+// Not a compile-time constant — depends on the station's scan-list length.
+constexpr uint32_t calc_twce_ms(uint32_t n_channels) {
+    return 2u * n_channels * static_cast<uint32_t>(Tdrw_ms);
+}
 constexpr uint32_t Twt_ms     = 2000;                    // Listen-before-TX = 2 s (voice/general)
 constexpr uint32_t Twt_ale_ms = 2 * TRW_MS;              // ALE-only LBT = Tdrw = 784 ms
 constexpr uint32_t LINK_TIMEOUT_MS = 120000;             // Link maintenance = 120 s
@@ -89,7 +96,7 @@ constexpr uint32_t SOUNDING_INTERVAL_MS = 30 * 60 * 1000; // Tps = 30 min
 constexpr uint32_t Twr_fast_int  = static_cast<uint32_t>(0.5 + Twr_fast_ms);
 constexpr uint32_t Twr_slow_int  = static_cast<uint32_t>(0.5 + Twr_slow_ms);
 constexpr uint32_t Twrt_fast_int = static_cast<uint32_t>(0.5 + Twrt_fast_ms);
-constexpr uint32_t Tsc_min_int   = static_cast<uint32_t>(0.5 + Tsc_min_ms);
+constexpr uint32_t Tsc_c10_1word_int = static_cast<uint32_t>(0.5 + Tsc_c10_1word_ms);
 
 // ── Star Calling (Annex B, pp.226-227) ──
 
@@ -98,8 +105,8 @@ constexpr double Tsw_std_ms      = 14.0 * TW_MS;          // Min slot standard =
 constexpr double Tsw_lqa_ms      = 17.0 * TW_MS;          // Min slot LQA = 17×Tw = 2221.33 ms
 constexpr double Tsw_tight_ms    = 9.0  * TW_MS;          // Min slot tight = 9×Tw = 1176 ms
 constexpr double Twan_max_std_ms = 188.0 * TW_MS;         // Twan max late arrival standard = 188×Tw
-// Annex B says 277 Tw, Table A-XV says 227 Tw — Annex B (277) used as authoritative:
-constexpr double Twan_max_lqa_ms = 277.0 * TW_MS;         // Twan max late arrival LQA = 277×Tw
+// Table A-XV: 227 Tw (mit LQA).  Annex B text says 277 Tw — Table A-XV governs.
+constexpr double Twan_max_lqa_ms = 227.0 * TW_MS;         // Twan max late arrival LQA = 227×Tw
 constexpr double Tta_tt_slot0_ms = 360.0;                  // Tta+Tt limit slot 0 = 360 ms
 constexpr double Tta_tt_slot1_ms = 2100.0;                 // Tta+Tt limit slot 1 = 2100 ms
 constexpr double Tta_tt_other_ms = 1500.0;                 // Tta+Tt limit other slots = 1500 ms
