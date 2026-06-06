@@ -64,14 +64,14 @@ uint8_t SymbolDecoder::majority_vote(const uint8_t bits[3]) {
     return (sum >= 2) ? 1 : 0;
 }
 
-uint32_t SymbolDecoder::decode_word_with_voting(const uint8_t symbols[],
-                                                uint64_t& output_word) {
+uint8_t SymbolDecoder::decode_word_with_voting(const uint8_t symbols[],
+                                               uint64_t& output_word) {
     // MIL-STD-188-141B A.5.2.2.4: bit k occupies positions k, k+49, k+98.
     // Only bits 0..47 are voted (the 48 "possible votes" per spec A.5.2.6.3).
     // Bit 48 (S49) is always 0 and is excluded from the unanimous-vote count.
 
     uint64_t word = 0;
-    uint32_t unanimous_count = 0;
+    uint8_t unanimous_count = 0;
 
     for (uint32_t bit_idx = 0; bit_idx < VOTE_BUFFER_LENGTH; ++bit_idx) {
         uint8_t bit_copies[SYMBOL_REPETITION];

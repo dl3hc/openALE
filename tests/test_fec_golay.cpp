@@ -57,7 +57,7 @@ bool test_golay_ale_word_decode() {
               << SYMBOLS_PER_WORD * SYMBOL_REPETITION << "\n";
 
     uint64_t word     = 0;
-    uint32_t unanimous = SymbolDecoder::decode_word_with_voting(dummy_symbols, word);
+    uint8_t unanimous = SymbolDecoder::decode_word_with_voting(dummy_symbols, word);
 
     std::cout << "  decoded=0x" << std::hex << word << std::dec
               << " unanimous_votes=" << unanimous << "/" << VOTE_BUFFER_LENGTH << "\n";
