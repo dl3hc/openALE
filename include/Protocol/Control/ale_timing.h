@@ -119,9 +119,13 @@ constexpr double Tta_tt_other_ms = 1500.0;                 // Tta+Tt limit other
 // ALETimingConstants::Trw_ms without ambiguity with ale::TRW_MS.
 // Twr_ms uses Twr_fast_int (solid-state equipment, 5×Tw ≈ 653 ms).
 namespace ALETimingConstants {
-    constexpr uint32_t Trw_ms          = ale::TRW_MS;          // 392 ms
-    constexpr double   Tw_ms           = ale::TW_MS;            // 130.666... ms
-    constexpr uint32_t Twr_ms          = ale::Twr_fast_int;     // 653 ms (fast equip.)
-    constexpr uint32_t Twa_ms          = ale::Twa_ms;           // 30 000 ms
-    constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;  // 120 000 ms
+    constexpr uint32_t Trw_ms          = ale::TRW_MS;                                        // 392 ms
+    constexpr double   Tw_ms           = ale::TW_MS;                                          // 130.666... ms
+    constexpr uint32_t Twr_ms          = ale::Twr_fast_int;                                   // 653 ms (fast equip.)
+    constexpr uint32_t Twrt_ms         = ale::Twrt_fast_int;                                  // 784 ms (Twr+Tt fast)
+    constexpr uint32_t Twt_ms          = ale::Twt_ale_ms;                                     // 784 ms (ALE-only LBT)
+    constexpr uint32_t Tt_ms           = static_cast<uint32_t>(ale::TT_BLIND_MS + 0.5);       // 1045 ms (blind tune)
+    constexpr uint32_t Tlww_ms         = ale::TRW_MS;                                         // 392 ms (= Trw)
+    constexpr uint32_t Twa_ms          = ale::Twa_ms;                                         // 30 000 ms
+    constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;                                // 120 000 ms
 }

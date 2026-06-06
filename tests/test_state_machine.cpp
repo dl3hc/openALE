@@ -201,12 +201,16 @@ bool test_call_initiation() {
     std::cout << "  Initiating individual call: ";
     bool success = sm.initiate_call("K6KB");
 
-    // Callback-driven model (DD-013): on_word_complete() must be called after
-    // each Trw-slot so call_cycle_count advances and the next slot can fire.
-    sm.update(0);                           // t=0:   1st TO word → transmit_callback
-    sm.on_word_complete();                  // ack slot 0 → call_cycle_count=1
-    sm.update(ALETimingConstants::Trw_ms);  // t=Trw: 2nd TO word → transmit_callback
-    sm.on_word_complete();                  // ack slot 1
+    // Drive through LBT (Twt_ms=784ms) and Tune (Tt_ms=1045ms) before TX.
+    // TX begins after both delays; first_call_tx_ms is set at Tune-expiry.
+    const uint32_t tx_start = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+
+    sm.update(ALETimingConstants::Twt_ms); // t=784:   LBT → TUNING
+    sm.update(tx_start);                   // t=1829:  TUNING → SCANNING_CALL
+    sm.update(tx_start);                   // t=1829:  1st TO word → transmit_callback
+    sm.on_word_complete();                 // ack slot 0 → call_cycle_count=1
+    sm.update(tx_start + ALETimingConstants::Trw_ms); // t=2221: 2nd TO word
+    sm.on_word_complete();                 // ack slot 1
 
     bool correct_state = (sm.get_state() == ALEState::CALLING);
     bool words_sent = (tracker.count() >= 2);
@@ -400,6 +404,121 @@ bool test_sounding() {
 }
 
 // ============================================================================
+// Test 8: Complete Scanning Call Cycle
+// Traces the full SAM-side call sequence per A.5.5.3.1:
+//   LBT → TUNING → SCANNING_CALL → LEADING_CALL → CONCLUSION → LISTENING
+//   → (no response within Twr) → IDLE
+// Addresses: SAM (self, 1 word) calling JOE (target, 1 word),
+//            target_scan_channels = 1 (default).
+// ============================================================================
+
+bool test_full_call_cycle() {
+    std::cout << "\n[TEST 8] Full Scanning Call Cycle\n";
+    std::cout << "==================================\n";
+
+    ALEStateMachine sm;
+
+    // ── Collect state transitions ─────────────────────────────────────────
+    struct Event { std::string kind; uint32_t t_ms; std::string detail; };
+    std::vector<Event> log;
+
+    sm.set_state_callback([&](ALEState from, ALEState to) {
+        log.push_back({"STATE", 0,
+            std::string(ALEStateMachine::state_name(from)) + " → " +
+            ALEStateMachine::state_name(to)});
+    });
+
+    // ── Collect transmitted words ─────────────────────────────────────────
+    struct SentWord { WordType type; std::string addr; };
+    std::vector<SentWord> sent;
+    sm.set_transmit_callback([&](const ALEWord& w) {
+        sent.push_back({w.type, std::string(w.address, 3)});
+    });
+
+    // ── Operator events ───────────────────────────────────────────────────
+    OperatorEvent last_op_event{};
+    bool op_event_fired = false;
+    sm.set_operator_callback([&](OperatorEvent e) {
+        last_op_event  = e;
+        op_event_fired = true;
+        const char* names[] = {"CALL_REJECTED","NO_CHANNELS_LEFT",
+                               "LINK_ESTABLISHED","EMERGENCY_ACTIVE"};
+        log.push_back({"OPER", 0, names[static_cast<int>(e)]});
+    });
+
+    sm.set_self_address("SAM");
+
+    // ── Constants for this run ────────────────────────────────────────────
+    const uint32_t Twt = ALETimingConstants::Twt_ms;   // 784 ms
+    const uint32_t Tt  = ALETimingConstants::Tt_ms;    // 1045 ms
+    const uint32_t Trw = ALETimingConstants::Trw_ms;   // 392 ms
+    const uint32_t Twr = ALETimingConstants::Twr_ms;   // 653 ms
+
+    const uint32_t tx0 = Twt + Tt; // first TX slot: 1829 ms
+
+    // send_slot: advance to time t, send one word, ack it
+    auto send_slot = [&](uint32_t t) {
+        sm.update(t);
+        sm.on_word_complete();
+    };
+
+    // ── Drive the state machine ───────────────────────────────────────────
+    sm.initiate_call("JOE");             // → CALLING/LBT
+
+    sm.update(Twt);                      // LBT (784 ms) → TUNING
+    sm.update(tx0);                      // Tune (1045 ms) → SCANNING_CALL
+    send_slot(tx0);                      // slot 0: TO "JOE" (scan)
+    send_slot(tx0 + 1 * Trw);           // slot 1: TO "JOE" (scan) → LEADING_CALL
+    send_slot(tx0 + 2 * Trw);           // slot 2: TO "JOE" (leading pass 1)
+    send_slot(tx0 + 3 * Trw);           // slot 3: TO "JOE" (leading pass 2) → CONCLUSION
+    send_slot(tx0 + 4 * Trw);           // slot 4: TIS "SAM" (conclusion) → LISTENING
+    sm.update(tx0 + 4 * Trw + Twr);     // Twr timeout → IDLE
+
+    // ── Print phase/word trace ────────────────────────────────────────────
+    const char* type_names[] = {"DATA","THRU","TO","TWAS","FROM","TIS","CMD","REP"};
+
+    std::cout << "\n  Transmitted words (" << sent.size() << "):\n";
+    for (size_t i = 0; i < sent.size(); ++i) {
+        uint8_t ti = static_cast<uint8_t>(sent[i].type);
+        std::cout << "    [" << i << "] "
+                  << (ti < 8 ? type_names[ti] : "??") << " \""
+                  << sent[i].addr << "\"\n";
+    }
+
+    std::cout << "\n  Events:\n";
+    for (const auto& ev : log)
+        std::cout << "    [" << ev.kind << "] " << ev.detail << "\n";
+
+    std::cout << "\n  Final state: "
+              << ALEStateMachine::state_name(sm.get_state()) << "\n\n";
+
+    // ── Assertions ────────────────────────────────────────────────────────
+    bool ok = true;
+
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        ok = ok && cond;
+    };
+
+    check(sm.get_state() == ALEState::IDLE,
+          "Final state IDLE");
+    check(sent.size() == 5,
+          "5 words sent (2 scan + 2 leading + 1 conclusion)");
+    check(sent.size() >= 2
+          && sent[0].type == WordType::TO && sent[1].type == WordType::TO,
+          "Scan slots: TO + TO");
+    check(sent.size() >= 4
+          && sent[2].type == WordType::TO && sent[3].type == WordType::TO,
+          "Leading slots: TO + TO");
+    check(sent.size() >= 5 && sent[4].type == WordType::TIS,
+          "Conclusion: TIS SAM");
+    check(op_event_fired && last_op_event == OperatorEvent::NO_CHANNELS_LEFT,
+          "Operator notified: NO_CHANNELS_LEFT");
+
+    return ok;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -420,6 +539,7 @@ int run_all_tests() {
     if (test_lqa()) { pass_count++; } else { fail_count++; }
     if (test_timeouts()) { pass_count++; } else { fail_count++; }
     if (test_sounding()) { pass_count++; } else { fail_count++; }
+    if (test_full_call_cycle()) { pass_count++; } else { fail_count++; }
     
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

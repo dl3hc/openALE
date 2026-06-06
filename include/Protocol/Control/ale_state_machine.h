@@ -1,11 +1,15 @@
-﻿/**
+/**
  * \file ale_state_machine.h
  * \brief ALE link state machine
  *
  * Implements MIL-STD-188-141B Appendix A link establishment procedures:
  *  - Scanning for incoming calls
- *  - Initiating outbound calls
- *  - Link handshake and establishment
+ *  - Initiating outbound calls (Individual / Net)
+ *  - Full three-way handshake: Call → Response → ACK (REQ-LINK-008)
+ *  - Listen-Before-Transmit (REQ-LINK-017 AC-1)
+ *  - Tune delay before first TX (REQ-LINK-017 AC-2)
+ *  - Multi-channel retry on no-reply (REQ-LINK-017 AC-8)
+ *  - Emergency manual override (REQ-LINK-007)
  *  - Sounding/LQA operations
  *
  * Specification: MIL-STD-188-141B Appendix A
@@ -23,6 +27,7 @@
 #include <functional>
 
 namespace ale {
+
 enum class ALEState {
     IDLE,
     SCANNING,
@@ -51,28 +56,44 @@ enum class ALEEvent {
 };
 
 /**
+ * \enum OperatorEvent
+ * Asynchronous events reported to the operator via operator_callback.
+ */
+enum class OperatorEvent {
+    CALL_REJECTED,     ///< Called station sent TWAS (rejection) — AC-LINK-019-10
+    NO_CHANNELS_LEFT,  ///< All calling channels exhausted with no reply
+    LINK_ESTABLISHED,  ///< Three-way handshake complete — link is up
+    EMERGENCY_ACTIVE,  ///< emergency_manual_control() was invoked
+};
+
+/**
  * \enum CallingPhase
  * Sub-states within CALLING per MIL-STD-188-141B A.5.5.3.1 / Figure A-29
  *
- * Individual call sequence (single channel):
+ * Complete SAM-side calling sequence:
  *
- *   SCANNING_CALL         LEADING_CALL      CONCLUSION    LISTENING
- *   ┌───────────────────┐ ┌──────────────┐ ┌──────────┐ ┌─────────┐
- *   │TO JOE … TO JOE    │ │TO JOE TO JOE│ │TIS SAM  │ │ (Twr)  │
- *   │ (2×Trw per ch.)   │ │  (Tlc=2×Tc) │ │         │ │        │
- *   └───────────────────┘ └──────────────┘ └──────────┘ └─────────┘
- *         Tsc                   Tlc            Tc          Twr
- *
- *   Response arrives in LISTENING via process_received_word() → HANDSHAKE_COMPLETE
- *   No response within Twr → LINK_TIMEOUT → IDLE (single ch.) / next ch. (TODO)
- *
- * Net call: NET_CALL_STUB — not yet implemented.
+ *   LBT               listen Twt (784 ms ALE-only) before TX — AC-LINK-017-1
+ *   TUNING            tune delay Tt (1045 ms blind) — AC-LINK-017-2
+ *   SCANNING_CALL     TO first-word × (C × 2 Trw)  — AC-LINK-017-5/6
+ *   LEADING_CALL      full TO address × 2 (Tlc)    — AC-LINK-017-7
+ *   MESSAGE           optional AMD/DTM/DBM orderwire (stub — AC-LINK-009-3)
+ *   CONCLUSION        TIS SAM — frame terminator
+ *   LISTENING         Twr/Twrt RX window for JOE's response
+ *                       ├─ "TO SAM" detected → arm Tlww (AC-LINK-019-6)
+ *                       └─ "TIS JOE" + Tlww → SENDING_ACK
+ *   SENDING_ACK       TO JOE + TIS SAM — third handshake frame (REQ-LINK-008)
+ *                       └─ complete → LINKED (HANDSHAKE_COMPLETE)
+ *   NET_CALL_STUB     TODO: net call protocol per A.5.5.x
  */
 enum class CallingPhase {
-    SCANNING_CALL,  ///< Tsc: TO first word only per A.5.2.5.1, 1×Trw per slot, C×2 slots
+    LBT,            ///< Listen-Before-Transmit: wait Twt before first TX
+    TUNING,         ///< Channel tune delay Tt
+    SCANNING_CALL,  ///< Tsc: TO first word only per A.5.2.5.1, C×2 slots
     LEADING_CALL,   ///< Tlc: full TO address, sent twice (2×Tc)
+    MESSAGE,        ///< Optional AMD/DTM orderwire (stub, see AC-LINK-009-3)
     CONCLUSION,     ///< TIS SAM — frame terminator, invites response
-    LISTENING,      ///< Twr: RX window, waiting for called station response
+    LISTENING,      ///< Twr/Twrt: RX window, waiting for called station response
+    SENDING_ACK,    ///< Third handshake frame: TO JOE + TIS SAM (REQ-LINK-008)
     NET_CALL_STUB   ///< TODO: net call protocol per A.5.5.x
 };
 
@@ -125,6 +146,13 @@ struct LinkQuality {
  */
 class ALEStateMachine {
 public:
+    /** Pending orderwire message for the MESSAGE phase (AMD, stub). */
+    struct PendingMessage {
+        enum class Type { NONE, AMD } type;
+        std::string content;
+        PendingMessage() : type(Type::NONE) {}
+    };
+
     ALEStateMachine();
 
     bool     process_event(ALEEvent event);
@@ -152,6 +180,33 @@ public:
      */
     void set_target_scan_channels(uint32_t n) { target_scan_channels = n; }
 
+    /**
+     * Set the ordered list of channels SAM will try when calling.
+     * On LISTENING timeout on one channel, SAM hops to the next.
+     * If empty, SAM stays on the current channel (single-channel operation).
+     * Must be called before initiate_call(); calling_channel_index resets to 0.
+     */
+    void set_calling_channels(const std::vector<Channel>& channels) {
+        calling_channels = channels;
+    }
+
+    /**
+     * Queue an orderwire message to be sent in the MESSAGE phase of the next call.
+     * Calling set_pending_message with type=NONE removes any queued message.
+     */
+    void set_pending_message(const PendingMessage& msg) { pending_message = msg; }
+    void clear_pending_message()                        { pending_message = PendingMessage(); }
+
+    /**
+     * Emergency manual override per REQ-LINK-007 / A.5.5.1.
+     * Immediately aborts any ongoing ALE operation and transitions to IDLE,
+     * allowing the operator to take direct control of the radio.
+     * Fires operator_callback(OperatorEvent::EMERGENCY_ACTIVE).
+     * The "always listening" (scanning/sounding) capability can be restored
+     * by the operator via start_scan() / send_sounding() afterwards.
+     */
+    void emergency_manual_control();
+
     void process_received_word(const ALEWord& word);
     void update_link_quality(const LinkQuality& lq);
     const Channel* select_best_channel() const;
@@ -170,6 +225,8 @@ public:
     uint32_t     get_call_cycles_in_phase() const { return call_cycles_in_phase; }
     CallingPhase get_calling_phase()        const { return calling_phase; }
     uint32_t     get_words_pending()        const { return words_pending; }
+    bool         is_emergency_active()      const { return emergency_active; }
+    const std::string& get_joe_address()   const { return joe_address; }
 
     // ── Callbacks ────────────────────────────────────────────────────────
 
@@ -192,10 +249,17 @@ public:
      * Called when the RX window opens or closes during CALLING.
      * true  = RX window open  (LISTENING phase — modem should receive)
      * false = RX window closed (TX phase — modem transmits)
-     * Stub until RX stack is integrated.
      */
     void set_rx_enabled_callback(std::function<void(bool)> callback) {
         rx_enabled_callback = callback;
+    }
+
+    /**
+     * Called for operator-level events (REQ-LINK-007, REQ-LINK-008).
+     * See OperatorEvent for event types.
+     */
+    void set_operator_callback(std::function<void(OperatorEvent)> callback) {
+        operator_callback = callback;
     }
 
 private:
@@ -217,12 +281,34 @@ private:
     // ── Calling sub-state (MIL-STD A.5.5.3.1) ────────────────────────────
     CallingPhase calling_phase;          ///< Current phase within CALLING
     bool         active_call_is_net;     ///< true = net call (TWAS), false = individual (TO)
-    uint32_t     first_call_tx_ms;       ///< Global Trw-grid anchor (DD-006): set once on CALLING entry, never modified
+    uint32_t     first_call_tx_ms;       ///< Trw-grid anchor (DD-006): set after LBT+Tune, never modified
     uint32_t     call_cycle_count;       ///< Total Trw-slots completed (incremented in on_word_complete() only)
     uint32_t     call_cycles_in_phase;   ///< Trw-slots completed within current inner phase (reset on transition)
     uint32_t     words_pending;          ///< Words enqueued but not yet acked by on_word_complete()
     uint32_t     listening_start_ms;     ///< Timestamp when LISTENING phase began (for Twr timeout)
-    uint32_t     target_scan_channels;   ///< Assumed scan channels of target (for Tsc)
+
+    // ── LBT and tuning (AC-LINK-017-1/2) ─────────────────────────────────
+    uint32_t     lbt_start_ms;           ///< When LBT phase started (for Twt timeout)
+    uint32_t     tune_start_ms;          ///< When TUNING phase started (for Tt timeout)
+
+    // ── Multi-channel calling (AC-LINK-017-8) ────────────────────────────
+    uint32_t             calling_channel_index;  ///< Current channel index within calling_channels
+    std::vector<Channel> calling_channels;        ///< Ordered list of channels to try (may be empty)
+
+    // ── Response tracking: LISTENING → SENDING_ACK ───────────────────────
+    bool         response_to_detected;   ///< true once "TO SAM" received from JOE
+    uint32_t     response_rx_start_ms;   ///< When "TO SAM" was first seen (for AC-LINK-019-8)
+    uint32_t     tlww_start_ms;          ///< When "TIS JOE" (conclusion) was received; 0 = not yet
+    std::string  joe_address;            ///< Identity of responding station (from TIS word)
+
+    // ── Emergency control (REQ-LINK-007) ─────────────────────────────────
+    bool emergency_active;
+
+    // ── Pending orderwire message (MESSAGE phase, stub) ───────────────────
+    PendingMessage pending_message;
+
+    // ── Target scan channels ──────────────────────────────────────────────
+    uint32_t target_scan_channels;       ///< Assumed scan channels of target (for Tsc)
 
     // ── Timing ────────────────────────────────────────────────────────────
     uint32_t state_entry_time_ms;
@@ -237,6 +323,7 @@ private:
     std::function<void(const ALEWord&)>     transmit_callback;
     std::function<void(const Channel&)>     channel_callback;
     std::function<void(bool)>               rx_enabled_callback;
+    std::function<void(OperatorEvent)>      operator_callback;
 
     // ── Internals ─────────────────────────────────────────────────────────
     void enter_state(ALEState new_state);
@@ -256,35 +343,36 @@ private:
     bool check_link_timeout();
     bool check_scan_dwell_timeout();
 
+    /**
+     * Called on LISTENING timeout or abort conditions AC-LINK-019-6/8/9.
+     * Hops to the next entry in calling_channels and restarts from LBT.
+     * If no more channels remain, notifies operator and transitions to IDLE.
+     */
+    void try_next_calling_channel();
+
+    /**
+     * Compute the maximum allowed duration for the entire CALLING state.
+     * Accounts for all channels: n × (Twt + Tt + Tsc + Tlc + Twr).
+     * Replaces the fixed Twa_ms safety net (AC-LINK-009-1).
+     */
+    uint32_t compute_calling_timeout_ms() const;
+
     // ── Word builders per calling phase ──────────────────────────────────
 
-    /**
-     * SCANNING_CALL: send only the first word of the called address (TO only).
-     * Per A.5.2.5.1: "The scanning call shall be composed of TO words...
-     * which contain only the first word(s) of the called station address."
-     * Per A.5.2.4.3: Stuffed words (DATA carrying '@'-padded chars) "should
-     * appear only in the leading call (Tlc)" — explicitly excluded from Tsc.
-     * One TO word per scanning slot regardless of address length.
-     * Slot width = 1 × Trw.
-     */
+    /** SCANNING_CALL: TO first word only (A.5.2.5.1). */
     void build_scanning_word(const std::string& to_addr);
 
-    /**
-     * LEADING_CALL: send full TO address once (one complete sequence).
-     * Called twice by handle_calling() to complete Tlc = 2 × Tc.
-     * Tc = words_for_address(addr) × Trw.
-     * Per A.5.5.3.1: "entire called station address shall be used in
-     * leading call section, and shall be sent twice."
-     * Includes DATA + REP extension for addresses > 3 chars.
-     */
+    /** LEADING_CALL: full TO address once (called twice by on_word_complete tracking). */
     void build_leading_call_word(const std::string& to_addr, bool is_net);
 
-    /**
-     * CONCLUSION: send TIS with full own address.
-     * Per A.5.2.3.2.2: TIS terminates the frame and invites response.
-     * Includes DATA + REP extension for own addresses > 3 chars.
-     */
+    /** CONCLUSION: TIS with full own address (A.5.2.3.2.2). */
     void build_conclusion_words();
+
+    /**
+     * SENDING_ACK: third handshake frame per REQ-LINK-008 / A.5.5.3.3.
+     * Frame: TO [called addr] + TIS [own addr].
+     */
+    void build_ack_words();
 
     void transmit_word(const ALEWord& word);
 
@@ -294,32 +382,23 @@ private:
      * Split address into 3-char chunks with trailing '@' stuffing on last chunk.
      * Per A.5.2.4.3: empty positions stuffed with utility symbol '@' (0x40).
      * Maximum 5 chunks (15 chars).
-     *
-     * "K6KB"  → ["K6K", "B@@"]
-     * "MIAMI" → ["MIA", "MI@"]
-     * "W1AW"  → ["W1A", "W@@"]
-     * "ABC"   → ["ABC"]           (no stuffing needed, fits exactly)
      */
     static std::vector<std::string> chunk_address(const std::string& addr);
 
     /**
      * Number of ALE words needed to transmit an address once.
-     *  1.. 3 chars → 1 word  (TO/TIS only)
-     *  4.. 6 chars → 2 words (TO/TIS + DATA)
-     *  7.. 9 chars → 3 words (TO/TIS + DATA + REP)
-     * 10..12 chars → 4 words (TO/TIS + DATA + REP + DATA)
-     * 13..15 chars → 5 words (TO/TIS + DATA + REP + DATA + REP)
+     *  1.. 3 chars → 1 word
+     *  4.. 6 chars → 2 words
+     *  7.. 9 chars → 3 words
+     * 10..12 chars → 4 words
+     * 13..15 chars → 5 words
      */
     static uint32_t words_for_address(const std::string& addr);
 
     /**
      * Transmit all words for one complete address sequence.
      * first_type : WordType::TO, TWAS, or TIS for the first word.
-     * Subsequent words alternate DATA / REP per A.5.2.3.2.1 / A.5.2.3.2.2.
-     *
-     * REP note: per spec, REP must not follow TIS/TWAS directly — the sequence
-     * is always TO/TIS first, then DATA, then REP, alternating. The first
-     * extension word is always DATA regardless of first_type.
+     * Subsequent words alternate DATA / REP per A.5.2.3.2.1.
      */
     void transmit_address_words(WordType first_type, const std::string& addr);
 };
