@@ -26,6 +26,11 @@ static const char* PHASE_NAMES[] = {
     "CONCLUSION", "LISTENING", "SENDING_ACK", "NET_CALL_STUB"
 };
 
+// Must match HandshakePhase enum order exactly.
+static const char* HS_PHASE_NAMES[] = {
+    "WAIT_CYCLE_END", "SENDING_RESPONSE", "WAIT_ACK"
+};
+
 // ============================================================================
 // Constructor
 // ============================================================================
@@ -48,11 +53,21 @@ ALEStateMachine::ALEStateMachine()
       response_to_detected(false),
       response_rx_start_ms(0),
       tlww_start_ms(0),
+      collecting_remote_conclusion(false),
       emergency_active(false),
       target_scan_channels(1),
       state_entry_time_ms(0),
       last_scan_hop_time_ms(0),
-      current_time_ms(0)
+      current_time_ms(0),
+      handshake_phase(HandshakePhase::WAIT_CYCLE_END),
+      twce_ms(0),
+      twce_start_ms(0),
+      hs_tlww_start_ms(0),
+      hs_conclusion_rcvd(false),
+      hs_words_in_phase(0),
+      hs_ack_start_ms(0),
+      hs_ack_tis_rcvd(false),
+      contiguous_errors(0)
 {}
 
 // ============================================================================
@@ -169,17 +184,18 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             break;
 
         case ALEState::CALLING:
-            link_start_time_ms   = current_time_ms;
-            first_call_tx_ms     = 0; // set after LBT+Tune (DD-006)
-            call_cycle_count     = 0;
-            call_cycles_in_phase = 0;
-            words_pending        = 0;
-            listening_start_ms   = 0;
-            lbt_start_ms         = current_time_ms;
-            tune_start_ms        = 0;
-            response_to_detected = false;
-            response_rx_start_ms = 0;
-            tlww_start_ms        = 0;
+            link_start_time_ms             = current_time_ms;
+            first_call_tx_ms               = 0; // set after LBT+Tune (DD-006)
+            call_cycle_count               = 0;
+            call_cycles_in_phase           = 0;
+            words_pending                  = 0;
+            listening_start_ms             = 0;
+            lbt_start_ms                   = current_time_ms;
+            tune_start_ms                  = 0;
+            response_to_detected           = false;
+            response_rx_start_ms           = 0;
+            tlww_start_ms                  = 0;
+            collecting_remote_conclusion   = false;
             joe_address.clear();
 
             // Activate first calling channel if a list was set
@@ -191,7 +207,25 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             break;
 
         case ALEState::HANDSHAKE:
-            link_start_time_ms = current_time_ms;
+            link_start_time_ms  = current_time_ms;
+            // ── Handshake sub-state init (Fix 2/3/4) ─────────────────────
+            twce_start_ms       = current_time_ms;
+            hs_tlww_start_ms    = 0;
+            hs_conclusion_rcvd  = false;
+            caller_address.clear();
+            hs_words_in_phase   = 0;
+            hs_ack_start_ms     = 0;
+            hs_ack_tis_rcvd     = false;
+            contiguous_errors   = 0;
+            words_pending       = 0;
+            handshake_phase     = HandshakePhase::WAIT_CYCLE_END;
+            // Twce = 2 × own Ts (Table A-XV); fall back to 1 channel if not configured.
+            {
+                const uint32_t C = static_cast<uint32_t>(
+                    std::max(size_t(1), scan_config.scan_list.size()));
+                twce_ms = ale::calc_twce_ms(C);
+            }
+            if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
         case ALEState::LINKED:
@@ -212,6 +246,12 @@ void ALEStateMachine::enter_state(ALEState new_state) {
 void ALEStateMachine::exit_state(ALEState old_state) {
     switch (old_state) {
         case ALEState::CALLING:
+            if (rx_enabled_callback)
+                rx_enabled_callback(false);
+            break;
+
+        case ALEState::HANDSHAKE:
+            // Ensure RX/TX state is clean regardless of which sub-phase we exit from.
             if (rx_enabled_callback)
                 rx_enabled_callback(false);
             break;
@@ -367,8 +407,9 @@ void ALEStateMachine::handle_calling() {
             } else {
                 // (c) — Tlww: let last copy of JOE's conclusion settle
                 if ((current_time_ms - tlww_start_ms) >= ALETimingConstants::Tlww_ms) {
-                    calling_phase        = CallingPhase::SENDING_ACK;
-                    call_cycles_in_phase = 0;
+                    calling_phase                = CallingPhase::SENDING_ACK;
+                    call_cycles_in_phase         = 0;
+                    collecting_remote_conclusion = false;
                     if (rx_enabled_callback)
                         rx_enabled_callback(false); // close RX before TX
                 }
@@ -393,7 +434,65 @@ void ALEStateMachine::handle_calling() {
 }
 
 void ALEStateMachine::handle_handshake() {
-    // Timeout handled in update()
+    std::cout << "[TRACE] t=" << current_time_ms
+              << " hs_phase=" << HS_PHASE_NAMES[static_cast<int>(handshake_phase)]
+              << " pending=" << words_pending
+              << " caller=" << caller_address
+              << " conclusion=" << hs_conclusion_rcvd
+              << "\n";
+
+    switch (handshake_phase) {
+
+        // ── WAIT_CYCLE_END ────────────────────────────────────────────────
+        // Listen for calling station's conclusion (TIS SAM) within Twce.
+        // Incoming words are processed by process_received_word().
+        case HandshakePhase::WAIT_CYCLE_END: {
+            // Twce timeout: calling cycle did not end → abort (A.5.5.3.2)
+            if (!hs_conclusion_rcvd &&
+                (current_time_ms - twce_start_ms) >= twce_ms) {
+                std::cout << "[TRACE] handle_handshake: Twce timeout → LINK_TIMEOUT\n";
+                process_event(ALEEvent::LINK_TIMEOUT);
+                return;
+            }
+            // Conclusion received + Tlww elapsed → send response frame (A.5.5.3.3)
+            if (hs_conclusion_rcvd && hs_tlww_start_ms > 0 &&
+                (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tlww_ms) {
+                std::cout << "[TRACE] handle_handshake: Tlww elapsed → SENDING_RESPONSE\n";
+                if (rx_enabled_callback) rx_enabled_callback(false);
+                handshake_phase   = HandshakePhase::SENDING_RESPONSE;
+                hs_words_in_phase = 0;
+                build_response_words();
+            }
+            break;
+        }
+
+        // ── SENDING_RESPONSE ──────────────────────────────────────────────
+        // Response TX in progress; on_word_complete() drives the counter and
+        // transitions to WAIT_ACK when all words have been sent.
+        case HandshakePhase::SENDING_RESPONSE:
+            break;
+
+        // ── WAIT_ACK ─────────────────────────────────────────────────────
+        // Wait Twr for calling station's ACK frame (TO JOE × 2 + TIS SAM).
+        // Incoming words are processed by process_received_word().
+        case HandshakePhase::WAIT_ACK: {
+            // Twr timeout: no ACK received → abort (A.5.5.3.4)
+            if ((current_time_ms - hs_ack_start_ms) >= ALETimingConstants::Twr_ms) {
+                std::cout << "[TRACE] handle_handshake: WAIT_ACK Twr timeout → LINK_TIMEOUT\n";
+                process_event(ALEEvent::LINK_TIMEOUT);
+                return;
+            }
+            // TIS [caller] received + Tlww elapsed → LINKED (A.5.5.3.4)
+            if (hs_ack_tis_rcvd && hs_tlww_start_ms > 0 &&
+                (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tlww_ms) {
+                std::cout << "[TRACE] handle_handshake: ACK Tlww elapsed → LINKED\n";
+                if (operator_callback)
+                    operator_callback(OperatorEvent::LINK_ESTABLISHED);
+                process_event(ALEEvent::HANDSHAKE_COMPLETE);
+            }
+            break;
+        }
+    }
 }
 
 void ALEStateMachine::handle_linked() {
@@ -477,7 +576,21 @@ void ALEStateMachine::emergency_manual_control() {
 // ============================================================================
 
 void ALEStateMachine::process_received_word(const ALEWord& word) {
-    if (!word.valid) return;
+    // ── Fix 6: 3-error tolerance in HANDSHAKE/WAIT_CYCLE_END (A.5.5.3.2) ──
+    // During the scanning call section, up to MAX_SCANNING_CALL_ERRORS contiguous
+    // FEC-uncorrectable words are tolerated without rejecting the frame.
+    if (!word.valid) {
+        if (current_state == ALEState::HANDSHAKE &&
+            handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
+            if (++contiguous_errors > ALETimingConstants::MAX_SCANNING_CALL_ERRORS) {
+                std::cout << "[TRACE] process_received_word: "
+                          << contiguous_errors << " contiguous errors → LINK_TIMEOUT\n";
+                process_event(ALEEvent::LINK_TIMEOUT);
+            }
+        }
+        return;
+    }
+    contiguous_errors = 0;   // Any valid word resets the error run.
 
     last_word_time_ms = current_time_ms;
 
@@ -487,12 +600,14 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
     lq.timestamp_ms = current_time_ms;
     update_link_quality(lq);
 
+    // Extract 3-char address field; trim trailing spaces.
     std::string addr(word.address, 3);
     auto trim = addr.find_last_not_of(' ');
     if (trim != std::string::npos) addr.erase(trim + 1);
 
     switch (current_state) {
 
+        // ── SCANNING ─────────────────────────────────────────────────────
         case ALEState::SCANNING:
             if (word.type == WordType::TO || word.type == WordType::TWAS) {
                 if (address_book.is_self(addr)) {
@@ -502,35 +617,94 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
             }
             break;
 
+        // ── CALLING / LISTENING (SAM side) ───────────────────────────────
+        // JOE's response frame per A.5.5.3.2: TO SAM [DATA]* TIS JOE [DATA]*
+        //
+        // Detection sequence:
+        //   1. TO + SAM's address → "TO SAM": JOE has begun his response.
+        //      Sets response_to_detected; starts AC-LINK-019-8 timer.
+        //   2. TIS + any address  → "TIS JOE" (first word of conclusion).
+        //      Captures JOE's identity; starts Tlww.
+        //   3. DATA/REP after TIS → extended JOE address; Tlww is reset each time
+        //      (Fix 5: multi-word conclusion).
+        //   4. TWAS              → call rejection (AC-LINK-019-10).
         case ALEState::CALLING:
-            // Only process words during the LISTENING window.
-            //
-            // JOE's response frame per A.5.5.3.2: TO SAM [DATA]* TIS JOE [DATA]*
-            //
-            // Detection sequence:
-            //   1. TO + SAM's address  → "TO SAM": JOE has begun his response.
-            //      Sets response_to_detected, starts AC-LINK-019-8 timer.
-            //   2. TIS + any address  → "TIS JOE": JOE's conclusion word.
-            //      Captures JOE's identity; starts Tlww timer.
-            //      handle_calling() transitions to SENDING_ACK after Tlww.
-            //   3. TWAS + any address → call rejection (AC-LINK-019-10).
-            //      Operator notified; LINK_TIMEOUT → IDLE.
             if (calling_phase == CallingPhase::LISTENING) {
                 if (word.type == WordType::TO && address_book.is_self(addr)) {
                     if (!response_to_detected) {
                         response_to_detected = true;
                         response_rx_start_ms = current_time_ms;
                     }
-                } else if (word.type == WordType::TIS && response_to_detected
+                } else if (word.type == WordType::TIS
+                           && response_to_detected
                            && tlww_start_ms == 0) {
-                    // JOE identifies himself — arm Tlww
-                    joe_address      = addr;
-                    active_call_from = addr;
-                    tlww_start_ms    = current_time_ms;
+                    // First conclusion word — arm Tlww, start collecting JOE's address.
+                    joe_address                  = addr;
+                    active_call_from             = addr;
+                    tlww_start_ms                = current_time_ms;
+                    collecting_remote_conclusion = true;
+                } else if (collecting_remote_conclusion
+                           && (word.type == WordType::DATA
+                               || word.type == WordType::REP)) {
+                    // Fix 5: extended address chunk after TIS — append and reset Tlww.
+                    std::string chunk(word.address, 3);
+                    auto p = chunk.find_last_not_of('@');
+                    if (p != std::string::npos) chunk.erase(p + 1);
+                    else chunk.clear();
+                    joe_address      += chunk;
+                    active_call_from  = joe_address;
+                    tlww_start_ms     = current_time_ms;   // Tlww reset: wait for next word
                 } else if (word.type == WordType::TWAS) {
-                    // Call rejected — AC-LINK-019-10: IDLE, operator notified
+                    // Call rejected — AC-LINK-019-10
                     if (operator_callback)
                         operator_callback(OperatorEvent::CALL_REJECTED);
+                    process_event(ALEEvent::LINK_TIMEOUT);
+                }
+            }
+            break;
+
+        // ── HANDSHAKE (JOE side) ─────────────────────────────────────────
+        // WAIT_CYCLE_END: read SAM's conclusion (TIS SAM [DATA]*).
+        // WAIT_ACK:       read SAM's ACK frame (TO JOE × 2 + TIS SAM [DATA]*).
+        case ALEState::HANDSHAKE:
+            if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
+                if (word.type == WordType::TIS && !hs_conclusion_rcvd) {
+                    // First word of SAM's conclusion.
+                    caller_address     = addr;
+                    active_call_from   = addr;
+                    hs_conclusion_rcvd = true;
+                    hs_tlww_start_ms   = current_time_ms;
+                } else if (hs_conclusion_rcvd
+                           && (word.type == WordType::DATA
+                               || word.type == WordType::REP)) {
+                    // Fix 5: extended caller address — append chunk, reset Tlww.
+                    std::string chunk(word.address, 3);
+                    auto p = chunk.find_last_not_of('@');
+                    if (p != std::string::npos) chunk.erase(p + 1);
+                    else chunk.clear();
+                    caller_address   += chunk;
+                    active_call_from  = caller_address;
+                    hs_tlww_start_ms  = current_time_ms;
+                } else if (word.type == WordType::TWAS) {
+                    // Calling station is busy / rejected — abort.
+                    process_event(ALEEvent::LINK_TIMEOUT);
+                }
+            } else if (handshake_phase == HandshakePhase::WAIT_ACK) {
+                // SAM's ACK frame: TO JOE × 2 + TIS SAM [DATA]*
+                if (word.type == WordType::TIS
+                    && !hs_ack_tis_rcvd
+                    && !caller_address.empty()
+                    && addr == caller_address.substr(0, 3)) {
+                    // SAM's conclusion word — arm Tlww.
+                    hs_ack_tis_rcvd  = true;
+                    hs_tlww_start_ms = current_time_ms;
+                } else if (hs_ack_tis_rcvd
+                           && (word.type == WordType::DATA
+                               || word.type == WordType::REP)) {
+                    // Fix 5: extended SAM address continuation — reset Tlww only.
+                    hs_tlww_start_ms = current_time_ms;
+                } else if (word.type == WordType::TWAS) {
+                    // SAM rejected (e.g. TWAS instead of TIS) — abort.
                     process_event(ALEEvent::LINK_TIMEOUT);
                 }
             }
@@ -740,9 +914,19 @@ void ALEStateMachine::build_conclusion_words() {
 }
 
 void ALEStateMachine::build_ack_words() {
-    // Third handshake frame per REQ-LINK-008 / A.5.5.3.3:
-    //   TO [called station address] + TIS [own address]
-    transmit_address_words(WordType::TO,  active_call_to);
+    // ACK frame per REQ-LINK-008 / A.5.5.3.4 / Figure A-31:
+    //   TO [called addr] × 2 + TIS [own addr]
+    // Leading call sent twice (Tlc = 2×Tc), same structure as single-channel call.
+    transmit_address_words(WordType::TO,  active_call_to);   // pass 1
+    transmit_address_words(WordType::TO,  active_call_to);   // pass 2
+    transmit_address_words(WordType::TIS, address_book.get_self_address());
+}
+
+void ALEStateMachine::build_response_words() {
+    // Response frame per A.5.5.3.3 / Figure A-30 — mirrors ACK (roles inverted):
+    //   TO [caller addr] × 2 + TIS [own addr]
+    transmit_address_words(WordType::TO,  caller_address);   // pass 1
+    transmit_address_words(WordType::TO,  caller_address);   // pass 2
     transmit_address_words(WordType::TIS, address_book.get_self_address());
 }
 
@@ -757,76 +941,96 @@ void ALEStateMachine::transmit_word(const ALEWord& word) {
 // ============================================================================
 
 void ALEStateMachine::on_word_complete() {
-    if (current_state != ALEState::CALLING) return;
+    // ── CALLING path (SAM side) ───────────────────────────────────────────
+    if (current_state == ALEState::CALLING) {
+        --words_pending;
+        ++call_cycle_count;
+        ++call_cycles_in_phase;
 
-    --words_pending;
-    ++call_cycle_count;
-    ++call_cycles_in_phase;
+        switch (calling_phase) {
 
-    switch (calling_phase) {
-
-        case CallingPhase::SCANNING_CALL: {
-            const uint32_t tsc_slots = target_scan_channels * 2;
-            if (call_cycles_in_phase >= tsc_slots) {
-                std::cout << "[TRACE] on_word_complete: SCANNING_CALL → LEADING_CALL"
-                          << " (tsc_slots=" << tsc_slots << ")\n";
-                calling_phase        = CallingPhase::LEADING_CALL;
-                call_cycles_in_phase = 0;
+            case CallingPhase::SCANNING_CALL: {
+                const uint32_t tsc_slots = target_scan_channels * 2u;
+                if (call_cycles_in_phase >= tsc_slots) {
+                    std::cout << "[TRACE] on_word_complete: SCANNING_CALL → LEADING_CALL"
+                              << " (tsc_slots=" << tsc_slots << ")\n";
+                    calling_phase        = CallingPhase::LEADING_CALL;
+                    call_cycles_in_phase = 0;
+                }
+                break;
             }
-            break;
-        }
 
-        case CallingPhase::LEADING_CALL: {
-            const uint32_t tlc_slots = 2 * words_for_address(active_call_to);
-            if (call_cycles_in_phase >= tlc_slots) {
-                std::cout << "[TRACE] on_word_complete: LEADING_CALL → "
-                          << (pending_message.type != PendingMessage::Type::NONE
-                              ? "MESSAGE" : "CONCLUSION")
-                          << " (tlc_slots=" << tlc_slots << ")\n";
-                calling_phase = (pending_message.type != PendingMessage::Type::NONE)
-                                ? CallingPhase::MESSAGE
-                                : CallingPhase::CONCLUSION;
-                call_cycles_in_phase = 0;
+            case CallingPhase::LEADING_CALL: {
+                const uint32_t tlc_slots = 2u * words_for_address(active_call_to);
+                if (call_cycles_in_phase >= tlc_slots) {
+                    std::cout << "[TRACE] on_word_complete: LEADING_CALL → "
+                              << (pending_message.type != PendingMessage::Type::NONE
+                                  ? "MESSAGE" : "CONCLUSION")
+                              << " (tlc_slots=" << tlc_slots << ")\n";
+                    calling_phase = (pending_message.type != PendingMessage::Type::NONE)
+                                    ? CallingPhase::MESSAGE
+                                    : CallingPhase::CONCLUSION;
+                    call_cycles_in_phase = 0;
+                }
+                break;
             }
-            break;
-        }
 
-        case CallingPhase::MESSAGE: {
-            // Stub: MESSAGE phase completes immediately (no words sent).
-            // This case is not reached in the current implementation because
-            // handle_calling() transitions MESSAGE → CONCLUSION synchronously.
-            break;
-        }
-
-        case CallingPhase::CONCLUSION: {
-            const uint32_t conclusion_slots =
-                words_for_address(address_book.get_self_address());
-            if (call_cycles_in_phase >= conclusion_slots) {
-                std::cout << "[TRACE] on_word_complete: CONCLUSION → LISTENING\n";
-                calling_phase        = CallingPhase::LISTENING;
-                listening_start_ms   = current_time_ms;
-                call_cycles_in_phase = 0;
-                if (rx_enabled_callback)
-                    rx_enabled_callback(true);
+            case CallingPhase::MESSAGE: {
+                // Stub: MESSAGE phase completes immediately (no words sent).
+                // handle_calling() transitions MESSAGE → CONCLUSION synchronously.
+                break;
             }
-            break;
-        }
 
-        case CallingPhase::SENDING_ACK: {
-            // ACK frame = words_for_address(called) + words_for_address(self)
-            const uint32_t ack_slots = words_for_address(active_call_to)
-                                     + words_for_address(address_book.get_self_address());
-            if (call_cycles_in_phase >= ack_slots) {
-                std::cout << "[TRACE] on_word_complete: SENDING_ACK → LINKED\n";
-                if (operator_callback)
-                    operator_callback(OperatorEvent::LINK_ESTABLISHED);
-                process_event(ALEEvent::HANDSHAKE_COMPLETE);
+            case CallingPhase::CONCLUSION: {
+                const uint32_t conclusion_slots =
+                    words_for_address(address_book.get_self_address());
+                if (call_cycles_in_phase >= conclusion_slots) {
+                    std::cout << "[TRACE] on_word_complete: CONCLUSION → LISTENING\n";
+                    calling_phase        = CallingPhase::LISTENING;
+                    listening_start_ms   = current_time_ms;
+                    call_cycles_in_phase = 0;
+                    if (rx_enabled_callback)
+                        rx_enabled_callback(true);
+                }
+                break;
             }
-            break;
-        }
 
-        default:
-            break;
+            case CallingPhase::SENDING_ACK: {
+                // ACK frame (Figure A-31): TO [called] × 2 + TIS [self]
+                const uint32_t ack_slots = 2u * words_for_address(active_call_to)
+                                         + words_for_address(address_book.get_self_address());
+                if (call_cycles_in_phase >= ack_slots) {
+                    std::cout << "[TRACE] on_word_complete: SENDING_ACK → LINKED\n";
+                    if (operator_callback)
+                        operator_callback(OperatorEvent::LINK_ESTABLISHED);
+                    process_event(ALEEvent::HANDSHAKE_COMPLETE);
+                }
+                break;
+            }
+
+            default:
+                break;
+        }
+        return;
+    }
+
+    // ── HANDSHAKE / SENDING_RESPONSE path (JOE side) ─────────────────────
+    if (current_state == ALEState::HANDSHAKE &&
+        handshake_phase == HandshakePhase::SENDING_RESPONSE) {
+        --words_pending;
+        ++hs_words_in_phase;
+
+        // Response frame (Figure A-30): TO [caller] × 2 + TIS [self]
+        const uint32_t resp_slots = 2u * words_for_address(caller_address)
+                                  + words_for_address(address_book.get_self_address());
+        if (hs_words_in_phase >= resp_slots) {
+            std::cout << "[TRACE] on_word_complete: SENDING_RESPONSE → WAIT_ACK\n";
+            handshake_phase  = HandshakePhase::WAIT_ACK;
+            hs_ack_start_ms  = current_time_ms;
+            hs_tlww_start_ms = 0;
+            hs_ack_tis_rcvd  = false;
+            if (rx_enabled_callback) rx_enabled_callback(true);
+        }
     }
 }
 

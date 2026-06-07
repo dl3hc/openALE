@@ -128,4 +128,18 @@ namespace ALETimingConstants {
     constexpr uint32_t Tlww_ms         = ale::TRW_MS;                                         // 392 ms (= Trw)
     constexpr uint32_t Twa_ms          = ale::Twa_ms;                                         // 30 000 ms
     constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;                                // 120 000 ms
+
+    // ── Derived protocol limits (integer, for SM comparisons) ────────────────
+    constexpr uint32_t Tx_max_ms  = 5u  * Trw_ms;   // Max conclusion length  = 5×Trw = 1960 ms
+    constexpr uint32_t Tm_max_ms  = 30u * Trw_ms;   // Max message section    = 30×Trw = 11760 ms
+
+    // ── Protocol count constants (spec-defined, non-timing) ──────────────────
+    // A.5.5.3.2: up to this many contiguous FEC-uncorrectable words tolerated
+    // during receipt of a scanning call before the frame is rejected.
+    constexpr uint32_t MAX_SCANNING_CALL_ERRORS = 3u;
+
+    // Max words in one response or ACK TX sequence:
+    //   2 × max_addr_words(5) + max_addr_words(5) = 15
+    // Used to size / assert the modem word queue.
+    constexpr uint32_t MAX_TX_SEQUENCE_WORDS = 15u;
 }

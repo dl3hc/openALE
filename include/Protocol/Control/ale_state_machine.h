@@ -81,7 +81,7 @@ enum class OperatorEvent {
  *   LISTENING         Twr/Twrt RX window for JOE's response
  *                       ├─ "TO SAM" detected → arm Tlww (AC-LINK-019-6)
  *                       └─ "TIS JOE" + Tlww → SENDING_ACK
- *   SENDING_ACK       TO JOE + TIS SAM — third handshake frame (REQ-LINK-008)
+ *   SENDING_ACK       TO JOE × 2 + TIS SAM — third handshake frame (REQ-LINK-008)
  *                       └─ complete → LINKED (HANDSHAKE_COMPLETE)
  *   NET_CALL_STUB     TODO: net call protocol per A.5.5.x
  */
@@ -93,8 +93,27 @@ enum class CallingPhase {
     MESSAGE,        ///< Optional AMD/DTM orderwire (stub, see AC-LINK-009-3)
     CONCLUSION,     ///< TIS SAM — frame terminator, invites response
     LISTENING,      ///< Twr/Twrt: RX window, waiting for called station response
-    SENDING_ACK,    ///< Third handshake frame: TO JOE + TIS SAM (REQ-LINK-008)
+    SENDING_ACK,    ///< Third handshake frame: TO JOE × 2 + TIS SAM (REQ-LINK-008)
     NET_CALL_STUB   ///< TODO: net call protocol per A.5.5.x
+};
+
+/**
+ * \enum HandshakePhase
+ * Sub-states within HANDSHAKE (called station, JOE side) per A.5.5.3.2–4.
+ *
+ *   WAIT_CYCLE_END    Twce: listen for calling station's conclusion (TIS SAM)
+ *                       ├─ TIS received → arm Tlww for last word wait
+ *                       └─ Tlww elapsed → SENDING_RESPONSE
+ *   SENDING_RESPONSE  TO caller × 2 + TIS self — response frame (Figure A-30)
+ *                       └─ all words sent → WAIT_ACK
+ *   WAIT_ACK          Twr: wait for ACK frame from calling station (Figure A-31)
+ *                       ├─ "TIS SAM" + Tlww → HANDSHAKE_COMPLETE → LINKED
+ *                       └─ "TWAS SAM" → abort → IDLE
+ */
+enum class HandshakePhase {
+    WAIT_CYCLE_END,    ///< Twce: listen for SAM's conclusion (A.5.5.3.2)
+    SENDING_RESPONSE,  ///< TO caller × 2 + TIS self — Figure A-30
+    WAIT_ACK,          ///< Twr: wait for SAM's ACK — Figure A-31
 };
 
 /**
@@ -221,12 +240,15 @@ public:
     void on_word_complete();
 
     // ── Test / inspection getters ─────────────────────────────────────────
-    uint32_t     get_call_cycle_count()     const { return call_cycle_count; }
-    uint32_t     get_call_cycles_in_phase() const { return call_cycles_in_phase; }
-    CallingPhase get_calling_phase()        const { return calling_phase; }
-    uint32_t     get_words_pending()        const { return words_pending; }
-    bool         is_emergency_active()      const { return emergency_active; }
-    const std::string& get_joe_address()   const { return joe_address; }
+    uint32_t       get_call_cycle_count()     const { return call_cycle_count; }
+    uint32_t       get_call_cycles_in_phase() const { return call_cycles_in_phase; }
+    CallingPhase   get_calling_phase()        const { return calling_phase; }
+    HandshakePhase get_handshake_phase()      const { return handshake_phase; }
+    uint32_t       get_words_pending()        const { return words_pending; }
+    bool           is_emergency_active()      const { return emergency_active; }
+    const std::string& get_joe_address()      const { return joe_address; }
+    const std::string& get_caller_address()   const { return caller_address; }
+    bool           is_hs_conclusion_rcvd()    const { return hs_conclusion_rcvd; }
 
     // ── Callbacks ────────────────────────────────────────────────────────
 
@@ -296,10 +318,23 @@ private:
     std::vector<Channel> calling_channels;        ///< Ordered list of channels to try (may be empty)
 
     // ── Response tracking: LISTENING → SENDING_ACK ───────────────────────
-    bool         response_to_detected;   ///< true once "TO SAM" received from JOE
-    uint32_t     response_rx_start_ms;   ///< When "TO SAM" was first seen (for AC-LINK-019-8)
-    uint32_t     tlww_start_ms;          ///< When "TIS JOE" (conclusion) was received; 0 = not yet
-    std::string  joe_address;            ///< Identity of responding station (from TIS word)
+    bool         response_to_detected;         ///< true once "TO SAM" received from JOE
+    uint32_t     response_rx_start_ms;         ///< When "TO SAM" was first seen (for AC-LINK-019-8)
+    uint32_t     tlww_start_ms;                ///< When "TIS JOE" conclusion was received; 0 = not yet
+    bool         collecting_remote_conclusion; ///< TIS received; still collecting DATA/REP (Fix 5)
+    std::string  joe_address;                  ///< Identity of responding station (from TIS word)
+
+    // ── Handshake sub-state (MIL-STD A.5.5.3.2–4, JOE side) ─────────────
+    HandshakePhase handshake_phase;       ///< Current sub-phase within HANDSHAKE
+    uint32_t       twce_ms;              ///< Twce = 2 × own Ts, computed on HANDSHAKE entry
+    uint32_t       twce_start_ms;        ///< Timestamp when HANDSHAKE was entered
+    uint32_t       hs_tlww_start_ms;     ///< Tlww in WAIT_CYCLE_END and WAIT_ACK; 0 = not yet
+    bool           hs_conclusion_rcvd;   ///< TIS [caller] received in WAIT_CYCLE_END
+    std::string    caller_address;       ///< Calling station identity (from TIS word)
+    uint32_t       hs_words_in_phase;    ///< TX word counter for SENDING_RESPONSE
+    uint32_t       hs_ack_start_ms;      ///< Timestamp when WAIT_ACK started
+    bool           hs_ack_tis_rcvd;      ///< TIS [caller] received in WAIT_ACK
+    uint8_t        contiguous_errors;    ///< Contiguous FEC-fail count (A.5.5.3.2, Fix 6)
 
     // ── Emergency control (REQ-LINK-007) ─────────────────────────────────
     bool emergency_active;
@@ -369,10 +404,17 @@ private:
     void build_conclusion_words();
 
     /**
-     * SENDING_ACK: third handshake frame per REQ-LINK-008 / A.5.5.3.3.
-     * Frame: TO [called addr] + TIS [own addr].
+     * SENDING_ACK: third handshake frame per REQ-LINK-008 / A.5.5.3.4.
+     * Frame: TO [called addr] × 2 + TIS [own addr]  (Figure A-31).
      */
     void build_ack_words();
+
+    /**
+     * SENDING_RESPONSE: JOE's response frame per A.5.5.3.3 / Figure A-30.
+     * Frame: TO [caller addr] × 2 + TIS [own addr].
+     * Reuses the same TX path as build_ack_words (inversion of roles).
+     */
+    void build_response_words();
 
     void transmit_word(const ALEWord& word);
 

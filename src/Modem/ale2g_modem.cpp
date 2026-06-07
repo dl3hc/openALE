@@ -19,10 +19,14 @@ ALE2GModem::ALE2GModem()
 void ALE2GModem::enqueue_word(const ALEWord& word) {
     if (copies_remaining_ > 0) {
         // Modem busy — queue for later (normal for multi-word address sequences).
-        // Max queue depth: 5 words/addr × 2 sequences (leading call) = 10 words.
-        assert(word_queue_.size() < 10 &&
-               "ALE2GModem queue overflow — SM enqueued more words than one "
-               "full leading-call sequence (max 10); likely a loop or double-transmit bug");
+        // Max queue depth for one TX sequence (response or ACK):
+        //   2 × wpa(5 words max) + wpa(5 words max) = 15 words total
+        //   → 14 in queue + 1 in pending_word_ = 15.
+        // See ALETimingConstants::MAX_TX_SEQUENCE_WORDS.
+        assert(word_queue_.size() < ALETimingConstants::MAX_TX_SEQUENCE_WORDS &&
+               "ALE2GModem queue overflow — SM enqueued more words than one full "
+               "TX sequence (max 15 = 2x5 addr + 5 conclusion); "
+               "likely a loop or double-transmit bug");
         word_queue_.push(word);
         return;
     }
