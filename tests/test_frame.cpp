@@ -296,8 +296,10 @@ bool test_ac_001_3_phase_sequence_via_callback_only()
               << (seq_ok ? "PASS" : "FAIL")
               << " (got " << phase_log.size() << ")\n";
 
+    // Must match CallingPhase enum order exactly (LBT=0 … NET_CALL_STUB=8).
     static const char* PNAMES[] = {
-        "SCANNING_CALL", "LEADING_CALL", "CONCLUSION", "LISTENING", "NET_CALL_STUB"
+        "LBT", "TUNING", "SCANNING_CALL", "LEADING_CALL", "MESSAGE",
+        "CONCLUSION", "LISTENING", "SENDING_ACK", "NET_CALL_STUB"
     };
 
     bool all_phases_ok = seq_ok;

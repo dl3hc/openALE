@@ -56,6 +56,7 @@ target_include_directories(ale_fec PUBLIC
 # Protocol / Word layer
 add_library(ale_protocol
     src/Word/ale_word.cpp
+    src/Word/address_encoder.cpp
     src/Protocol/Message/ale_message.cpp
 )
 
@@ -204,6 +205,11 @@ add_executable(test_lqa_analyzer tests/test_lqa_analyzer.cpp)
 target_link_libraries(test_lqa_analyzer ale_lqa ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_analyzer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME LQAAnalyzer COMMAND test_lqa_analyzer)
+
+add_executable(test_address_encoder tests/test_address_encoder.cpp)
+target_link_libraries(test_address_encoder ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_address_encoder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AddressEncoder COMMAND test_address_encoder)
 
 add_executable(test_ale_calling tests/test_ale_calling.cpp)
 target_link_libraries(test_ale_calling ale_link ale_protocol ale_fsk_core ale_fec)

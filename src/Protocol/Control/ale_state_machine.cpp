@@ -4,6 +4,7 @@
  */
 
 #include "Protocol/Control/ale_state_machine.h"
+#include "Word/address_encoder.h"
 #include <algorithm>
 #include <cstring>
 #include <iostream>
@@ -187,13 +188,13 @@ void ALEStateMachine::enter_state(ALEState new_state) {
 
         case ALEState::CALLING:
             link_start_time_ms             = current_time_ms;
-            first_call_tx_ms               = 0; // set after LBT+Tune (DD-006)
+            // DD-013/DD-006: slot-grid anchor set at state entry; first word fires
+            // when current_time_ms >= first_call_tx_ms + call_cycle_count × Trw_ms.
+            first_call_tx_ms               = current_time_ms;
             call_cycle_count               = 0;
             call_cycles_in_phase           = 0;
             words_pending                  = 0;
             listening_start_ms             = 0;
-            lbt_start_ms                   = current_time_ms;
-            tune_start_ms                  = 0;
             response_to_detected           = false;
             response_rx_start_ms           = 0;
             tlww_start_ms                  = 0;
@@ -204,8 +205,16 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             if (!calling_channels.empty() && channel_callback)
                 channel_callback(calling_channels[calling_channel_index]);
 
-            calling_phase = active_call_is_net ? CallingPhase::NET_CALL_STUB
-                                               : CallingPhase::LBT;
+            // Enter TX phase directly (DD-013: phase transitions only via on_word_complete).
+            // target_scan_channels == 0: target on fixed channel → LEADING_CALL directly.
+            // target_scan_channels  > 0: scan target first → SCANNING_CALL.
+            if (active_call_is_net) {
+                calling_phase = CallingPhase::NET_CALL_STUB;
+            } else if (target_scan_channels > 0) {
+                calling_phase = CallingPhase::SCANNING_CALL;
+            } else {
+                calling_phase = CallingPhase::LEADING_CALL;
+            }
             break;
 
         case ALEState::HANDSHAKE:
@@ -239,7 +248,8 @@ void ALEStateMachine::enter_state(ALEState new_state) {
 
         case ALEState::SOUNDING:
             if (!address_book.get_self_address().empty())
-                transmit_address_words(WordType::TIS, address_book.get_self_address());
+                transmit_words(AddressEncoder::encode(address_book.get_self_address(),
+                                                      WordType::TIS));
             break;
 
         default:
@@ -315,31 +325,6 @@ void ALEStateMachine::handle_calling() {
 
     switch (calling_phase) {
 
-        // ── LBT ───────────────────────────────────────────────────────────
-        // Listen-Before-Transmit: wait Twt_ms before first word — AC-LINK-017-1.
-        // No TX during this phase; RX is implicitly open (modem receives normally).
-        case CallingPhase::LBT: {
-            if ((current_time_ms - lbt_start_ms) >= ALETimingConstants::Twt_ms) {
-                calling_phase = CallingPhase::TUNING;
-                tune_start_ms = current_time_ms;
-            }
-            break;
-        }
-
-        // ── TUNING ────────────────────────────────────────────────────────
-        // Hardware channel tune delay Tt — AC-LINK-017-2.
-        // first_call_tx_ms (DD-006 grid anchor) is set here, after LBT+Tune.
-        case CallingPhase::TUNING: {
-            if ((current_time_ms - tune_start_ms) >= ALETimingConstants::Tt_ms) {
-                first_call_tx_ms     = current_time_ms;
-                call_cycles_in_phase = 0;
-                calling_phase = (target_scan_channels > 0)
-                                ? CallingPhase::SCANNING_CALL
-                                : CallingPhase::LEADING_CALL;
-            }
-            break;
-        }
-
         // ── SCANNING_CALL ─────────────────────────────────────────────────
         // One TO word per slot (first address chunk only), no DATA/REP.
         // Phase transitions in on_word_complete().
@@ -348,7 +333,7 @@ void ALEStateMachine::handle_calling() {
             const uint32_t next_tx = first_call_tx_ms
                                    + call_cycle_count * ALETimingConstants::Trw_ms;
             if (current_time_ms >= next_tx)
-                build_scanning_word(active_call_to);
+                build_scanning_word();
             break;
         }
 
@@ -359,7 +344,7 @@ void ALEStateMachine::handle_calling() {
             const uint32_t next_tx = first_call_tx_ms
                                    + call_cycle_count * ALETimingConstants::Trw_ms;
             if (current_time_ms >= next_tx)
-                build_leading_call_word(active_call_to, active_call_is_net);
+                build_leading_call_word();
             break;
         }
 
@@ -562,6 +547,17 @@ bool ALEStateMachine::initiate_call(const std::string& to_address) {
     active_call_is_net    = false;
     calling_channel_index = 0;
 
+    // Pre-compute all TX word sequences for this call.
+    // After this point the state machine never re-processes the address string
+    // for transmission; it only iterates the vectors below.
+    //
+    // scanning_word_   — first 3 chars only (A.5.2.5.1); sent once per Trw slot
+    // leading_words_   — full address (A.5.5.3.1); sent twice (Tlc = 2 × Tc)
+    // conclusion_words_ — own address with TIS (A.5.2.3.2.2); sent once
+    scanning_word_    = AddressEncoder::encode_first(to_address, WordType::TO);
+    leading_words_    = AddressEncoder::encode(to_address, WordType::TO);
+    conclusion_words_ = AddressEncoder::encode(address_book.get_self_address(), WordType::TIS);
+
     return process_event(ALEEvent::CALL_REQUEST);
 }
 
@@ -573,6 +569,12 @@ bool ALEStateMachine::initiate_net_call(const std::string& net_address) {
     active_call_from      = address_book.get_self_address();
     active_call_is_net    = true;
     calling_channel_index = 0;
+
+    // Pre-compute TX sequences (same encoding as individual call; net call
+    // protocol is currently stubbed as NET_CALL_STUB).
+    scanning_word_    = AddressEncoder::encode_first(net_address, WordType::TO);
+    leading_words_    = AddressEncoder::encode(net_address, WordType::TO);
+    conclusion_words_ = AddressEncoder::encode(address_book.get_self_address(), WordType::TIS);
 
     return process_event(ALEEvent::CALL_REQUEST);
 }
@@ -814,7 +816,9 @@ bool ALEStateMachine::check_link_timeout() {
 uint32_t ALEStateMachine::compute_calling_timeout_ms() const {
     // Tsc = C × 2 × Trw;  Tlc = 2 × wpa × Trw
     const uint32_t tsc = target_scan_channels * 2u * ALETimingConstants::Trw_ms;
-    const uint32_t tlc = 2u * words_for_address(active_call_to)
+    // leading_words_ was pre-computed in initiate_call(); its size equals the
+    // number of words needed to transmit active_call_to once (1–5 words).
+    const uint32_t tlc = 2u * static_cast<uint32_t>(leading_words_.size())
                             * ALETimingConstants::Trw_ms;
     // Per-channel budget: LBT + Tune + Tsc + Tlc + Twr/Twrt
     const uint32_t twr = (calling_channels.size() > 1)
@@ -869,112 +873,81 @@ void ALEStateMachine::try_next_calling_channel() {
 }
 
 // ============================================================================
-// Multi-word address helpers
-// ============================================================================
-
-// static
-std::vector<std::string> ALEStateMachine::chunk_address(const std::string& addr) {
-    std::vector<std::string> chunks;
-    const size_t len = std::min(addr.size(), size_t(15));
-
-    for (size_t i = 0; i < len; i += 3) {
-        std::string chunk = addr.substr(i, std::min(size_t(3), len - i));
-        while (chunk.size() < 3)
-            chunk += '@';
-        chunks.push_back(chunk);
-    }
-
-    if (chunks.empty())
-        chunks.push_back("@@@");
-
-    return chunks;
-}
-
-// static
-uint32_t ALEStateMachine::words_for_address(const std::string& addr) {
-    const size_t len = std::min(addr.size(), size_t(15));
-    return static_cast<uint32_t>(std::max(size_t(1), (len + 2) / 3));
-}
-
-void ALEStateMachine::transmit_address_words(WordType first_type,
-                                             const std::string& addr) {
-    const auto chunks = chunk_address(addr);
-
-    static constexpr WordType extension_types[] = {
-        WordType::DATA, WordType::REP,
-        WordType::DATA, WordType::REP
-    };
-    static_assert(extension_types[0] != extension_types[1] &&
-                  extension_types[1] != extension_types[2] &&
-                  extension_types[2] != extension_types[3],
-                  "Extension word preambles must alternate (AC-WORD-010-2/3)");
-
-    for (size_t i = 0; i < chunks.size(); ++i) {
-        ALEWord word = ALEWord();
-        word.type        = (i == 0) ? first_type : extension_types[i - 1];
-        word.address[0]  = chunks[i][0];
-        word.address[1]  = chunks[i][1];
-        word.address[2]  = chunks[i][2];
-        word.address[3]  = '\0';
-        word.valid        = true;
-        word.timestamp_ms = current_time_ms;
-        transmit_word(word);
-    }
-}
-
-// ============================================================================
 // Word builders — one per calling phase
 // ============================================================================
+//
+// All build_* functions route through transmit_word() / transmit_words().
+// transmit_word() is the single exit point: it stamps the current timestamp
+// and fires transmit_callback.  No other code sets timestamp_ms on TX words.
+//
+// For the calling path (scanning / leading / conclusion) the words are
+// pre-computed in initiate_call() via AddressEncoder and stored in
+// scanning_word_ / leading_words_ / conclusion_words_.
+//
+// For the receive path (ACK, response) the remote address is not known at
+// initiate_call() time, so AddressEncoder::encode() is called at send time.
 
-void ALEStateMachine::build_scanning_word(const std::string& to_addr) {
-    // Per A.5.2.5.1: scanning call contains only the first word of the address.
-    // Per A.5.2.4.3: stuffed DATA words appear only in the leading call.
-    // → One TO word per scanning slot, no DATA/REP, regardless of address length.
-    ALEWord word = ALEWord();
-    word.type        = WordType::TO;
-    const auto chunks = chunk_address(to_addr);
-    word.address[0]  = chunks[0][0];
-    word.address[1]  = chunks[0][1];
-    word.address[2]  = chunks[0][2];
-    word.address[3]  = '\0';
-    word.valid        = true;
-    word.timestamp_ms = current_time_ms;
-    transmit_word(word);
+void ALEStateMachine::build_scanning_word() {
+    // Transmit scanning_word_ once for the current Trw slot.
+    // scanning_word_ holds only the first 3 chars of the destination address
+    // (A.5.2.5.1).  DATA/REP extension words are forbidden in the scanning
+    // section; the full address is sent only in the leading call.
+    // on_word_complete() counts slots and transitions to LEADING_CALL after
+    // C × 2 slots.
+    transmit_word(scanning_word_);
 }
 
-void ALEStateMachine::build_leading_call_word(const std::string& to_addr,
-                                              bool /*is_net*/) {
-    // Per A.5.5.3.1: full called station address in leading call.
-    // Net calls use the same TO preamble as individual calls (A.5.2.5.1).
-    transmit_address_words(WordType::TO, to_addr);
+void ALEStateMachine::build_leading_call_word() {
+    // Transmit the full leading_words_ sequence once.
+    // This function is called twice by the on_word_complete() slot counter
+    // (Tlc = 2 × Tc per A.5.5.3.1).  leading_words_ contains 1–5 words
+    // depending on the address length: TO + DATA/REP alternation.
+    transmit_words(leading_words_);
 }
 
 void ALEStateMachine::build_conclusion_words() {
-    // Per A.5.2.3.2.2: TIS with full own address terminates the frame.
-    transmit_address_words(WordType::TIS, address_book.get_self_address());
+    // Transmit conclusion_words_ once.
+    // conclusion_words_ encodes the own address with TIS preamble
+    // (A.5.2.3.2.2), same DATA/REP scheme as leading_words_.
+    transmit_words(conclusion_words_);
 }
 
 void ALEStateMachine::build_ack_words() {
     // ACK frame per REQ-LINK-008 / A.5.5.3.4 / Figure A-31:
-    //   TO [called addr] × 2 + TIS [own addr]
-    // Leading call sent twice (Tlc = 2×Tc), same structure as single-channel call.
-    transmit_address_words(WordType::TO,  active_call_to);   // pass 1
-    transmit_address_words(WordType::TO,  active_call_to);   // pass 2
-    transmit_address_words(WordType::TIS, address_book.get_self_address());
+    //   TO [joe_address] × 2 + TIS [own addr]
+    // joe_address is set during the LISTENING phase (process_received_word),
+    // so it is encoded here at send time, not pre-computed.
+    const auto joe_words = AddressEncoder::encode(joe_address, WordType::TO);
+    transmit_words(joe_words);   // pass 1
+    transmit_words(joe_words);   // pass 2
+    transmit_words(AddressEncoder::encode(address_book.get_self_address(), WordType::TIS));
 }
 
 void ALEStateMachine::build_response_words() {
     // Response frame per A.5.5.3.3 / Figure A-30 — mirrors ACK (roles inverted):
-    //   TO [caller addr] × 2 + TIS [own addr]
-    transmit_address_words(WordType::TO,  caller_address);   // pass 1
-    transmit_address_words(WordType::TO,  caller_address);   // pass 2
-    transmit_address_words(WordType::TIS, address_book.get_self_address());
+    //   TO [caller_address] × 2 + TIS [own addr]
+    // caller_address is set during WAIT_CYCLE_END (process_received_word),
+    // so it is encoded here at send time, not pre-computed.
+    const auto caller_words = AddressEncoder::encode(caller_address, WordType::TO);
+    transmit_words(caller_words);   // pass 1
+    transmit_words(caller_words);   // pass 2
+    transmit_words(AddressEncoder::encode(address_book.get_self_address(), WordType::TIS));
 }
 
 void ALEStateMachine::transmit_word(const ALEWord& word) {
+    // Single exit point for all transmitted words.
+    // Stamps the transmission timestamp so pre-computed words carry the
+    // correct time regardless of when they were built.
+    ALEWord w      = word;
+    w.timestamp_ms = current_time_ms;
     ++words_pending;
     if (transmit_callback)
-        transmit_callback(word);
+        transmit_callback(w);
+}
+
+void ALEStateMachine::transmit_words(const std::vector<ALEWord>& words) {
+    for (const auto& w : words)
+        transmit_word(w);
 }
 
 // ============================================================================
@@ -1002,7 +975,9 @@ void ALEStateMachine::on_word_complete() {
             }
 
             case CallingPhase::LEADING_CALL: {
-                const uint32_t tlc_slots = 2u * words_for_address(active_call_to);
+                // leading_words_ pre-computed in initiate_call(); its size equals
+                // the word count for active_call_to.  Tlc = 2 × Tc = 2 × wpa × Trw.
+                const uint32_t tlc_slots = 2u * static_cast<uint32_t>(leading_words_.size());
                 if (call_cycles_in_phase >= tlc_slots) {
                     std::cout << "[TRACE] on_word_complete: LEADING_CALL → "
                               << (pending_message.type != PendingMessage::Type::NONE
@@ -1023,8 +998,9 @@ void ALEStateMachine::on_word_complete() {
             }
 
             case CallingPhase::CONCLUSION: {
+                // conclusion_words_ pre-computed in initiate_call().
                 const uint32_t conclusion_slots =
-                    words_for_address(address_book.get_self_address());
+                    static_cast<uint32_t>(conclusion_words_.size());
                 if (call_cycles_in_phase >= conclusion_slots) {
                     std::cout << "[TRACE] on_word_complete: CONCLUSION → LISTENING\n";
                     calling_phase        = CallingPhase::LISTENING;
@@ -1037,9 +1013,13 @@ void ALEStateMachine::on_word_complete() {
             }
 
             case CallingPhase::SENDING_ACK: {
-                // ACK frame (Figure A-31): TO [called] × 2 + TIS [self]
-                const uint32_t ack_slots = 2u * words_for_address(active_call_to)
-                                         + words_for_address(address_book.get_self_address());
+                // ACK frame (Figure A-31): TO [joe_address] × 2 + TIS [self]
+                // joe_address is set during the LISTENING phase; encode here to
+                // get the exact word count matching build_ack_words().
+                const uint32_t ack_slots =
+                    2u * static_cast<uint32_t>(
+                             AddressEncoder::encode(joe_address, WordType::TO).size())
+                    + static_cast<uint32_t>(conclusion_words_.size());
                 if (call_cycles_in_phase >= ack_slots) {
                     std::cout << "[TRACE] on_word_complete: SENDING_ACK → LINKED\n";
                     if (operator_callback)
@@ -1061,9 +1041,15 @@ void ALEStateMachine::on_word_complete() {
         --words_pending;
         ++hs_words_in_phase;
 
-        // Response frame (Figure A-30): TO [caller] × 2 + TIS [self]
-        const uint32_t resp_slots = 2u * words_for_address(caller_address)
-                                  + words_for_address(address_book.get_self_address());
+        // Response frame (Figure A-30): TO [caller_address] × 2 + TIS [self]
+        // JOE never calls initiate_call(), so no pre-computed vectors exist;
+        // encode here to get the exact word counts matching build_response_words().
+        const uint32_t resp_slots =
+            2u * static_cast<uint32_t>(
+                     AddressEncoder::encode(caller_address, WordType::TO).size())
+            + static_cast<uint32_t>(
+                     AddressEncoder::encode(address_book.get_self_address(),
+                                            WordType::TIS).size());
         if (hs_words_in_phase >= resp_slots) {
             std::cout << "[TRACE] on_word_complete: SENDING_RESPONSE → WAIT_ACK\n";
             handshake_phase  = HandshakePhase::WAIT_ACK;

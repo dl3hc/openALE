@@ -19,6 +19,7 @@
 
 #include "Protocol/Message/ale_message.h"
 #include "Word/ale_word.h"
+#include "Word/address_encoder.h"
 #include "Stores/address_book.h"
 #include "Protocol/Control/ale_timing.h"
 #include <cstdint>
@@ -313,6 +314,29 @@ private:
     uint32_t     words_pending;          ///< Words enqueued but not yet acked by on_word_complete()
     uint32_t     listening_start_ms;     ///< Timestamp when LISTENING phase began (for Twr timeout)
 
+    // ── Pre-computed TX word sequences ───────────────────────────────────────
+    // Computed once in initiate_call() / initiate_net_call(); the raw address
+    // string is not re-processed after that point.
+    //
+    // SCANNING_CALL phase (A.5.2.5.1):
+    //   scanning_word_ is transmitted once per Trw slot for C × 2 slots total
+    //   (Tsc = target_scan_channels × 2 × Trw).  The word always carries only
+    //   the first 3 chars of the address with preamble TO — regardless of the
+    //   full address length.  DATA / REP extension words are strictly forbidden
+    //   in the scanning section; they appear only in the leading call.
+    //
+    // LEADING_CALL phase (A.5.5.3.1):
+    //   leading_words_ is transmitted twice (Tlc = 2 × Tc).  It contains the
+    //   complete address: 1 word for ≤3-char addresses, up to 5 words for
+    //   15-char addresses (TO + DATA/REP alternation per A.5.2.3.2.1).
+    //
+    // CONCLUSION phase (A.5.2.3.2.2):
+    //   conclusion_words_ is transmitted once.  Same encoding rule as
+    //   leading_words_ but with preamble TIS instead of TO.
+    ALEWord              scanning_word_;     ///< TO first-word only — one copy per scanning slot
+    std::vector<ALEWord> leading_words_;     ///< Full TO address — sent twice in LEADING_CALL
+    std::vector<ALEWord> conclusion_words_;  ///< Full TIS address — sent once in CONCLUSION
+
     // ── LBT and tuning (AC-LINK-017-1/2) ─────────────────────────────────
     uint32_t     lbt_start_ms;           ///< When LBT phase started (for Twt timeout)
     uint32_t     tune_start_ms;          ///< When TUNING phase started (for Tt timeout)
@@ -399,56 +423,58 @@ private:
     uint32_t compute_calling_timeout_ms() const;
 
     // ── Word builders per calling phase ──────────────────────────────────
+    //
+    // Each builder transmits words from the pre-computed vectors filled by
+    // initiate_call().  None of them re-processes address strings.
+    //
+    // For ACK and response, addresses are known only during the receive path,
+    // so they are encoded on-the-fly via AddressEncoder::encode() at that point.
 
-    /** SCANNING_CALL: TO first word only (A.5.2.5.1). */
-    void build_scanning_word(const std::string& to_addr);
+    /**
+     * SCANNING_CALL: transmit scanning_word_ once for the current slot.
+     * Called once per Trw slot; on_word_complete() counts slots and transitions
+     * to LEADING_CALL after C × 2 slots (A.5.2.5.1).
+     */
+    void build_scanning_word();
 
-    /** LEADING_CALL: full TO address once (called twice by on_word_complete tracking). */
-    void build_leading_call_word(const std::string& to_addr, bool is_net);
+    /**
+     * LEADING_CALL: transmit the full leading_words_ sequence once.
+     * Called twice by the slot counter (Tlc = 2 × Tc) per A.5.5.3.1.
+     */
+    void build_leading_call_word();
 
-    /** CONCLUSION: TIS with full own address (A.5.2.3.2.2). */
+    /** CONCLUSION: transmit conclusion_words_ once (A.5.2.3.2.2). */
     void build_conclusion_words();
 
     /**
      * SENDING_ACK: third handshake frame per REQ-LINK-008 / A.5.5.3.4.
-     * Frame: TO [called addr] × 2 + TIS [own addr]  (Figure A-31).
+     * Frame: TO [joe_address] × 2 + TIS [own addr]  (Figure A-31).
+     * Encoded via AddressEncoder::encode() at send time (joe_address is set
+     * during the LISTENING phase, not at initiate_call() time).
      */
     void build_ack_words();
 
     /**
      * SENDING_RESPONSE: JOE's response frame per A.5.5.3.3 / Figure A-30.
-     * Frame: TO [caller addr] × 2 + TIS [own addr].
-     * Reuses the same TX path as build_ack_words (inversion of roles).
+     * Frame: TO [caller_address] × 2 + TIS [own addr].
+     * Encoded via AddressEncoder::encode() at send time (caller_address is set
+     * during WAIT_CYCLE_END, not at initiate_call() time).
      */
     void build_response_words();
 
+    /**
+     * Transmit one word: stamps the current timestamp and fires transmit_callback.
+     * This is the single exit point for all TX words; all build_* functions
+     * route through here.
+     */
     void transmit_word(const ALEWord& word);
 
-    // ── Multi-word address helpers ────────────────────────────────────────
-
     /**
-     * Split address into 3-char chunks with trailing '@' stuffing on last chunk.
-     * Per A.5.2.4.3: empty positions stuffed with utility symbol '@' (0x40).
-     * Maximum 5 chunks (15 chars).
+     * Transmit all words in a pre-encoded sequence.
+     * Convenience wrapper used by build_* functions to iterate vectors from
+     * AddressEncoder without repeating the loop at every call site.
      */
-    static std::vector<std::string> chunk_address(const std::string& addr);
-
-    /**
-     * Number of ALE words needed to transmit an address once.
-     *  1.. 3 chars → 1 word
-     *  4.. 6 chars → 2 words
-     *  7.. 9 chars → 3 words
-     * 10..12 chars → 4 words
-     * 13..15 chars → 5 words
-     */
-    static uint32_t words_for_address(const std::string& addr);
-
-    /**
-     * Transmit all words for one complete address sequence.
-     * first_type : WordType::TO, TWAS, or TIS for the first word.
-     * Subsequent words alternate DATA / REP per A.5.2.3.2.1.
-     */
-    void transmit_address_words(WordType first_type, const std::string& addr);
+    void transmit_words(const std::vector<ALEWord>& words);
 };
 
 } // namespace ale
