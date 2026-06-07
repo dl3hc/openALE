@@ -103,7 +103,10 @@ enum class CallingPhase {
  *
  *   WAIT_CYCLE_END    Twce: listen for calling station's conclusion (TIS SAM)
  *                       ├─ TIS received → arm Tlww for last word wait
- *                       └─ Tlww elapsed → SENDING_RESPONSE
+ *                       └─ Tlww elapsed → CHANNEL_CHECK
+ *   CHANNEL_CHECK     2×Trw LBT before transmitting response — AC-LINK-019-1, A.5.5.3.3
+ *                       ├─ any RX activity → channel busy → abort
+ *                       └─ 2×Trw clear → SENDING_RESPONSE
  *   SENDING_RESPONSE  TO caller × 2 + TIS self — response frame (Figure A-30)
  *                       └─ all words sent → WAIT_ACK
  *   WAIT_ACK          Twr: wait for ACK frame from calling station (Figure A-31)
@@ -112,6 +115,7 @@ enum class CallingPhase {
  */
 enum class HandshakePhase {
     WAIT_CYCLE_END,    ///< Twce: listen for SAM's conclusion (A.5.5.3.2)
+    CHANNEL_CHECK,     ///< 2×Trw LBT before response TX (AC-LINK-019-1, A.5.5.3.3)
     SENDING_RESPONSE,  ///< TO caller × 2 + TIS self — Figure A-30
     WAIT_ACK,          ///< Twr: wait for SAM's ACK — Figure A-31
 };
@@ -335,6 +339,8 @@ private:
     uint32_t       hs_ack_start_ms;      ///< Timestamp when WAIT_ACK started
     bool           hs_ack_tis_rcvd;      ///< TIS [caller] received in WAIT_ACK
     uint8_t        contiguous_errors;    ///< Contiguous FEC-fail count (A.5.5.3.2, Fix 6)
+    uint32_t       hs_lbt_start_ms;      ///< When CHANNEL_CHECK LBT started; 0 = not active
+    uint32_t       hs_message_start_ms;  ///< When first message word (DATA/REP before TIS) arrived; 0 = none
 
     // ── Emergency control (REQ-LINK-007) ─────────────────────────────────
     bool emergency_active;

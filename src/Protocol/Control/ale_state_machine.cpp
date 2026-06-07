@@ -28,7 +28,7 @@ static const char* PHASE_NAMES[] = {
 
 // Must match HandshakePhase enum order exactly.
 static const char* HS_PHASE_NAMES[] = {
-    "WAIT_CYCLE_END", "SENDING_RESPONSE", "WAIT_ACK"
+    "WAIT_CYCLE_END", "CHANNEL_CHECK", "SENDING_RESPONSE", "WAIT_ACK"
 };
 
 // ============================================================================
@@ -67,7 +67,9 @@ ALEStateMachine::ALEStateMachine()
       hs_words_in_phase(0),
       hs_ack_start_ms(0),
       hs_ack_tis_rcvd(false),
-      contiguous_errors(0)
+      contiguous_errors(0),
+      hs_lbt_start_ms(0),
+      hs_message_start_ms(0)
 {}
 
 // ============================================================================
@@ -218,6 +220,8 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             hs_ack_tis_rcvd     = false;
             contiguous_errors   = 0;
             words_pending       = 0;
+            hs_lbt_start_ms     = 0;
+            hs_message_start_ms = 0;
             handshake_phase     = HandshakePhase::WAIT_CYCLE_END;
             // Twce = 2 × own Ts (Table A-XV); fall back to 1 channel if not configured.
             {
@@ -447,17 +451,39 @@ void ALEStateMachine::handle_handshake() {
         // Listen for calling station's conclusion (TIS SAM) within Twce.
         // Incoming words are processed by process_received_word().
         case HandshakePhase::WAIT_CYCLE_END: {
-            // Twce timeout: calling cycle did not end → abort (A.5.5.3.2)
+            // Twce timeout: calling cycle did not end → abort (A.5.5.3.2, AC-LINK-018-5)
             if (!hs_conclusion_rcvd &&
                 (current_time_ms - twce_start_ms) >= twce_ms) {
                 std::cout << "[TRACE] handle_handshake: Twce timeout → LINK_TIMEOUT\n";
                 process_event(ALEEvent::LINK_TIMEOUT);
                 return;
             }
-            // Conclusion received + Tlww elapsed → send response frame (A.5.5.3.3)
+            // Tmmax: message section began but conclusion not yet received → abort
+            // (A.5.5.3.2, AC-LINK-018-5 second condition)
+            if (!hs_conclusion_rcvd && hs_message_start_ms > 0 &&
+                (current_time_ms - hs_message_start_ms) >= ALETimingConstants::Tm_max_ms) {
+                std::cout << "[TRACE] handle_handshake: Tmmax elapsed without conclusion → LINK_TIMEOUT\n";
+                process_event(ALEEvent::LINK_TIMEOUT);
+                return;
+            }
+            // Conclusion received + Tlww elapsed → LBT before response (A.5.5.3.3, AC-LINK-019-1)
             if (hs_conclusion_rcvd && hs_tlww_start_ms > 0 &&
                 (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tlww_ms) {
-                std::cout << "[TRACE] handle_handshake: Tlww elapsed → SENDING_RESPONSE\n";
+                std::cout << "[TRACE] handle_handshake: Tlww elapsed → CHANNEL_CHECK\n";
+                handshake_phase = HandshakePhase::CHANNEL_CHECK;
+                hs_lbt_start_ms = current_time_ms;
+                // RX stays open during LBT to detect channel activity
+            }
+            break;
+        }
+
+        // ── CHANNEL_CHECK ─────────────────────────────────────────────────
+        // Listen-Before-Transmit: 2×Trw per A.5.5.3.3 / AC-LINK-019-1.
+        // Any word received here signals channel busy → abort (AC-LINK-019-3).
+        // process_received_word() handles the busy-detection path.
+        case HandshakePhase::CHANNEL_CHECK: {
+            if ((current_time_ms - hs_lbt_start_ms) >= 2u * ALETimingConstants::Trw_ms) {
+                std::cout << "[TRACE] handle_handshake: LBT clear → SENDING_RESPONSE\n";
                 if (rx_enabled_callback) rx_enabled_callback(false);
                 handshake_phase   = HandshakePhase::SENDING_RESPONSE;
                 hs_words_in_phase = 0;
@@ -580,11 +606,16 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
     // During the scanning call section, up to MAX_SCANNING_CALL_ERRORS contiguous
     // FEC-uncorrectable words are tolerated without rejecting the frame.
     if (!word.valid) {
-        if (current_state == ALEState::HANDSHAKE &&
-            handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
-            if (++contiguous_errors > ALETimingConstants::MAX_SCANNING_CALL_ERRORS) {
-                std::cout << "[TRACE] process_received_word: "
-                          << contiguous_errors << " contiguous errors → LINK_TIMEOUT\n";
+        if (current_state == ALEState::HANDSHAKE) {
+            if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
+                if (++contiguous_errors > ALETimingConstants::MAX_SCANNING_CALL_ERRORS) {
+                    std::cout << "[TRACE] process_received_word: "
+                              << contiguous_errors << " contiguous errors → LINK_TIMEOUT\n";
+                    process_event(ALEEvent::LINK_TIMEOUT);
+                }
+            } else if (handshake_phase == HandshakePhase::CHANNEL_CHECK) {
+                // Signal on channel during LBT → busy → abort (AC-LINK-019-3)
+                std::cout << "[TRACE] process_received_word: channel busy during LBT → LINK_TIMEOUT\n";
                 process_event(ALEEvent::LINK_TIMEOUT);
             }
         }
@@ -685,10 +716,20 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                     caller_address   += chunk;
                     active_call_from  = caller_address;
                     hs_tlww_start_ms  = current_time_ms;
+                } else if (!hs_conclusion_rcvd
+                           && (word.type == WordType::DATA
+                               || word.type == WordType::REP)
+                           && hs_message_start_ms == 0) {
+                    // Message section has begun — arm Tmmax (AC-LINK-018-5)
+                    hs_message_start_ms = current_time_ms;
                 } else if (word.type == WordType::TWAS) {
                     // Calling station is busy / rejected — abort.
                     process_event(ALEEvent::LINK_TIMEOUT);
                 }
+            } else if (handshake_phase == HandshakePhase::CHANNEL_CHECK) {
+                // Any valid word during LBT → channel busy → abort (AC-LINK-019-3)
+                std::cout << "[TRACE] process_received_word: channel busy during LBT → LINK_TIMEOUT\n";
+                process_event(ALEEvent::LINK_TIMEOUT);
             } else if (handshake_phase == HandshakePhase::WAIT_ACK) {
                 // SAM's ACK frame: TO JOE × 2 + TIS SAM [DATA]*
                 if (word.type == WordType::TIS
