@@ -43,10 +43,10 @@ static bool addr_eq(const ALEWord& w, const char* expected3) {
 bool test_encode_3chars()
 {
     std::cout << "\n[AddressEncoder] encode(): 3-char address (1 word)\n";
-    auto words = AddressEncoder::encode("W1A", WordType::TO);
+    auto words = AddressEncoder::encode("W1A", PreambleType::TO);
 
     bool count = words.size() == 1;
-    bool type  = count && words[0].type == WordType::TO;
+    bool type  = count && words[0].type == PreambleType::TO;
     bool addr  = count && addr_eq(words[0], "W1A");
     bool valid = count && words[0].valid;
 
@@ -59,11 +59,11 @@ bool test_encode_4chars()
 {
     std::cout << "\n[AddressEncoder] encode(): 4-char address (2 words)\n";
     // "W1AW" → [TO:W1A, DATA:W@@]
-    auto words = AddressEncoder::encode("W1AW", WordType::TO);
+    auto words = AddressEncoder::encode("W1AW", PreambleType::TO);
 
     bool count = words.size() == 2;
-    bool t0    = count && words[0].type == WordType::TO   && addr_eq(words[0], "W1A");
-    bool t1    = count && words[1].type == WordType::DATA && addr_eq(words[1], "W@@");
+    bool t0    = count && words[0].type == PreambleType::TO   && addr_eq(words[0], "W1A");
+    bool t1    = count && words[1].type == PreambleType::DATA && addr_eq(words[1], "W@@");
 
     bool pass = count && t0 && t1;
     std::cout << "  \"W1AW\" → [TO:W1A, DATA:W@@]: " << (pass ? "PASS" : "FAIL") << "\n";
@@ -79,11 +79,11 @@ bool test_encode_6chars()
 {
     std::cout << "\n[AddressEncoder] encode(): 6-char address (2 words)\n";
     // "EDWARD" → [TO:EDW, DATA:ARD]
-    auto words = AddressEncoder::encode("EDWARD", WordType::TO);
+    auto words = AddressEncoder::encode("EDWARD", PreambleType::TO);
 
     bool count = words.size() == 2;
-    bool t0    = count && words[0].type == WordType::TO   && addr_eq(words[0], "EDW");
-    bool t1    = count && words[1].type == WordType::DATA && addr_eq(words[1], "ARD");
+    bool t0    = count && words[0].type == PreambleType::TO   && addr_eq(words[0], "EDW");
+    bool t1    = count && words[1].type == PreambleType::DATA && addr_eq(words[1], "ARD");
 
     bool pass = count && t0 && t1;
     std::cout << "  \"EDWARD\" → [TO:EDW, DATA:ARD]: " << (pass ? "PASS" : "FAIL") << "\n";
@@ -94,12 +94,12 @@ bool test_encode_7chars()
 {
     std::cout << "\n[AddressEncoder] encode(): 7-char address (3 words)\n";
     // "EDWARDS" → [TO:EDW, DATA:ARD, REP:S@@]
-    auto words = AddressEncoder::encode("EDWARDS", WordType::TO);
+    auto words = AddressEncoder::encode("EDWARDS", PreambleType::TO);
 
     bool count = words.size() == 3;
-    bool t0    = count && words[0].type == WordType::TO   && addr_eq(words[0], "EDW");
-    bool t1    = count && words[1].type == WordType::DATA && addr_eq(words[1], "ARD");
-    bool t2    = count && words[2].type == WordType::REP  && addr_eq(words[2], "S@@");
+    bool t0    = count && words[0].type == PreambleType::TO   && addr_eq(words[0], "EDW");
+    bool t1    = count && words[1].type == PreambleType::DATA && addr_eq(words[1], "ARD");
+    bool t2    = count && words[2].type == PreambleType::REP  && addr_eq(words[2], "S@@");
 
     bool pass = count && t0 && t1 && t2;
     std::cout << "  \"EDWARDS\" → [TO:EDW, DATA:ARD, REP:S@@]: " << (pass ? "PASS" : "FAIL") << "\n";
@@ -110,12 +110,12 @@ bool test_encode_9chars()
 {
     std::cout << "\n[AddressEncoder] encode(): 9-char address (3 words, no padding)\n";
     // "CALLSIGNX" → [TO:CAL, DATA:LSI, REP:GNX]
-    auto words = AddressEncoder::encode("CALLSIGNX", WordType::TO);
+    auto words = AddressEncoder::encode("CALLSIGNX", PreambleType::TO);
 
     bool count = words.size() == 3;
-    bool t0    = count && words[0].type == WordType::TO   && addr_eq(words[0], "CAL");
-    bool t1    = count && words[1].type == WordType::DATA && addr_eq(words[1], "LSI");
-    bool t2    = count && words[2].type == WordType::REP  && addr_eq(words[2], "GNX");
+    bool t0    = count && words[0].type == PreambleType::TO   && addr_eq(words[0], "CAL");
+    bool t1    = count && words[1].type == PreambleType::DATA && addr_eq(words[1], "LSI");
+    bool t2    = count && words[2].type == PreambleType::REP  && addr_eq(words[2], "GNX");
 
     bool pass = count && t0 && t1 && t2;
     std::cout << "  \"CALLSIGNX\" → [TO:CAL, DATA:LSI, REP:GNX]: " << (pass ? "PASS" : "FAIL") << "\n";
@@ -126,13 +126,13 @@ bool test_encode_12chars()
 {
     std::cout << "\n[AddressEncoder] encode(): 12-char address (4 words)\n";
     // "LONGERCALLXY" → [TO:LON, DATA:GER, REP:CAL, DATA:LXY]
-    auto words = AddressEncoder::encode("LONGERCALLXY", WordType::TO);
+    auto words = AddressEncoder::encode("LONGERCALLXY", PreambleType::TO);
 
     bool count = words.size() == 4;
-    bool t0    = count && words[0].type == WordType::TO   && addr_eq(words[0], "LON");
-    bool t1    = count && words[1].type == WordType::DATA && addr_eq(words[1], "GER");
-    bool t2    = count && words[2].type == WordType::REP  && addr_eq(words[2], "CAL");
-    bool t3    = count && words[3].type == WordType::DATA && addr_eq(words[3], "LXY");
+    bool t0    = count && words[0].type == PreambleType::TO   && addr_eq(words[0], "LON");
+    bool t1    = count && words[1].type == PreambleType::DATA && addr_eq(words[1], "GER");
+    bool t2    = count && words[2].type == PreambleType::REP  && addr_eq(words[2], "CAL");
+    bool t3    = count && words[3].type == PreambleType::DATA && addr_eq(words[3], "LXY");
 
     bool pass = count && t0 && t1 && t2 && t3;
     std::cout << "  \"LONGERCALLXY\" → 4 words [TO,DATA,REP,DATA]: "
@@ -144,14 +144,14 @@ bool test_encode_15chars()
 {
     std::cout << "\n[AddressEncoder] encode(): 15-char address (5 words, max)\n";
     // "VERYLONGCALLSIG" → [TO:VER, DATA:YLO, REP:NGC, DATA:ALL, REP:SIG]
-    auto words = AddressEncoder::encode("VERYLONGCALLSIG", WordType::TO);
+    auto words = AddressEncoder::encode("VERYLONGCALLSIG", PreambleType::TO);
 
     bool count = words.size() == 5;
-    bool t0    = count && words[0].type == WordType::TO   && addr_eq(words[0], "VER");
-    bool t1    = count && words[1].type == WordType::DATA && addr_eq(words[1], "YLO");
-    bool t2    = count && words[2].type == WordType::REP  && addr_eq(words[2], "NGC");
-    bool t3    = count && words[3].type == WordType::DATA && addr_eq(words[3], "ALL");
-    bool t4    = count && words[4].type == WordType::REP  && addr_eq(words[4], "SIG");
+    bool t0    = count && words[0].type == PreambleType::TO   && addr_eq(words[0], "VER");
+    bool t1    = count && words[1].type == PreambleType::DATA && addr_eq(words[1], "YLO");
+    bool t2    = count && words[2].type == PreambleType::REP  && addr_eq(words[2], "NGC");
+    bool t3    = count && words[3].type == PreambleType::DATA && addr_eq(words[3], "ALL");
+    bool t4    = count && words[4].type == PreambleType::REP  && addr_eq(words[4], "SIG");
 
     bool pass = count && t0 && t1 && t2 && t3 && t4;
     std::cout << "  \"VERYLONGCALLSIG\" → 5 words [TO,DATA,REP,DATA,REP]: "
@@ -163,7 +163,7 @@ bool test_encode_truncates_at_15()
 {
     std::cout << "\n[AddressEncoder] encode(): address >15 chars is truncated to 15\n";
     // 18-char address → must produce exactly 5 words (15 chars)
-    auto words = AddressEncoder::encode("ABCDEFGHIJKLMNOPQR", WordType::TO);
+    auto words = AddressEncoder::encode("ABCDEFGHIJKLMNOPQR", PreambleType::TO);
     bool pass = words.size() == 5;
     std::cout << "  18-char addr → 5 words: " << (pass ? "PASS" : "FAIL")
               << " (got " << words.size() << ")\n";
@@ -175,19 +175,19 @@ bool test_encode_anchor_type()
     std::cout << "\n[AddressEncoder] encode(): anchor type is placed in first word only\n";
     bool all_pass = true;
 
-    struct Case { WordType anchor; const char* name; };
+    struct Case { PreambleType anchor; const char* name; };
     const Case cases[] = {
-        { WordType::TO,   "TO"   },
-        { WordType::TIS,  "TIS"  },
-        { WordType::TWAS, "TWAS" },
-        { WordType::FROM, "FROM" },
+        { PreambleType::TO,   "TO"   },
+        { PreambleType::TIS,  "TIS"  },
+        { PreambleType::TWAS, "TWAS" },
+        { PreambleType::FROM, "FROM" },
     };
 
     for (const auto& c : cases) {
         // 6-char address → [anchor:XXX, DATA:YYY]
         auto words = AddressEncoder::encode("ABCDEF", c.anchor);
         bool first_ok = words.size() >= 1 && words[0].type == c.anchor;
-        bool ext_ok   = words.size() >= 2 && words[1].type == WordType::DATA;
+        bool ext_ok   = words.size() >= 2 && words[1].type == PreambleType::DATA;
         bool pass = first_ok && ext_ok;
         all_pass &= pass;
         std::cout << "  anchor=" << c.name << ": first=" << c.name
@@ -212,8 +212,8 @@ bool test_encode_first_always_one_word()
     };
 
     for (const auto& c : cases) {
-        ALEWord w = AddressEncoder::encode_first(c.addr, WordType::TO);
-        bool type_ok = w.type == WordType::TO;
+        ALEWord w = AddressEncoder::encode_first(c.addr, PreambleType::TO);
+        bool type_ok = w.type == PreambleType::TO;
         bool addr_ok = addr_eq(w, c.expected3);
         bool pass    = type_ok && addr_ok;
         all_pass &= pass;
@@ -233,8 +233,8 @@ bool test_encode_first_equals_encode_front()
 
     const char* addrs[] = { "A", "ABC", "ABCD", "ABCDEF", "ABCDEFGHI", "ABCDEFGHIJKLMNO" };
     for (const char* addr : addrs) {
-        ALEWord first    = AddressEncoder::encode_first(addr, WordType::TO);
-        ALEWord via_full = AddressEncoder::encode(addr, WordType::TO).front();
+        ALEWord first    = AddressEncoder::encode_first(addr, PreambleType::TO);
+        ALEWord via_full = AddressEncoder::encode(addr, PreambleType::TO).front();
 
         bool type_eq = first.type == via_full.type;
         bool addr_eq_r = strncmp(first.address, via_full.address, 3) == 0;
@@ -251,11 +251,11 @@ bool test_encode_group_two_single_word()
 {
     std::cout << "\n[AddressEncoder] encode_group(): two single-word addresses\n";
     // ["BOB","SAM"] → [TO:BOB, REP:SAM]
-    auto words = AddressEncoder::encode_group({"BOB","SAM"}, WordType::TO);
+    auto words = AddressEncoder::encode_group({"BOB","SAM"}, PreambleType::TO);
 
     bool count = words.size() == 2;
-    bool t0    = count && words[0].type == WordType::TO  && addr_eq(words[0], "BOB");
-    bool t1    = count && words[1].type == WordType::REP && addr_eq(words[1], "SAM");
+    bool t0    = count && words[0].type == PreambleType::TO  && addr_eq(words[0], "BOB");
+    bool t1    = count && words[1].type == PreambleType::REP && addr_eq(words[1], "SAM");
 
     bool pass = count && t0 && t1;
     std::cout << "  [\"BOB\",\"SAM\"] → [TO:BOB, REP:SAM]: " << (pass ? "PASS" : "FAIL") << "\n";
@@ -266,12 +266,12 @@ bool test_encode_group_second_addr_extended()
 {
     std::cout << "\n[AddressEncoder] encode_group(): second address is multi-word\n";
     // ["BOB","SAMUEL"] → [TO:BOB, REP:SAM, DATA:UEL]
-    auto words = AddressEncoder::encode_group({"BOB","SAMUEL"}, WordType::TO);
+    auto words = AddressEncoder::encode_group({"BOB","SAMUEL"}, PreambleType::TO);
 
     bool count = words.size() == 3;
-    bool t0    = count && words[0].type == WordType::TO   && addr_eq(words[0], "BOB");
-    bool t1    = count && words[1].type == WordType::REP  && addr_eq(words[1], "SAM");
-    bool t2    = count && words[2].type == WordType::DATA && addr_eq(words[2], "UEL");
+    bool t0    = count && words[0].type == PreambleType::TO   && addr_eq(words[0], "BOB");
+    bool t1    = count && words[1].type == PreambleType::REP  && addr_eq(words[1], "SAM");
+    bool t2    = count && words[2].type == PreambleType::DATA && addr_eq(words[2], "UEL");
 
     bool pass = count && t0 && t1 && t2;
     std::cout << "  [\"BOB\",\"SAMUEL\"] → [TO:BOB, REP:SAM, DATA:UEL]: "
@@ -284,12 +284,12 @@ bool test_encode_group_first_addr_extended()
     std::cout << "\n[AddressEncoder] encode_group(): first address is multi-word\n";
     // ["ROBERT","SAM"] → [TO:ROB, DATA:ERT, TO:SAM]
     // (REP-after-DATA would extend, so a fresh TO is needed for the 2nd address)
-    auto words = AddressEncoder::encode_group({"ROBERT","SAM"}, WordType::TO);
+    auto words = AddressEncoder::encode_group({"ROBERT","SAM"}, PreambleType::TO);
 
     bool count = words.size() == 3;
-    bool t0    = count && words[0].type == WordType::TO   && addr_eq(words[0], "ROB");
-    bool t1    = count && words[1].type == WordType::DATA && addr_eq(words[1], "ERT");
-    bool t2    = count && words[2].type == WordType::TO   && addr_eq(words[2], "SAM");
+    bool t0    = count && words[0].type == PreambleType::TO   && addr_eq(words[0], "ROB");
+    bool t1    = count && words[1].type == PreambleType::DATA && addr_eq(words[1], "ERT");
+    bool t2    = count && words[2].type == PreambleType::TO   && addr_eq(words[2], "SAM");
 
     bool pass = count && t0 && t1 && t2;
     std::cout << "  [\"ROBERT\",\"SAM\"] → [TO:ROB, DATA:ERT, TO:SAM]: "
@@ -301,12 +301,12 @@ bool test_encode_group_three_single_word()
 {
     std::cout << "\n[AddressEncoder] encode_group(): three single-word addresses\n";
     // ["BOB","SAM","TOM"] → [TO:BOB, REP:SAM, REP:TOM]
-    auto words = AddressEncoder::encode_group({"BOB","SAM","TOM"}, WordType::TO);
+    auto words = AddressEncoder::encode_group({"BOB","SAM","TOM"}, PreambleType::TO);
 
     bool count = words.size() == 3;
-    bool t0    = count && words[0].type == WordType::TO  && addr_eq(words[0], "BOB");
-    bool t1    = count && words[1].type == WordType::REP && addr_eq(words[1], "SAM");
-    bool t2    = count && words[2].type == WordType::REP && addr_eq(words[2], "TOM");
+    bool t0    = count && words[0].type == PreambleType::TO  && addr_eq(words[0], "BOB");
+    bool t1    = count && words[1].type == PreambleType::REP && addr_eq(words[1], "SAM");
+    bool t2    = count && words[2].type == PreambleType::REP && addr_eq(words[2], "TOM");
 
     bool pass = count && t0 && t1 && t2;
     std::cout << "  [\"BOB\",\"SAM\",\"TOM\"] → [TO:BOB, REP:SAM, REP:TOM]: "
@@ -317,7 +317,7 @@ bool test_encode_group_three_single_word()
 bool test_encode_group_empty()
 {
     std::cout << "\n[AddressEncoder] encode_group(): empty input → empty output\n";
-    auto words = AddressEncoder::encode_group({}, WordType::TO);
+    auto words = AddressEncoder::encode_group({}, PreambleType::TO);
     bool pass = words.empty();
     std::cout << "  {} → []: " << (pass ? "PASS" : "FAIL") << "\n";
     return pass;
@@ -327,7 +327,7 @@ bool test_encode_group_empty()
 
 bool test_roundtrip_single(const std::string& addr)
 {
-    auto words     = AddressEncoder::encode(addr, WordType::TO);
+    auto words     = AddressEncoder::encode(addr, PreambleType::TO);
     auto recovered = FrameValidator::reconstruct_to_addresses(words);
 
     bool pass = (recovered.size() == 1) && (recovered[0] == addr);
@@ -361,7 +361,7 @@ bool test_roundtrip_all_single_addresses()
 
 bool test_roundtrip_group(const std::vector<std::string>& addrs)
 {
-    auto words     = AddressEncoder::encode_group(addrs, WordType::TO);
+    auto words     = AddressEncoder::encode_group(addrs, PreambleType::TO);
     auto recovered = FrameValidator::reconstruct_to_addresses(words);
 
     bool pass = (recovered == addrs);

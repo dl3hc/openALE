@@ -31,7 +31,7 @@ void example_aqc_call() {
     ALEWord words[2];
     
     // Word 0: TO address with AQC data elements
-    words[0].type = WordType::TO;
+    words[0].type = PreambleType::TO;
     strcpy(words[0].address, "ABC");
     
     // Build payload with DE fields
@@ -48,7 +48,7 @@ void example_aqc_call() {
     words[0].valid = true;
     
     // Word 1: FROM address (calling station)
-    words[1].type = WordType::FROM;
+    words[1].type = PreambleType::FROM;
     strcpy(words[1].address, "XYZ");
     words[1].raw_payload = 0;
     words[1].timestamp_ms = 1100;

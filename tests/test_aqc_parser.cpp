@@ -85,14 +85,14 @@ void test_parse_call_probe() {
     ALEWord words[2];
     
     // Word 0: TO address
-    words[0].type = WordType::TO;
+    words[0].type = PreambleType::TO;
     strcpy(words[0].address, "ABC");
     words[0].raw_payload = 0x012345;  // Some payload
     words[0].timestamp_ms = 1000;
     words[0].valid = true;
     
     // Word 1: FROM (terminator)
-    words[1].type = WordType::FROM;
+    words[1].type = PreambleType::FROM;
     strcpy(words[1].address, "XYZ");
     words[1].raw_payload = 0;
     words[1].timestamp_ms = 1100;
@@ -119,14 +119,14 @@ void test_parse_call_handshake() {
     ALEWord words[2];
     
     // Word 0: TO (original caller)
-    words[0].type = WordType::TO;
+    words[0].type = PreambleType::TO;
     strcpy(words[0].address, "ABC");
     words[0].raw_payload = 0;
     words[0].timestamp_ms = 2000;
     words[0].valid = true;
     
     // Word 1: FROM (responding station) with AQC DE
-    words[1].type = WordType::FROM;
+    words[1].type = PreambleType::FROM;
     strcpy(words[1].address, "XYZ");
     
     // Build payload with DE fields
@@ -161,7 +161,7 @@ void test_parse_inlink() {
     ALEWord words[2];
     
     // Word 0: TWAS (net call)
-    words[0].type = WordType::TWAS;
+    words[0].type = PreambleType::TWAS;
     strcpy(words[0].address, "NET");
     
     // Payload with DE fields
@@ -176,7 +176,7 @@ void test_parse_inlink() {
     words[0].valid = true;
     
     // Word 1: FROM (terminator)
-    words[1].type = WordType::FROM;
+    words[1].type = PreambleType::FROM;
     strcpy(words[1].address, "STA");
     words[1].raw_payload = 0;
     words[1].timestamp_ms = 3100;
@@ -205,19 +205,19 @@ void test_parse_orderwire() {
     ALEWord words[3];
     
     // Word 0: DATA "HEL"
-    words[0].type = WordType::DATA;
+    words[0].type = PreambleType::DATA;
     strcpy(words[0].address, "HEL");
     words[0].timestamp_ms = 4000;
     words[0].valid = true;
     
     // Word 1: DATA "LO "
-    words[1].type = WordType::DATA;
+    words[1].type = PreambleType::DATA;
     strcpy(words[1].address, "LO ");
     words[1].timestamp_ms = 4100;
     words[1].valid = true;
     
     // Word 2: CMD with CRC
-    words[2].type = WordType::CMD;
+    words[2].type = PreambleType::CMD;
     strcpy(words[2].address, "CRC");
     words[2].raw_payload = 0xABCD;  // Mock CRC
     words[2].timestamp_ms = 4200;

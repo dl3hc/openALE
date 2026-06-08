@@ -25,9 +25,9 @@ namespace ale {
 
 // Extension word types for chunks[1..4].  Index 0 = chunk[1], etc.
 // Alternates DATA, REP, DATA, REP per AC-WORD-010-2/3.
-static constexpr WordType EXT[4] = {
-    WordType::DATA, WordType::REP,
-    WordType::DATA, WordType::REP
+static constexpr PreambleType EXT[4] = {
+    PreambleType::DATA, PreambleType::REP,
+    PreambleType::DATA, PreambleType::REP
 };
 
 // ── Private helpers ──────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ std::vector<std::string> AddressEncoder::chunk(const std::string& addr) {
 }
 
 // static
-ALEWord AddressEncoder::make(WordType type, const std::string& chunk3) {
+ALEWord AddressEncoder::make(PreambleType type, const std::string& chunk3) {
     ALEWord w;
     w.type       = type;
     w.address[0] = chunk3[0];
@@ -67,14 +67,14 @@ ALEWord AddressEncoder::make(WordType type, const std::string& chunk3) {
 
 // static
 std::vector<ALEWord> AddressEncoder::encode(const std::string& addr,
-                                             WordType           first_word_type) {
+                                             PreambleType           first_word_type) {
     const auto chunks = chunk(addr);
 
     std::vector<ALEWord> words;
     words.reserve(chunks.size());
 
     for (size_t i = 0; i < chunks.size(); ++i) {
-        WordType t = (i == 0) ? first_word_type : EXT[i - 1];
+        PreambleType t = (i == 0) ? first_word_type : EXT[i - 1];
         words.push_back(make(t, chunks[i]));
     }
 
@@ -83,7 +83,7 @@ std::vector<ALEWord> AddressEncoder::encode(const std::string& addr,
 
 // static
 ALEWord AddressEncoder::encode_first(const std::string& addr,
-                                     WordType           first_word_type) {
+                                     PreambleType           first_word_type) {
     // Deliberately delegates to encode() to guarantee identical behaviour.
     // "Scanning uses the same rule as leading call, just the first word only."
     return encode(addr, first_word_type).front();
@@ -91,7 +91,7 @@ ALEWord AddressEncoder::encode_first(const std::string& addr,
 
 // static
 std::vector<ALEWord> AddressEncoder::encode_group(const std::vector<std::string>& addrs,
-                                                    WordType                        first_word_type) {
+                                                    PreambleType                        first_word_type) {
     if (addrs.empty())
         return {};
 
@@ -106,23 +106,23 @@ std::vector<ALEWord> AddressEncoder::encode_group(const std::vector<std::string>
     //   last_non_rep == DATA after processing address N
     //     → address N+1 must begin with a fresh anchor word (TO), because
     //       REP-after-DATA extends the current address in the decoder
-    WordType last_non_rep = WordType::UNKNOWN;
+    PreambleType last_non_rep = PreambleType::UNKNOWN;
 
     for (size_t a = 0; a < addrs.size(); ++a) {
         const auto chunks = chunk(addrs[a]);
 
         for (size_t i = 0; i < chunks.size(); ++i) {
-            WordType t;
+            PreambleType t;
 
             if (i == 0) {
                 if (a == 0) {
                     t = first_word_type;    // first address always uses anchor
-                } else if (last_non_rep == WordType::TO
+                } else if (last_non_rep == PreambleType::TO
                         || last_non_rep == first_word_type) {
                     // Previous address ended on an anchor word (single-word address
                     // or a REP that the decoder treats as anchor-equivalent).
                     // REP is the compact "new recipient" marker.
-                    t = WordType::REP;
+                    t = PreambleType::REP;
                 } else {
                     // Previous address ended on DATA → REP-after-DATA would extend,
                     // not start a new recipient.  Use a new anchor word instead.
@@ -135,7 +135,7 @@ std::vector<ALEWord> AddressEncoder::encode_group(const std::vector<std::string>
             result.push_back(make(t, chunks[i]));
 
             // REP does not update last_non_rep (mirrors the decoder's behaviour).
-            if (t != WordType::REP)
+            if (t != PreambleType::REP)
                 last_non_rep = t;
         }
     }

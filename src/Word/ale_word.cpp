@@ -11,7 +11,7 @@
  *                  is_valid_basic38_char()   — A.5.2.4.2
  *                  is_valid_expanded64_char() — A.5.7.2.1
  *
- * AC-WORD-002-2  decode_ascii() / encode_ascii() now receive the WordType and
+ * AC-WORD-002-2  decode_ascii() / encode_ascii() now receive the PreambleType and
  *                select the correct predicate automatically via uses_basic38().
  *
  * AC-WORD-002-3  set_self_address() calls is_valid_basic38_char() (addresses
@@ -82,11 +82,11 @@ bool WordParser::parse_from_bits(uint32_t word_bits,
     return ascii_valid;
 }
 
-WordType WordParser::extract_preamble(uint32_t word_bits)
+PreambleType WordParser::extract_preamble(uint32_t word_bits)
 {
     uint8_t preamble = (word_bits >> 21) & 0x07;   // bits 23-21
     // All 3-bit values 0-7 map directly to the enum
-    return static_cast<WordType>(preamble);
+    return static_cast<PreambleType>(preamble);
 }
 
 uint32_t WordParser::extract_payload(uint32_t word_bits)
@@ -95,7 +95,7 @@ uint32_t WordParser::extract_payload(uint32_t word_bits)
 }
 
 bool WordParser::decode_ascii(uint32_t payload,
-                               WordType  word_type,
+                               PreambleType  word_type,
                                char      output[4])
 {
     // 21 bits = 3 × 7-bit characters
@@ -121,7 +121,7 @@ bool WordParser::decode_ascii(uint32_t payload,
     return true;
 }
 
-uint32_t WordParser::encode_ascii(const char chars[3], WordType word_type)
+uint32_t WordParser::encode_ascii(const char chars[3], PreambleType word_type)
 {
     bool (*valid_char)(char) = uses_basic38(word_type)
                                ? is_valid_basic38_char
@@ -164,14 +164,14 @@ bool WordParser::is_valid_expanded64_char(char ch)
     return (u >= 0x20) && (u < 0x60);
 }
 
-bool WordParser::uses_basic38(WordType type)
+bool WordParser::uses_basic38(PreambleType type)
 {
     // DATA (0) and REP (7) carry orderwire content → Expanded 64
     // All other preamble types carry addresses → Basic 38
-    return (type != WordType::DATA) && (type != WordType::REP);
+    return (type != PreambleType::DATA) && (type != PreambleType::REP);
 }
 
-ALEWord WordParser::make_word(WordType type, const char chars[3])
+ALEWord WordParser::make_word(PreambleType type, const char chars[3])
 {
     uint32_t payload = encode_ascii(chars, type);
     ALEWord  w;
@@ -181,7 +181,7 @@ ALEWord WordParser::make_word(WordType type, const char chars[3])
     return w;
 }
 
-const char* WordParser::word_type_name(WordType type)
+const char* WordParser::word_type_name(PreambleType type)
 {
     uint8_t index = static_cast<uint8_t>(type);
     if (index > 7) index = 8;   // maps UNKNOWN (0xFF) to last entry
@@ -196,7 +196,7 @@ bool FrameValidator::from_count_valid(const std::vector<ALEWord>& words)
 {
     int count = 0;
     for (const auto& w : words) {
-        if (w.type == WordType::FROM) ++count;
+        if (w.type == PreambleType::FROM) ++count;
     }
     return count <= 1;
 }
@@ -204,15 +204,15 @@ bool FrameValidator::from_count_valid(const std::vector<ALEWord>& words)
 bool FrameValidator::from_precedes_cmd_only(const std::vector<ALEWord>& words)
 {
     for (size_t i = 0; i < words.size(); ++i) {
-        if (words[i].type != WordType::FROM) continue;
+        if (words[i].type != PreambleType::FROM) continue;
         // Skip optional DATA/REP address extension words
         size_t j = i + 1;
         while (j < words.size() &&
-               (words[j].type == WordType::DATA || words[j].type == WordType::REP)) {
+               (words[j].type == PreambleType::DATA || words[j].type == PreambleType::REP)) {
             ++j;
         }
         // FROM (+ optional DATA/REP) must be immediately followed by CMD
-        if (j >= words.size() || words[j].type != WordType::CMD) {
+        if (j >= words.size() || words[j].type != PreambleType::CMD) {
             return false;
         }
     }
@@ -224,14 +224,14 @@ bool FrameValidator::thru_in_scanning_section_only(const std::vector<ALEWord>& w
     bool past_scanning = false;
     for (const auto& w : words) {
         switch (w.type) {
-            case WordType::TO:
-            case WordType::TIS:
-            case WordType::TWAS:
-            case WordType::FROM:
-            case WordType::CMD:
+            case PreambleType::TO:
+            case PreambleType::TIS:
+            case PreambleType::TWAS:
+            case PreambleType::FROM:
+            case PreambleType::CMD:
                 past_scanning = true;
                 break;
-            case WordType::THRU:
+            case PreambleType::THRU:
                 if (past_scanning) return false;
                 break;
             default:
@@ -248,9 +248,9 @@ bool FrameValidator::thru_rep_alternates(const std::vector<ALEWord>& scanning_wo
     // Returning true requires expect_thru == true (all pairs complete).
     bool expect_thru = true;
     for (const auto& w : scanning_words) {
-        if (w.type != WordType::THRU && w.type != WordType::REP) continue;
-        if (expect_thru  && w.type != WordType::THRU) return false;
-        if (!expect_thru && w.type != WordType::REP)  return false;
+        if (w.type != PreambleType::THRU && w.type != PreambleType::REP) continue;
+        if (expect_thru  && w.type != PreambleType::THRU) return false;
+        if (!expect_thru && w.type != PreambleType::REP)  return false;
         expect_thru = !expect_thru;
     }
     return expect_thru; // true only after an even number of THRU/REP words
@@ -261,7 +261,7 @@ bool FrameValidator::group_call_target_count_valid(const std::vector<ALEWord>& s
     // Accumulate distinct THRU target addresses; maximum is 5 per spec.
     std::vector<std::string> seen;
     for (const auto& w : scanning_words) {
-        if (w.type != WordType::THRU) continue;
+        if (w.type != PreambleType::THRU) continue;
         std::string addr(w.address, 3);
         bool found = false;
         for (const auto& s : seen) {
@@ -286,13 +286,13 @@ bool FrameValidator::cmd_not_before_address_section(const std::vector<ALEWord>& 
     bool address_seen = false;
     for (const auto& word : words) {
         switch (word.type) {
-            case WordType::TO:
-            case WordType::FROM:
-            case WordType::TIS:
-            case WordType::TWAS:
+            case PreambleType::TO:
+            case PreambleType::FROM:
+            case PreambleType::TIS:
+            case PreambleType::TWAS:
                 address_seen = true;
                 break;
-            case WordType::CMD:
+            case PreambleType::CMD:
                 if (!address_seen) return false;
                 break;
             default:
@@ -308,16 +308,16 @@ bool FrameValidator::cmd_has_call_and_conclusion(const std::vector<ALEWord>& wor
     // conclusion.  Find the first CMD and check both sides.
     size_t cmd_idx = words.size();
     for (size_t i = 0; i < words.size(); ++i) {
-        if (words[i].type == WordType::CMD) { cmd_idx = i; break; }
+        if (words[i].type == PreambleType::CMD) { cmd_idx = i; break; }
     }
     if (cmd_idx == words.size()) return true;  // no CMD — no constraint
 
     bool has_call = false;
     for (size_t i = 0; i < cmd_idx; ++i) {
-        if (words[i].type == WordType::TO   ||
-            words[i].type == WordType::FROM  ||
-            words[i].type == WordType::TIS   ||
-            words[i].type == WordType::TWAS) {
+        if (words[i].type == PreambleType::TO   ||
+            words[i].type == PreambleType::FROM  ||
+            words[i].type == PreambleType::TIS   ||
+            words[i].type == PreambleType::TWAS) {
             has_call = true;
             break;
         }
@@ -325,7 +325,7 @@ bool FrameValidator::cmd_has_call_and_conclusion(const std::vector<ALEWord>& wor
     if (!has_call) return false;
 
     for (size_t i = cmd_idx + 1; i < words.size(); ++i) {
-        if (words[i].type == WordType::TIS || words[i].type == WordType::TWAS)
+        if (words[i].type == PreambleType::TIS || words[i].type == PreambleType::TWAS)
             return true;
     }
     return false;
@@ -336,10 +336,10 @@ bool FrameValidator::message_sections_begin_with_cmd(const std::vector<ALEWord>&
     // AC-WORD-008-1: THRU must not appear inside the message section (after CMD).
     bool in_message_section = false;
     for (const auto& word : words) {
-        if (word.type == WordType::CMD) {
+        if (word.type == PreambleType::CMD) {
             in_message_section = true;
         } else if (in_message_section &&
-                   (word.type == WordType::THRU || word.type == WordType::UNKNOWN)) {
+                   (word.type == PreambleType::THRU || word.type == PreambleType::UNKNOWN)) {
             return false;
         }
     }
@@ -353,13 +353,13 @@ bool FrameValidator::first_cmd_begins_message_section(const std::vector<ALEWord>
     // must not appear after the first CMD.
     bool past_first_cmd = false;
     for (const auto& word : words) {
-        if (word.type == WordType::CMD) {
+        if (word.type == PreambleType::CMD) {
             past_first_cmd = true;
         } else if (past_first_cmd) {
-            if (word.type == WordType::TO   ||
-                word.type == WordType::FROM  ||
-                word.type == WordType::TIS   ||
-                word.type == WordType::THRU) {
+            if (word.type == PreambleType::TO   ||
+                word.type == PreambleType::FROM  ||
+                word.type == PreambleType::TIS   ||
+                word.type == PreambleType::THRU) {
                 return false;
             }
         }
@@ -371,10 +371,10 @@ bool FrameValidator::rep_not_preceded_by_self_tis_twas(const std::vector<ALEWord
 {
     // AC-WORD-010-6: REP must not be directly preceded by REP, TIS, or TWAS.
     for (size_t i = 1; i < words.size(); ++i) {
-        if (words[i].type == WordType::REP) {
-            if (words[i-1].type == WordType::REP ||
-                words[i-1].type == WordType::TIS  ||
-                words[i-1].type == WordType::TWAS) {
+        if (words[i].type == PreambleType::REP) {
+            if (words[i-1].type == PreambleType::REP ||
+                words[i-1].type == PreambleType::TIS  ||
+                words[i-1].type == PreambleType::TWAS) {
                 return false;
             }
         }
@@ -405,7 +405,7 @@ bool FrameValidator::data_not_after_data(const std::vector<ALEWord>& words)
 {
     // AC-WORD-009-1: DATA must not extend a DATA word (only non-DATA words may be extended).
     for (size_t i = 1; i < words.size(); ++i) {
-        if (words[i].type == WordType::DATA && words[i-1].type == WordType::DATA)
+        if (words[i].type == PreambleType::DATA && words[i-1].type == PreambleType::DATA)
             return false;
     }
     return true;
@@ -427,21 +427,21 @@ std::vector<std::string> FrameValidator::reconstruct_to_addresses(const std::vec
     //   last_non_rep == DATA → REP acts as DATA → extend current address
     std::vector<std::string> addresses;
     std::string current;
-    WordType last_non_rep = WordType::UNKNOWN;
+    PreambleType last_non_rep = PreambleType::UNKNOWN;
 
     for (const auto& word : words) {
         switch (word.type) {
-            case WordType::TO:
+            case PreambleType::TO:
                 if (!current.empty()) addresses.push_back(current);
                 current = strip_padding(word.address);
-                last_non_rep = WordType::TO;
+                last_non_rep = PreambleType::TO;
                 break;
-            case WordType::DATA:
+            case PreambleType::DATA:
                 current += strip_padding(word.address);
-                last_non_rep = WordType::DATA;
+                last_non_rep = PreambleType::DATA;
                 break;
-            case WordType::REP:
-                if (last_non_rep == WordType::TO) {
+            case PreambleType::REP:
+                if (last_non_rep == PreambleType::TO) {
                     addresses.push_back(current);
                     current = strip_padding(word.address);
                     // last_non_rep stays TO: next REP would also be a new recipient

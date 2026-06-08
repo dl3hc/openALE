@@ -37,39 +37,9 @@ constexpr uint32_t MAX_GOLAY_ERRORS    = 3;
 
 /**
  * \enum PreambleType
- * Word preamble types per MIL-STD-188-141B (low-level encoding layer)
+ * Word preamble types per MIL-STD-188-141B Table A-II
  */
 enum class PreambleType : uint8_t {
-    DATA = 0,
-    THRU = 1,
-    TO   = 2,
-    TWAS = 3,
-    FROM = 4,
-    TIS  = 5,
-    CMD  = 6,
-    REP  = 7,
-    UNKNOWN = 0xFF
-};
-
-/**
- * \struct Word
- * Low-level decoded ALE word with raw bits and FEC metadata
- */
-struct Word {
-    uint32_t     raw_bits;
-    uint32_t     corrected_bits;
-    PreambleType preamble;
-    uint32_t     payload;
-    uint8_t      error_count;
-    bool         crc_valid;
-    uint32_t     word_index;
-};
-
-/**
- * \enum WordType
- * Preamble types per MIL-STD-188-141B Table A-II
- */
-enum class WordType : uint8_t {
     DATA = 0,    ///< Data word  — uses Expanded 64 character set
     THRU = 1,    ///< Through word (repeater) — uses Basic 38
     TO   = 2,    ///< To address  — uses Basic 38
@@ -86,15 +56,15 @@ enum class WordType : uint8_t {
  * Decoded ALE word with preamble and payload
  */
 struct ALEWord {
-    WordType type;           ///< Preamble type (3 bits)
-    char     address[4];     ///< 3 decoded characters + null terminator
-    uint32_t raw_payload;    ///< Raw 21-bit payload
-    uint8_t  fec_errors;     ///< Golay errors corrected
-    uint8_t  unanimous_votes;///< 2/3-voter unanimous count 0..48 (A.5.2.6.3)
-    bool     valid;          ///< Word passed FEC and character validation
-    uint32_t timestamp_ms;   ///< Reception timestamp (ms)
+    PreambleType type;       ///< Preamble type (3 bits)
+    char         address[4]; ///< 3 decoded characters + null terminator
+    uint32_t     raw_payload;    ///< Raw 21-bit payload
+    uint8_t      fec_errors;     ///< Golay errors corrected
+    uint8_t      unanimous_votes;///< 2/3-voter unanimous count 0..48 (A.5.2.6.3)
+    bool         valid;          ///< Word passed FEC and character validation
+    uint32_t     timestamp_ms;   ///< Reception timestamp (ms)
 
-    ALEWord() : type(WordType::UNKNOWN), raw_payload(0), fec_errors(0),
+    ALEWord() : type(PreambleType::UNKNOWN), raw_payload(0), fec_errors(0),
                 unanimous_votes(0), valid(false), timestamp_ms(0) {
         address[0] = address[1] = address[2] = address[3] = '\0';
     }
@@ -148,7 +118,7 @@ public:
     /**
      * Extract preamble type from 24-bit word (bits 23-21).
      */
-    static WordType extract_preamble(uint32_t word_bits);
+    static PreambleType extract_preamble(uint32_t word_bits);
 
     /**
      * Extract 21-bit payload from 24-bit word (bits 20-0).
@@ -168,7 +138,7 @@ public:
      * \return true if all three characters are valid for the given word type
      */
     static bool decode_ascii(uint32_t payload,
-                              WordType  word_type,
+                              PreambleType  word_type,
                               char      output[4]);
 
     /**
@@ -178,7 +148,7 @@ public:
      * \param word_type Preamble type (drives character-set selection)
      * \return 21-bit payload, or 0xFFFFFFFF if any character is invalid
      */
-    static uint32_t encode_ascii(const char chars[3], WordType word_type);
+    static uint32_t encode_ascii(const char chars[3], PreambleType word_type);
 
     // ------------------------------------------------------------------
     // Character-set predicates (A.5.2.4.2 and A.5.7.2.1)
@@ -203,12 +173,12 @@ public:
      * Return true if the word type uses the Basic 38 character set.
      * DATA and REP use Expanded 64; all other types use Basic 38.
      */
-    static bool uses_basic38(WordType type);
+    static bool uses_basic38(PreambleType type);
 
     /**
      * Get string name for word type.
      */
-    static const char* word_type_name(WordType type);
+    static const char* word_type_name(PreambleType type);
 
     /**
      * Convenience factory: build an ALEWord from a preamble type and
@@ -219,7 +189,7 @@ public:
      * \param chars  Exactly 3 characters; must be valid for \p type
      * \return Valid ALEWord on success; ALEWord with valid==false on invalid chars
      */
-    static ALEWord make_word(WordType type, const char chars[3]);
+    static ALEWord make_word(PreambleType type, const char chars[3]);
 
 private:
     uint32_t last_timestamp_ms; ///< Timestamp of most recently parsed word

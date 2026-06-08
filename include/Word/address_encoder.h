@@ -28,11 +28,11 @@
  *
  * \code
  * // Scanning call — ALWAYS one word, regardless of address length:
- * transmit( AddressEncoder::encode_first("W1AWJ", WordType::TO) );
+ * transmit( AddressEncoder::encode_first("W1AWJ", PreambleType::TO) );
  * //  → TO:W1A   (only first 3 chars)
  *
  * // Leading call, conclusion, ACK, response, sounding — full address:
- * for (auto& w : AddressEncoder::encode("W1AWJ", WordType::TO))
+ * for (auto& w : AddressEncoder::encode("W1AWJ", PreambleType::TO))
  *     transmit(w);
  * //  → TO:W1A, DATA:WJ@   (all chunks)
  * \endcode
@@ -91,7 +91,7 @@ public:
      *   "VERYLONGCALLSIG" →  [TO:VER, DATA:YLO, REP:NGC, DATA:ALL, REP:SIG]
      */
     static std::vector<ALEWord> encode(const std::string& addr,
-                                       WordType           first_word_type);
+                                       PreambleType           first_word_type);
 
     /**
      * Return only the first word of the address encoding.
@@ -113,7 +113,7 @@ public:
      *   "EDWARD" → TO:EDW   (first 3 chars only; "ARD" is dropped)
      */
     static ALEWord encode_first(const std::string& addr,
-                                WordType           first_word_type);
+                                PreambleType           first_word_type);
 
     /**
      * Encode multiple addresses into a single interleaved word sequence.
@@ -141,7 +141,7 @@ public:
      *   {"ROBERT","SAM"} → [TO:ROB, DATA:ERT, TO:SAM]
      */
     static std::vector<ALEWord> encode_group(const std::vector<std::string>& addrs,
-                                              WordType                        first_word_type);
+                                              PreambleType                        first_word_type);
 
 private:
     /**
@@ -156,7 +156,7 @@ private:
      * Construct one ALEWord from a preamble type and a 3-char chunk.
      * chunk3 must be exactly 3 characters (guaranteed by chunk()).
      */
-    static ALEWord make(WordType type, const std::string& chunk3);
+    static ALEWord make(PreambleType type, const std::string& chunk3);
 };
 
 } // namespace ale

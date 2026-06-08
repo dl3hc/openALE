@@ -242,7 +242,7 @@ private:
         // Simulate receiving TO word
         std::cout << "Receiving incoming call...\n";
         ALEWord to_word;
-        to_word.type = WordType::TO;
+        to_word.type = PreambleType::TO;
         strncpy(to_word.address, "W1A", 3);
         to_word.valid = true;
         to_word.timestamp_ms = 1000;

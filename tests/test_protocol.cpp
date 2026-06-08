@@ -18,7 +18,7 @@ bool test_word_parsing() {
     
     struct TestCase {
         uint32_t word_bits;
-        WordType expected_type;
+        PreambleType expected_type;
         const char* expected_addr;
         const char* description;
     };
@@ -26,18 +26,18 @@ bool test_word_parsing() {
     // Build test words: 3-bit preamble + 21-bit payload
     // Payload = 3 x 7-bit ASCII characters
     // Helper: encode word from preamble + 3 chars
-    auto make_word = [](WordType type, const char* chars) -> uint32_t {
+    auto make_word = [](PreambleType type, const char* chars) -> uint32_t {
         uint32_t payload = WordParser::encode_ascii(chars, type);
         uint32_t preamble = static_cast<uint8_t>(type) & 0x07;
         return (preamble << 21) | payload;
     };
     
     TestCase tests[] = {
-        { make_word(WordType::TO, "W1A"), WordType::TO, "W1A", "TO address" },
-        { make_word(WordType::FROM, "K6K"), WordType::FROM, "K6K", "FROM address" },
-        { make_word(WordType::TIS, "N0C"), WordType::TIS, "N0C", "TIS (sounding)" },
-        { make_word(WordType::DATA, "ABC"), WordType::DATA, "ABC", "DATA word" },
-        { make_word(WordType::TWAS, "NET"), WordType::TWAS, "NET", "Net call (TWAS)" },
+        { make_word(PreambleType::TO, "W1A"), PreambleType::TO, "W1A", "TO address" },
+        { make_word(PreambleType::FROM, "K6K"), PreambleType::FROM, "K6K", "FROM address" },
+        { make_word(PreambleType::TIS, "N0C"), PreambleType::TIS, "N0C", "TIS (sounding)" },
+        { make_word(PreambleType::DATA, "ABC"), PreambleType::DATA, "ABC", "DATA word" },
+        { make_word(PreambleType::TWAS, "NET"), PreambleType::TWAS, "NET", "Net call (TWAS)" },
     };
     
     bool all_pass = true;
@@ -96,11 +96,11 @@ bool test_ascii_codec() {
     
     bool all_pass = true;
     for (const auto& test : tests) {
-        uint32_t encoded = WordParser::encode_ascii(test.input, WordType::TO);
+        uint32_t encoded = WordParser::encode_ascii(test.input, PreambleType::TO);
         bool encode_success = (encoded != 0xFFFFFFFF);
         
         char decoded[4];
-        bool decode_success = WordParser::decode_ascii(encoded, WordType::TO, decoded);
+        bool decode_success = WordParser::decode_ascii(encoded, PreambleType::TO, decoded);
         
         bool pass = (encode_success == test.should_succeed);
         if (pass && test.should_succeed) {
@@ -194,10 +194,10 @@ bool test_word_bit_structure() {
     // AC-WORD-001-3: MSB (bit 23) transmitted first — preamble occupies bits 23-21
     {
         const char chars[3] = {'A', 'B', 'C'};
-        uint32_t payload = WordParser::encode_ascii(chars, WordType::TO);
-        uint32_t preamble_val = static_cast<uint8_t>(WordType::TO) & 0x07;
+        uint32_t payload = WordParser::encode_ascii(chars, PreambleType::TO);
+        uint32_t preamble_val = static_cast<uint8_t>(PreambleType::TO) & 0x07;
         uint32_t word = (preamble_val << 21) | payload;
-        WordType extracted = WordParser::extract_preamble(word);
+        PreambleType extracted = WordParser::extract_preamble(word);
         bool pass = (static_cast<uint8_t>(extracted) == preamble_val) &&
                     (WordParser::extract_payload(word) == payload);
         std::cout << "  AC-WORD-001-3 MSB-first (preamble at bits 23-21): "
@@ -222,9 +222,9 @@ bool test_word_bit_structure() {
     // AC-WORD-001-5: 21-bit data field holds 3 x 7-bit ASCII chars
     {
         const char in[3] = {'W', '1', 'A'};
-        uint32_t encoded = WordParser::encode_ascii(in, WordType::TO);
+        uint32_t encoded = WordParser::encode_ascii(in, PreambleType::TO);
         char decoded[4] = {};
-        bool ok = WordParser::decode_ascii(encoded, WordType::TO, decoded);
+        bool ok = WordParser::decode_ascii(encoded, PreambleType::TO, decoded);
         bool roundtrip = ok && (decoded[0] == 'W') && (decoded[1] == '1') && (decoded[2] == 'A');
         bool pass = (PAYLOAD_BITS == 21) && (PAYLOAD_BITS == 3 * 7) && roundtrip;
         std::cout << "  AC-WORD-001-5 3x7-bit ASCII payload (PAYLOAD_BITS="
@@ -249,7 +249,7 @@ bool test_preamble_types() {
         bool all_map = true;
         for (uint8_t v = 0; v <= 7; ++v) {
             uint32_t word = static_cast<uint32_t>(v) << 21;
-            WordType type = WordParser::extract_preamble(word);
+            PreambleType type = WordParser::extract_preamble(word);
             if (static_cast<uint8_t>(type) != v) {
                 all_map = false;
             }
@@ -270,15 +270,15 @@ bool test_preamble_types() {
 
     // AC-WORD-002-3: All 8 word types with correct binary values per Table A-VIII
     {
-        struct { WordType type; uint8_t val; const char* name; } types[] = {
-            { WordType::DATA, 0, "DATA" },
-            { WordType::THRU, 1, "THRU" },
-            { WordType::TO,   2, "TO"   },
-            { WordType::TWAS,  3, "TWAS" },
-            { WordType::FROM, 4, "FROM" },
-            { WordType::TIS,  5, "TIS"  },
-            { WordType::CMD,  6, "CMD"  },
-            { WordType::REP,  7, "REP"  },
+        struct { PreambleType type; uint8_t val; const char* name; } types[] = {
+            { PreambleType::DATA, 0, "DATA" },
+            { PreambleType::THRU, 1, "THRU" },
+            { PreambleType::TO,   2, "TO"   },
+            { PreambleType::TWAS,  3, "TWAS" },
+            { PreambleType::FROM, 4, "FROM" },
+            { PreambleType::TIS,  5, "TIS"  },
+            { PreambleType::CMD,  6, "CMD"  },
+            { PreambleType::REP,  7, "REP"  },
         };
         bool all_ok = true;
         for (const auto& t : types) {
@@ -296,7 +296,7 @@ bool test_preamble_types() {
     // AC-WORD-002-4: Non-standard (AQC-ALE) preamble values handled as UNKNOWN
     {
         // Standard 3-bit preamble covers 0-7; UNKNOWN sentinel is 0xFF
-        bool pass = (static_cast<uint8_t>(WordType::UNKNOWN) == 0xFF);
+        bool pass = (static_cast<uint8_t>(PreambleType::UNKNOWN) == 0xFF);
         std::cout << "  AC-WORD-002-4 AQC/non-standard preambles -> UNKNOWN (0xFF): "
                   << (pass ? "PASS" : "FAIL") << "\n";
         all_pass &= pass;
@@ -318,10 +318,10 @@ bool test_cmd_data_rep_validation() {
     // Test for AC-WORD-008-1: Every Message section begins with CMD
     {
         std::vector<ALEWord> words;
-        words.push_back(WordParser::make_word(WordType::CMD, "ABC"));  // Start message section
-        words.push_back(WordParser::make_word(WordType::DATA, "DEF"));  // Valid in message section
-        words.push_back(WordParser::make_word(WordType::TO, "GHI"));    // Valid in message section
-        words.push_back(WordParser::make_word(WordType::CMD, "JKL"));  // Start new message section
+        words.push_back(WordParser::make_word(PreambleType::CMD, "ABC"));  // Start message section
+        words.push_back(WordParser::make_word(PreambleType::DATA, "DEF"));  // Valid in message section
+        words.push_back(WordParser::make_word(PreambleType::TO, "GHI"));    // Valid in message section
+        words.push_back(WordParser::make_word(PreambleType::CMD, "JKL"));  // Start new message section
         
         bool pass = FrameValidator::message_sections_begin_with_cmd(words);
         std::cout << "  AC-WORD-008-1 Message sections begin with CMD: " 
@@ -334,35 +334,35 @@ bool test_cmd_data_rep_validation() {
     {
         // Valid: typical frame — address words precede CMD, message content follows
         std::vector<ALEWord> valid1;
-        valid1.push_back(WordParser::make_word(WordType::TO,   "XYZ"));
-        valid1.push_back(WordParser::make_word(WordType::FROM, "ABC"));
-        valid1.push_back(WordParser::make_word(WordType::CMD,  "MSG"));
-        valid1.push_back(WordParser::make_word(WordType::DATA, "HI!"));
+        valid1.push_back(WordParser::make_word(PreambleType::TO,   "XYZ"));
+        valid1.push_back(WordParser::make_word(PreambleType::FROM, "ABC"));
+        valid1.push_back(WordParser::make_word(PreambleType::CMD,  "MSG"));
+        valid1.push_back(WordParser::make_word(PreambleType::DATA, "HI!"));
         bool v1 = FrameValidator::first_cmd_begins_message_section(valid1);
         std::cout << "  AC-WORD-008-5 Valid (TO,FROM,CMD,DATA): "
                   << (v1 ? "PASS" : "FAIL") << "\n";
 
         // Valid: CMD followed by TWAS conclusion (no calling-section words after CMD)
         std::vector<ALEWord> valid2;
-        valid2.push_back(WordParser::make_word(WordType::TO,   "XYZ"));
-        valid2.push_back(WordParser::make_word(WordType::CMD,  "MSG"));
-        valid2.push_back(WordParser::make_word(WordType::TWAS, "ABC"));
+        valid2.push_back(WordParser::make_word(PreambleType::TO,   "XYZ"));
+        valid2.push_back(WordParser::make_word(PreambleType::CMD,  "MSG"));
+        valid2.push_back(WordParser::make_word(PreambleType::TWAS, "ABC"));
         bool v2 = FrameValidator::first_cmd_begins_message_section(valid2);
         std::cout << "  AC-WORD-008-5 Valid (TO,CMD,TWAS): "
                   << (v2 ? "PASS" : "FAIL") << "\n";
 
         // Invalid: TO appears after CMD — calling section bled into message section
         std::vector<ALEWord> invalid1;
-        invalid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
-        invalid1.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
+        invalid1.push_back(WordParser::make_word(PreambleType::CMD, "MSG"));
+        invalid1.push_back(WordParser::make_word(PreambleType::TO,  "XYZ"));
         bool i1 = !FrameValidator::first_cmd_begins_message_section(invalid1);
         std::cout << "  AC-WORD-008-5 Invalid (CMD,TO): "
                   << (i1 ? "PASS" : "FAIL") << "\n";
 
         // Invalid: TIS appears after CMD
         std::vector<ALEWord> invalid2;
-        invalid2.push_back(WordParser::make_word(WordType::CMD, "MSG"));
-        invalid2.push_back(WordParser::make_word(WordType::TIS, "ABC"));
+        invalid2.push_back(WordParser::make_word(PreambleType::CMD, "MSG"));
+        invalid2.push_back(WordParser::make_word(PreambleType::TIS, "ABC"));
         bool i2 = !FrameValidator::first_cmd_begins_message_section(invalid2);
         std::cout << "  AC-WORD-008-5 Invalid (CMD,TIS): "
                   << (i2 ? "PASS" : "FAIL") << "\n";
@@ -374,9 +374,9 @@ bool test_cmd_data_rep_validation() {
     {
         // Valid sequence: DATA, REP, DATA
         std::vector<ALEWord> valid_words;
-        valid_words.push_back(WordParser::make_word(WordType::DATA, "ABC"));
-        valid_words.push_back(WordParser::make_word(WordType::REP, "DEF"));
-        valid_words.push_back(WordParser::make_word(WordType::DATA, "GHI"));
+        valid_words.push_back(WordParser::make_word(PreambleType::DATA, "ABC"));
+        valid_words.push_back(WordParser::make_word(PreambleType::REP, "DEF"));
+        valid_words.push_back(WordParser::make_word(PreambleType::DATA, "GHI"));
         
         bool valid_pass = FrameValidator::rep_not_preceded_by_self_tis_twas(valid_words);
         std::cout << "  AC-WORD-010-6 Valid sequence (DATA, REP, DATA): " 
@@ -384,8 +384,8 @@ bool test_cmd_data_rep_validation() {
         
         // Invalid sequence: REP, REP
         std::vector<ALEWord> invalid_words1;
-        invalid_words1.push_back(WordParser::make_word(WordType::REP, "ABC"));
-        invalid_words1.push_back(WordParser::make_word(WordType::REP, "DEF"));
+        invalid_words1.push_back(WordParser::make_word(PreambleType::REP, "ABC"));
+        invalid_words1.push_back(WordParser::make_word(PreambleType::REP, "DEF"));
         
         bool invalid1_pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(invalid_words1);
         std::cout << "  AC-WORD-010-6 Invalid sequence (REP, REP): " 
@@ -393,8 +393,8 @@ bool test_cmd_data_rep_validation() {
         
         // Invalid sequence: TIS, REP
         std::vector<ALEWord> invalid_words2;
-        invalid_words2.push_back(WordParser::make_word(WordType::TIS, "ABC"));
-        invalid_words2.push_back(WordParser::make_word(WordType::REP, "DEF"));
+        invalid_words2.push_back(WordParser::make_word(PreambleType::TIS, "ABC"));
+        invalid_words2.push_back(WordParser::make_word(PreambleType::REP, "DEF"));
         
         bool invalid2_pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(invalid_words2);
         std::cout << "  AC-WORD-010-6 Invalid sequence (TIS, REP): " 
@@ -402,8 +402,8 @@ bool test_cmd_data_rep_validation() {
         
         // Invalid sequence: TWAS, REP
         std::vector<ALEWord> invalid_words3;
-        invalid_words3.push_back(WordParser::make_word(WordType::TWAS, "ABC"));
-        invalid_words3.push_back(WordParser::make_word(WordType::REP, "DEF"));
+        invalid_words3.push_back(WordParser::make_word(PreambleType::TWAS, "ABC"));
+        invalid_words3.push_back(WordParser::make_word(PreambleType::REP, "DEF"));
         
         bool invalid3_pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(invalid_words3);
         std::cout << "  AC-WORD-010-6 Invalid sequence (TWAS, REP): " 
@@ -416,16 +416,16 @@ bool test_cmd_data_rep_validation() {
     {
         // Valid: TO → DATA (DATA extends TO)
         std::vector<ALEWord> valid;
-        valid.push_back(WordParser::make_word(WordType::TO,   "ABC"));
-        valid.push_back(WordParser::make_word(WordType::DATA, "DEF"));
+        valid.push_back(WordParser::make_word(PreambleType::TO,   "ABC"));
+        valid.push_back(WordParser::make_word(PreambleType::DATA, "DEF"));
         bool pos = FrameValidator::data_not_after_data(valid);
         std::cout << "  AC-WORD-009-1 Valid (TO, DATA): "
                   << (pos ? "PASS" : "FAIL") << "\n";
 
         // Invalid: DATA → DATA (DATA cannot extend DATA)
         std::vector<ALEWord> invalid;
-        invalid.push_back(WordParser::make_word(WordType::DATA, "ABC"));
-        invalid.push_back(WordParser::make_word(WordType::DATA, "DEF"));
+        invalid.push_back(WordParser::make_word(PreambleType::DATA, "ABC"));
+        invalid.push_back(WordParser::make_word(PreambleType::DATA, "DEF"));
         bool neg = !FrameValidator::data_not_after_data(invalid);
         std::cout << "  AC-WORD-009-1 Invalid (DATA, DATA): "
                   << (neg ? "PASS" : "FAIL") << "\n";
@@ -436,8 +436,8 @@ bool test_cmd_data_rep_validation() {
     // AC-WORD-009-2: DATA carries Expanded-64 content in messages.
     {
         std::vector<ALEWord> words;
-        words.push_back(WordParser::make_word(WordType::DATA, "ABC"));
-        bool pass = (words[0].type == WordType::DATA &&
+        words.push_back(WordParser::make_word(PreambleType::DATA, "ABC"));
+        bool pass = (words[0].type == PreambleType::DATA &&
                      std::string(words[0].address) == "ABC");
         std::cout << "  AC-WORD-009-2 DATA carries message information: "
                   << (pass ? "PASS" : "FAIL") << "\n";
@@ -448,9 +448,9 @@ bool test_cmd_data_rep_validation() {
     // [TO "ABC", DATA "DEF", REP "GHI"] must reconstruct to one address "ABCDEFGHI".
     {
         std::vector<ALEWord> words;
-        words.push_back(WordParser::make_word(WordType::TO,   "ABC"));
-        words.push_back(WordParser::make_word(WordType::DATA, "DEF"));
-        words.push_back(WordParser::make_word(WordType::REP,  "GHI"));
+        words.push_back(WordParser::make_word(PreambleType::TO,   "ABC"));
+        words.push_back(WordParser::make_word(PreambleType::DATA, "DEF"));
+        words.push_back(WordParser::make_word(PreambleType::REP,  "GHI"));
         auto addrs = FrameValidator::reconstruct_to_addresses(words);
         bool pass = (addrs.size() == 1 && addrs[0] == "ABCDEFGHI");
         std::cout << "  AC-WORD-010-1 REP extends address (TO,DATA,REP -> \"ABCDEFGHI\"): "
@@ -462,8 +462,8 @@ bool test_cmd_data_rep_validation() {
     // [TO "ABC", REP "DEF"] must reconstruct to two addresses {"ABC", "DEF"}.
     {
         std::vector<ALEWord> words;
-        words.push_back(WordParser::make_word(WordType::TO,  "ABC"));
-        words.push_back(WordParser::make_word(WordType::REP, "DEF"));
+        words.push_back(WordParser::make_word(PreambleType::TO,  "ABC"));
+        words.push_back(WordParser::make_word(PreambleType::REP, "DEF"));
         auto addrs = FrameValidator::reconstruct_to_addresses(words);
         bool pass = (addrs.size() == 2 && addrs[0] == "ABC" && addrs[1] == "DEF");
         std::cout << "  AC-WORD-010-4 REP after TO = two recipients (\"ABC\", \"DEF\"): "
@@ -488,24 +488,24 @@ bool test_phase3_validators() {
     {
         // Valid: address word before CMD
         std::vector<ALEWord> valid1;
-        valid1.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
-        valid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
+        valid1.push_back(WordParser::make_word(PreambleType::TO,  "XYZ"));
+        valid1.push_back(WordParser::make_word(PreambleType::CMD, "MSG"));
         bool v1 = FrameValidator::cmd_not_before_address_section(valid1);
         std::cout << "  AC-WORD-008-3 Valid (TO, CMD): "
                   << (v1 ? "PASS" : "FAIL") << "\n";
 
         // Invalid: CMD before any address word
         std::vector<ALEWord> invalid1;
-        invalid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
-        invalid1.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
+        invalid1.push_back(WordParser::make_word(PreambleType::CMD, "MSG"));
+        invalid1.push_back(WordParser::make_word(PreambleType::TO,  "XYZ"));
         bool i1 = !FrameValidator::cmd_not_before_address_section(invalid1);
         std::cout << "  AC-WORD-008-3 Invalid (CMD, TO): "
                   << (i1 ? "PASS" : "FAIL") << "\n";
 
         // Invalid: CMD in scanning section (THRU present, no address word yet)
         std::vector<ALEWord> invalid2;
-        invalid2.push_back(WordParser::make_word(WordType::THRU, "XYZ"));
-        invalid2.push_back(WordParser::make_word(WordType::CMD,  "MSG"));
+        invalid2.push_back(WordParser::make_word(PreambleType::THRU, "XYZ"));
+        invalid2.push_back(WordParser::make_word(PreambleType::CMD,  "MSG"));
         bool i2 = !FrameValidator::cmd_not_before_address_section(invalid2);
         std::cout << "  AC-WORD-008-3 Invalid (THRU, CMD): "
                   << (i2 ? "PASS" : "FAIL") << "\n";
@@ -517,35 +517,35 @@ bool test_phase3_validators() {
     {
         // Valid: TO → CMD → TIS
         std::vector<ALEWord> valid1;
-        valid1.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
-        valid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
-        valid1.push_back(WordParser::make_word(WordType::TIS, "ABC"));
+        valid1.push_back(WordParser::make_word(PreambleType::TO,  "XYZ"));
+        valid1.push_back(WordParser::make_word(PreambleType::CMD, "MSG"));
+        valid1.push_back(WordParser::make_word(PreambleType::TIS, "ABC"));
         bool v1 = FrameValidator::cmd_has_call_and_conclusion(valid1);
         std::cout << "  AC-WORD-008-4 Valid (TO, CMD, TIS): "
                   << (v1 ? "PASS" : "FAIL") << "\n";
 
         // Valid: TO → FROM → CMD → TWAS
         std::vector<ALEWord> valid2;
-        valid2.push_back(WordParser::make_word(WordType::TO,   "XYZ"));
-        valid2.push_back(WordParser::make_word(WordType::FROM, "ABC"));
-        valid2.push_back(WordParser::make_word(WordType::CMD,  "MSG"));
-        valid2.push_back(WordParser::make_word(WordType::TWAS, "NET"));
+        valid2.push_back(WordParser::make_word(PreambleType::TO,   "XYZ"));
+        valid2.push_back(WordParser::make_word(PreambleType::FROM, "ABC"));
+        valid2.push_back(WordParser::make_word(PreambleType::CMD,  "MSG"));
+        valid2.push_back(WordParser::make_word(PreambleType::TWAS, "NET"));
         bool v2 = FrameValidator::cmd_has_call_and_conclusion(valid2);
         std::cout << "  AC-WORD-008-4 Valid (TO, FROM, CMD, TWAS): "
                   << (v2 ? "PASS" : "FAIL") << "\n";
 
         // Invalid: CMD without preceding call
         std::vector<ALEWord> invalid1;
-        invalid1.push_back(WordParser::make_word(WordType::CMD, "MSG"));
-        invalid1.push_back(WordParser::make_word(WordType::TIS, "ABC"));
+        invalid1.push_back(WordParser::make_word(PreambleType::CMD, "MSG"));
+        invalid1.push_back(WordParser::make_word(PreambleType::TIS, "ABC"));
         bool i1 = !FrameValidator::cmd_has_call_and_conclusion(invalid1);
         std::cout << "  AC-WORD-008-4 Invalid (CMD, TIS — no call): "
                   << (i1 ? "PASS" : "FAIL") << "\n";
 
         // Invalid: CMD without following conclusion
         std::vector<ALEWord> invalid2;
-        invalid2.push_back(WordParser::make_word(WordType::TO,  "XYZ"));
-        invalid2.push_back(WordParser::make_word(WordType::CMD, "MSG"));
+        invalid2.push_back(WordParser::make_word(PreambleType::TO,  "XYZ"));
+        invalid2.push_back(WordParser::make_word(PreambleType::CMD, "MSG"));
         bool i2 = !FrameValidator::cmd_has_call_and_conclusion(invalid2);
         std::cout << "  AC-WORD-008-4 Invalid (TO, CMD — no conclusion): "
                   << (i2 ? "PASS" : "FAIL") << "\n";
@@ -557,25 +557,25 @@ bool test_phase3_validators() {
     {
         // Valid: alternating TO, DATA, REP
         std::vector<ALEWord> valid1;
-        valid1.push_back(WordParser::make_word(WordType::TO,   "ABC"));
-        valid1.push_back(WordParser::make_word(WordType::DATA, "DEF"));
-        valid1.push_back(WordParser::make_word(WordType::REP,  "GHI"));
+        valid1.push_back(WordParser::make_word(PreambleType::TO,   "ABC"));
+        valid1.push_back(WordParser::make_word(PreambleType::DATA, "DEF"));
+        valid1.push_back(WordParser::make_word(PreambleType::REP,  "GHI"));
         bool v1 = FrameValidator::no_consecutive_same_preamble(valid1);
         std::cout << "  AC-WORD-010-2/3 Valid (TO, DATA, REP): "
                   << (v1 ? "PASS" : "FAIL") << "\n";
 
         // Invalid: two consecutive DATA words
         std::vector<ALEWord> invalid1;
-        invalid1.push_back(WordParser::make_word(WordType::DATA, "ABC"));
-        invalid1.push_back(WordParser::make_word(WordType::DATA, "DEF"));
+        invalid1.push_back(WordParser::make_word(PreambleType::DATA, "ABC"));
+        invalid1.push_back(WordParser::make_word(PreambleType::DATA, "DEF"));
         bool i1 = !FrameValidator::no_consecutive_same_preamble(invalid1);
         std::cout << "  AC-WORD-010-2/3 Invalid (DATA, DATA): "
                   << (i1 ? "PASS" : "FAIL") << "\n";
 
         // Invalid: two consecutive REP words
         std::vector<ALEWord> invalid2;
-        invalid2.push_back(WordParser::make_word(WordType::REP, "ABC"));
-        invalid2.push_back(WordParser::make_word(WordType::REP, "DEF"));
+        invalid2.push_back(WordParser::make_word(PreambleType::REP, "ABC"));
+        invalid2.push_back(WordParser::make_word(PreambleType::REP, "DEF"));
         bool i2 = !FrameValidator::no_consecutive_same_preamble(invalid2);
         std::cout << "  AC-WORD-010-2/3 Invalid (REP, REP): "
                   << (i2 ? "PASS" : "FAIL") << "\n";

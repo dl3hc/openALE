@@ -226,11 +226,11 @@ bool test_call_initiation() {
     if (!words_sent) return false;
 
     std::cout << "  Word 1 (TO): ";
-    bool word1_ok = (tracker.words[0].type == WordType::TO);
+    bool word1_ok = (tracker.words[0].type == PreambleType::TO);
     std::cout << (word1_ok ? "PASS" : "FAIL") << "\n";
 
     std::cout << "  Word 2 (TO): ";
-    bool word2_ok = (tracker.words[1].type == WordType::TO);
+    bool word2_ok = (tracker.words[1].type == PreambleType::TO);
     std::cout << (word2_ok ? "PASS" : "FAIL") << "\n";
 
     return pass && word1_ok && word2_ok;
@@ -257,7 +257,7 @@ bool test_incoming_call() {
     
     // Simulate receiving TO word addressed to us
     ALEWord to_word;
-    to_word.type = WordType::TO;
+    to_word.type = PreambleType::TO;
     strncpy(to_word.address, "W1A", 3);  // Matches W1AW
     to_word.valid = true;
     to_word.timestamp_ms = 1000;
@@ -388,7 +388,7 @@ bool test_sounding() {
     
     if (word_sent) {
         std::cout << "  TIS word sent: ";
-        bool is_tis = (tracker.words[0].type == WordType::TIS);
+        bool is_tis = (tracker.words[0].type == PreambleType::TIS);
         std::cout << (is_tis ? "PASS" : "FAIL") << "\n";
         pass = pass && is_tis;
     }
@@ -429,7 +429,7 @@ bool test_full_call_cycle() {
     });
 
     // ── Collect transmitted words ─────────────────────────────────────────
-    struct SentWord { WordType type; std::string addr; };
+    struct SentWord { PreambleType type; std::string addr; };
     std::vector<SentWord> sent;
     sm.set_transmit_callback([&](const ALEWord& w) {
         sent.push_back({w.type, std::string(w.address, 3)});
@@ -505,12 +505,12 @@ bool test_full_call_cycle() {
     check(sent.size() == 5,
           "5 words sent (2 scan + 2 leading + 1 conclusion)");
     check(sent.size() >= 2
-          && sent[0].type == WordType::TO && sent[1].type == WordType::TO,
+          && sent[0].type == PreambleType::TO && sent[1].type == PreambleType::TO,
           "Scan slots: TO + TO");
     check(sent.size() >= 4
-          && sent[2].type == WordType::TO && sent[3].type == WordType::TO,
+          && sent[2].type == PreambleType::TO && sent[3].type == PreambleType::TO,
           "Leading slots: TO + TO");
-    check(sent.size() >= 5 && sent[4].type == WordType::TIS,
+    check(sent.size() >= 5 && sent[4].type == PreambleType::TIS,
           "Conclusion: TIS SAM");
     check(op_event_fired && last_op_event == OperatorEvent::NO_CHANNELS_LEFT,
           "Operator notified: NO_CHANNELS_LEFT");

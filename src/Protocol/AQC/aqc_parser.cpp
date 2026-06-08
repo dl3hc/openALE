@@ -53,7 +53,7 @@ bool AQCParser::is_aqc_format(const ALEWord& word) {
     // For now, detect based on word type and payload analysis
     // Full implementation would use more sophisticated detection
     
-    if (word.type == WordType::CMD) {
+    if (word.type == PreambleType::CMD) {
         // CMD words are often used for AQC signaling
         return true;
     }
@@ -109,7 +109,7 @@ bool AQCParser::parse_call_probe(const ALEWord* words, size_t count, AQCCallProb
     // Word 1: Terminator (FROM)
     
     // Extract TO address
-    if (words[0].type == WordType::TO || words[0].type == WordType::TWAS) {
+    if (words[0].type == PreambleType::TO || words[0].type == PreambleType::TWAS) {
         probe.to_address = words[0].address;
         
         // Check if AQC-enhanced
@@ -121,7 +121,7 @@ bool AQCParser::parse_call_probe(const ALEWord* words, size_t count, AQCCallProb
     }
     
     // Extract terminator
-    if (words[1].type == WordType::FROM || words[1].type == WordType::TIS) {
+    if (words[1].type == PreambleType::FROM || words[1].type == PreambleType::TIS) {
         probe.term_address = words[1].address;
     } else {
         return false;
@@ -144,13 +144,13 @@ bool AQCParser::parse_call_handshake(const ALEWord* words, size_t count, AQCCall
     // Optional: CMD word with DE fields
     
     // Extract addresses
-    if (words[0].type == WordType::TO) {
+    if (words[0].type == PreambleType::TO) {
         handshake.to_address = words[0].address;
     } else {
         return false;
     }
     
-    if (words[1].type == WordType::FROM || words[1].type == WordType::TIS) {
+    if (words[1].type == PreambleType::FROM || words[1].type == PreambleType::TIS) {
         handshake.from_address = words[1].address;
         
         // Check for AQC enhancements
@@ -164,7 +164,7 @@ bool AQCParser::parse_call_handshake(const ALEWord* words, size_t count, AQCCall
     }
     
     // Check for additional CMD word with CRC
-    if (count >= 3 && words[2].type == WordType::CMD) {
+    if (count >= 3 && words[2].type == PreambleType::CMD) {
         // CRC would be validated here
         handshake.crc_status = CRCStatus::NOT_APPLICABLE;  // Placeholder
     }
@@ -185,9 +185,9 @@ bool AQCParser::parse_inlink(const ALEWord* words, size_t count, AQCInlink& inli
     // Optional: Additional AQC control words
     
     // Extract TO address
-    if (words[0].type == WordType::TO || words[0].type == WordType::TWAS) {
+    if (words[0].type == PreambleType::TO || words[0].type == PreambleType::TWAS) {
         inlink.to_address = words[0].address;
-        inlink.net_address_flag = (words[0].type == WordType::TWAS);
+        inlink.net_address_flag = (words[0].type == PreambleType::TWAS);
         
         // Extract AQC data elements
         if (is_aqc_format(words[0])) {
@@ -200,14 +200,14 @@ bool AQCParser::parse_inlink(const ALEWord* words, size_t count, AQCInlink& inli
     }
     
     // Extract terminator
-    if (words[1].type == WordType::FROM || words[1].type == WordType::TIS) {
+    if (words[1].type == PreambleType::FROM || words[1].type == PreambleType::TIS) {
         inlink.term_address = words[1].address;
     } else {
         return false;
     }
     
     // Check for CRC in additional words
-    if (count >= 3 && words[2].type == WordType::CMD) {
+    if (count >= 3 && words[2].type == PreambleType::CMD) {
         inlink.crc_status = CRCStatus::NOT_APPLICABLE;  // Placeholder for CRC validation
     }
     
@@ -226,10 +226,10 @@ bool AQCParser::parse_orderwire(const ALEWord* words, size_t count, AQCOrderwire
     std::string message;
     
     for (size_t i = 0; i < count; i++) {
-        if (words[i].type == WordType::DATA) {
+        if (words[i].type == PreambleType::DATA) {
             // Append 3 characters from each word
             message.append(words[i].address, 3);
-        } else if (words[i].type == WordType::CMD) {
+        } else if (words[i].type == PreambleType::CMD) {
             // CMD word may contain CRC
             // Extract CRC from payload
             uint16_t crc = words[i].raw_payload & 0xFFFF;

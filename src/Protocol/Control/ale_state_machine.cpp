@@ -249,7 +249,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
         case ALEState::SOUNDING:
             if (!address_book.get_self_address().empty())
                 transmit_words(AddressEncoder::encode(address_book.get_self_address(),
-                                                      WordType::TIS));
+                                                      PreambleType::TIS));
             break;
 
         default:
@@ -554,9 +554,9 @@ bool ALEStateMachine::initiate_call(const std::string& to_address) {
     // scanning_word_   — first 3 chars only (A.5.2.5.1); sent once per Trw slot
     // leading_words_   — full address (A.5.5.3.1); sent twice (Tlc = 2 × Tc)
     // conclusion_words_ — own address with TIS (A.5.2.3.2.2); sent once
-    scanning_word_    = AddressEncoder::encode_first(to_address, WordType::TO);
-    leading_words_    = AddressEncoder::encode(to_address, WordType::TO);
-    conclusion_words_ = AddressEncoder::encode(address_book.get_self_address(), WordType::TIS);
+    scanning_word_    = AddressEncoder::encode_first(to_address, PreambleType::TO);
+    leading_words_    = AddressEncoder::encode(to_address, PreambleType::TO);
+    conclusion_words_ = AddressEncoder::encode(address_book.get_self_address(), PreambleType::TIS);
 
     return process_event(ALEEvent::CALL_REQUEST);
 }
@@ -572,9 +572,9 @@ bool ALEStateMachine::initiate_net_call(const std::string& net_address) {
 
     // Pre-compute TX sequences (same encoding as individual call; net call
     // protocol is currently stubbed as NET_CALL_STUB).
-    scanning_word_    = AddressEncoder::encode_first(net_address, WordType::TO);
-    leading_words_    = AddressEncoder::encode(net_address, WordType::TO);
-    conclusion_words_ = AddressEncoder::encode(address_book.get_self_address(), WordType::TIS);
+    scanning_word_    = AddressEncoder::encode_first(net_address, PreambleType::TO);
+    leading_words_    = AddressEncoder::encode(net_address, PreambleType::TO);
+    conclusion_words_ = AddressEncoder::encode(address_book.get_self_address(), PreambleType::TIS);
 
     return process_event(ALEEvent::CALL_REQUEST);
 }
@@ -642,7 +642,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
 
         // ── SCANNING ─────────────────────────────────────────────────────
         case ALEState::SCANNING:
-            if (word.type == WordType::TO || word.type == WordType::TWAS) {
+            if (word.type == PreambleType::TO || word.type == PreambleType::TWAS) {
                 if (address_book.is_self(addr)) {
                     active_call_to = addr;
                     process_event(ALEEvent::CALL_DETECTED);
@@ -663,12 +663,12 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
         //   4. TWAS              → call rejection (AC-LINK-019-10).
         case ALEState::CALLING:
             if (calling_phase == CallingPhase::LISTENING) {
-                if (word.type == WordType::TO && address_book.is_self(addr)) {
+                if (word.type == PreambleType::TO && address_book.is_self(addr)) {
                     if (!response_to_detected) {
                         response_to_detected = true;
                         response_rx_start_ms = current_time_ms;
                     }
-                } else if (word.type == WordType::TIS
+                } else if (word.type == PreambleType::TIS
                            && response_to_detected
                            && tlww_start_ms == 0) {
                     // First conclusion word — arm Tlww, start collecting JOE's address.
@@ -677,8 +677,8 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                     tlww_start_ms                = current_time_ms;
                     collecting_remote_conclusion = true;
                 } else if (collecting_remote_conclusion
-                           && (word.type == WordType::DATA
-                               || word.type == WordType::REP)) {
+                           && (word.type == PreambleType::DATA
+                               || word.type == PreambleType::REP)) {
                     // Fix 5: extended address chunk after TIS — append and reset Tlww.
                     std::string chunk(word.address, 3);
                     auto p = chunk.find_last_not_of('@');
@@ -687,7 +687,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                     joe_address      += chunk;
                     active_call_from  = joe_address;
                     tlww_start_ms     = current_time_ms;   // Tlww reset: wait for next word
-                } else if (word.type == WordType::TWAS) {
+                } else if (word.type == PreambleType::TWAS) {
                     // Call rejected — AC-LINK-019-10
                     if (operator_callback)
                         operator_callback(OperatorEvent::CALL_REJECTED);
@@ -701,15 +701,15 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
         // WAIT_ACK:       read SAM's ACK frame (TO JOE × 2 + TIS SAM [DATA]*).
         case ALEState::HANDSHAKE:
             if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
-                if (word.type == WordType::TIS && !hs_conclusion_rcvd) {
+                if (word.type == PreambleType::TIS && !hs_conclusion_rcvd) {
                     // First word of SAM's conclusion.
                     caller_address     = addr;
                     active_call_from   = addr;
                     hs_conclusion_rcvd = true;
                     hs_tlww_start_ms   = current_time_ms;
                 } else if (hs_conclusion_rcvd
-                           && (word.type == WordType::DATA
-                               || word.type == WordType::REP)) {
+                           && (word.type == PreambleType::DATA
+                               || word.type == PreambleType::REP)) {
                     // Fix 5: extended caller address — append chunk, reset Tlww.
                     std::string chunk(word.address, 3);
                     auto p = chunk.find_last_not_of('@');
@@ -719,12 +719,12 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                     active_call_from  = caller_address;
                     hs_tlww_start_ms  = current_time_ms;
                 } else if (!hs_conclusion_rcvd
-                           && (word.type == WordType::DATA
-                               || word.type == WordType::REP)
+                           && (word.type == PreambleType::DATA
+                               || word.type == PreambleType::REP)
                            && hs_message_start_ms == 0) {
                     // Message section has begun — arm Tmmax (AC-LINK-018-5)
                     hs_message_start_ms = current_time_ms;
-                } else if (word.type == WordType::TWAS) {
+                } else if (word.type == PreambleType::TWAS) {
                     // Calling station is busy / rejected — abort.
                     process_event(ALEEvent::LINK_TIMEOUT);
                 }
@@ -734,7 +734,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                 process_event(ALEEvent::LINK_TIMEOUT);
             } else if (handshake_phase == HandshakePhase::WAIT_ACK) {
                 // SAM's ACK frame: TO JOE × 2 + TIS SAM [DATA]*
-                if (word.type == WordType::TIS
+                if (word.type == PreambleType::TIS
                     && !hs_ack_tis_rcvd
                     && !caller_address.empty()
                     && addr == caller_address.substr(0, 3)) {
@@ -742,11 +742,11 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                     hs_ack_tis_rcvd  = true;
                     hs_tlww_start_ms = current_time_ms;
                 } else if (hs_ack_tis_rcvd
-                           && (word.type == WordType::DATA
-                               || word.type == WordType::REP)) {
+                           && (word.type == PreambleType::DATA
+                               || word.type == PreambleType::REP)) {
                     // Fix 5: extended SAM address continuation — reset Tlww only.
                     hs_tlww_start_ms = current_time_ms;
-                } else if (word.type == WordType::TWAS) {
+                } else if (word.type == PreambleType::TWAS) {
                     // SAM rejected (e.g. TWAS instead of TIS) — abort.
                     process_event(ALEEvent::LINK_TIMEOUT);
                 }
@@ -917,10 +917,10 @@ void ALEStateMachine::build_ack_words() {
     //   TO [joe_address] × 2 + TIS [own addr]
     // joe_address is set during the LISTENING phase (process_received_word),
     // so it is encoded here at send time, not pre-computed.
-    const auto joe_words = AddressEncoder::encode(joe_address, WordType::TO);
+    const auto joe_words = AddressEncoder::encode(joe_address, PreambleType::TO);
     transmit_words(joe_words);   // pass 1
     transmit_words(joe_words);   // pass 2
-    transmit_words(AddressEncoder::encode(address_book.get_self_address(), WordType::TIS));
+    transmit_words(AddressEncoder::encode(address_book.get_self_address(), PreambleType::TIS));
 }
 
 void ALEStateMachine::build_response_words() {
@@ -928,10 +928,10 @@ void ALEStateMachine::build_response_words() {
     //   TO [caller_address] × 2 + TIS [own addr]
     // caller_address is set during WAIT_CYCLE_END (process_received_word),
     // so it is encoded here at send time, not pre-computed.
-    const auto caller_words = AddressEncoder::encode(caller_address, WordType::TO);
+    const auto caller_words = AddressEncoder::encode(caller_address, PreambleType::TO);
     transmit_words(caller_words);   // pass 1
     transmit_words(caller_words);   // pass 2
-    transmit_words(AddressEncoder::encode(address_book.get_self_address(), WordType::TIS));
+    transmit_words(AddressEncoder::encode(address_book.get_self_address(), PreambleType::TIS));
 }
 
 void ALEStateMachine::transmit_word(const ALEWord& word) {
@@ -1018,7 +1018,7 @@ void ALEStateMachine::on_word_complete() {
                 // get the exact word count matching build_ack_words().
                 const uint32_t ack_slots =
                     2u * static_cast<uint32_t>(
-                             AddressEncoder::encode(joe_address, WordType::TO).size())
+                             AddressEncoder::encode(joe_address, PreambleType::TO).size())
                     + static_cast<uint32_t>(conclusion_words_.size());
                 if (call_cycles_in_phase >= ack_slots) {
                     std::cout << "[TRACE] on_word_complete: SENDING_ACK → LINKED\n";
@@ -1046,10 +1046,10 @@ void ALEStateMachine::on_word_complete() {
         // encode here to get the exact word counts matching build_response_words().
         const uint32_t resp_slots =
             2u * static_cast<uint32_t>(
-                     AddressEncoder::encode(caller_address, WordType::TO).size())
+                     AddressEncoder::encode(caller_address, PreambleType::TO).size())
             + static_cast<uint32_t>(
                      AddressEncoder::encode(address_book.get_self_address(),
-                                            WordType::TIS).size());
+                                            PreambleType::TIS).size());
         if (hs_words_in_phase >= resp_slots) {
             std::cout << "[TRACE] on_word_complete: SENDING_RESPONSE → WAIT_ACK\n";
             handshake_phase  = HandshakePhase::WAIT_ACK;

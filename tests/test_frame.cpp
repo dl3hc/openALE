@@ -113,7 +113,7 @@ bool test_ac_001_2_modem_3x_identical_copies()
     });
 
     ALEWord word = ALEWord();
-    word.type       = WordType::TO;
+    word.type       = PreambleType::TO;
     word.address[0] = 'S'; word.address[1] = 'A'; word.address[2] = 'M';
     word.address[3] = '\0';
     word.valid       = true;

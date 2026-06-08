@@ -31,12 +31,12 @@ void example_individual_call() {
     ToneGenerator generator;
     
     // Build TO word: preamble=2 (TO), address="K6KB" (padded to "K6K")
-    uint32_t to_payload = WordParser::encode_ascii("K6K", WordType::TO);
-    uint32_t to_word_bits = (static_cast<uint32_t>(WordType::TO) << 21) | to_payload;
+    uint32_t to_payload = WordParser::encode_ascii("K6K", PreambleType::TO);
+    uint32_t to_word_bits = (static_cast<uint32_t>(PreambleType::TO) << 21) | to_payload;
 
     // Build FROM word: preamble=4 (FROM), address="W1AW" (padded to "W1A")
-    uint32_t from_payload = WordParser::encode_ascii("W1A", WordType::FROM);
-    uint32_t from_word_bits = (static_cast<uint32_t>(WordType::FROM) << 21) | from_payload;
+    uint32_t from_payload = WordParser::encode_ascii("W1A", PreambleType::FROM);
+    uint32_t from_word_bits = (static_cast<uint32_t>(PreambleType::FROM) << 21) | from_payload;
     
     // Convert 24-bit words to symbols (each symbol = 3 bits)
     // For simplicity, just use lower bits as symbols
@@ -170,8 +170,8 @@ void example_sounding() {
     MessageAssembler assembler;
     
     // Build TIS word: preamble=5 (TIS), address="W1AW" → "W1A"
-    uint32_t payload = WordParser::encode_ascii("W1A", WordType::TIS);
-    uint32_t word_bits = (static_cast<uint32_t>(WordType::TIS) << 21) | payload;
+    uint32_t payload = WordParser::encode_ascii("W1A", PreambleType::TIS);
+    uint32_t word_bits = (static_cast<uint32_t>(PreambleType::TIS) << 21) | payload;
     
     ALEWord word;
     if (parser.parse_from_bits(word_bits, word)) {
