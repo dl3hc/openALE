@@ -91,15 +91,16 @@ public:
     WordParser();
 
     /**
-     * Parse 49 symbols into an ALE word.
+     * Parse one received word from a triple-copy vote buffer.
      * Applies majority voting, then extracts preamble and payload.
      *
-     * \param symbols      Array of 49 detected symbols (0-7)
+     * \param symbols      WordVoteBuffer with 3 × 49 received symbols
      * \param output [out] Decoded ALE word
      * \param timestamp_ms Reception timestamp in milliseconds
-     * \return true if parsing successful
+     * \return true if word passed FEC, character validation, and vote quality
+     *         threshold (unanimous_votes >= VOTE_THRESHOLD_BAD, A.5.2.6.3)
      */
-    bool parse_word(const uint8_t symbols[SYMBOLS_PER_WORD],
+    bool parse_word(const WordVoteBuffer& symbols,
                     ALEWord& output,
                     uint32_t timestamp_ms = 0);
 

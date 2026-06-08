@@ -45,8 +45,23 @@ void ALE2GModem::enqueue_tx49_(uint64_t tx49) {
 }
 
 void ALE2GModem::build_symbols() {
-    for (uint32_t i = 0; i < SYMBOLS_PER_WORD; ++i)
-        symbol_buf_[i] = static_cast<uint8_t>((pending_tx49_ >> i) & 1u);
+    // Pack BITS_PER_SYMBOL=3 consecutive encoded bits into each 8-FSK symbol slot.
+    // 49 encoded bits → 17 symbols carry data (ceil(49/3)); slots 17..48 stay 0.
+    // ToneGenerator::generate_symbols() uses phase_increment[symbol_value], so a
+    // symbol value of 0-7 directly selects one of the 8 ALE tones — no further
+    // FREQ_TO_SYMBOL indirection needed here (already baked into ToneGenerator).
+    symbol_buf_.fill(0);
+    for (uint32_t s = 0; s < SYMBOLS_PER_WORD; ++s) {
+        const uint32_t base_bit = s * BITS_PER_SYMBOL;
+        if (base_bit >= SYMBOLS_PER_WORD) break;   // all 49 encoded bits consumed
+        uint8_t sym = 0;
+        for (uint32_t b = 0; b < BITS_PER_SYMBOL; ++b) {
+            const uint32_t bit_pos = base_bit + b;
+            if (bit_pos < SYMBOLS_PER_WORD)
+                sym |= static_cast<uint8_t>(((pending_tx49_ >> bit_pos) & 1u) << b);
+        }
+        symbol_buf_[s] = sym;
+    }
 }
 
 void ALE2GModem::send_one_copy() {

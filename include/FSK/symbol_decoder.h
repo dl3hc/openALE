@@ -17,10 +17,9 @@
 #include <array>
 #include <cstdint>
 
-// FEC (Forward Error Correction) parameters per MIL-STD-188-141B
-constexpr uint32_t SYMBOL_REPETITION  = 3;   // Triple redundant word transmission
-constexpr uint32_t VOTE_BUFFER_LENGTH = 48;  // Symbol voting window size
-constexpr uint32_t VOTE_THRESHOLD_BAD = 25;  // Min votes for valid symbol detection
+// SYMBOL_REPETITION is now in ale_waveform.h (physical waveform constant).
+constexpr uint32_t VOTE_BUFFER_LENGTH = 48;  // Voted bit positions per word (excludes S49)
+constexpr uint32_t VOTE_THRESHOLD_BAD = 25;  // Min unanimous votes for sync quality (A.5.2.6.3)
 
 namespace ale {
 
@@ -59,15 +58,14 @@ static uint8_t bin_to_symbol(uint32_t bin_index);
      * Decode word using triple redundancy voting.
      *
      * Votes across SYMBOL_REPETITION copies of the 49-bit transmitted word.
-     * The caller must supply SYMBOLS_PER_WORD * SYMBOL_REPETITION symbols.
      * Each symbol value (0-7) contributes its LSB as the transmitted bit.
      *
-     * \param symbols      Buffer of SYMBOLS_PER_WORD * SYMBOL_REPETITION symbols
+     * \param symbols      WordVoteBuffer with all 3 × 49 received symbols
      * \param output_word  [out] 49-bit transmitted word after majority voting (bit 48 = 0)
      * \return             Number of unanimous votes among the 48 voted bit positions
      *                     (A.5.2.6.3); range 0..48.  Threshold: VOTE_THRESHOLD_BAD.
      */
-    static uint8_t decode_word_with_voting(const uint8_t symbols[],
+    static uint8_t decode_word_with_voting(const WordVoteBuffer& symbols,
                                            uint64_t& output_word);
     
 private:

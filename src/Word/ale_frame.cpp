@@ -21,7 +21,7 @@ std::vector<uint64_t> Frame::encode() const {
 // ── ALEFrameBuilder ───────────────────────────────────────────────────────────
 
 Frame ALEFrameBuilder::scanning_individual(const std::string& dest) {
-    return Frame(AddressEncoder::encode(dest, PreambleType::TO));
+    return Frame({ AddressEncoder::encode_first(dest, PreambleType::TO) });
 }
 
 Frame ALEFrameBuilder::scanning_group(const std::string& relay, const std::string& dest) {

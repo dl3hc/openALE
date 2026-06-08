@@ -47,14 +47,12 @@ bool test_golay_ale_word_decode() {
     std::cout << "\n[TEST FEC-1] ALE decode path (SymbolDecoder + Golay)\n";
     std::cout << "-------------------------------------------------------\n";
 
-    uint8_t dummy_symbols[SYMBOLS_PER_WORD * SYMBOL_REPETITION];
-
-    for (uint32_t i = 0; i < SYMBOLS_PER_WORD * SYMBOL_REPETITION; ++i)
+    WordVoteBuffer dummy_symbols;
+    for (uint32_t i = 0; i < WordVoteBuffer::SIZE; ++i)
         dummy_symbols[i] = i % 8;
 
     std::cout << "  symbol stream pattern: i % 8 (deterministic)\n";
-    std::cout << "  total symbols per word: "
-              << SYMBOLS_PER_WORD * SYMBOL_REPETITION << "\n";
+    std::cout << "  total symbols per word: " << WordVoteBuffer::SIZE << "\n";
 
     uint64_t word     = 0;
     uint8_t unanimous = SymbolDecoder::decode_word_with_voting(dummy_symbols, word);

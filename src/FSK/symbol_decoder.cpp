@@ -64,31 +64,37 @@ uint8_t SymbolDecoder::majority_vote(const uint8_t bits[3]) {
     return (sum >= 2) ? 1 : 0;
 }
 
-uint8_t SymbolDecoder::decode_word_with_voting(const uint8_t symbols[],
+uint8_t SymbolDecoder::decode_word_with_voting(const WordVoteBuffer& symbols,
                                                uint64_t& output_word) {
-    // MIL-STD-188-141B A.5.2.2.4: bit k occupies positions k, k+49, k+98.
-    // Only bits 0..47 are voted (the 48 "possible votes" per spec A.5.2.6.3).
-    // Bit 48 (S49) is always 0 and is excluded from the unanimous-vote count.
+    // Each 8-FSK symbol carries BITS_PER_SYMBOL=3 bits.
+    // Bit position k is encoded in symbol k/3 at bit-lane k%3.
+    // This maps all 8 tones to the full 0-7 symbol range (symmetric with build_symbols()).
+    //
+    // Bits 0..47: voted + count toward unanimous threshold (A.5.2.6.3 — 48 "possible votes").
+    // Bit 48 (S49): voted for correctness, excluded from unanimous count.
+    // Bit positions 49-50 (padding zeros in the last symbol): never accessed.
 
     uint64_t word = 0;
     uint8_t unanimous_count = 0;
 
-    for (uint32_t bit_idx = 0; bit_idx < VOTE_BUFFER_LENGTH; ++bit_idx) {
-        uint8_t bit_copies[SYMBOL_REPETITION];
+    for (uint32_t bit_pos = 0; bit_pos <= 48; ++bit_pos) {
+        const uint32_t sym_pos    = bit_pos / BITS_PER_SYMBOL;
+        const uint32_t bit_in_sym = bit_pos % BITS_PER_SYMBOL;
 
+        uint8_t bit_copies[SYMBOL_REPETITION];
         for (uint32_t rep = 0; rep < SYMBOL_REPETITION; ++rep) {
-            const uint32_t sym_idx = bit_idx + rep * SYMBOLS_PER_WORD;
-            const uint8_t  symbol  = symbols[sym_idx];
-            bit_copies[rep] = static_cast<uint8_t>((symbol < NUM_TONES) ? (symbol & 1u) : 0u);
+            const uint8_t sym = symbols[sym_pos + rep * SYMBOLS_PER_WORD];
+            bit_copies[rep] = (sym >> bit_in_sym) & 1u;
         }
 
         const uint8_t voted = majority_vote(bit_copies);
-        if (voted) word |= (1ULL << bit_idx);
+        if (voted) word |= (1ULL << bit_pos);
 
-        if (bit_copies[0] == bit_copies[1] && bit_copies[1] == bit_copies[2])
-            ++unanimous_count;
+        if (bit_pos < VOTE_BUFFER_LENGTH) {  // bits 0..47 count toward sync threshold
+            if (bit_copies[0] == bit_copies[1] && bit_copies[1] == bit_copies[2])
+                ++unanimous_count;
+        }
     }
-    // bit 48 (S49) stays 0 in output_word — not voted, not counted
 
     output_word = word;
     return unanimous_count;

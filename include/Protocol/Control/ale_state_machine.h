@@ -19,6 +19,7 @@
 
 #include "Protocol/Message/ale_message.h"
 #include "Word/ale_word.h"
+#include "Word/ale_frame.h"
 #include "Word/address_encoder.h"
 #include "Stores/address_book.h"
 #include "Protocol/Control/ale_timing.h"
@@ -26,6 +27,8 @@
 #include <vector>
 #include <string>
 #include <functional>
+
+namespace ale { class LQAMetrics; }
 
 namespace ale {
 
@@ -289,6 +292,13 @@ public:
         operator_callback = callback;
     }
 
+    /**
+     * Attach an LQAMetrics instance for quality tracking.
+     * When set, every call to update_link_quality() also feeds the metrics
+     * subsystem.  Pass nullptr to detach.  Ownership stays with the caller.
+     */
+    void set_lqa_metrics(LQAMetrics* m) { lqa_metrics_ = m; }
+
 private:
     // ── State machine ─────────────────────────────────────────────────────
     ALEState current_state;
@@ -314,28 +324,18 @@ private:
     uint32_t     words_pending;          ///< Words enqueued but not yet acked by on_word_complete()
     uint32_t     listening_start_ms;     ///< Timestamp when LISTENING phase began (for Twr timeout)
 
-    // ── Pre-computed TX word sequences ───────────────────────────────────────
-    // Computed once in initiate_call() / initiate_net_call(); the raw address
-    // string is not re-processed after that point.
+    // ── Pre-computed TX frames ───────────────────────────────────────────────
+    // Computed once in initiate_call() / initiate_net_call() via ALEFrameBuilder;
+    // the raw address string is not re-processed after that point.
     //
-    // SCANNING_CALL phase (A.5.2.5.1):
-    //   scanning_word_ is transmitted once per Trw slot for C × 2 slots total
-    //   (Tsc = target_scan_channels × 2 × Trw).  The word always carries only
-    //   the first 3 chars of the address with preamble TO — regardless of the
-    //   full address length.  DATA / REP extension words are strictly forbidden
-    //   in the scanning section; they appear only in the leading call.
-    //
-    // LEADING_CALL phase (A.5.5.3.1):
-    //   leading_words_ is transmitted twice (Tlc = 2 × Tc).  It contains the
-    //   complete address: 1 word for ≤3-char addresses, up to 5 words for
-    //   15-char addresses (TO + DATA/REP alternation per A.5.2.3.2.1).
-    //
-    // CONCLUSION phase (A.5.2.3.2.2):
-    //   conclusion_words_ is transmitted once.  Same encoding rule as
-    //   leading_words_ but with preamble TIS instead of TO.
-    ALEWord              scanning_word_;     ///< TO first-word only — one copy per scanning slot
-    std::vector<ALEWord> leading_words_;     ///< Full TO address — sent twice in LEADING_CALL
-    std::vector<ALEWord> conclusion_words_;  ///< Full TIS address — sent once in CONCLUSION
+    // scanning_frame_   — one word (A.5.2.5.1, first 3 chars only)
+    // leading_frame_    — full TO address × 2 (Tlc = 2 × Tc, A.5.5.3.1)
+    //                     ALEFrameBuilder::leading_individual() pre-doubles the sequence;
+    //                     on_word_complete() counts leading_frame_.size() total slots.
+    // conclusion_frame_ — full TIS address, sent once (A.5.2.3.2.2)
+    Frame scanning_frame_;    ///< 1 word — TO first-word only
+    Frame leading_frame_;     ///< 2×wpa words — full TO address doubled (Tlc)
+    Frame conclusion_frame_;  ///< TIS own address — sent once in CONCLUSION
 
     // ── LBT and tuning (AC-LINK-017-1/2) ─────────────────────────────────
     uint32_t     lbt_start_ms;           ///< When LBT phase started (for Twt timeout)
@@ -381,7 +381,7 @@ private:
     uint32_t current_time_ms;
 
     // ── LQA ───────────────────────────────────────────────────────────────
-    std::vector<LinkQuality> channel_quality;
+    LQAMetrics* lqa_metrics_ = nullptr;  ///< Optional; set via set_lqa_metrics()
 
     // ── Callbacks ─────────────────────────────────────────────────────────
     std::function<void(ALEState, ALEState)> state_callback;

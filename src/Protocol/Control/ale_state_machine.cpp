@@ -4,7 +4,9 @@
  */
 
 #include "Protocol/Control/ale_state_machine.h"
+#include "Word/ale_frame.h"
 #include "Word/address_encoder.h"
+#include "LQA/lqa_metrics.h"
 #include <algorithm>
 #include <cstring>
 #include <iostream>
@@ -243,8 +245,8 @@ void ALEStateMachine::enter_state(ALEState new_state) {
 
         case ALEState::SOUNDING:
             if (!address_book.get_self_address().empty())
-                transmit_words(AddressEncoder::encode(address_book.get_self_address(),
-                                                      PreambleType::TIS));
+                transmit_words(
+                    ALEFrameBuilder::conclusion(address_book.get_self_address()).words());
             break;
 
         default:
@@ -559,16 +561,15 @@ bool ALEStateMachine::initiate_call(const std::string& to_address) {
     active_call_is_net    = false;
     calling_channel_index = 0;
 
-    // Pre-compute all TX word sequences for this call.
-    // After this point the state machine never re-processes the address string
-    // for transmission; it only iterates the vectors below.
+    // Pre-compute all TX frames for this call via ALEFrameBuilder.
+    // After this point the state machine never re-processes the address string.
     //
-    // scanning_word_   — first 3 chars only (A.5.2.5.1); sent once per Trw slot
-    // leading_words_   — full address (A.5.5.3.1); sent twice (Tlc = 2 × Tc)
-    // conclusion_words_ — own address with TIS (A.5.2.3.2.2); sent once
-    scanning_word_    = AddressEncoder::encode_first(to_address, PreambleType::TO);
-    leading_words_    = AddressEncoder::encode(to_address, PreambleType::TO);
-    conclusion_words_ = AddressEncoder::encode(address_book.get_self_address(), PreambleType::TIS);
+    // scanning_frame_   — 1 word (first 3 chars only, A.5.2.5.1)
+    // leading_frame_    — full TO address × 2 (Tlc = 2 × Tc, A.5.5.3.1)
+    // conclusion_frame_ — own TIS address, sent once (A.5.2.3.2.2)
+    scanning_frame_   = ALEFrameBuilder::scanning_individual(to_address);
+    leading_frame_    = ALEFrameBuilder::leading_individual(to_address);
+    conclusion_frame_ = ALEFrameBuilder::conclusion(address_book.get_self_address());
 
     return process_event(ALEEvent::CALL_REQUEST);
 }
@@ -582,11 +583,11 @@ bool ALEStateMachine::initiate_net_call(const std::string& net_address) {
     active_call_is_net    = true;
     calling_channel_index = 0;
 
-    // Pre-compute TX sequences (same encoding as individual call; net call
+    // Pre-compute TX frames (same structure as individual call; net call
     // protocol is currently stubbed as NET_CALL_STUB).
-    scanning_word_    = AddressEncoder::encode_first(net_address, PreambleType::TO);
-    leading_words_    = AddressEncoder::encode(net_address, PreambleType::TO);
-    conclusion_words_ = AddressEncoder::encode(address_book.get_self_address(), PreambleType::TIS);
+    scanning_frame_   = ALEFrameBuilder::scanning_individual(net_address);
+    leading_frame_    = ALEFrameBuilder::leading_individual(net_address);
+    conclusion_frame_ = ALEFrameBuilder::conclusion(address_book.get_self_address());
 
     return process_event(ALEEvent::CALL_REQUEST);
 }
@@ -773,13 +774,23 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
 }
 
 void ALEStateMachine::update_link_quality(const LinkQuality& lq) {
-    uint32_t idx = scan_config.channel_index;
-    while (channel_quality.size() <= idx)
-        channel_quality.push_back(LinkQuality());
-    channel_quality[idx] = lq;
+    // Forward to LQAMetrics subsystem when attached.
+    if (lqa_metrics_) {
+        MetricsSample sample;
+        sample.snr_db               = lq.snr_db;
+        sample.fec_errors_corrected = static_cast<int>(lq.fec_errors);
+        sample.decode_success       = (lq.fec_errors <= MAX_GOLAY_ERRORS);
+        sample.timestamp_ms         = lq.timestamp_ms;
+        const Channel* ch = get_current_channel();
+        lqa_metrics_->add_sample(sample,
+                                  ch ? ch->frequency_hz : 0u,
+                                  active_call_from);
+    }
 
+    // Keep a quick heuristic LQA score on the Channel for internal channel selection.
+    const uint32_t idx = scan_config.channel_index;
     if (idx < scan_config.scan_list.size()) {
-        float score = 100.0f - (lq.fec_errors * 10.0f);
+        float score = 100.0f - (static_cast<float>(lq.fec_errors) * 10.0f);
         score = std::max(0.0f, std::min(100.0f, score));
         scan_config.scan_list[idx].lqa_score = score;
     }
@@ -828,9 +839,8 @@ bool ALEStateMachine::check_link_timeout() {
 uint32_t ALEStateMachine::compute_calling_timeout_ms() const {
     // Tsc = C × 2 × Trw;  Tlc = 2 × wpa × Trw
     const uint32_t tsc = target_scan_channels * 2u * ALETimingConstants::Trw_ms;
-    // leading_words_ was pre-computed in initiate_call(); its size equals the
-    // number of words needed to transmit active_call_to once (1–5 words).
-    const uint32_t tlc = 2u * static_cast<uint32_t>(leading_words_.size())
+    // leading_frame_ is already doubled (2 × wpa words); multiply by Trw gives Tlc.
+    const uint32_t tlc = static_cast<uint32_t>(leading_frame_.size())
                             * ALETimingConstants::Trw_ms;
     // Per-channel budget: LBT + Tune + Tsc + Tlc + Twr/Twrt
     const uint32_t twr = (calling_channels.size() > 1)
@@ -900,28 +910,28 @@ void ALEStateMachine::try_next_calling_channel() {
 // initiate_call() time, so AddressEncoder::encode() is called at send time.
 
 void ALEStateMachine::build_scanning_word() {
-    // Transmit scanning_word_ once for the current Trw slot.
-    // scanning_word_ holds only the first 3 chars of the destination address
+    // Transmit the single word in scanning_frame_ for the current Trw slot.
+    // scanning_frame_ holds only the first 3 chars of the destination address
     // (A.5.2.5.1).  DATA/REP extension words are forbidden in the scanning
     // section; the full address is sent only in the leading call.
     // on_word_complete() counts slots and transitions to LEADING_CALL after
     // C × 2 slots.
-    transmit_word(scanning_word_);
+    transmit_word(scanning_frame_.words()[0]);
 }
 
 void ALEStateMachine::build_leading_call_word() {
-    // Transmit the full leading_words_ sequence once.
-    // This function is called twice by the on_word_complete() slot counter
-    // (Tlc = 2 × Tc per A.5.5.3.1).  leading_words_ contains 1–5 words
-    // depending on the address length: TO + DATA/REP alternation.
-    transmit_words(leading_words_);
+    // Transmit the full leading_frame_ sequence (already doubled by
+    // ALEFrameBuilder::leading_individual — Tlc = 2 × Tc per A.5.5.3.1).
+    // All words are enqueued at once; on_word_complete() counts each word
+    // individually against leading_frame_.size() total slots.
+    transmit_words(leading_frame_.words());
 }
 
 void ALEStateMachine::build_conclusion_words() {
-    // Transmit conclusion_words_ once.
-    // conclusion_words_ encodes the own address with TIS preamble
-    // (A.5.2.3.2.2), same DATA/REP scheme as leading_words_.
-    transmit_words(conclusion_words_);
+    // Transmit conclusion_frame_ once.
+    // conclusion_frame_ encodes the own address with TIS preamble
+    // (A.5.2.3.2.2), same DATA/REP scheme as the leading frame.
+    transmit_words(conclusion_frame_.words());
 }
 
 void ALEStateMachine::build_ack_words() {
@@ -996,9 +1006,9 @@ void ALEStateMachine::on_word_complete() {
             }
 
             case CallingPhase::LEADING_CALL: {
-                // leading_words_ pre-computed in initiate_call(); its size equals
-                // the word count for active_call_to.  Tlc = 2 × Tc = 2 × wpa × Trw.
-                const uint32_t tlc_slots = 2u * static_cast<uint32_t>(leading_words_.size());
+                // leading_frame_ was pre-doubled by ALEFrameBuilder::leading_individual();
+                // its size already equals 2 × wpa (Tlc = 2 × Tc = 2 × wpa × Trw).
+                const uint32_t tlc_slots = static_cast<uint32_t>(leading_frame_.size());
                 if (call_cycles_in_phase >= tlc_slots) {
                     std::cout << "[TRACE] on_word_complete: LEADING_CALL → "
                               << (pending_message.type != PendingMessage::Type::NONE
@@ -1019,9 +1029,8 @@ void ALEStateMachine::on_word_complete() {
             }
 
             case CallingPhase::CONCLUSION: {
-                // conclusion_words_ pre-computed in initiate_call().
                 const uint32_t conclusion_slots =
-                    static_cast<uint32_t>(conclusion_words_.size());
+                    static_cast<uint32_t>(conclusion_frame_.size());
                 if (call_cycles_in_phase >= conclusion_slots) {
                     std::cout << "[TRACE] on_word_complete: CONCLUSION → LISTENING\n";
                     calling_phase        = CallingPhase::LISTENING;
@@ -1040,7 +1049,7 @@ void ALEStateMachine::on_word_complete() {
                 const uint32_t ack_slots =
                     2u * static_cast<uint32_t>(
                              AddressEncoder::encode(joe_address, PreambleType::TO).size())
-                    + static_cast<uint32_t>(conclusion_words_.size());
+                    + static_cast<uint32_t>(conclusion_frame_.size());
                 if (call_cycles_in_phase >= ack_slots) {
                     std::cout << "[TRACE] on_word_complete: SENDING_ACK → LINKED\n";
                     if (operator_callback)
