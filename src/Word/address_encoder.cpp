@@ -52,15 +52,9 @@ std::vector<std::string> AddressEncoder::chunk(const std::string& addr) {
 
 // static
 ALEWord AddressEncoder::make(PreambleType type, const std::string& chunk3) {
-    ALEWord w;
-    w.type       = type;
-    w.address[0] = chunk3[0];
-    w.address[1] = chunk3[1];
-    w.address[2] = chunk3[2];
-    w.address[3] = '\0';
-    w.valid      = true;
-    // timestamp_ms is left at 0; the transmit path stamps it at send time.
-    return w;
+    // WordParser::make_word sets both address[] and raw_payload via parse_from_bits,
+    // ensuring ALEWord::encode() produces the correct 49-bit output on TX.
+    return WordParser::make_word(type, chunk3.c_str());
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
