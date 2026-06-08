@@ -91,6 +91,37 @@ constexpr uint32_t LINK_TIMEOUT_MS = 120000;             // Link maintenance = 1
 // Annex B says 45 min, Table A-XV says 30 min — Table A-XV used:
 constexpr uint32_t SOUNDING_INTERVAL_MS = 30 * 60 * 1000; // Tps = 30 min
 
+// ── Frame-Duration Formulas (MIL-STD-188-141B Table A-XV, Annex B) ──
+//
+// n_channels             = C: number of channels in the scan list
+// scan_words_per_channel = words in one scanning iteration (1 for 1-word addr,
+//                          2 for 2-word individual or group THRU+REP pair)
+// leading_words_half     = words in one half of the leading-call section
+//                          (Tlc = 2 × half; e.g. 1 for TO:SAM, 2 for TO:SAM DATA:UEL)
+// conclusion_words       = words in the TIS conclusion (1 for ≤3-char self-id)
+
+// Tsc: scanning-call duration  (sum over all channels, one scan pass)
+constexpr double calc_tsc_ms(uint32_t n_channels, uint32_t scan_words_per_channel) {
+    return static_cast<double>(n_channels) * scan_words_per_channel * TRW_MS;
+}
+
+// Tlc: leading-call duration  (full address × 2)
+constexpr double calc_tlc_ms(uint32_t leading_words_half) {
+    return 2.0 * leading_words_half * TRW_MS;
+}
+
+// Tcc: complete call cycle  (Tsc + Tlc, excluding Tx)
+constexpr double calc_tcc_ms(uint32_t n_channels, uint32_t scan_words_per_channel,
+                              uint32_t leading_words_half) {
+    return calc_tsc_ms(n_channels, scan_words_per_channel)
+         + calc_tlc_ms(leading_words_half);
+}
+
+// Tx: conclusion (termination) duration
+constexpr double calc_tx_ms(uint32_t conclusion_words) {
+    return static_cast<double>(conclusion_words) * TRW_MS;
+}
+
 // ── Integer Variants (round-to-nearest, for arrays/bounds) ──
 
 constexpr uint32_t Twr_fast_int  = static_cast<uint32_t>(0.5 + Twr_fast_ms);

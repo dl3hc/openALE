@@ -25,6 +25,7 @@
 #pragma once
 
 #include "Word/ale_word.h"
+#include <string>
 #include <vector>
 #include <cstdint>
 
@@ -55,6 +56,69 @@ public:
 
 private:
     std::vector<ALEWord> words_;
+};
+
+/**
+ * Baut Frame-Objekte für die sechs Basis-Rufstrukturen nach
+ * MIL-STD-188-141B Figuren A-29(a)–(f).
+ *
+ * Figuren-Zuordnung:
+ *   (a) 1-Kanal Nonscan, 1-Wort, Einzelruf:   leading_individual  + conclusion
+ *   (b) N-Kanal Scanning, 1-Wort, Einzelruf:  scanning_individual + leading_individual + conclusion
+ *   (c) 1-Kanal Nonscan, 2-Wort, Einzelruf:   leading_individual  + conclusion
+ *   (d) N-Kanal Scanning, 2-Wort, Einzelruf:  scanning_individual + leading_individual + conclusion
+ *   (e) N-Kanal Scanning, 1-Wort, Gruppenruf: scanning_group      + leading_group      + conclusion
+ *   (f) N-Kanal Scanning, 2-Wort, Gruppenruf: scanning_group      + leading_group      + conclusion
+ *
+ * Dauern (Tsc, Tlc, Tcc, Tx) → ale_timing.h, calc_tsc_ms / calc_tlc_ms etc.
+ * 1-Wort- vs. 2-Wort-Adressierung ergibt sich automatisch aus der Adresslänge.
+ */
+class ALEFrameBuilder {
+public:
+    /**
+     * Scanning-Iteration, Einzelruf (Figuren b, d).
+     *
+     * Liefert die vollständige Adressfolge von dest mit TO-Anker:
+     *   dest ≤ 3 Zeichen  →  [TO:dest]
+     *   dest ≤ 6 Zeichen  →  [TO:dest_part1, DATA:dest_part2]
+     *   …
+     */
+    static Frame scanning_individual(const std::string& dest);
+
+    /**
+     * Scanning-Iteration, Gruppenruf (Figuren e, f).
+     *
+     * Immer genau zwei Wörter, erste 3 Zeichen beider Adressen:
+     *   [THRU:relay_first3, REP:dest_first3]
+     */
+    static Frame scanning_group(const std::string& relay, const std::string& dest);
+
+    /**
+     * Leading-Call-Abschnitt, Einzelruf (Figuren a, b, c, d).
+     *
+     * Vollständige Adressfolge × 2 (Tlc = 2 × Tc):
+     *   1-Wort: [TO:dest, TO:dest]
+     *   2-Wort: [TO:dest1, DATA:dest2, TO:dest1, DATA:dest2]
+     */
+    static Frame leading_individual(const std::string& dest);
+
+    /**
+     * Leading-Call-Abschnitt, Gruppenruf (Figuren e, f).
+     *
+     * Kurze Adressen (je ≤ 3 Zeichen, Figur e) — THRU-Anker:
+     *   [THRU:relay, REP:dest,  THRU:relay, REP:dest]
+     *
+     * Lange Adressen (mind. eine > 3 Zeichen, Figur f) — TO-Anker:
+     *   [TO:relay…, TO:dest…,  TO:relay…, TO:dest…]
+     */
+    static Frame leading_group(const std::string& relay, const std::string& dest);
+
+    /**
+     * Abschlussrahmen — alle Figuren (a–f).
+     *
+     *   [TIS:self]  (mehrere Wörter bei Rufzeichen > 3 Zeichen)
+     */
+    static Frame conclusion(const std::string& self);
 };
 
 } // namespace ale

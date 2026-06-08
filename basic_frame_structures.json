@@ -1,0 +1,254 @@
+{
+"figure": "basic_frame_structures",
+"legend": {
+"triangle": "optional_message_section_position"
+},
+"frames": [
+{
+"id": "a",
+"title": "1-CHANNEL NONSCAN, 1-WORD ADDRESSING, INDIVIDUAL (OR NET) CALL",
+"timing": {
+"Tsc": null,
+"Tlc": {
+"present": true,
+"scope": ["leading_call", "conclusion"],
+"span": "from call start to end of conclusion"
+},
+"Tcc": {
+"present": true,
+"scope": ["leading_call", "conclusion"],
+"span": "from call start to end of conclusion"
+},
+"Tx": {
+"present": true,
+"position": "after_conclusion"
+}
+},
+"sections": {
+"scanning": [],
+"leading": [
+{ "preamble": "TO", "address": ["SAM"] },
+{ "preamble": "TO", "address": ["SAM"] }
+],
+"message": [],
+"conclusion": [
+{ "preamble": "TIS", "address": ["JOE"] }
+]
+}
+},
+{
+"id": "b",
+"title": "N-CHANNEL SCANNING, 1-WORD ADDRESSING, INDIVIDUAL (OR NET) CALL",
+"timing": {
+"Tsc": {
+"present": true,
+"scope": ["scanning_call"],
+"span": "from call start to scan/leading boundary"
+},
+"Tlc": {
+"present": true,
+"scope": ["leading_call", "conclusion"],
+"span": "from scan/leading boundary to end of conclusion"
+},
+"Tcc": {
+"present": true,
+"scope": ["scanning_call", "leading_call", "conclusion"],
+"span": "entire complete call cycle"
+},
+"Tx": {
+"present": true,
+"position": "after_conclusion"
+}
+},
+"sections": {
+"scanning": [
+{ "preamble": "TO", "address": ["SAM"], "repeat": "multiple" }
+],
+"leading": [
+{ "preamble": "TO", "address": ["SAM"] },
+{ "preamble": "TO", "address": ["SAM"] }
+],
+"message": [],
+"conclusion": [
+{ "preamble": "TIS", "address": ["JOE"] }
+]
+}
+},
+{
+"id": "c",
+"title": "1-CHANNEL NONSCAN, 2-WORD ADDRESSING, INDIVIDUAL (OR NET) CALL",
+"timing": {
+"Tsc": null,
+"Tlc": {
+"present": true,
+"scope": ["leading_call", "conclusion"],
+"span": "from call start to end of conclusion"
+},
+"Tcc": {
+"present": true,
+"scope": ["leading_call", "conclusion"],
+"span": "from call start to end of conclusion"
+},
+"Tx": {
+"present": true,
+"position": "after_conclusion"
+}
+},
+"sections": {
+"scanning": [],
+"leading": [
+{ "preamble": "TO", "address": ["SAM"] },
+{ "preamble": "DATA", "data": ["UEL"] },
+{ "preamble": "TO", "address": ["SAM"] },
+{ "preamble": "DATA", "data": ["UEL"] }
+],
+"message": [],
+"conclusion": [
+{ "preamble": "TIS", "address": ["JOE"] }
+]
+}
+},
+{
+"id": "d",
+"title": "N-CHANNEL SCANNING, 2-WORD ADDRESSING, INDIVIDUAL (OR NET) CALL",
+"timing": {
+"Tsc": {
+"present": true,
+"scope": ["scanning_call"],
+"span": "from call start to scan/leading boundary"
+},
+"Tlc": {
+"present": true,
+"scope": ["leading_call", "conclusion"],
+"span": "from scan/leading boundary to end of conclusion"
+},
+"Tcc": {
+"present": true,
+"scope": ["scanning_call", "leading_call", "conclusion"],
+"span": "entire complete call cycle"
+},
+"Tx": {
+"present": true,
+"position": "after_conclusion"
+}
+},
+"sections": {
+"scanning": [
+{
+"sequence": [
+{ "preamble": "TO", "address": ["SAM"] },
+{ "preamble": "DATA", "data": ["UEL"] }
+],
+"repeat": "multiple"
+}
+],
+"leading": [
+{ "preamble": "TO", "address": ["SAM"] },
+{ "preamble": "DATA", "data": ["UEL"] },
+{ "preamble": "TO", "address": ["SAM"] },
+{ "preamble": "DATA", "data": ["UEL"] }
+],
+"message": [],
+"conclusion": [
+{ "preamble": "TIS", "address": ["JOE"] }
+]
+}
+},
+{
+"id": "e",
+"title": "N-CHANNEL SCANNING, 1-WORD ADDRESSING, GROUP CALL",
+"timing": {
+"Tsc": {
+"present": true,
+"scope": ["scanning_call"],
+"span": "from call start to scan/leading boundary"
+},
+"Tlc": {
+"present": true,
+"scope": ["leading_call", "conclusion"],
+"span": "from scan/leading boundary to end of conclusion"
+},
+"Tcc": {
+"present": true,
+"scope": ["scanning_call", "leading_call", "conclusion"],
+"span": "entire complete call cycle"
+},
+"Tx": {
+"present": true,
+"position": "after_conclusion"
+}
+},
+"sections": {
+"scanning": [
+{
+"sequence": [
+{ "preamble": "THRU", "address": ["BOB"] },
+{ "preamble": "REP", "address": ["SAM"] }
+],
+"repeat": "multiple"
+}
+],
+"leading": [
+{ "preamble": "THRU", "address": ["BOB"] },
+{ "preamble": "REP", "address": ["SAM"] },
+{ "preamble": "THRU", "address": ["BOB"] },
+{ "preamble": "REP", "address": ["SAM"] }
+],
+"message": [],
+"conclusion": [
+{ "preamble": "TIS", "address": ["JOE"] }
+]
+}
+},
+{
+"id": "f",
+"title": "N-CHANNEL SCANNING, 2-WORD ADDRESSING, GROUP CALL",
+"timing": {
+"Tsc": {
+"present": true,
+"scope": ["scanning_call"],
+"span": "from call start to scan/leading boundary"
+},
+"Tlc": {
+"present": true,
+"scope": ["leading_call", "conclusion"],
+"span": "from scan/leading boundary to end of conclusion"
+},
+"Tcc": {
+"present": true,
+"scope": ["scanning_call", "leading_call", "conclusion"],
+"span": "entire complete call cycle"
+},
+"Tx": {
+"present": true,
+"position": "after_conclusion"
+}
+},
+"sections": {
+"scanning": [
+{
+"sequence": [
+{ "preamble": "THRU", "address": ["BOB"] },
+{ "preamble": "REP", "address": ["SAM"] }
+],
+"repeat": "multiple"
+}
+],
+"leading": [
+{ "preamble": "TO", "address": ["BOB"] },
+{ "preamble": "DATA", "data": ["BY@"] },
+{ "preamble": "TO", "address": ["SAM"] },
+{ "preamble": "DATA", "data": ["UEL"] },
+{ "preamble": "TO", "address": ["BOB"] },
+{ "preamble": "DATA", "data": ["BY@"] },
+{ "preamble": "TO", "address": ["SAM"] },
+{ "preamble": "DATA", "data": ["UEL"] }
+],
+"message": [],
+"conclusion": [
+{ "preamble": "TIS", "address": ["JOE"] }
+]
+}
+}
+]
+}
