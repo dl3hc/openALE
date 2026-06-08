@@ -52,8 +52,9 @@ Frame ALEFrameBuilder::leading_group(const std::string& relay, const std::string
     return Frame(std::move(doubled));
 }
 
-Frame ALEFrameBuilder::conclusion(const std::string& self) {
-    return Frame(AddressEncoder::encode(self, PreambleType::TIS));
+Frame ALEFrameBuilder::conclusion(const std::string& self, bool is_reject) {
+    const PreambleType anchor = is_reject ? PreambleType::TWAS : PreambleType::TIS;
+    return Frame(AddressEncoder::encode(self, anchor));
 }
 
 } // namespace ale

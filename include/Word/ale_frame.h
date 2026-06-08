@@ -116,9 +116,12 @@ public:
     /**
      * Abschlussrahmen — alle Figuren (a–f).
      *
-     *   [TIS:self]  (mehrere Wörter bei Rufzeichen > 3 Zeichen)
+     *   is_reject = false (Standard): [TIS:self]  — Ruf angenommen
+     *   is_reject = true:             [TWAS:self] — Ruf abgelehnt (A.5.2.3.2.2)
+     *
+     * Mehrere Wörter bei Rufzeichen > 3 Zeichen (DATA/REP-Extension).
      */
-    static Frame conclusion(const std::string& self);
+    static Frame conclusion(const std::string& self, bool is_reject = false);
 };
 
 } // namespace ale

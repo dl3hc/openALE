@@ -72,7 +72,8 @@ ALEStateMachine::ALEStateMachine()
       hs_ack_tis_rcvd(false),
       contiguous_errors(0),
       hs_lbt_start_ms(0),
-      hs_message_start_ms(0)
+      hs_message_start_ms(0),
+      pending_reject_(false)
 {}
 
 // ============================================================================
@@ -228,6 +229,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             words_pending       = 0;
             hs_lbt_start_ms     = 0;
             hs_message_start_ms = 0;
+            pending_reject_     = false;
             handshake_phase     = HandshakePhase::WAIT_CYCLE_END;
             // Twce = 2 × own Ts (Table A-XV); fall back to 1 channel if not configured.
             {
@@ -598,6 +600,12 @@ bool ALEStateMachine::respond_to_call() {
     return true;
 }
 
+bool ALEStateMachine::reject_call() {
+    if (current_state != ALEState::HANDSHAKE) return false;
+    pending_reject_ = true;
+    return true;
+}
+
 bool ALEStateMachine::send_sounding() {
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
         return false;
@@ -946,7 +954,14 @@ void ALEStateMachine::build_ack_words() {
 }
 
 void ALEStateMachine::build_response_words() {
-    // Response frame per A.5.5.3.3 / Figure A-30 — mirrors ACK (roles inverted):
+    if (pending_reject_) {
+        // Rejection frame per FEAT-FRAME-005 / AC-FRAME-010-1:
+        //   TWAS [own addr]  — no TO prefix, no WAIT_ACK after this
+        transmit_words(AddressEncoder::encode(
+            address_book.get_self_address(), PreambleType::TWAS));
+        return;
+    }
+    // Accept response per A.5.5.3.3 / Figure A-30:
     //   TO [caller_address] × 2 + TIS [own addr]
     // caller_address is set during WAIT_CYCLE_END (process_received_word),
     // so it is encoded here at send time, not pre-computed.
@@ -1071,22 +1086,33 @@ void ALEStateMachine::on_word_complete() {
         --words_pending;
         ++hs_words_in_phase;
 
-        // Response frame (Figure A-30): TO [caller_address] × 2 + TIS [self]
-        // JOE never calls initiate_call(), so no pre-computed vectors exist;
-        // encode here to get the exact word counts matching build_response_words().
-        const uint32_t resp_slots =
-            2u * static_cast<uint32_t>(
-                     AddressEncoder::encode(caller_address, PreambleType::TO).size())
-            + static_cast<uint32_t>(
-                     AddressEncoder::encode(address_book.get_self_address(),
-                                            PreambleType::TIS).size());
+        // Slot count depends on whether this is an accept or a reject frame.
+        // Rejection (FEAT-FRAME-005): TWAS [self] only — no TO prefix.
+        // Accept (Figure A-30):       TO [caller] × 2 + TIS [self].
+        const uint32_t resp_slots = pending_reject_
+            ? static_cast<uint32_t>(
+                  AddressEncoder::encode(address_book.get_self_address(),
+                                         PreambleType::TWAS).size())
+            : 2u * static_cast<uint32_t>(
+                       AddressEncoder::encode(caller_address, PreambleType::TO).size())
+              + static_cast<uint32_t>(
+                       AddressEncoder::encode(address_book.get_self_address(),
+                                              PreambleType::TIS).size());
+
         if (hs_words_in_phase >= resp_slots) {
-            std::cout << "[TRACE] on_word_complete: SENDING_RESPONSE → WAIT_ACK\n";
-            handshake_phase  = HandshakePhase::WAIT_ACK;
-            hs_ack_start_ms  = current_time_ms;
-            hs_tlww_start_ms = 0;
-            hs_ack_tis_rcvd  = false;
-            if (rx_enabled_callback) rx_enabled_callback(true);
+            if (pending_reject_) {
+                // Rejection sent — SAM expects no ACK; return to SCANNING.
+                std::cout << "[TRACE] on_word_complete: SENDING_RESPONSE (TWAS reject) → SCANNING\n";
+                pending_reject_ = false;
+                process_event(ALEEvent::LINK_TIMEOUT);
+            } else {
+                std::cout << "[TRACE] on_word_complete: SENDING_RESPONSE → WAIT_ACK\n";
+                handshake_phase  = HandshakePhase::WAIT_ACK;
+                hs_ack_start_ms  = current_time_ms;
+                hs_tlww_start_ms = 0;
+                hs_ack_tis_rcvd  = false;
+                if (rx_enabled_callback) rx_enabled_callback(true);
+            }
         }
     }
 }

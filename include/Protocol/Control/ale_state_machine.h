@@ -197,6 +197,21 @@ public:
     bool initiate_call(const std::string& to_address);
     bool initiate_net_call(const std::string& net_address);
     bool respond_to_call();
+
+    /**
+     * Signal call rejection while in HANDSHAKE state (JOE side).
+     *
+     * Sets the pending_reject_ flag; the response frame built in
+     * CHANNEL_CHECK → SENDING_RESPONSE will use TWAS instead of
+     * TO×2 + TIS (AC-FRAME-010-1 / FEAT-FRAME-005).
+     * After the TWAS frame is sent the handshake ends immediately —
+     * no WAIT_ACK phase, because SAM expects no further reply.
+     *
+     * Must be called before SENDING_RESPONSE begins.
+     * Returns false if not in HANDSHAKE state.
+     */
+    bool reject_call();
+
     bool send_sounding();
 
     /**
@@ -257,6 +272,7 @@ public:
     const std::string& get_joe_address()      const { return joe_address; }
     const std::string& get_caller_address()   const { return caller_address; }
     bool           is_hs_conclusion_rcvd()    const { return hs_conclusion_rcvd; }
+    bool           is_pending_reject()        const { return pending_reject_; }
 
     // ── Callbacks ────────────────────────────────────────────────────────
 
@@ -365,6 +381,7 @@ private:
     uint8_t        contiguous_errors;    ///< Contiguous FEC-fail count (A.5.5.3.2, Fix 6)
     uint32_t       hs_lbt_start_ms;      ///< When CHANNEL_CHECK LBT started; 0 = not active
     uint32_t       hs_message_start_ms;  ///< When first message word (DATA/REP before TIS) arrived; 0 = none
+    bool           pending_reject_;      ///< true = send TWAS rejection frame (set via reject_call())
 
     // ── Emergency control (REQ-LINK-007) ─────────────────────────────────
     bool emergency_active;
