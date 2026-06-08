@@ -4,8 +4,9 @@
  *
  * Frame arbeitet auf ALEWord-Ebene (24-bit logische Wörter).
  * encode() überführt jeden ALEWord in ein 49-bit-Übertragungswort
- * (Golay + Interleaving per A.5.2.2.2/A.5.2.2.3) und liefert den
- * resultierenden Vektor an ALE2GModem::enqueue_frame().
+ * (Golay + Interleaving per A.5.2.2.2/A.5.2.2.3).
+ * ALE2GModem::enqueue_frame() ruft encode() auf und übergibt das Ergebnis
+ * wortweise an den internen Sendepuffer.
  *
  * Bit-Konvention der 49-bit-Wörter (A.5.2.2.3, MSB-first):
  *   bit  0 = A1  (W1, erstes gesendetes Bit)
@@ -42,8 +43,6 @@ public:
      *   2. Golay (24,12) auf obere Hälfte W1..W12 (Coder A) und
      *      untere Hälfte W13..W24 (Coder B, Parität invertiert) — A.5.2.2.2
      *   3. A/B-Interleaving [A1,B1, A2,B2, …, A24,B24] + S49=0 — A.5.2.2.3
-     *
-     * Das Ergebnis wird 1:1 an ALE2GModem::enqueue_frame() übergeben.
      *
      * \return Vektor mit size() Einträgen; jeder Eintrag ist ein 49-bit-Wort
      *         (bit 0 = A1 = erstes gesendetes Bit, bit 48 = S49 = 0).

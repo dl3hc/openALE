@@ -1,8 +1,12 @@
 /**
  * \file test_frame.cpp
- * \brief Acceptance tests for FEAT-FRAME-001 — Frame-Grundstruktur & Wortbasis
+ * \brief Tests for FEAT-FRAME-001 — Frame-Grundstruktur & Wortbasis
  *
- * Covers REQ-FRAME-001 (AC-FRAME-001-2, -3, -4) per MIL-STD-188-141B A.5.2.5.
+ * Part 1 (AC-FRAME-002): Frame class unit tests — encode() correctness and
+ *   roundtrip via ALEFECCodec::deinterleave_word().
+ *
+ * Part 2 (AC-FRAME-001): ALEStateMachine / ALE2GModem integration tests —
+ *   slot timing, phase sequencing, and modem 3× copy behaviour.
  *
  * Timing model (DD-013, DD-006):
  *   ALEStateMachine is callback-driven: on_word_complete() is called once per
@@ -19,6 +23,8 @@
 
 #include "Protocol/Control/ale_state_machine.h"
 #include "Modem/ale2g_modem.h"
+#include "Word/ale_frame.h"
+#include "FEC/ale_fec_codec.h"
 #include "FSK/ale_waveform.h"
 #include <iostream>
 #include <iomanip>
@@ -28,6 +34,100 @@
 #include <algorithm>
 
 namespace ale {
+
+// ============================================================================
+// AC-FRAME-002 — Frame class unit tests
+// ============================================================================
+
+// AC-FRAME-002-1: Frame::encode() produces one entry per word and each entry
+// equals ALEWord::encode() for that word.
+bool test_ac_002_1_encode_delegates_to_word_encode()
+{
+    std::cout << "\n[AC-FRAME-002-1] Frame::encode() delegates to ALEWord::encode()\n";
+
+    const char addr[] = {'S', 'A', 'M'};
+    ALEWord word = WordParser::make_word(PreambleType::TO, addr);
+    Frame frame({word});
+
+    auto encoded = frame.encode();
+    bool size_ok  = (encoded.size() == 1);
+    bool value_ok = size_ok && (encoded[0] == word.encode());
+
+    std::cout << "  encode() has 1 element: " << (size_ok  ? "PASS" : "FAIL") << "\n";
+    std::cout << "  encode()[0] == word.encode(): " << (value_ok ? "PASS" : "FAIL") << "\n";
+
+    return size_ok && value_ok;
+}
+
+// AC-FRAME-002-2: encode() → deinterleave_word() round-trips preamble and
+// payload back to their original values with zero FEC errors.
+bool test_ac_002_2_encode_roundtrip()
+{
+    std::cout << "\n[AC-FRAME-002-2] Frame::encode() roundtrip via ALEFECCodec::deinterleave_word()\n";
+
+    const char addr[] = {'S', 'A', 'M'};
+    ALEWord word = WordParser::make_word(PreambleType::TO, addr);
+    Frame frame({word});
+
+    auto encoded = frame.encode();
+
+    Golay::DecodeResult fec;
+    uint32_t decoded      = ALEFECCodec::deinterleave_word(encoded[0], fec);
+    uint32_t got_preamble = decoded >> PAYLOAD_BITS;
+    uint32_t got_payload  = decoded & ((1u << PAYLOAD_BITS) - 1u);
+
+    bool fec_ok      = (fec.flag == Golay::DECODE_OK);
+    bool preamble_ok = (got_preamble == static_cast<uint32_t>(word.type));
+    bool payload_ok  = (got_payload  == word.raw_payload);
+
+    std::cout << "  FEC clean (DECODE_OK): "      << (fec_ok      ? "PASS" : "FAIL") << "\n";
+    std::cout << "  preamble round-trips (TO=2): " << (preamble_ok ? "PASS" : "FAIL")
+              << " (got " << got_preamble << ")\n";
+    std::cout << "  payload round-trips: "         << (payload_ok  ? "PASS" : "FAIL")
+              << " (expected " << word.raw_payload << ", got " << got_payload << ")\n";
+
+    return fec_ok && preamble_ok && payload_ok;
+}
+
+// AC-FRAME-002-3: multi-word Frame preserves insertion order in encode().
+bool test_ac_002_3_multi_word_order()
+{
+    std::cout << "\n[AC-FRAME-002-3] Frame::encode() preserves word order\n";
+
+    const char sam[] = {'S', 'A', 'M'};
+    const char bob[] = {'B', 'O', 'B'};
+    ALEWord w1 = WordParser::make_word(PreambleType::TO,  sam);
+    ALEWord w2 = WordParser::make_word(PreambleType::TIS, bob);
+    Frame frame({w1, w2});
+
+    auto encoded = frame.encode();
+    bool size_ok  = (encoded.size() == 2);
+    bool order_ok = size_ok
+                    && (encoded[0] == w1.encode())
+                    && (encoded[1] == w2.encode());
+
+    std::cout << "  encode() has 2 elements: "     << (size_ok  ? "PASS" : "FAIL") << "\n";
+    std::cout << "  word order preserved: "         << (order_ok ? "PASS" : "FAIL") << "\n";
+
+    return size_ok && order_ok;
+}
+
+// AC-FRAME-002-4: empty Frame produces an empty encode() result.
+bool test_ac_002_4_empty_frame()
+{
+    std::cout << "\n[AC-FRAME-002-4] Empty Frame\n";
+
+    Frame empty;
+    bool is_empty   = empty.empty();
+    bool size_zero  = (empty.size() == 0);
+    bool enc_empty  = empty.encode().empty();
+
+    std::cout << "  empty() == true: "              << (is_empty  ? "PASS" : "FAIL") << "\n";
+    std::cout << "  size() == 0: "                  << (size_zero ? "PASS" : "FAIL") << "\n";
+    std::cout << "  encode() returns empty vector: " << (enc_empty ? "PASS" : "FAIL") << "\n";
+
+    return is_empty && size_zero && enc_empty;
+}
 
 // ============================================================================
 // Test harness
@@ -179,8 +279,15 @@ bool test_ac_001_2_cycle_count_increments_in_callback()
     std::cout << "  before update: call_cycle_count=0, words_pending=0: "
               << (pre_ok ? "PASS" : "FAIL") << "\n";
 
-    // update(0) → transmit_word() called once (1 word, LEADING seq 1)
-    sm.update(0);
+    // Advance through LBT (Twt=784 ms) and TUNING (Tt=1045 ms) — AC-LINK-017-1/2.
+    // No words are transmitted during these pre-TX phases.
+    const uint32_t T_LBT = ALETimingConstants::Twt_ms;
+    const uint32_t T_TX  = T_LBT + ALETimingConstants::Tt_ms;
+    sm.update(T_LBT);   // LBT ends → TUNING
+    sm.update(T_TX);    // TUNING ends → LEADING_CALL, first_call_tx_ms = T_TX
+
+    // update(T_TX) → first word fires (slot 0: current_time_ms >= first_call_tx_ms)
+    sm.update(T_TX);
     bool tx_fired  = (transmit_count == 1);
     bool count_unchanged = (sm.get_call_cycle_count() == 0);  // NOT yet incremented
     bool pending_up      = (sm.get_words_pending() == 1);
@@ -232,9 +339,18 @@ bool test_ac_001_3_phase_sequence_via_callback_only()
 
     const uint32_t Trw = ALETimingConstants::Trw_ms;
 
+    // Advance through LBT and TUNING — these are timer-based transitions that
+    // legitimately happen inside update(), not in on_word_complete().
+    const uint32_t T_LBT = ALETimingConstants::Twt_ms;
+    const uint32_t T_TX  = T_LBT + ALETimingConstants::Tt_ms;
+    sm.update(T_LBT);   // LBT ends → TUNING
+    sm.update(T_TX);    // TUNING ends → SCANNING_CALL, first_call_tx_ms = T_TX
+
     std::vector<CallingPhase> phase_log;
     // Record phase BEFORE update() and BEFORE on_word_complete().
     // A transition must not appear between the two — only inside the callback.
+    // (This invariant applies only to word-based phase transitions SCANNING→…;
+    //  LBT→TUNING→SCANNING_CALL are timer-based and happen inside update().)
 
     bool transition_outside_callback = false;
 
@@ -256,14 +372,14 @@ bool test_ac_001_3_phase_sequence_via_callback_only()
 
     // Drive 4 SCANNING slots (Tsc = 4 Trw-slots)
     for (uint32_t i = 0; i < 4; ++i)
-        tick(i * Trw);
+        tick(T_TX + i * Trw);
 
     // Drive 2 LEADING slots (Tlc = 2 × 1 × Trw = 2 Trw-slots for 1-word address)
     for (uint32_t i = 4; i < 6; ++i)
-        tick(i * Trw);
+        tick(T_TX + i * Trw);
 
     // Drive 1 CONCLUSION slot
-    tick(6 * Trw);
+    tick(T_TX + 6 * Trw);
 
     // ── Check no transition happened outside on_word_complete() ──────────
     bool no_outside_transition = !transition_outside_callback;
@@ -342,10 +458,17 @@ bool test_ac_001_4_slot_timing_formula()
 
     sm.initiate_call("BOB");
 
-    // first_call_tx_ms = 0 (initiate_call at t=0, first update at t=0)
-    const uint32_t t0 = 0;
+    // Advance through LBT (Twt=784 ms) and TUNING (Tt=1045 ms).
+    // first_call_tx_ms is set at end of TUNING — that timestamp becomes the slot anchor.
+    const uint32_t T_LBT = ALETimingConstants::Twt_ms;
+    const uint32_t T_TX  = T_LBT + ALETimingConstants::Tt_ms;   // = first_call_tx_ms
+    sm.update(T_LBT);   // LBT ends → TUNING
+    sm.update(T_TX);    // TUNING ends → LEADING_CALL, first_call_tx_ms = T_TX
 
-    // Drive 5 slots: tick at t = N × Trw, ack after each
+    // Slot anchor: first word at T_TX + 0*Trw, second at T_TX + 1*Trw, etc.
+    const uint32_t t0 = T_TX;
+
+    // Drive 5 slots: tick at t = t0 + N × Trw, ack after each
     for (uint32_t slot = 0; slot < 5; ++slot) {
         uint32_t t = t0 + slot * Trw;
         // Record time just before triggering so we can match to transmit
@@ -422,6 +545,12 @@ bool test_ac_001_4_timing_formulas()
 
         sm.initiate_call(c.to_addr);
 
+        // Advance through LBT and TUNING before counting word-phase slots.
+        const uint32_t T_LBT = ALETimingConstants::Twt_ms;
+        const uint32_t T_TX  = T_LBT + ALETimingConstants::Tt_ms;
+        sm.update(T_LBT);
+        sm.update(T_TX);
+
         // Count slots in each phase by driving until CONCLUSION phase begins.
         uint32_t scanning_slots = 0;
         uint32_t leading_slots  = 0;
@@ -431,7 +560,7 @@ bool test_ac_001_4_timing_formulas()
             if (ph == CallingPhase::CONCLUSION || ph == CallingPhase::LISTENING)
                 break;
 
-            sm.update(slot * Trw);
+            sm.update(T_TX + slot * Trw);
             sm.on_word_complete();
 
             if (ph == CallingPhase::SCANNING_CALL) ++scanning_slots;
@@ -463,7 +592,7 @@ int run_all_tests()
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
     std::cout << "║  FEAT-FRAME-001 — Frame-Grundstruktur & Wortbasis         ║\n";
-    std::cout << "║  REQ-FRAME-001 Acceptance Tests                           ║\n";
+    std::cout << "║  REQ-FRAME-001/002 Acceptance Tests                       ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n";
 
     int pass_count = 0;
@@ -474,6 +603,20 @@ int run_all_tests()
         else        { ++fail_count; std::cout << "  *** FAILED: " << name << "\n"; }
     };
 
+    // ── Frame class unit tests ────────────────────────────────────────────────
+    run("AC-FRAME-002-1        encode() delegates to ALEWord::encode()",
+        test_ac_002_1_encode_delegates_to_word_encode());
+
+    run("AC-FRAME-002-2        encode() roundtrip via deinterleave_word()",
+        test_ac_002_2_encode_roundtrip());
+
+    run("AC-FRAME-002-3        encode() preserves word order (multi-word)",
+        test_ac_002_3_multi_word_order());
+
+    run("AC-FRAME-002-4        empty Frame → empty encode()",
+        test_ac_002_4_empty_frame());
+
+    // ── SM / modem integration timing tests ──────────────────────────────────
     run("AC-FRAME-001-2 (modem) ALE2GModem sends 3 identical PCM copies",
         test_ac_001_2_modem_3x_identical_copies());
 

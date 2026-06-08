@@ -56,6 +56,7 @@ target_include_directories(ale_fec PUBLIC
 # Protocol / Word layer
 add_library(ale_protocol
     src/Word/ale_word.cpp
+    src/Word/ale_frame.cpp
     src/Word/address_encoder.cpp
     src/Protocol/Message/ale_message.cpp
 )

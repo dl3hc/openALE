@@ -36,6 +36,7 @@
 #include "FSK/symbol_decoder.h"
 #include "Protocol/Control/ale_timing.h"
 #include "Word/ale_word.h"
+#include "Word/ale_frame.h"
 #include <functional>
 #include <array>
 #include <queue>
@@ -65,6 +66,14 @@ public:
     void enqueue_word(const ALEWord& word);
 
     /**
+     * Enqueue all words of a Frame for sequential 3× transmission.
+     * Equivalent to calling enqueue_word() for each word in frame.words(),
+     * but uses the pre-encoded 49-bit representation from Frame::encode()
+     * directly — encoding happens once at enqueue time.
+     */
+    void enqueue_frame(const Frame& frame);
+
+    /**
      * Drive the modem forward in time.
      *
      * Call this in the same integration loop as ALEStateMachine::update(), passing
@@ -85,11 +94,11 @@ private:
     static constexpr uint32_t SAMPLES_PER_COPY =
         SYMBOLS_PER_WORD * (SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD);
 
-    ALEWord  pending_word_;
+    uint64_t pending_tx49_     = 0;      // pre-encoded 49-bit word ready for modulation
     uint8_t  copies_remaining_ = 0;
     bool     word_enqueued_    = false;  // first copy not yet sent
     uint32_t next_copy_ms_     = 0;
-    std::queue<ALEWord> word_queue_;
+    std::queue<uint64_t> tx49_queue_;
 
     std::array<uint8_t, SYMBOLS_PER_WORD> symbol_buf_;
     std::array<int16_t, SAMPLES_PER_COPY> sample_buf_;
@@ -98,7 +107,10 @@ private:
     TxCallback       tx_cb_;
     WordDoneCallback done_cb_;
 
-    // Encode pending_word_ into symbol_buf_ (called once per enqueue_word()).
+    // Common enqueue path for word and frame: stores tx49, starts or queues.
+    void enqueue_tx49_(uint64_t tx49);
+
+    // Map the bits of pending_tx49_ into symbol_buf_.
     void build_symbols();
 
     // Generate and deliver one word copy via tx_cb_.

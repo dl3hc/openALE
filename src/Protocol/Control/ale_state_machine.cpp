@@ -188,9 +188,11 @@ void ALEStateMachine::enter_state(ALEState new_state) {
 
         case ALEState::CALLING:
             link_start_time_ms             = current_time_ms;
-            // DD-013/DD-006: slot-grid anchor set at state entry; first word fires
-            // when current_time_ms >= first_call_tx_ms + call_cycle_count × Trw_ms.
-            first_call_tx_ms               = current_time_ms;
+            // DD-006: first_call_tx_ms is the Trw-grid anchor; set at end of TUNING
+            // so that slot 0 fires exactly when the radio is tuned and ready (AC-LINK-017-2).
+            first_call_tx_ms               = 0;
+            lbt_start_ms                   = current_time_ms;
+            tune_start_ms                  = 0;
             call_cycle_count               = 0;
             call_cycles_in_phase           = 0;
             words_pending                  = 0;
@@ -205,16 +207,9 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             if (!calling_channels.empty() && channel_callback)
                 channel_callback(calling_channels[calling_channel_index]);
 
-            // Enter TX phase directly (DD-013: phase transitions only via on_word_complete).
-            // target_scan_channels == 0: target on fixed channel → LEADING_CALL directly.
-            // target_scan_channels  > 0: scan target first → SCANNING_CALL.
-            if (active_call_is_net) {
-                calling_phase = CallingPhase::NET_CALL_STUB;
-            } else if (target_scan_channels > 0) {
-                calling_phase = CallingPhase::SCANNING_CALL;
-            } else {
-                calling_phase = CallingPhase::LEADING_CALL;
-            }
+            // AC-LINK-017-1: always start with LBT; TX begins only after Twt + Tt.
+            calling_phase = CallingPhase::LBT;
+            if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
         case ALEState::HANDSHAKE:
@@ -315,15 +310,37 @@ void ALEStateMachine::handle_scanning() {
  *   next_tx = first_call_tx_ms + call_cycle_count × Trw_ms
  */
 void ALEStateMachine::handle_calling() {
-    std::cout << "[TRACE] t=" << current_time_ms
-              << " phase=" << PHASE_NAMES[static_cast<int>(calling_phase)]
-              << " pending=" << words_pending
-              << " cycles=" << call_cycles_in_phase
-              << " total=" << call_cycle_count
-              << " addr=" << active_call_to
-              << "\n";
-
     switch (calling_phase) {
+
+        // ── LBT ──────────────────────────────────────────────────────────────────
+        // Listen Twt (784 ms ALE-only) before first TX — AC-LINK-017-1.
+        // RX is open; timer runs regardless of channel activity.
+        case CallingPhase::LBT: {
+            if ((current_time_ms - lbt_start_ms) >= ALETimingConstants::Twt_ms) {
+                calling_phase = CallingPhase::TUNING;
+                tune_start_ms = current_time_ms;
+                if (rx_enabled_callback) rx_enabled_callback(false);  // blind tune
+            }
+            break;
+        }
+
+        // ── TUNING ───────────────────────────────────────────────────────────────
+        // Blind tune Tt (1045 ms) — AC-LINK-017-2.
+        // Sets first_call_tx_ms (Trw-grid anchor) so slot 0 starts at tune-complete.
+        case CallingPhase::TUNING: {
+            if ((current_time_ms - tune_start_ms) >= ALETimingConstants::Tt_ms) {
+                first_call_tx_ms     = current_time_ms;
+                call_cycles_in_phase = 0;
+                if (active_call_is_net) {
+                    calling_phase = CallingPhase::NET_CALL_STUB;
+                } else if (target_scan_channels > 0) {
+                    calling_phase = CallingPhase::SCANNING_CALL;
+                } else {
+                    calling_phase = CallingPhase::LEADING_CALL;
+                }
+            }
+            break;
+        }
 
         // ── SCANNING_CALL ─────────────────────────────────────────────────
         // One TO word per slot (first address chunk only), no DATA/REP.
@@ -349,11 +366,13 @@ void ALEStateMachine::handle_calling() {
         }
 
         // ── MESSAGE ───────────────────────────────────────────────────────
-        // Optional AMD/DTM/DBM orderwire — stub, falls through to CONCLUSION.
-        // TODO: implement AMD per AC-LINK-009-3 (earliest start: word 30 = 11.368 s)
+        // Stub (AC-LINK-009-3 not yet implemented): no words to send.
+        // Per DD-013, phase transitions are driven by on_word_complete(), not update().
+        // The stub synthesises the callback here so the transition stays in on_word_complete().
+        // TODO: when AMD is implemented, replace this with build_message_words() and
+        //       let on_word_complete() handle the word-count guard normally.
         case CallingPhase::MESSAGE: {
-            calling_phase        = CallingPhase::CONCLUSION;
-            call_cycles_in_phase = 0;
+            on_word_complete();
             break;
         }
 
@@ -423,13 +442,6 @@ void ALEStateMachine::handle_calling() {
 }
 
 void ALEStateMachine::handle_handshake() {
-    std::cout << "[TRACE] t=" << current_time_ms
-              << " hs_phase=" << HS_PHASE_NAMES[static_cast<int>(handshake_phase)]
-              << " pending=" << words_pending
-              << " caller=" << caller_address
-              << " conclusion=" << hs_conclusion_rcvd
-              << "\n";
-
     switch (handshake_phase) {
 
         // ── WAIT_CYCLE_END ────────────────────────────────────────────────
@@ -955,6 +967,15 @@ void ALEStateMachine::transmit_words(const std::vector<ALEWord>& words) {
 // ============================================================================
 
 void ALEStateMachine::on_word_complete() {
+    // ── MESSAGE stub guard ────────────────────────────────────────────────
+    // MESSAGE sends 0 words; transition to CONCLUSION without touching word counters.
+    // Triggered synthetically by handle_calling() per DD-013.
+    if (current_state == ALEState::CALLING && calling_phase == CallingPhase::MESSAGE) {
+        calling_phase        = CallingPhase::CONCLUSION;
+        call_cycles_in_phase = 0;
+        return;
+    }
+
     // ── CALLING path (SAM side) ───────────────────────────────────────────
     if (current_state == ALEState::CALLING) {
         --words_pending;
@@ -992,8 +1013,8 @@ void ALEStateMachine::on_word_complete() {
             }
 
             case CallingPhase::MESSAGE: {
-                // Stub: MESSAGE phase completes immediately (no words sent).
-                // handle_calling() transitions MESSAGE → CONCLUSION synchronously.
+                // Unreachable: the MESSAGE guard at the top of on_word_complete()
+                // intercepts the stub call before words_pending is decremented.
                 break;
             }
 

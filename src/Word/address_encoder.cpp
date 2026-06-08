@@ -78,9 +78,9 @@ std::vector<ALEWord> AddressEncoder::encode(const std::string& addr,
 // static
 ALEWord AddressEncoder::encode_first(const std::string& addr,
                                      PreambleType           first_word_type) {
-    // Deliberately delegates to encode() to guarantee identical behaviour.
-    // "Scanning uses the same rule as leading call, just the first word only."
-    return encode(addr, first_word_type).front();
+    // Use chunk() directly to reuse the same padding/splitting rule as encode()
+    // without allocating the full word vector — only the first chunk is needed.
+    return make(first_word_type, chunk(addr).front());
 }
 
 // static
@@ -111,11 +111,9 @@ std::vector<ALEWord> AddressEncoder::encode_group(const std::vector<std::string>
             if (i == 0) {
                 if (a == 0) {
                     t = first_word_type;    // first address always uses anchor
-                } else if (last_non_rep == PreambleType::TO
-                        || last_non_rep == first_word_type) {
-                    // Previous address ended on an anchor word (single-word address
-                    // or a REP that the decoder treats as anchor-equivalent).
-                    // REP is the compact "new recipient" marker.
+                } else if (last_non_rep == PreambleType::TO) {
+                    // Previous address ended on TO → decoder treats REP as new recipient
+                    // (reconstruct_to_addresses: REP after TO → new recipient).
                     t = PreambleType::REP;
                 } else {
                     // Previous address ended on DATA → REP-after-DATA would extend,

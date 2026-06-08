@@ -394,10 +394,11 @@ bool FrameValidator::no_consecutive_same_preamble(const std::vector<ALEWord>& wo
 
 bool FrameValidator::rep_not_used_in_multiple_sender_situation(const std::vector<ALEWord>& words)
 {
-    // This is a complex validation that requires detailed frame analysis
-    // For now, we'll return true to indicate it's a placeholder
-    // In a full implementation, this would analyze the frame structure to 
-    // detect multiple sender situations where REP is not appropriate
+    // AC-WORD-010-7: not enforceable at single-frame level.
+    // "Multiple sender situation" is a network-state concept (net call, simultaneous
+    // TX from several stations) that requires cross-station context unavailable here.
+    // Enforcement deferred to ALEStateMachine net-call handling (NET_CALL_STUB).
+    (void)words;
     return true;
 }
 

@@ -304,7 +304,14 @@ public:
 
     /**
      * AC-WORD-010-7: REP must not be used where multiple senders exist.
-     * \return true if REP is not used in a multiple sender situation.
+     *
+     * \note Always returns true. Detecting a "multiple sender situation"
+     *       requires cross-station protocol state (net-call membership,
+     *       simultaneous transmissions) that is not available to a single-frame
+     *       validator. This check must be enforced at the ALEStateMachine level
+     *       when net-call support (CallingPhase::NET_CALL_STUB) is implemented.
+     *
+     * \return true (unconditional — see note above)
      */
     static bool rep_not_used_in_multiple_sender_situation(const std::vector<ALEWord>& words);
 
