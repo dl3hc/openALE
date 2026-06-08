@@ -98,6 +98,14 @@ struct ALEWord {
                 unanimous_votes(0), valid(false), timestamp_ms(0) {
         address[0] = address[1] = address[2] = address[3] = '\0';
     }
+
+    /**
+     * Encode this word for transmission (A.5.2.2.2 / A.5.2.2.3).
+     * Applies Golay (24,12) to both halves, inverts Coder-B check bits,
+     * interleaves A/B channels, and appends S49=0.
+     * \return 49-bit transmitted word ready for FSK modulation.
+     */
+    uint64_t encode() const;
 };
 
 /**

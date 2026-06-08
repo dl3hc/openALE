@@ -459,4 +459,16 @@ std::vector<std::string> FrameValidator::reconstruct_to_addresses(const std::vec
     return addresses;
 }
 
+// ============================================================================
+// ALEWord
+// ============================================================================
+
+uint64_t ALEWord::encode() const
+{
+    const uint32_t raw24   = (static_cast<uint32_t>(type) << 21)
+                           | (raw_payload & 0x1F'FFFFu);
+    const GolayCoded coded = ALEFECCodec::encode_word(raw24);
+    return ALEFECCodec::interleave_word(coded);
+}
+
 } // namespace ale

@@ -4,7 +4,6 @@
  */
 
 #include "Modem/ale2g_modem.h"
-#include "FEC/ale_fec_codec.h"
 #include <cassert>
 
 namespace ale {
@@ -41,11 +40,16 @@ void ALE2GModem::build_symbols() {
     const uint32_t raw24 = (static_cast<uint32_t>(pending_word_.type) << 21)
                          | (pending_word_.raw_payload & 0x1F'FFFFu);
 
-    // Golay FEC encode + bit-level word interleaving → 49-bit transmitted word (A.5.2.2.3)
-    const uint64_t tx49 = ALEFECCodec::interleave_word(raw24);
+    // Step 1 — Golay (24,12) encode both halves (A.5.2.2.2):
+    //   coded.coder_a = [W1..W12  | G1..G12 ]    24 bit — Coder A, check bits normal
+    //   coded.coder_b = [W13..W24 | ~G13..~G24]  24 bit — Coder B, check bits inverted
+    const GolayCoded coded = ALEFECCodec::encode_word(raw24);
 
-    // Map each bit to a 2-tone FSK symbol.
-    // Decoder uses (symbol & 1u) → bit, so: bit 0 → sym 0 (750 Hz), bit 1 → sym 1 (1000 Hz).
+    // Step 2 — Bit-interleave coder_a and coder_b, append S49=0 (A.5.2.2.3):
+    //   [A1,B1, A2,B2, ..., A24,B24, S49=0]  → 49-bit transmitted word
+    const uint64_t tx49 = ALEFECCodec::interleave_word(coded);
+
+    // Map each bit to a 2-tone FSK symbol (bit 0 → 750 Hz, bit 1 → 1000 Hz).
     for (uint32_t i = 0; i < SYMBOLS_PER_WORD; ++i)
         symbol_buf_[i] = static_cast<uint8_t>((tx49 >> i) & 1u);
 }

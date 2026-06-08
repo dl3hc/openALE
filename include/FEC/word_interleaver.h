@@ -1,21 +1,22 @@
 /**
  * \file fec/word_interleaver.h
- * \brief Bit-level word interleaver for ALE transmitted-word structure
+ * \brief Bit-level word interleaver for ALE transmitted-word structure (A.5.2.2.3)
  *
- * Implements the bit interleaving / deinterleaving per MIL-STD-188-141B A.5.2.2.3.
+ * Responsible ONLY for interleaving and deinterleaving of pre-encoded bit sequences.
+ * Golay encoding and decoding are NOT performed here; see ALEFECCodec.
  *
  * Transmitted-word layout (49 bits):
- *   Positions  0..23 : A/B pairs for W1..W24 (data bits, interleaved)
- *   Positions 24..47 : A/B pairs for G1..G12 (Golay parity, normal / inverted)
+ *   Positions  0..23 : A/B pairs for data bits   W1..W24
+ *   Positions 24..47 : A/B pairs for parity bits G1..G12 (A, normal) / G13..G24 (B, inverted)
  *   Position  48     : Stuff bit S49 = 0
  *
- * Parity bits G13..G24 are the bitwise inverses of G1..G12 (AC-FEC-012-2).
- * Golay (24,12) is applied to the upper 12 bits of the ALE word (W1..W12).
+ * interleave()   expects two pre-encoded 24-bit codewords (sequence_a, sequence_b).
+ * deinterleave() returns two extracted 24-bit codewords; B-channel parity is uninverted.
+ * Both operations are the exact inverse of each other.
  */
 
 #pragma once
 
-#include "FEC/golay.h"
 #include <cstdint>
 
 namespace ale {
@@ -25,28 +26,32 @@ public:
     static constexpr uint32_t TRANSMITTED_BITS = 49;
 
     /**
-     * Interleave a 24-bit ALE word into a 49-bit transmitted word.
+     * Interleave two Golay codewords into a 49-bit transmitted word.
      *
-     * Golay parity G1..G12 is computed from bits 23..12 (W1..W12).
+     * sequence_a = [W1..W12  | G1..G12 ] — A-channel; parity placed normal.
+     * sequence_b = [W13..W24 | G13..G24] — B-channel; parity placed inverted.
      * Bit 48 of the result (S49) is always 0.
      *
-     * \param ale_word  24-bit ALE word  [W1=bit23 .. W24=bit0]
-     * \return          49-bit transmitted word [A1,B1, ..., A24,B24, S49]
+     * \param sequence_a  24-bit Golay codeword for the upper ALE-word half
+     * \param sequence_b  24-bit Golay codeword for the lower ALE-word half
+     * \return            49-bit transmitted word [A1,B1, ..., A24,B24, S49]
      */
-    static uint64_t interleave(uint32_t ale_word);
+    static uint64_t interleave(uint32_t sequence_a, uint32_t sequence_b);
 
     /**
-     * Deinterleave a 49-bit transmitted word and apply Golay error correction.
+     * Deinterleave a 49-bit received word into two raw codewords.
      *
-     * W1..W12 are corrected using the extracted G1..G12 parity.
-     * W13..W24 are passed through unchanged.
+     * Reconstructs sequence_a (A-channel) and sequence_b (B-channel).
+     * B-channel parity bits are uninverted before writing to sequence_b.
      * Bit 48 (S49) is ignored per AC-FEC-013-4.
+     * No Golay error correction is applied — call ALEFECCodec::decode_word() next.
      *
      * \param transmitted  49-bit received word
-     * \param fec_out      [out] Golay decode result (flag + errors_corrected)
-     * \return             24-bit corrected ALE word
+     * \param sequence_a   [out] reconstructed A-channel codeword [W1..W12  | G1..G12 ]
+     * \param sequence_b   [out] reconstructed B-channel codeword [W13..W24 | G13..G24]
      */
-    static uint32_t deinterleave(uint64_t transmitted, Golay::DecodeResult& fec_out);
+    static void deinterleave(uint64_t transmitted,
+                             uint32_t& sequence_a, uint32_t& sequence_b);
 };
 
 } // namespace ale

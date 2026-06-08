@@ -314,30 +314,38 @@ bool test_feat_fec_002_decoder_acs() {
 // ============================================================================
 
 // AC-FEC-012-1/3, AC-FEC-013-1: Roundtrip interleave → deinterleave
-// Tests that deinterleave(interleave(w)) == w for all 4096 representative words.
+// Tests that deinterleave(interleave(w)) == w for representative words in both halves.
 bool test_feat_fec_003_roundtrip() {
     std::cout << "\n[TEST FEC-6] FEAT-FEC-003 — Roundtrip interleave/deinterleave (AC-FEC-012-1/3, AC-FEC-013-1)\n";
     std::cout << "--------------------------------------------------------------------------------------------\n";
 
-    // Sweep all 12-bit info fields (W1..W12), fix W13..W24 = 0xA5A
     uint32_t fail_count = 0;
-    for (uint32_t info = 0; info < 4096; ++info) {
-        const uint32_t ale_word = ((info & 0xFFF) << 12) | 0xA5A;
-        const uint64_t transmitted = ALEFECCodec::interleave_word(ale_word);
 
+    auto roundtrip = [&](uint32_t ale_word) {
+        const GolayCoded coded     = ALEFECCodec::encode_word(ale_word);
+        const uint64_t transmitted = ALEFECCodec::interleave_word(coded);
         Golay::DecodeResult fec;
-        const uint32_t recovered = ALEFECCodec::deinterleave_word(transmitted, fec);
-
+        const uint32_t recovered   = ALEFECCodec::deinterleave_word(transmitted, fec);
         if (recovered != ale_word || fec.flag != Golay::DECODE_OK) {
-            std::cout << "FAIL: info=0x" << std::hex << info
-                      << " ale=0x" << ale_word
+            std::cout << "FAIL: ale=0x" << std::hex << ale_word
                       << " recovered=0x" << recovered
                       << " fec.flag=0x" << (int)fec.flag << std::dec << "\n";
-            if (++fail_count >= 5) break;
+            ++fail_count;
         }
-    }
+    };
+
+    // Sweep all W1..W12 values, fixed W13..W24 = 0xA5A
+    for (uint32_t info = 0; info < 4096; ++info)
+        roundtrip(((info & 0xFFF) << 12) | 0xA5A);
     if (fail_count) { std::cout << "FAIL\n"; return false; }
-    std::cout << "  all 4096 info words roundtrip losslessly OK\n";
+    std::cout << "  W1..W12 sweep (W13..W24=0xA5A): all 4096 OK\n";
+
+    // Sweep all W13..W24 values, fixed W1..W12 = 0xABC
+    for (uint32_t info = 0; info < 4096; ++info)
+        roundtrip((0xABCu << 12) | (info & 0xFFF));
+    if (fail_count) { std::cout << "FAIL\n"; return false; }
+    std::cout << "  W13..W24 sweep (W1..W12=0xABC): all 4096 OK\n";
+
     std::cout << "PASS\n";
     return true;
 }
@@ -347,13 +355,12 @@ bool test_feat_fec_003_stuff_bit() {
     std::cout << "\n[TEST FEC-7] FEAT-FEC-003 — Stuff-Bit S49 = 0 (AC-FEC-013-2)\n";
     std::cout << "----------------------------------------------------------------\n";
 
-    // Check S49 for a range of ALE words
     static const uint32_t probe_words[] = {
         0x000000u, 0xFFFFFFu, 0xABC123u, 0x123ABCu,
         0x5A5A5Au, 0xA5A5A5u, 0x800000u, 0x000001u
     };
     for (uint32_t w : probe_words) {
-        const uint64_t transmitted = ALEFECCodec::interleave_word(w);
+        const uint64_t transmitted = ALEFECCodec::interleave_word(ALEFECCodec::encode_word(w));
         if ((transmitted >> 48) & 1u) {
             std::cout << "FAIL: S49 != 0 for ale_word=0x" << std::hex << w << std::dec << "\n";
             return false;
@@ -364,8 +371,8 @@ bool test_feat_fec_003_stuff_bit() {
     return true;
 }
 
-// AC-FEC-012-2: G13..G24 (B-channel parity, odd positions 25..47) must be
-//               the bitwise inverses of G1..G12 (A-channel parity, even positions 24..46).
+// AC-FEC-012-2: B-channel parity (odd positions 25..47) must carry ~Golay(W13..W24),
+//               A-channel parity (even positions 24..46) must carry Golay(W1..W12).
 bool test_feat_fec_003_parity_inversion() {
     std::cout << "\n[TEST FEC-8] FEAT-FEC-003 — Paritaets-Inversion G13..G24 (AC-FEC-012-2)\n";
     std::cout << "--------------------------------------------------------------------------\n";
@@ -374,20 +381,34 @@ bool test_feat_fec_003_parity_inversion() {
         0x000000u, 0xFFFFFFu, 0xABC123u, 0x5A5A5Au, 0x123456u
     };
     for (uint32_t w : probe_words) {
-        const uint64_t t = ALEFECCodec::interleave_word(w);
-        // Positions 24..46 (even) = G A-channel; 25..47 (odd) = G B-channel (inverted)
+        const GolayCoded coded = ALEFECCodec::encode_word(w);
+        const uint64_t t       = ALEFECCodec::interleave_word(coded);
+
+        // Expected parity values (bits 11..0 of each codeword, MSB = bit 11)
+        const uint16_t exp_parity_a = coded.coder_a & 0xFFFu;           // G1..G12  normal
+        const uint16_t exp_parity_b = coded.coder_b & 0xFFFu;           // ~G13..~G24 (already inverted)
+
         for (int k = 12; k < 24; ++k) {
-            const uint8_t a = (t >> (2 * k))     & 1u;  // A channel = G normal
-            const uint8_t b = (t >> (2 * k + 1)) & 1u;  // B channel = G inverted
-            if (a == b) {
-                std::cout << "FAIL: parity at k=" << k
-                          << " A=" << (int)a << " B=" << (int)b
-                          << " (expected B = ~A) for word=0x" << std::hex << w << std::dec << "\n";
+            const uint8_t a        = (t          >> (2 * k))     & 1u;
+            const uint8_t b        = (t          >> (2 * k + 1)) & 1u;
+            const uint8_t expect_a = (exp_parity_a >> (23 - k))  & 1u;
+            const uint8_t expect_b = (exp_parity_b >> (23 - k))  & 1u;
+
+            if (a != expect_a) {
+                std::cout << "FAIL: A-parity k=" << k
+                          << " got=" << (int)a << " expected=" << (int)expect_a
+                          << " word=0x" << std::hex << w << std::dec << "\n";
+                return false;
+            }
+            if (b != expect_b) {
+                std::cout << "FAIL: B-parity k=" << k
+                          << " got=" << (int)b << " expected=" << (int)expect_b
+                          << " word=0x" << std::hex << w << std::dec << "\n";
                 return false;
             }
         }
     }
-    std::cout << "  B-channel parity = ~A-channel parity for all probe words OK\n";
+    std::cout << "  A-parity = Golay(W1..W12), B-parity = ~Golay(W13..W24) for all probe words OK\n";
     std::cout << "PASS\n";
     return true;
 }
@@ -402,7 +423,7 @@ bool test_feat_fec_003_stuff_bit_ignored() {
         0x000000u, 0xFFFFFFu, 0xABC123u, 0x5A5A5Au
     };
     for (uint32_t w : probe_words) {
-        const uint64_t clean = ALEFECCodec::interleave_word(w);
+        const uint64_t clean   = ALEFECCodec::interleave_word(ALEFECCodec::encode_word(w));
         const uint64_t flipped = clean ^ (1ULL << 48);  // flip S49
 
         Golay::DecodeResult fec_clean, fec_flipped;
