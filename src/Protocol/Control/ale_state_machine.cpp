@@ -9,7 +9,12 @@
 #include "LQA/lqa_metrics.h"
 #include <algorithm>
 #include <cstring>
-#include <iostream>
+#include <string>
+
+// Forward protocol-level debug events to the injected trace callback.
+// Expands to a no-op (zero overhead) when no callback is set.
+// The msg expression is only evaluated when trace_cb_ is non-null.
+#define SM_TRACE(msg) do { if (trace_cb_) trace_cb_(msg); } while(0)
 
 namespace ale {
 
@@ -452,7 +457,7 @@ void ALEStateMachine::handle_handshake() {
             // Twce timeout: calling cycle did not end → abort (A.5.5.3.2, AC-LINK-018-5)
             if (!hs_conclusion_rcvd &&
                 (current_time_ms - twce_start_ms) >= twce_ms) {
-                std::cout << "[TRACE] handle_handshake: Twce timeout → LINK_TIMEOUT\n";
+                SM_TRACE("[TRACE] handle_handshake: Twce timeout → LINK_TIMEOUT\n");
                 process_event(ALEEvent::LINK_TIMEOUT);
                 return;
             }
@@ -460,14 +465,14 @@ void ALEStateMachine::handle_handshake() {
             // (A.5.5.3.2, AC-LINK-018-5 second condition)
             if (!hs_conclusion_rcvd && hs_message_start_ms > 0 &&
                 (current_time_ms - hs_message_start_ms) >= ALETimingConstants::Tm_max_ms) {
-                std::cout << "[TRACE] handle_handshake: Tmmax elapsed without conclusion → LINK_TIMEOUT\n";
+                SM_TRACE("[TRACE] handle_handshake: Tmmax elapsed without conclusion → LINK_TIMEOUT\n");
                 process_event(ALEEvent::LINK_TIMEOUT);
                 return;
             }
             // Conclusion received + Tlww elapsed → LBT before response (A.5.5.3.3, AC-LINK-019-1)
             if (hs_conclusion_rcvd && hs_tlww_start_ms > 0 &&
                 (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tlww_ms) {
-                std::cout << "[TRACE] handle_handshake: Tlww elapsed → CHANNEL_CHECK\n";
+                SM_TRACE("[TRACE] handle_handshake: Tlww elapsed → CHANNEL_CHECK\n");
                 handshake_phase = HandshakePhase::CHANNEL_CHECK;
                 hs_lbt_start_ms = current_time_ms;
                 // RX stays open during LBT to detect channel activity
@@ -481,7 +486,7 @@ void ALEStateMachine::handle_handshake() {
         // process_received_word() handles the busy-detection path.
         case HandshakePhase::CHANNEL_CHECK: {
             if ((current_time_ms - hs_lbt_start_ms) >= 2u * ALETimingConstants::Trw_ms) {
-                std::cout << "[TRACE] handle_handshake: LBT clear → SENDING_RESPONSE\n";
+                SM_TRACE("[TRACE] handle_handshake: LBT clear → SENDING_RESPONSE\n");
                 if (rx_enabled_callback) rx_enabled_callback(false);
                 handshake_phase   = HandshakePhase::SENDING_RESPONSE;
                 hs_words_in_phase = 0;
@@ -502,14 +507,14 @@ void ALEStateMachine::handle_handshake() {
         case HandshakePhase::WAIT_ACK: {
             // Twr timeout: no ACK received → abort (A.5.5.3.4)
             if ((current_time_ms - hs_ack_start_ms) >= ALETimingConstants::Twr_ms) {
-                std::cout << "[TRACE] handle_handshake: WAIT_ACK Twr timeout → LINK_TIMEOUT\n";
+                SM_TRACE("[TRACE] handle_handshake: WAIT_ACK Twr timeout → LINK_TIMEOUT\n");
                 process_event(ALEEvent::LINK_TIMEOUT);
                 return;
             }
             // TIS [caller] received + Tlww elapsed → LINKED (A.5.5.3.4)
             if (hs_ack_tis_rcvd && hs_tlww_start_ms > 0 &&
                 (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tlww_ms) {
-                std::cout << "[TRACE] handle_handshake: ACK Tlww elapsed → LINKED\n";
+                SM_TRACE("[TRACE] handle_handshake: ACK Tlww elapsed → LINKED\n");
                 if (operator_callback)
                     operator_callback(OperatorEvent::LINK_ESTABLISHED);
                 process_event(ALEEvent::HANDSHAKE_COMPLETE);
@@ -624,13 +629,14 @@ void ALEStateMachine::handle_invalid_word() {
     if (current_state != ALEState::HANDSHAKE) return;
     if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
         if (++contiguous_errors > ALETimingConstants::MAX_SCANNING_CALL_ERRORS) {
-            std::cout << "[TRACE] handle_invalid_word: "
-                      << +contiguous_errors << " contiguous errors → LINK_TIMEOUT\n";
+            SM_TRACE("[TRACE] handle_invalid_word: "
+                     + std::to_string(+contiguous_errors)
+                     + " contiguous errors → LINK_TIMEOUT\n");
             process_event(ALEEvent::LINK_TIMEOUT);
         }
     } else if (handshake_phase == HandshakePhase::CHANNEL_CHECK) {
         // Invalid signal on channel during LBT → busy → abort (AC-LINK-019-3)
-        std::cout << "[TRACE] handle_invalid_word: invalid word during LBT → LINK_TIMEOUT\n";
+        SM_TRACE("[TRACE] handle_invalid_word: invalid word during LBT → LINK_TIMEOUT\n");
         process_event(ALEEvent::LINK_TIMEOUT);
     }
 }
@@ -685,7 +691,7 @@ void ALEStateMachine::react_calling(const WordEvent& ev) {
 // WAIT_ACK:       read SAM's ACK frame (TO JOE × 2 + TIS SAM [DATA]*).
 void ALEStateMachine::react_handshake(const WordEvent& ev, const ALEWord& word) {
     if (ev.type == WordEvent::Type::CHANNEL_BUSY) {
-        std::cout << "[TRACE] react_handshake: channel busy during LBT → LINK_TIMEOUT\n";
+        SM_TRACE("[TRACE] react_handshake: channel busy during LBT → LINK_TIMEOUT\n");
         process_event(ALEEvent::LINK_TIMEOUT);
         return;
     }
@@ -960,8 +966,8 @@ void ALEStateMachine::on_word_complete() {
             case CallingPhase::SCANNING_CALL: {
                 const uint32_t tsc_slots = target_scan_channels * 2u;
                 if (call_cycles_in_phase >= tsc_slots) {
-                    std::cout << "[TRACE] on_word_complete: SCANNING_CALL → LEADING_CALL"
-                              << " (tsc_slots=" << tsc_slots << ")\n";
+                    SM_TRACE("[TRACE] on_word_complete: SCANNING_CALL → LEADING_CALL (tsc_slots="
+                             + std::to_string(tsc_slots) + ")\n");
                     calling_phase        = CallingPhase::LEADING_CALL;
                     call_cycles_in_phase = 0;
                 }
@@ -973,10 +979,10 @@ void ALEStateMachine::on_word_complete() {
                 // its size already equals 2 × wpa (Tlc = 2 × Tc = 2 × wpa × Trw).
                 const uint32_t tlc_slots = static_cast<uint32_t>(leading_frame_.size());
                 if (call_cycles_in_phase >= tlc_slots) {
-                    std::cout << "[TRACE] on_word_complete: LEADING_CALL → "
-                              << (pending_message.type != PendingMessage::Type::NONE
-                                  ? "MESSAGE" : "CONCLUSION")
-                              << " (tlc_slots=" << tlc_slots << ")\n";
+                    SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → "
+                             + std::string(pending_message.type != PendingMessage::Type::NONE
+                                           ? "MESSAGE" : "CONCLUSION")
+                             + " (tlc_slots=" + std::to_string(tlc_slots) + ")\n");
                     calling_phase = (pending_message.type != PendingMessage::Type::NONE)
                                     ? CallingPhase::MESSAGE
                                     : CallingPhase::CONCLUSION;
@@ -995,7 +1001,7 @@ void ALEStateMachine::on_word_complete() {
                 const uint32_t conclusion_slots =
                     static_cast<uint32_t>(conclusion_frame_.size());
                 if (call_cycles_in_phase >= conclusion_slots) {
-                    std::cout << "[TRACE] on_word_complete: CONCLUSION → LISTENING\n";
+                    SM_TRACE("[TRACE] on_word_complete: CONCLUSION → LISTENING\n");
                     calling_phase        = CallingPhase::LISTENING;
                     listening_start_ms   = current_time_ms;
                     call_cycles_in_phase = 0;
@@ -1014,7 +1020,7 @@ void ALEStateMachine::on_word_complete() {
                               AddressEncoder::encode(to_address, PreambleType::TO).size())
                      + static_cast<uint32_t>(conclusion_frame_.size());
                 if (call_cycles_in_phase >= ack_slots) {
-                    std::cout << "[TRACE] on_word_complete: SENDING_ACK → LINKED\n";
+                    SM_TRACE("[TRACE] on_word_complete: SENDING_ACK → LINKED\n");
                     if (operator_callback)
                         operator_callback(OperatorEvent::LINK_ESTABLISHED);
                     process_event(ALEEvent::HANDSHAKE_COMPLETE);
@@ -1050,11 +1056,11 @@ void ALEStateMachine::on_word_complete() {
         if (hs_words_in_phase >= resp_slots) {
             if (pending_reject_) {
                 // Rejection sent — SAM expects no ACK; return to SCANNING.
-                std::cout << "[TRACE] on_word_complete: SENDING_RESPONSE (TWAS reject) → SCANNING\n";
+                SM_TRACE("[TRACE] on_word_complete: SENDING_RESPONSE (TWAS reject) → SCANNING\n");
                 pending_reject_ = false;
                 process_event(ALEEvent::LINK_TIMEOUT);
             } else {
-                std::cout << "[TRACE] on_word_complete: SENDING_RESPONSE → WAIT_ACK\n";
+                SM_TRACE("[TRACE] on_word_complete: SENDING_RESPONSE → WAIT_ACK\n");
                 handshake_phase  = HandshakePhase::WAIT_ACK;
                 hs_ack_start_ms  = current_time_ms;
                 hs_tlww_start_ms = 0;

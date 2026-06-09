@@ -274,6 +274,15 @@ public:
      */
     void set_lqa_metrics(LQAMetrics* m) { lqa_metrics_ = m; }
 
+    /**
+     * Optional trace sink for protocol-level debug events.
+     * When set, SM_TRACE() calls forward the message string to \p cb.
+     * Pass nullptr to detach.
+     */
+    void set_trace_callback(std::function<void(const std::string&)> cb) {
+        trace_cb_ = std::move(cb);
+    }
+
 private:
     // ── State machine ─────────────────────────────────────────────────────
     ALEState current_state;
@@ -363,10 +372,11 @@ private:
     LQAMetrics* lqa_metrics_ = nullptr;  ///< Optional; set via set_lqa_metrics()
 
     // ── Callbacks ─────────────────────────────────────────────────────────
-    std::function<void(ALEState, ALEState)> state_callback;
-    std::function<void(const ALEWord&)>     transmit_callback;
-    std::function<void(bool)>               rx_enabled_callback;
-    std::function<void(OperatorEvent)>      operator_callback;
+    std::function<void(ALEState, ALEState)>  state_callback;
+    std::function<void(const ALEWord&)>      transmit_callback;
+    std::function<void(bool)>                rx_enabled_callback;
+    std::function<void(OperatorEvent)>       operator_callback;
+    std::function<void(const std::string&)>  trace_cb_;
 
     // ── Internals ─────────────────────────────────────────────────────────
     void enter_state(ALEState new_state);
