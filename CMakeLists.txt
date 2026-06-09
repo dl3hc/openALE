@@ -92,6 +92,7 @@ target_link_libraries(ale_modem ale_protocol ale_fsk_core ale_fec)
 # ALE state machine (link layer)
 add_library(ale_link
     src/Protocol/Control/ale_state_machine.cpp
+    src/Protocol/Control/ale_word_decoder.cpp
 )
 
 target_include_directories(ale_link PUBLIC

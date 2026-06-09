@@ -625,28 +625,129 @@ void ALEStateMachine::emergency_manual_control() {
 // process_received_word
 // ============================================================================
 
-void ALEStateMachine::process_received_word(const ALEWord& word) {
-    // ── Fix 6: 3-error tolerance in HANDSHAKE/WAIT_CYCLE_END (A.5.5.3.2) ──
-    // During the scanning call section, up to MAX_SCANNING_CALL_ERRORS contiguous
-    // FEC-uncorrectable words are tolerated without rejecting the frame.
-    if (!word.valid) {
-        if (current_state == ALEState::HANDSHAKE) {
-            if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
-                if (++contiguous_errors > ALETimingConstants::MAX_SCANNING_CALL_ERRORS) {
-                    std::cout << "[TRACE] process_received_word: "
-                              << contiguous_errors << " contiguous errors → LINK_TIMEOUT\n";
-                    process_event(ALEEvent::LINK_TIMEOUT);
-                }
-            } else if (handshake_phase == HandshakePhase::CHANNEL_CHECK) {
-                // Signal on channel during LBT → busy → abort (AC-LINK-019-3)
-                std::cout << "[TRACE] process_received_word: channel busy during LBT → LINK_TIMEOUT\n";
-                process_event(ALEEvent::LINK_TIMEOUT);
-            }
+// ── Fix 6: 3-error tolerance in HANDSHAKE/WAIT_CYCLE_END (A.5.5.3.2) ──
+void ALEStateMachine::handle_invalid_word() {
+    if (current_state != ALEState::HANDSHAKE) return;
+    if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
+        if (++contiguous_errors > ALETimingConstants::MAX_SCANNING_CALL_ERRORS) {
+            std::cout << "[TRACE] handle_invalid_word: "
+                      << +contiguous_errors << " contiguous errors → LINK_TIMEOUT\n";
+            process_event(ALEEvent::LINK_TIMEOUT);
         }
+    } else if (handshake_phase == HandshakePhase::CHANNEL_CHECK) {
+        // Invalid signal on channel during LBT → busy → abort (AC-LINK-019-3)
+        std::cout << "[TRACE] handle_invalid_word: invalid word during LBT → LINK_TIMEOUT\n";
+        process_event(ALEEvent::LINK_TIMEOUT);
+    }
+}
+
+void ALEStateMachine::react_scanning(const WordEvent& ev) {
+    if (ev.type == WordEvent::Type::TO_SELF) {
+        active_call_to = ev.address;
+        process_event(ALEEvent::CALL_DETECTED);
+    }
+}
+
+// JOE's response frame per A.5.5.3.2: TO SAM [DATA]* TIS JOE [DATA]*
+//   TO_SELF      → "TO SAM": JOE has begun his response; arm AC-LINK-019-8 timer.
+//   TIS_CALLER   → "TIS JOE" (first conclusion word); arm Tlww.
+//   DATA_EXTENSION → extended JOE address; Tlww reset each time (Fix 5).
+//   TWAS_REJECTION → call rejected (AC-LINK-019-10).
+void ALEStateMachine::react_calling(const WordEvent& ev) {
+    if (calling_phase != CallingPhase::LISTENING) return;
+
+    switch (ev.type) {
+    case WordEvent::Type::TO_SELF:
+        if (!response_to_detected) {
+            response_to_detected = true;
+            response_rx_start_ms = current_time_ms;
+        }
+        break;
+    case WordEvent::Type::TIS_CALLER:
+        if (response_to_detected && tlww_start_ms == 0) {
+            to_address                   = ev.address;
+            active_call_from             = ev.address;
+            tlww_start_ms                = current_time_ms;
+            collecting_remote_conclusion = true;
+        }
+        break;
+    case WordEvent::Type::DATA_EXTENSION:
+        to_address      += ev.address;
+        active_call_from = to_address;
+        tlww_start_ms    = current_time_ms;
+        break;
+    case WordEvent::Type::TWAS_REJECTION:
+        if (operator_callback)
+            operator_callback(OperatorEvent::CALL_REJECTED);
+        process_event(ALEEvent::LINK_TIMEOUT);
+        break;
+    default:
+        break;
+    }
+}
+
+// WAIT_CYCLE_END: read SAM's conclusion (TIS SAM [DATA]*).
+// CHANNEL_CHECK:  any valid word → channel busy → abort.
+// WAIT_ACK:       read SAM's ACK frame (TO JOE × 2 + TIS SAM [DATA]*).
+void ALEStateMachine::react_handshake(const WordEvent& ev, const ALEWord& word) {
+    if (ev.type == WordEvent::Type::CHANNEL_BUSY) {
+        std::cout << "[TRACE] react_handshake: channel busy during LBT → LINK_TIMEOUT\n";
+        process_event(ALEEvent::LINK_TIMEOUT);
         return;
     }
-    contiguous_errors = 0;   // Any valid word resets the error run.
 
+    if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
+        switch (ev.type) {
+        case WordEvent::Type::TIS_CALLER:
+            if (!hs_conclusion_rcvd) {
+                caller_address     = ev.address;
+                active_call_from   = ev.address;
+                hs_conclusion_rcvd = true;
+                hs_tlww_start_ms   = current_time_ms;
+            }
+            break;
+        case WordEvent::Type::DATA_EXTENSION:
+            caller_address  += ev.address;
+            active_call_from = caller_address;
+            hs_tlww_start_ms = current_time_ms;
+            break;
+        case WordEvent::Type::TWAS_REJECTION:
+            process_event(ALEEvent::LINK_TIMEOUT);
+            break;
+        case WordEvent::Type::NONE:
+            // DATA/REP before TIS → message section has begun; arm Tmmax (AC-LINK-018-5).
+            if (!hs_conclusion_rcvd
+                && (word.type == PreambleType::DATA || word.type == PreambleType::REP)
+                && hs_message_start_ms == 0) {
+                hs_message_start_ms = current_time_ms;
+            }
+            break;
+        default:
+            break;
+        }
+    } else if (handshake_phase == HandshakePhase::WAIT_ACK) {
+        switch (ev.type) {
+        case WordEvent::Type::TIS_CALLER:
+            if (!hs_ack_tis_rcvd) {
+                hs_ack_tis_rcvd  = true;
+                hs_tlww_start_ms = current_time_ms;
+            }
+            break;
+        case WordEvent::Type::DATA_EXTENSION:
+            hs_tlww_start_ms = current_time_ms;
+            break;
+        case WordEvent::Type::TWAS_REJECTION:
+            process_event(ALEEvent::LINK_TIMEOUT);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+void ALEStateMachine::process_received_word(const ALEWord& word) {
+    if (!word.valid) { handle_invalid_word(); return; }
+    contiguous_errors = 0;
     last_word_time_ms = current_time_ms;
 
     LinkQuality lq;
@@ -655,119 +756,28 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
     lq.timestamp_ms = current_time_ms;
     update_link_quality(lq);
 
-    std::string addr = trim_ale_address(word.address);
+    const bool lbt_active =
+        current_state == ALEState::HANDSHAKE
+        && handshake_phase == HandshakePhase::CHANNEL_CHECK;
+
+    const bool collecting =
+        collecting_remote_conclusion   // CALLING/LISTENING
+        || hs_conclusion_rcvd          // HANDSHAKE/WAIT_CYCLE_END
+        || hs_ack_tis_rcvd;            // HANDSHAKE/WAIT_ACK
+
+    WordDecodeContext ctx;
+    ctx.self_address        = address_book.get_self_address();
+    ctx.expected_caller     = caller_address.substr(0, 3);
+    ctx.lbt_active          = lbt_active;
+    ctx.collecting_conclusion = collecting;
+
+    const WordEvent ev = decoder_.decode(word, ctx);
 
     switch (current_state) {
-
-        // ── SCANNING ─────────────────────────────────────────────────────
-        case ALEState::SCANNING:
-            if (word.type == PreambleType::TO || word.type == PreambleType::TWAS) {
-                if (address_book.is_self(addr)) {
-                    active_call_to = addr;
-                    process_event(ALEEvent::CALL_DETECTED);
-                }
-            }
-            break;
-
-        // ── CALLING / LISTENING (SAM side) ───────────────────────────────
-        // JOE's response frame per A.5.5.3.2: TO SAM [DATA]* TIS JOE [DATA]*
-        //
-        // Detection sequence:
-        //   1. TO + SAM's address → "TO SAM": JOE has begun his response.
-        //      Sets response_to_detected; starts AC-LINK-019-8 timer.
-        //   2. TIS + any address  → "TIS JOE" (first word of conclusion).
-        //      Captures JOE's identity; starts Tlww.
-        //   3. DATA/REP after TIS → extended JOE address; Tlww is reset each time
-        //      (Fix 5: multi-word conclusion).
-        //   4. TWAS              → call rejection (AC-LINK-019-10).
-        case ALEState::CALLING:
-            if (calling_phase == CallingPhase::LISTENING) {
-                if (word.type == PreambleType::TO && address_book.is_self(addr)) {
-                    if (!response_to_detected) {
-                        response_to_detected = true;
-                        response_rx_start_ms = current_time_ms;
-                    }
-                } else if (word.type == PreambleType::TIS
-                           && response_to_detected
-                           && tlww_start_ms == 0) {
-                    // First conclusion word — arm Tlww, start collecting JOE's address.
-                    to_address                  = addr;
-                    active_call_from             = addr;
-                    tlww_start_ms                = current_time_ms;
-                    collecting_remote_conclusion = true;
-                } else if (collecting_remote_conclusion
-                           && (word.type == PreambleType::DATA
-                               || word.type == PreambleType::REP)) {
-                    // Fix 5: extended address chunk after TIS — append and reset Tlww.
-                    std::string chunk = trim_ale_address(word.address);
-                    to_address      += chunk;
-                    active_call_from  = to_address;
-                    tlww_start_ms     = current_time_ms;   // Tlww reset: wait for next word
-                } else if (word.type == PreambleType::TWAS) {
-                    // Call rejected — AC-LINK-019-10
-                    if (operator_callback)
-                        operator_callback(OperatorEvent::CALL_REJECTED);
-                    process_event(ALEEvent::LINK_TIMEOUT);
-                }
-            }
-            break;
-
-        // ── HANDSHAKE (JOE side) ─────────────────────────────────────────
-        // WAIT_CYCLE_END: read SAM's conclusion (TIS SAM [DATA]*).
-        // WAIT_ACK:       read SAM's ACK frame (TO JOE × 2 + TIS SAM [DATA]*).
-        case ALEState::HANDSHAKE:
-            if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
-                if (word.type == PreambleType::TIS && !hs_conclusion_rcvd) {
-                    // First word of SAM's conclusion.
-                    caller_address     = addr;
-                    active_call_from   = addr;
-                    hs_conclusion_rcvd = true;
-                    hs_tlww_start_ms   = current_time_ms;
-                } else if (hs_conclusion_rcvd
-                           && (word.type == PreambleType::DATA
-                               || word.type == PreambleType::REP)) {
-                    // Fix 5: extended caller address — append chunk, reset Tlww.
-                    std::string chunk = trim_ale_address(word.address);
-                    caller_address   += chunk;
-                    active_call_from  = caller_address;
-                    hs_tlww_start_ms  = current_time_ms;
-                } else if (!hs_conclusion_rcvd
-                           && (word.type == PreambleType::DATA
-                               || word.type == PreambleType::REP)
-                           && hs_message_start_ms == 0) {
-                    // Message section has begun — arm Tmmax (AC-LINK-018-5)
-                    hs_message_start_ms = current_time_ms;
-                } else if (word.type == PreambleType::TWAS) {
-                    // Calling station is busy / rejected — abort.
-                    process_event(ALEEvent::LINK_TIMEOUT);
-                }
-            } else if (handshake_phase == HandshakePhase::CHANNEL_CHECK) {
-                // Any valid word during LBT → channel busy → abort (AC-LINK-019-3)
-                std::cout << "[TRACE] process_received_word: channel busy during LBT → LINK_TIMEOUT\n";
-                process_event(ALEEvent::LINK_TIMEOUT);
-            } else if (handshake_phase == HandshakePhase::WAIT_ACK) {
-                // SAM's ACK frame: TO JOE × 2 + TIS SAM [DATA]*
-                if (word.type == PreambleType::TIS
-                    && !hs_ack_tis_rcvd
-                    && !caller_address.empty()
-                    && addr == caller_address.substr(0, 3)) {
-                    // SAM's conclusion word — arm Tlww.
-                    hs_ack_tis_rcvd  = true;
-                    hs_tlww_start_ms = current_time_ms;
-                } else if (hs_ack_tis_rcvd
-                           && (word.type == PreambleType::DATA
-                               || word.type == PreambleType::REP)) {
-                    // Fix 5: extended SAM address continuation — reset Tlww only.
-                    hs_tlww_start_ms = current_time_ms;
-                } else if (word.type == PreambleType::TWAS) {
-                    // SAM rejected (e.g. TWAS instead of TIS) — abort.
-                    process_event(ALEEvent::LINK_TIMEOUT);
-                }
-            }
-            break;
-
-        default:
-            break;
+        case ALEState::SCANNING:  react_scanning(ev);        break;
+        case ALEState::CALLING:   react_calling(ev);         break;
+        case ALEState::HANDSHAKE: react_handshake(ev, word); break;
+        default: break;
     }
 
     message_assembler.add_word(word);

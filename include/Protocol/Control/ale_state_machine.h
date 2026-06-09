@@ -23,6 +23,7 @@
 #include "Word/address_encoder.h"
 #include "Stores/address_book.h"
 #include "Protocol/Control/ale_timing.h"
+#include "Protocol/Control/ale_word_decoder.h"
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -398,6 +399,9 @@ private:
     uint32_t last_scan_hop_time_ms;
     uint32_t current_time_ms;
 
+    // ── Word decoder ──────────────────────────────────────────────────────
+    ALEWordDecoder decoder_;
+
     // ── LQA ───────────────────────────────────────────────────────────────
     LQAMetrics* lqa_metrics_ = nullptr;  ///< Optional; set via set_lqa_metrics()
 
@@ -412,6 +416,12 @@ private:
     void enter_state(ALEState new_state);
     void exit_state(ALEState old_state);
     bool transition_to(ALEState new_state);
+
+    // ── Word-receive helpers ──────────────────────────────────────────────
+    void handle_invalid_word();
+    void react_scanning(const WordEvent& ev);
+    void react_calling(const WordEvent& ev);
+    void react_handshake(const WordEvent& ev, const ALEWord& word);
 
     void handle_idle();
     void handle_scanning();
