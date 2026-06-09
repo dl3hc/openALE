@@ -817,22 +817,13 @@ bool ALEStateMachine::check_link_timeout() {
 }
 
 uint32_t ALEStateMachine::compute_calling_timeout_ms() const {
-    // Tsc = C × 2 × Trw;  Tlc = 2 × wpa × Trw
-    const uint32_t tsc = target_scan_channels * 2u * ALETimingConstants::Trw_ms;
-    // leading_frame_ is already doubled (2 × wpa words); multiply by Trw gives Tlc.
-    const uint32_t tlc = static_cast<uint32_t>(leading_frame_.size())
-                            * ALETimingConstants::Trw_ms;
-    // Per-channel budget: LBT + Tune + Tsc + Tlc + Twr/Twrt
-    const uint32_t twr = (calling_channels.size() > 1)
-                         ? ALETimingConstants::Twrt_ms
-                         : ALETimingConstants::Twr_ms;
-    const uint32_t per_ch = ALETimingConstants::Twt_ms
-                          + ALETimingConstants::Tt_ms
-                          + tsc + tlc + twr;
-    const uint32_t n = calling_channels.empty()
-                     ? 1u
-                     : static_cast<uint32_t>(calling_channels.size());
-    return per_ch * n + 2000u; // 2 s safety margin
+    const ale::CallingBudgetParams p{
+        calling_channels.empty() ? 1u : static_cast<uint32_t>(calling_channels.size()),
+        target_scan_channels,
+        static_cast<uint32_t>(leading_frame_.size()),
+        calling_channels.size() > 1
+    };
+    return ale::calc_calling_timeout_ms(p);
 }
 
 // ============================================================================

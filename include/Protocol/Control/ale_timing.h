@@ -129,6 +129,32 @@ constexpr uint32_t Twr_slow_int  = static_cast<uint32_t>(0.5 + Twr_slow_ms);
 constexpr uint32_t Twrt_fast_int = static_cast<uint32_t>(0.5 + Twrt_fast_ms);
 constexpr uint32_t Tsc_c10_1word_int = static_cast<uint32_t>(0.5 + Tsc_c10_1word_ms);
 
+// ── Calling-Timeout Budget (MIL-STD-188-141B Annex B, Table A-XV) ──────────
+//
+// Encodes the protocol-level formula:
+//   timeout = n_channels × (Twt + Tt + Tsc + Tlc + Twr/Twrt) + 2 s margin
+//
+// leading_frame_words: already-doubled word count (size of leading_frame_ vector),
+//   so one multiply by Trw directly yields Tlc.
+// multi_channel: true  → use Twrt (Twr + Tt, fast equip.)
+//                false → use Twr alone (single channel, no retune)
+struct CallingBudgetParams {
+    uint32_t n_channels;           // calling_channels.size(), min 1
+    uint32_t target_scan_channels; // channels in the scan list
+    uint32_t leading_frame_words;  // already-doubled leading frame size
+    bool     multi_channel;        // Twrt vs Twr
+};
+
+constexpr uint32_t calc_calling_timeout_ms(const CallingBudgetParams& p) {
+    const uint32_t tsc    = p.target_scan_channels * 2u * TRW_MS;
+    const uint32_t tlc    = p.leading_frame_words * TRW_MS;
+    const uint32_t twr    = p.multi_channel ? Twrt_fast_int : Twr_fast_int;
+    const uint32_t per_ch = Twt_ale_ms
+                          + static_cast<uint32_t>(TT_BLIND_MS + 0.5)
+                          + tsc + tlc + twr;
+    return per_ch * p.n_channels + 2000u;
+}
+
 // ── Star Calling (Annex B, pp.226-227) ──
 
 constexpr double TAL_MS          = static_cast<double>(TRW_MS); // Tal = Trw = 392 ms
