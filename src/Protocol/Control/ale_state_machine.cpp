@@ -60,7 +60,6 @@ ALEStateMachine::ALEStateMachine()
       emergency_active(false),
       target_scan_channels(1),
       state_entry_time_ms(0),
-      last_scan_hop_time_ms(0),
       current_time_ms(0),
       handshake_phase(HandshakePhase::WAIT_CYCLE_END),
       twce_ms(0),
@@ -183,10 +182,7 @@ bool ALEStateMachine::transition_to(ALEState new_state) {
 void ALEStateMachine::enter_state(ALEState new_state) {
     switch (new_state) {
         case ALEState::SCANNING:
-            scan_config.channel_index = 0;
-            last_scan_hop_time_ms     = current_time_ms;
-            if (!scan_config.scan_list.empty())
-                set_channel(0);
+            channel_manager_.start(current_time_ms);
             break;
 
         case ALEState::CALLING:
@@ -208,8 +204,8 @@ void ALEStateMachine::enter_state(ALEState new_state) {
         to_address.clear();
 
             // Activate first calling channel if a list was set
-            if (!calling_channels.empty() && channel_callback)
-                channel_callback(calling_channels[calling_channel_index]);
+            if (!calling_channels.empty())
+                channel_manager_.hop_calling(calling_channels[calling_channel_index]);
 
             // AC-LINK-017-1: always start with LBT; TX begins only after Twt + Tt.
             calling_phase = CallingPhase::LBT;
@@ -235,7 +231,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             // Twce = 2 × own Ts (Table A-XV); fall back to 1 channel if not configured.
             {
                 const uint32_t C = static_cast<uint32_t>(
-                    std::max(size_t(1), scan_config.scan_list.size()));
+                    std::max(size_t(1), channel_manager_.channel_count()));
                 twce_ms = ale::calc_twce_ms(C);
             }
             if (rx_enabled_callback) rx_enabled_callback(true);
@@ -287,8 +283,8 @@ void ALEStateMachine::exit_state(ALEState old_state) {
 void ALEStateMachine::handle_idle() {}
 
 void ALEStateMachine::handle_scanning() {
-    if (check_scan_dwell_timeout())
-        hop_to_next_channel();
+    if (channel_manager_.check_dwell_timeout(current_time_ms))
+        channel_manager_.hop_next(current_time_ms);
 }
 
 /**
@@ -538,11 +534,11 @@ void ALEStateMachine::handle_sounding() {
 // ============================================================================
 
 void ALEStateMachine::configure_scan(const ScanConfig& config) {
-    scan_config = config;
+    channel_manager_.configure(config);
 }
 
 void ALEStateMachine::add_scan_channel(const Channel& channel) {
-    scan_config.scan_list.push_back(channel);
+    channel_manager_.add_channel(channel);
 }
 
 void ALEStateMachine::set_self_address(const std::string& address) {
@@ -550,9 +546,7 @@ void ALEStateMachine::set_self_address(const std::string& address) {
 }
 
 const Channel* ALEStateMachine::get_current_channel() const {
-    if (scan_config.scan_list.empty()) return nullptr;
-    if (scan_config.channel_index >= scan_config.scan_list.size()) return nullptr;
-    return &scan_config.scan_list[scan_config.channel_index];
+    return channel_manager_.current();
 }
 
 bool ALEStateMachine::initiate_call(const std::string& to_address) {
@@ -791,44 +785,20 @@ void ALEStateMachine::update_link_quality(const LinkQuality& lq) {
         sample.fec_errors_corrected = static_cast<int>(lq.fec_errors);
         sample.decode_success       = (lq.fec_errors <= MAX_GOLAY_ERRORS);
         sample.timestamp_ms         = lq.timestamp_ms;
-        const Channel* ch = get_current_channel();
+        const Channel* ch = channel_manager_.current();
         lqa_metrics_->add_sample(sample,
                                   ch ? ch->frequency_hz : 0u,
                                   active_call_from);
     }
 
-    // Keep a quick heuristic LQA score on the Channel for internal channel selection.
-    const uint32_t idx = scan_config.channel_index;
-    if (idx < scan_config.scan_list.size()) {
-        float score = 100.0f - (static_cast<float>(lq.fec_errors) * 10.0f);
-        score = std::max(0.0f, std::min(100.0f, score));
-        scan_config.scan_list[idx].lqa_score = score;
-    }
+    // Route heuristic LQA score update through channel manager (Schritt 6).
+    float score = 100.0f - (static_cast<float>(lq.fec_errors) * 10.0f);
+    score = std::max(0.0f, std::min(100.0f, score));
+    channel_manager_.update_lqa_score(channel_manager_.current_index(), score);
 }
 
 const Channel* ALEStateMachine::select_best_channel() const {
-    if (scan_config.scan_list.empty()) return nullptr;
-    const Channel* best = &scan_config.scan_list[0];
-    for (const auto& ch : scan_config.scan_list)
-        if (ch.lqa_score > best->lqa_score)
-            best = &ch;
-    return best;
-}
-
-void ALEStateMachine::hop_to_next_channel() {
-    if (scan_config.scan_list.empty()) return;
-    scan_config.channel_index =
-        (scan_config.channel_index + 1) % scan_config.scan_list.size();
-    set_channel(scan_config.channel_index);
-    last_scan_hop_time_ms = current_time_ms;
-}
-
-void ALEStateMachine::set_channel(uint32_t index) {
-    if (index >= scan_config.scan_list.size()) return;
-    scan_config.channel_index = index;
-    scan_config.scan_list[index].last_scan_time_ms = current_time_ms;
-    if (channel_callback)
-        channel_callback(scan_config.scan_list[index]);
+    return channel_manager_.select_best();
 }
 
 // ============================================================================
@@ -865,11 +835,6 @@ uint32_t ALEStateMachine::compute_calling_timeout_ms() const {
     return per_ch * n + 2000u; // 2 s safety margin
 }
 
-bool ALEStateMachine::check_scan_dwell_timeout() {
-    if (current_state != ALEState::SCANNING) return false;
-    return (current_time_ms - last_scan_hop_time_ms) >= scan_config.dwell_time_ms;
-}
-
 // ============================================================================
 // Multi-channel retry — AC-LINK-017-8
 // ============================================================================
@@ -880,8 +845,7 @@ void ALEStateMachine::try_next_calling_channel() {
     if (!calling_channels.empty()
         && calling_channel_index < calling_channels.size()) {
         // Hop to next channel and restart from LBT
-        if (channel_callback)
-            channel_callback(calling_channels[calling_channel_index]);
+        channel_manager_.hop_calling(calling_channels[calling_channel_index]);
 
         calling_phase        = CallingPhase::LBT;
         lbt_start_ms         = current_time_ms;

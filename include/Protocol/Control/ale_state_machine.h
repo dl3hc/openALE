@@ -18,6 +18,7 @@
 #pragma once
 
 #include "Protocol/Control/ale_channel_types.h"
+#include "Protocol/Control/ale_channel_manager.h"
 #include "Protocol/Message/ale_message.h"
 #include "Word/ale_word.h"
 #include "Word/ale_frame.h"
@@ -246,7 +247,7 @@ public:
 
     /** Called on channel change */
     void set_channel_callback(std::function<void(const Channel&)> callback) {
-        channel_callback = callback;
+        channel_manager_.set_channel_callback(std::move(callback));
     }
 
     /**
@@ -279,8 +280,8 @@ private:
     ALEState previous_state;
 
     // ── Configuration ─────────────────────────────────────────────────────
-    ScanConfig   scan_config;
-    AddressBook  address_book;
+    ALEChannelManager channel_manager_;
+    AddressBook       address_book;
 
     // ── Active link state ─────────────────────────────────────────────────
     std::string      active_call_to;
@@ -353,7 +354,6 @@ private:
 
     // ── Timing ────────────────────────────────────────────────────────────
     uint32_t state_entry_time_ms;
-    uint32_t last_scan_hop_time_ms;
     uint32_t current_time_ms;
 
     // ── Word decoder ──────────────────────────────────────────────────────
@@ -365,7 +365,6 @@ private:
     // ── Callbacks ─────────────────────────────────────────────────────────
     std::function<void(ALEState, ALEState)> state_callback;
     std::function<void(const ALEWord&)>     transmit_callback;
-    std::function<void(const Channel&)>     channel_callback;
     std::function<void(bool)>               rx_enabled_callback;
     std::function<void(OperatorEvent)>      operator_callback;
 
@@ -387,11 +386,7 @@ private:
     void handle_linked();
     void handle_sounding();
 
-    void hop_to_next_channel();
-    void set_channel(uint32_t index);
-
     bool check_link_timeout();
-    bool check_scan_dwell_timeout();
 
     /**
      * Called on LISTENING timeout or abort conditions AC-LINK-019-6/8/9.
