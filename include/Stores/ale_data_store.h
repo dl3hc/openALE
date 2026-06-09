@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "Protocol/Control/ale_channel_types.h"
 #include "Protocol/Message/ale_message.h"
 #include "LQA/lqa_database.h"
 #include <cstdint>
@@ -16,22 +17,6 @@
 #include <memory>
 
 namespace ale {
-
-// ── Channel ───────────────────────────────────────────────────────────────────
-
-/**
- * \struct Channel
- * A single ALE channel with its frequency and optional label
- */
-struct Channel {
-    uint32_t    frequency_hz;
-    std::string label;
-    bool        enabled;
-
-    Channel() : frequency_hz(0), enabled(true) {}
-    explicit Channel(uint32_t freq_hz, std::string lbl = "", bool en = true)
-        : frequency_hz(freq_hz), label(std::move(lbl)), enabled(en) {}
-};
 
 // ── ChannelStore ──────────────────────────────────────────────────────────────
 

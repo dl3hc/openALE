@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "Protocol/Control/ale_channel_types.h"
 #include "Protocol/Message/ale_message.h"
 #include "Word/ale_word.h"
 #include "Word/ale_frame.h"
@@ -123,50 +124,6 @@ enum class HandshakePhase {
     CHANNEL_CHECK,     ///< 2×Trw LBT before response TX (AC-LINK-019-1, A.5.5.3.3)
     SENDING_RESPONSE,  ///< TO caller × 2 + TIS self — Figure A-30
     WAIT_ACK,          ///< Twr: wait for SAM's ACK — Figure A-31
-};
-
-/**
- * \struct Channel
- */
-struct Channel {
-    uint32_t frequency_hz;
-    std::string mode;
-    float lqa_score;
-    uint32_t last_scan_time_ms;
-    uint32_t call_count;
-
-    Channel() : frequency_hz(0), mode("USB"), lqa_score(0.0f),
-                last_scan_time_ms(0), call_count(0) {}
-
-    Channel(uint32_t freq, const std::string& m = "USB")
-        : frequency_hz(freq), mode(m), lqa_score(0.0f),
-          last_scan_time_ms(0), call_count(0) {}
-};
-
-/**
- * \struct ScanConfig
- */
-struct ScanConfig {
-    std::vector<Channel> scan_list;
-    uint32_t dwell_time_ms;
-    uint32_t channel_index;
-    bool enabled;
-
-    ScanConfig() : dwell_time_ms(200), channel_index(0), enabled(false) {}
-};
-
-/**
- * \struct LinkQuality
- */
-struct LinkQuality {
-    float snr_db;
-    float ber;
-    uint32_t fec_errors;
-    uint32_t total_words;
-    uint32_t timestamp_ms;
-
-    LinkQuality() : snr_db(0.0f), ber(0.0f), fec_errors(0),
-                    total_words(0), timestamp_ms(0) {}
 };
 
 /**
