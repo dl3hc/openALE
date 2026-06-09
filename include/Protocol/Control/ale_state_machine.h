@@ -269,7 +269,7 @@ public:
     HandshakePhase get_handshake_phase()      const { return handshake_phase; }
     uint32_t       get_words_pending()        const { return words_pending; }
     bool           is_emergency_active()      const { return emergency_active; }
-    const std::string& get_joe_address()      const { return joe_address; }
+    const std::string& get_to_address()      const { return to_address; }
     const std::string& get_caller_address()   const { return caller_address; }
     bool           is_hs_conclusion_rcvd()    const { return hs_conclusion_rcvd; }
     bool           is_pending_reject()        const { return pending_reject_; }
@@ -367,7 +367,7 @@ private:
     uint32_t     response_rx_start_ms;         ///< When "TO SAM" was first seen (for AC-LINK-019-8)
     uint32_t     tlww_start_ms;                ///< When "TIS JOE" conclusion was received; 0 = not yet
     bool         collecting_remote_conclusion; ///< TIS received; still collecting DATA/REP (Fix 5)
-    std::string  joe_address;                  ///< Identity of responding station (from TIS word)
+    std::string  to_address;                  ///< Identity of responding station (from TIS word)
 
     // ── Handshake sub-state (MIL-STD A.5.5.3.2–4, JOE side) ─────────────
     HandshakePhase handshake_phase;       ///< Current sub-phase within HANDSHAKE
@@ -466,8 +466,8 @@ private:
 
     /**
      * SENDING_ACK: third handshake frame per REQ-LINK-008 / A.5.5.3.4.
-     * Frame: TO [joe_address] × 2 + TIS [own addr]  (Figure A-31).
-     * Encoded via AddressEncoder::encode() at send time (joe_address is set
+     * Frame: TO [to_address] × 2 + TIS [self_address]  (Figure A-31).
+     * Encoded via AddressEncoder::encode() at send time (to_address is set
      * during the LISTENING phase, not at initiate_call() time).
      */
     void build_ack_words();

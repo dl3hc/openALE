@@ -57,4 +57,30 @@ Frame ALEFrameBuilder::conclusion(const std::string& self, bool is_reject) {
     return Frame(AddressEncoder::encode(self, anchor));
 }
 
+Frame ALEFrameBuilder::ack_frame(const std::string& to_addr, const std::string& self_addr) {
+    auto to_words = AddressEncoder::encode(to_addr, PreambleType::TO);
+    std::vector<ALEWord> words;
+    words.reserve(to_words.size() * 2 + AddressEncoder::encode(self_addr, PreambleType::TIS).size());
+    words.insert(words.end(), to_words.begin(), to_words.end());
+    words.insert(words.end(), to_words.begin(), to_words.end());
+    auto tis_words = AddressEncoder::encode(self_addr, PreambleType::TIS);
+    words.insert(words.end(), tis_words.begin(), tis_words.end());
+    return Frame(std::move(words));
+}
+
+Frame ALEFrameBuilder::response_frame(const std::string& caller_addr,
+                                       const std::string& self_addr,
+                                       bool is_reject) {
+    if (is_reject)
+        return Frame(AddressEncoder::encode(self_addr, PreambleType::TWAS));
+    auto caller_words = AddressEncoder::encode(caller_addr, PreambleType::TO);
+    std::vector<ALEWord> words;
+    words.reserve(caller_words.size() * 2 + AddressEncoder::encode(self_addr, PreambleType::TIS).size());
+    words.insert(words.end(), caller_words.begin(), caller_words.end());
+    words.insert(words.end(), caller_words.begin(), caller_words.end());
+    auto tis_words = AddressEncoder::encode(self_addr, PreambleType::TIS);
+    words.insert(words.end(), tis_words.begin(), tis_words.end());
+    return Frame(std::move(words));
+}
+
 } // namespace ale

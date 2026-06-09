@@ -122,6 +122,21 @@ public:
      * Mehrere Wörter bei Rufzeichen > 3 Zeichen (DATA/REP-Extension).
      */
     static Frame conclusion(const std::string& self, bool is_reject = false);
+
+    /**
+     * Dritter Handshake-Rahmen (Figur A-31): TO [to_addr] × 2 + TIS [self_addr].
+     * REQ-LINK-008 / A.5.5.3.4
+     */
+    static Frame ack_frame(const std::string& to_addr, const std::string& self_addr);
+
+    /**
+     * JOE-Antwortrahmen (Figur A-30): TO [caller_addr] × 2 + TIS [self_addr].
+     * Ablehnungsrahmen (FEAT-FRAME-005): TWAS [self_addr].
+     * A.5.5.3.3
+     */
+    static Frame response_frame(const std::string& caller_addr,
+                                 const std::string& self_addr,
+                                 bool is_reject = false);
 };
 
 } // namespace ale

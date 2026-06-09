@@ -205,7 +205,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             response_rx_start_ms           = 0;
             tlww_start_ms                  = 0;
             collecting_remote_conclusion   = false;
-            joe_address.clear();
+        to_address.clear();
 
             // Activate first calling channel if a list was set
             if (!calling_channels.empty() && channel_callback)
@@ -694,7 +694,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                            && response_to_detected
                            && tlww_start_ms == 0) {
                     // First conclusion word — arm Tlww, start collecting JOE's address.
-                    joe_address                  = addr;
+                    to_address                  = addr;
                     active_call_from             = addr;
                     tlww_start_ms                = current_time_ms;
                     collecting_remote_conclusion = true;
@@ -706,8 +706,8 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                     auto p = chunk.find_last_not_of('@');
                     if (p != std::string::npos) chunk.erase(p + 1);
                     else chunk.clear();
-                    joe_address      += chunk;
-                    active_call_from  = joe_address;
+                    to_address      += chunk;
+                    active_call_from  = to_address;
                     tlww_start_ms     = current_time_ms;   // Tlww reset: wait for next word
                 } else if (word.type == PreambleType::TWAS) {
                     // Call rejected — AC-LINK-019-10
@@ -894,7 +894,7 @@ void ALEStateMachine::try_next_calling_channel() {
         response_to_detected = false;
         response_rx_start_ms = 0;
         tlww_start_ms        = 0;
-        joe_address.clear();
+        to_address.clear();
         state_entry_time_ms  = current_time_ms; // reset global timeout per channel
     } else {
         // All channels exhausted — AC-LINK-017-8: notify operator, go IDLE
@@ -947,31 +947,20 @@ void ALEStateMachine::build_conclusion_words() {
 
 void ALEStateMachine::build_ack_words() {
     // ACK frame per REQ-LINK-008 / A.5.5.3.4 / Figure A-31:
-    //   TO [joe_address] × 2 + TIS [own addr]
-    // joe_address is set during the LISTENING phase (process_received_word),
+    //   TO [to_address] × 2 + TIS [self_address]
+    // to_address is set during the LISTENING phase (process_received_word),
     // so it is encoded here at send time, not pre-computed.
-    const auto joe_words = AddressEncoder::encode(joe_address, PreambleType::TO);
-    transmit_words(joe_words);   // pass 1
-    transmit_words(joe_words);   // pass 2
-    transmit_words(AddressEncoder::encode(address_book.get_self_address(), PreambleType::TIS));
+    transmit_words(ALEFrameBuilder::ack_frame(
+        to_address, address_book.get_self_address()).words());
 }
 
 void ALEStateMachine::build_response_words() {
-    if (pending_reject_) {
-        // Rejection frame per FEAT-FRAME-005 / AC-FRAME-010-1:
-        //   TWAS [own addr]  — no TO prefix, no WAIT_ACK after this
-        transmit_words(AddressEncoder::encode(
-            address_book.get_self_address(), PreambleType::TWAS));
-        return;
-    }
-    // Accept response per A.5.5.3.3 / Figure A-30:
-    //   TO [caller_address] × 2 + TIS [own addr]
+    // Accept response per A.5.5.3.3 / Figure A-30: TO [caller] × 2 + TIS [self].
+    // Rejection per FEAT-FRAME-005 / AC-FRAME-010-1: TWAS [self].
     // caller_address is set during WAIT_CYCLE_END (process_received_word),
     // so it is encoded here at send time, not pre-computed.
-    const auto caller_words = AddressEncoder::encode(caller_address, PreambleType::TO);
-    transmit_words(caller_words);   // pass 1
-    transmit_words(caller_words);   // pass 2
-    transmit_words(AddressEncoder::encode(address_book.get_self_address(), PreambleType::TIS));
+    transmit_words(ALEFrameBuilder::response_frame(
+        caller_address, address_book.get_self_address(), pending_reject_).words());
 }
 
 void ALEStateMachine::transmit_word(const ALEWord& word) {
@@ -1061,13 +1050,13 @@ void ALEStateMachine::on_word_complete() {
             }
 
             case CallingPhase::SENDING_ACK: {
-                // ACK frame (Figure A-31): TO [joe_address] × 2 + TIS [self]
-                // joe_address is set during the LISTENING phase; encode here to
+                 // ACK frame (Figure A-31): TO [to_address] × 2 + TIS [self_address]
+                 // to_address is set during the LISTENING phase; encode here to
                 // get the exact word count matching build_ack_words().
-                const uint32_t ack_slots =
-                    2u * static_cast<uint32_t>(
-                             AddressEncoder::encode(joe_address, PreambleType::TO).size())
-                    + static_cast<uint32_t>(conclusion_frame_.size());
+                 const uint32_t ack_slots =
+                     2u * static_cast<uint32_t>(
+                              AddressEncoder::encode(to_address, PreambleType::TO).size())
+                     + static_cast<uint32_t>(conclusion_frame_.size());
                 if (call_cycles_in_phase >= ack_slots) {
                     std::cout << "[TRACE] on_word_complete: SENDING_ACK → LINKED\n";
                     if (operator_callback)
@@ -1090,8 +1079,8 @@ void ALEStateMachine::on_word_complete() {
         ++hs_words_in_phase;
 
         // Slot count depends on whether this is an accept or a reject frame.
-        // Rejection (FEAT-FRAME-005): TWAS [self] only — no TO prefix.
-        // Accept (Figure A-30):       TO [caller] × 2 + TIS [self].
+        // Rejection (FEAT-FRAME-005): TWAS [self_address] only — no TO prefix.
+        // Accept (Figure A-30):       TO [caller] × 2 + TIS [self_address].
         const uint32_t resp_slots = pending_reject_
             ? static_cast<uint32_t>(
                   AddressEncoder::encode(address_book.get_self_address(),

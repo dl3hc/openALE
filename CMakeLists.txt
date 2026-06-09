@@ -222,6 +222,11 @@ target_link_libraries(test_frame ale_link ale_modem ale_protocol ale_fsk_core al
 target_include_directories(test_frame PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME Frame COMMAND test_frame)
 
+add_executable(test_frame_c tests/test_frame_c.cpp)
+target_link_libraries(test_frame_c ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_frame_c PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME FrameC COMMAND test_frame_c)
+
 add_executable(debug_fft tests/debug_fft.cpp)
 target_link_libraries(debug_fft ale_fsk_core ale_fec)
 target_include_directories(debug_fft PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
