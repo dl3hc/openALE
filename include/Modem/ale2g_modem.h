@@ -1,28 +1,29 @@
 /**
  * \file Modem/ale2g_modem.h
- * \brief ALE 2G Modem — word-level TX with built-in 3× redundancy (A.5.2.2.4)
+ * \brief ALE 2G Modem — word-level TX per MIL-STD-188-141B A.5.1.3 / REQ-WAVEFORM-008
  *
  * Sits between the Link Establishment layer (ALEStateMachine) and the physical
  * FSK layer (ToneGenerator).
  *
- * ## Timing model (matches ALEStateMachine::update() convention)
+ * ## On-air word format — 49 symbols per redundant word (AC-WAVEFORM-008-2)
  *
- *   The integration layer drives BOTH the state machine and the modem with the
- *   same absolute timestamp:
+ *   The three redundant copies of the 49-bit encoded word are packed as a
+ *   continuous 147-bit stream (3 × 49 bits) into 49 8-FSK symbol periods:
+ *
+ *     symbol[k] = word_bits[3k..3k+2]  read MSB-first  (indices mod 49)
+ *
+ *   That is: symbol[k] bit2 = word_bit(3k%49), bit1 = word_bit((3k+1)%49),
+ *   bit0 = word_bit((3k+2)%49).  The MSB-first convention means every ALE
+ *   decoder's bit-stream contains stream[i] = word_bit[i%49], so bits at
+ *   stride-49 are identical and the majority vote succeeds (REQ-WAVEFORM-009).
+ *   49 symbols × 8 ms/symbol = 392 ms = Trw  (exact, REQ-WAVEFORM-010).
+ *
+ * ## Integration loop
  *
  *     uint32_t now = get_time_ms();
  *     sm.update(now);     // may call transmit_callback → enqueue_word()
- *     modem.update(now);  // fires physical copies on schedule
- *
- *   enqueue_word() records the word and marks the first copy as pending.
- *   update() sends the first copy immediately on the same tick, then schedules
- *   the remaining two copies at TW_INT_MS = Trw_ms / 3 intervals each.
- *
- *   Copy schedule for a word enqueued at t = T:
- *     copy 0  →  t = T              (first update() tick after enqueue)
- *     copy 1  →  t = T + TW_INT_MS  (≈ Tw = 130 ms)
- *     copy 2  →  t = T + 2·TW_INT_MS (≈ 2·Tw = 261 ms)
- *   Total on-air time: 3 copies × TW_INT_MS ≈ Trw = 392 ms  (−2 ms rounding)
+ *     modem.update(now);  // transmits the 49-symbol block on the first tick
+ *                         // after enqueue, then fires done_cb_
  *
  * ## IModem not used
  *   IModem::transmit(bytes*, size) operates on raw bytes and does not fit the
@@ -46,9 +47,9 @@ namespace ale {
 
 class ALE2GModem {
 public:
-    /** Audio output: called once per copy with SAMPLES_PER_COPY PCM samples (8 kHz). */
+    /** Audio output: called once per word with SAMPLES_PER_WORD PCM samples (8 kHz). */
     using TxCallback       = std::function<void(const int16_t* samples, uint32_t count)>;
-    /** Completion: fired after all SYMBOL_REPETITION copies of a word have been sent. */
+    /** Completion: fired after the 49-symbol block for one word has been sent. */
     using WordDoneCallback = std::function<void()>;
 
     ALE2GModem();
@@ -57,11 +58,11 @@ public:
     void set_word_done_callback(WordDoneCallback cb) { done_cb_ = std::move(cb); }
 
     /**
-     * Enqueue one logical word for 3× transmission (A.5.2.2.4).
-     * If the modem is idle, transmission starts on the next modem.update() call.
+     * Enqueue one logical word for transmission (AC-WAVEFORM-008-2).
+     * If the modem is idle, the 49-symbol block starts on the next modem.update() call.
      * If the modem is busy, the word is appended to the internal queue and sent
      * after all preceding words have completed — preserving word order.
-     * done_cb_ fires once per word after all 3 copies have been sent.
+     * done_cb_ fires once per word after the 49-symbol block has been handed off.
      */
     void enqueue_word(const ALEWord& word);
 
@@ -77,31 +78,27 @@ public:
      * Drive the modem forward in time.
      *
      * Call this in the same integration loop as ALEStateMachine::update(), passing
-     * the same timestamp.  The modem fires one physical copy whenever
-     * current_time_ms >= next_copy_ms_ and copies are still pending.
+     * the same timestamp.  The modem transmits the pending 49-symbol block on the
+     * first tick after enqueue_word() and fires done_cb_ immediately after.
      *
-     * \param current_time_ms  Absolute wall-clock time in milliseconds
+     * \param current_time_ms  Absolute wall-clock time in milliseconds (unused internally)
      */
     void update(uint32_t current_time_ms);
 
     bool is_transmitting() const { return copies_remaining_ > 0; }
 
 private:
-    // Integer approximation of Tw = Trw / 3  (130 ms; −0.67 ms rounding per copy)
-    static constexpr uint32_t TW_INT_MS = ALETimingConstants::Trw_ms / SYMBOL_REPETITION;
+    // 49 symbols × 64 samples/symbol = 3136 samples per word = 392 ms = Trw (exact)
+    static constexpr uint32_t SAMPLES_PER_WORD =
+        SYMBOLS_PER_WORD * (SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD);  // 3136
 
-    // 17 symbols × 64 samples/symbol = 1088 samples per copy (≈ 136 ms ≈ Tw)
-    static constexpr uint32_t SAMPLES_PER_COPY =
-        SYMBOLS_PER_COPY * (SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD);
-
-    uint64_t pending_tx49_     = 0;      // pre-encoded 49-bit word ready for modulation
+    uint64_t pending_tx49_     = 0;
     uint8_t  copies_remaining_ = 0;
-    bool     word_enqueued_    = false;  // first copy not yet sent
-    uint32_t next_copy_ms_     = 0;
+    bool     word_enqueued_    = false;
     std::queue<uint64_t> tx49_queue_;
 
-    std::array<uint8_t, SYMBOLS_PER_COPY> symbol_buf_;
-    std::array<int16_t, SAMPLES_PER_COPY> sample_buf_;
+    std::array<uint8_t, SYMBOLS_PER_WORD> symbol_buf_;   // 49 on-air symbols
+    std::array<int16_t, SAMPLES_PER_WORD> sample_buf_;   // 3136 samples
 
     ToneGenerator    generator_;
     TxCallback       tx_cb_;

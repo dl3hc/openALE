@@ -384,10 +384,17 @@ void ALEStateMachine::handle_calling() {
 
         // ── CONCLUSION ────────────────────────────────────────────────────
         // TIS SAM — sent once. RX window opens after last word in on_word_complete().
+        // Uses same Trw slot timer as LEADING_CALL so the conclusion starts exactly
+        // at call_cycle_count × Trw from first_call_tx_ms, not immediately after
+        // the last leading-word's 3rd copy (which finishes 132 ms before the slot).
         case CallingPhase::CONCLUSION: {
             if (words_pending > 0) break;
-            if (call_cycles_in_phase == 0)
-                build_conclusion_words();
+            if (call_cycles_in_phase == 0) {
+                const uint32_t next_tx = first_call_tx_ms
+                                       + call_cycle_count * ALETimingConstants::Trw_ms;
+                if (current_time_ms >= next_tx)
+                    build_conclusion_words();
+            }
             break;
         }
 
