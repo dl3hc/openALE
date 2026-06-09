@@ -229,6 +229,11 @@ target_link_libraries(test_frame_c ale_link ale_modem ale_protocol ale_fsk_core 
 target_include_directories(test_frame_c PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FrameC COMMAND test_frame_c)
 
+add_executable(test_roundtrip tests/test_roundtrip.cpp)
+target_link_libraries(test_roundtrip ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_roundtrip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME Roundtrip COMMAND test_roundtrip)
+
 add_executable(debug_fft tests/debug_fft.cpp)
 target_link_libraries(debug_fft ale_fsk_core ale_fec)
 target_include_directories(debug_fft PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
