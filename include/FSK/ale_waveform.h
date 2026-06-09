@@ -32,6 +32,8 @@ constexpr uint32_t SYMBOL_DURATION_MS  = 8;
 constexpr uint32_t SYMBOLS_PER_WORD    = 49;
 // Physical redundancy: each word is transmitted this many times (A.5.2.2.4)
 constexpr uint32_t SYMBOL_REPETITION   = 3;
+// Symbols per one physical copy: ceil(49/3) = 17; last symbol uses only 1 of 3 bits
+constexpr uint32_t SYMBOLS_PER_COPY    = (SYMBOLS_PER_WORD + SYMBOL_REPETITION - 1) / SYMBOL_REPETITION;
 
 /**
  * Type-safe buffer holding one complete ALE word across all three physical

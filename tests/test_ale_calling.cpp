@@ -52,18 +52,21 @@ static ALEStateMachine make_sm(WordCapture& cap,
     return sm;
 }
 
-// Drive through leading call (2 sequences of 1 word each) into CONCLUSION.
-// Works for 3-char TO address (1 word → tc = 1 × Trw) and any self address.
-// Calls on_word_complete() after each transmission so phase transitions fire.
+// Drive through LBT+TUNING, leading call (2 slots of 1 word each), into CONCLUSION.
+// Works for 3-char TO address (leading_frame_ = 2 words, 1 per slot) and any self.
+// Calls on_word_complete() after each word so phase transitions fire correctly.
 static void advance_to_conclusion(ALEStateMachine& sm, WordCapture& cap)
 {
-    const uint32_t Trw = ALETimingConstants::Trw_ms;
-    sm.update(0);           // LEADING seq 1 fires
-    sm.on_word_complete();  // ack → call_cycles_in_phase = 1 (still LEADING)
-    sm.update(Trw);         // LEADING seq 2 fires
-    sm.on_word_complete();  // ack → call_cycles_in_phase = 2 = tlc_slots → CONCLUSION
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t T_TX = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+    sm.update(ALETimingConstants::Twt_ms);  // LBT → TUNING
+    sm.update(T_TX);                         // TUNING → LEADING_CALL
+    sm.update(T_TX);            // slot 0: LEADING word 0 fires
+    sm.on_word_complete();      // ack → call_cycles_in_phase=1 (still LEADING)
+    sm.update(T_TX + Trw);     // slot 1: LEADING word 1 fires
+    sm.on_word_complete();      // ack → call_cycles_in_phase=2 = tlc_slots → CONCLUSION
     cap.clear();
-    sm.update(2 * Trw);     // CONCLUSION fires (TIS self)
+    sm.update(T_TX + 2 * Trw); // CONCLUSION fires (TIS self)
 }
 
 // ============================================================================
@@ -78,7 +81,10 @@ bool test_ac_003_1_individual_scanning_uses_to()
     WordCapture cap;
     ALEStateMachine sm = make_sm(cap, "SAM", /*scan_ch=*/1);
     sm.initiate_call("N1XYZ");
-    sm.update(0);  // first scanning slot fires at t=0
+    const uint32_t T_TX = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+    sm.update(ALETimingConstants::Twt_ms); // LBT → TUNING
+    sm.update(T_TX);                        // TUNING → SCANNING_CALL
+    sm.update(T_TX);                        // slot 0: first scanning word fires
 
     bool ok = !cap.empty() && cap.words[0].type == PreambleType::TO;
     std::cout << "  scanning first word = TO: " << (ok ? "PASS" : "FAIL");
@@ -146,7 +152,10 @@ bool test_ac_003_2_to_first_three_chars()
         WordCapture cap;
         ALEStateMachine sm = make_sm(cap, "SAM", 1);
         sm.initiate_call("N1XYZ");
-        sm.update(0);
+        const uint32_t T_TX2 = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+        sm.update(ALETimingConstants::Twt_ms); // LBT → TUNING
+        sm.update(T_TX2);                       // TUNING → SCANNING_CALL
+        sm.update(T_TX2);                       // slot 0: first scanning word fires
         bool sm_ok = !cap.empty()
                   && cap.words[0].type == PreambleType::TO
                   && strncmp(cap.words[0].address, "N1X", 3) == 0;
@@ -200,12 +209,20 @@ bool test_ac_003_3_extended_address_data_rep_sequence()
     };
 
     bool all_pass = true;
+    const uint32_t T_TX3 = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+    const uint32_t Trw3  = ALETimingConstants::Trw_ms;
+
     for (const auto& c : cases) {
-        // Drive leading call seq 1 directly (target_scan_channels=0)
+        // Drive leading call seq 1 via LBT+TUNING then one slot per word.
         WordCapture cap;
         ALEStateMachine sm = make_sm(cap, "SAM", 0);
         sm.initiate_call(c.addr);
-        sm.update(0);  // seq 1 fires immediately
+        sm.update(ALETimingConstants::Twt_ms); // LBT → TUNING
+        sm.update(T_TX3);                       // TUNING → LEADING_CALL
+        for (size_t slot = 0; slot < c.expected_word_count; ++slot) {
+            sm.update(T_TX3 + static_cast<uint32_t>(slot) * Trw3);
+            sm.on_word_complete();
+        }
 
         bool count_ok = (cap.size() >= c.expected_word_count);
         bool types_ok = true;
@@ -279,12 +296,15 @@ bool test_tis_extended_address()
     ALEStateMachine sm = make_sm(cap, "SAMUELB", 0);
     sm.initiate_call("ABC");
 
-    // tc_ms for "ABC" = 1 × Trw. Drive through leading call (2 seqs) to conclusion.
-    const uint32_t Trw = ALETimingConstants::Trw_ms;
-    sm.update(0);          sm.on_word_complete();  // LEADING seq 1 ack
-    sm.update(Trw);        sm.on_word_complete();  // LEADING seq 2 ack → CONCLUSION
+    // tc_ms for "ABC" = 1 × Trw. Drive through LBT+TUNING then 2 leading slots.
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t T_TX4 = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+    sm.update(ALETimingConstants::Twt_ms);   // LBT → TUNING
+    sm.update(T_TX4);                         // TUNING → LEADING_CALL
+    sm.update(T_TX4);       sm.on_word_complete();  // slot 0: LEADING word 0 ack
+    sm.update(T_TX4 + Trw); sm.on_word_complete();  // slot 1: LEADING word 1 ack → CONCLUSION
     cap.clear();
-    sm.update(2 * Trw);    // CONCLUSION fires
+    sm.update(T_TX4 + 2 * Trw);    // CONCLUSION fires
 
     // Own address is 7 chars → 3 logical words: TIS + DATA + REP
     bool count_ok = cap.size() >= 3;

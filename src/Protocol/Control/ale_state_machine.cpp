@@ -199,6 +199,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             call_cycle_count               = 0;
             call_cycles_in_phase           = 0;
             words_pending                  = 0;
+            leading_frame_idx_             = 0;
             listening_start_ms             = 0;
             response_to_detected           = false;
             response_rx_start_ms           = 0;
@@ -888,6 +889,7 @@ void ALEStateMachine::try_next_calling_channel() {
         call_cycle_count     = 0;
         call_cycles_in_phase = 0;
         words_pending        = 0;
+        leading_frame_idx_   = 0;
         listening_start_ms   = 0;
         response_to_detected = false;
         response_rx_start_ms = 0;
@@ -928,11 +930,12 @@ void ALEStateMachine::build_scanning_word() {
 }
 
 void ALEStateMachine::build_leading_call_word() {
-    // Transmit the full leading_frame_ sequence (already doubled by
-    // ALEFrameBuilder::leading_individual — Tlc = 2 × Tc per A.5.5.3.1).
-    // All words are enqueued at once; on_word_complete() counts each word
-    // individually against leading_frame_.size() total slots.
-    transmit_words(leading_frame_.words());
+    // Send exactly one word from the pre-doubled leading_frame_ per Trw slot.
+    // leading_frame_idx_ advances through the sequence; on_word_complete() counts
+    // each word individually against leading_frame_.size() total slots (Tlc = 2×Tc).
+    const auto& words = leading_frame_.words();
+    if (leading_frame_idx_ < words.size())
+        transmit_word(words[leading_frame_idx_++]);
 }
 
 void ALEStateMachine::build_conclusion_words() {

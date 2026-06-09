@@ -90,9 +90,9 @@ private:
     // Integer approximation of Tw = Trw / 3  (130 ms; −0.67 ms rounding per copy)
     static constexpr uint32_t TW_INT_MS = ALETimingConstants::Trw_ms / SYMBOL_REPETITION;
 
-    // 49 symbols × 64 samples/symbol = 3136 samples per copy
+    // 17 symbols × 64 samples/symbol = 1088 samples per copy (≈ 136 ms ≈ Tw)
     static constexpr uint32_t SAMPLES_PER_COPY =
-        SYMBOLS_PER_WORD * (SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD);
+        SYMBOLS_PER_COPY * (SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD);
 
     uint64_t pending_tx49_     = 0;      // pre-encoded 49-bit word ready for modulation
     uint8_t  copies_remaining_ = 0;
@@ -100,7 +100,7 @@ private:
     uint32_t next_copy_ms_     = 0;
     std::queue<uint64_t> tx49_queue_;
 
-    std::array<uint8_t, SYMBOLS_PER_WORD> symbol_buf_;
+    std::array<uint8_t, SYMBOLS_PER_COPY> symbol_buf_;
     std::array<int16_t, SAMPLES_PER_COPY> sample_buf_;
 
     ToneGenerator    generator_;

@@ -338,6 +338,7 @@ private:
     uint32_t     call_cycle_count;       ///< Total Trw-slots completed (incremented in on_word_complete() only)
     uint32_t     call_cycles_in_phase;   ///< Trw-slots completed within current inner phase (reset on transition)
     uint32_t     words_pending;          ///< Words enqueued but not yet acked by on_word_complete()
+    uint32_t     leading_frame_idx_;     ///< Index of next word to send in leading_frame_ (reset on CALLING entry)
     uint32_t     listening_start_ms;     ///< Timestamp when LISTENING phase began (for Twr timeout)
 
     // ── Pre-computed TX frames ───────────────────────────────────────────────
