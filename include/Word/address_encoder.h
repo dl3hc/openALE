@@ -68,6 +68,20 @@
 
 namespace ale {
 
+/**
+ * Trimmt trailing spaces und '@'-Füllzeichen aus einem 3-Zeichen-ALE-Adressfeld.
+ * Gibt leeren String zurück wenn das Feld ausschließlich aus Füllzeichen besteht.
+ */
+inline std::string trim_ale_address(const char* raw, size_t len = 3) {
+    std::string s(raw, len);
+    auto pos = s.find_last_not_of(" @");
+    if (pos != std::string::npos)
+        s.erase(pos + 1);
+    else
+        s.clear();
+    return s;
+}
+
 class AddressEncoder {
 public:
     // -------------------------------------------------------------------------

@@ -655,10 +655,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
     lq.timestamp_ms = current_time_ms;
     update_link_quality(lq);
 
-    // Extract 3-char address field; trim trailing spaces.
-    std::string addr(word.address, 3);
-    auto trim = addr.find_last_not_of(' ');
-    if (trim != std::string::npos) addr.erase(trim + 1);
+    std::string addr = trim_ale_address(word.address);
 
     switch (current_state) {
 
@@ -702,10 +699,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                            && (word.type == PreambleType::DATA
                                || word.type == PreambleType::REP)) {
                     // Fix 5: extended address chunk after TIS — append and reset Tlww.
-                    std::string chunk(word.address, 3);
-                    auto p = chunk.find_last_not_of('@');
-                    if (p != std::string::npos) chunk.erase(p + 1);
-                    else chunk.clear();
+                    std::string chunk = trim_ale_address(word.address);
                     to_address      += chunk;
                     active_call_from  = to_address;
                     tlww_start_ms     = current_time_ms;   // Tlww reset: wait for next word
@@ -733,10 +727,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                            && (word.type == PreambleType::DATA
                                || word.type == PreambleType::REP)) {
                     // Fix 5: extended caller address — append chunk, reset Tlww.
-                    std::string chunk(word.address, 3);
-                    auto p = chunk.find_last_not_of('@');
-                    if (p != std::string::npos) chunk.erase(p + 1);
-                    else chunk.clear();
+                    std::string chunk = trim_ale_address(word.address);
                     caller_address   += chunk;
                     active_call_from  = caller_address;
                     hs_tlww_start_ms  = current_time_ms;

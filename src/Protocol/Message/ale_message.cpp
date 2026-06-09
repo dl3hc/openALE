@@ -4,6 +4,7 @@
  */
 
 #include "Protocol/Message/ale_message.h"
+#include "Word/address_encoder.h"
 #include <algorithm>
 
 namespace ale {
@@ -128,15 +129,12 @@ bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
 void MessageAssembler::extract_addresses(const std::vector<ALEWord>& words, ALEMessage& msg) {
     for (const auto& word : words) {
         if (word.type == PreambleType::TO || word.type == PreambleType::TWAS) {
-            std::string addr(word.address, 3);
-            // Trim trailing spaces
-            addr.erase(addr.find_last_not_of(' ') + 1);
+            std::string addr = trim_ale_address(word.address);
             if (!addr.empty()) {
                 msg.to_addresses.push_back(addr);
             }
         } else if (word.type == PreambleType::FROM || word.type == PreambleType::TIS) {
-            std::string addr(word.address, 3);
-            addr.erase(addr.find_last_not_of(' ') + 1);
+            std::string addr = trim_ale_address(word.address);
             if (!addr.empty()) {
                 msg.from_address = addr;
             }
