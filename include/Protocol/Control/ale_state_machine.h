@@ -90,18 +90,41 @@ enum class OperatorEvent {
  *                       └─ "TIS JOE" + Tlww → SENDING_ACK
  *   SENDING_ACK       TO JOE × 2 + TIS SAM — third handshake frame (REQ-LINK-008)
  *                       └─ complete → LINKED (HANDSHAKE_COMPLETE)
- *   NET_CALL_STUB     TODO: net call protocol per A.5.5.x
+ *
+ * Net calls (A.5.5.4.2.1): SAM-seitig identischer Ablauf wie Individual Call.
  */
 enum class CallingPhase {
-    LBT,            ///< Listen-Before-Transmit: wait Twt before first TX
-    TUNING,         ///< Channel tune delay Tt
-    SCANNING_CALL,  ///< Tsc: TO first word only per A.5.2.5.1, C×2 slots
-    LEADING_CALL,   ///< Tlc: full TO address, sent twice (2×Tc)
-    MESSAGE,        ///< Optional AMD/DTM orderwire (stub, see AC-LINK-009-3)
-    CONCLUSION,     ///< TIS SAM — frame terminator, invites response
-    LISTENING,      ///< Twr/Twrt: RX window, waiting for called station response
-    SENDING_ACK,    ///< Third handshake frame: TO JOE × 2 + TIS SAM (REQ-LINK-008)
-    NET_CALL_STUB   ///< TODO: net call protocol per A.5.5.x
+    LBT,                ///< Listen-Before-Transmit: wait Twt before first TX
+    TUNING,             ///< Channel tune delay Tt
+    SCANNING_CALL,      ///< Tsc: TO first word only per A.5.2.5.1, C×2 slots
+    GROUP_SCANNING_CALL,///< Tsc: THRU/REP-Paare für Star-Group-Call, rotieren bis Tsc (T-11)
+    LEADING_CALL,       ///< Tlc: full TO address, sent twice (2×Tc)
+    MESSAGE,            ///< Optional AMD/DTM orderwire (stub, see AC-LINK-009-3)
+    CONCLUSION,         ///< TIS SAM — frame terminator, invites response
+    LISTENING,          ///< Twr/Twrt: RX window, waiting for called station response
+    SENDING_ACK,        ///< Third handshake frame: TO JOE × 2 + TIS SAM (REQ-LINK-008)
+};
+
+/**
+ * \enum ScanningPhase
+ * Sub-states within SCANNING per A.5.5.4.4/5 (T-10).
+ *   HOPPING        — normales Channel-Hopping
+ *   ALLCALL_PAUSE  — Channel-Hopping eingefroren; warte auf Message/Conclusion
+ */
+enum class ScanningPhase {
+    HOPPING,
+    ALLCALL_PAUSE,
+};
+
+/**
+ * \enum SoundingPhase
+ * Sub-states within SOUNDING per A.5.3.4.
+ *   TRANSMITTING  — TIS-Frame wird gerade gesendet
+ *   LISTENING     — optionales RX-Fenster für eingehenden Handshake (Trw)
+ */
+enum class SoundingPhase {
+    TRANSMITTING,
+    LISTENING,
 };
 
 /**
@@ -122,6 +145,7 @@ enum class CallingPhase {
  */
 enum class HandshakePhase {
     WAIT_CYCLE_END,    ///< Twce: listen for SAM's conclusion (A.5.5.3.2)
+    SLOT_WAIT,         ///< Tswt: warte zugewiesenen Slot vor LBT (0 ms bei Individual Call, T-09)
     CHANNEL_CHECK,     ///< 2×Trw LBT before response TX (AC-LINK-019-1, A.5.5.3.3)
     SENDING_RESPONSE,  ///< TO caller × 2 + TIS self — Figure A-30
     WAIT_ACK,          ///< Twr: wait for SAM's ACK — Figure A-31
@@ -155,6 +179,15 @@ public:
 
     bool initiate_call(const std::string& to_address);
     bool initiate_net_call(const std::string& net_address);
+
+    /**
+     * Initiiert einen Star-Group-Call (A.5.5.4.3).
+     * relay  = Relay-Adresse (THRU-Anker)
+     * dest   = Ziel-Adresse (REP-Folge)
+     * Max. 12 Adresswörter gesamt, max. 5 unique first words (Spec A.5.5.4.3).
+     */
+    bool initiate_group_call(const std::string& relay, const std::string& dest);
+
     bool respond_to_call();
 
     /**
@@ -174,12 +207,30 @@ public:
     bool send_sounding();
 
     /**
+     * Terminate the current link per A.5.5.3.5:
+     * Sends TO [peer] × 2 + TWAS [self] before transitioning to pre_link_state_.
+     * No-op if not in LINKED state.
+     * Transition happens in on_word_complete() after the frame is fully sent.
+     */
+    void terminate_link();
+
+    /**
      * Set assumed number of scan channels of the target station.
      * Used to compute Tsc = target_scan_channels × 2 × Trw.
      * Default = 1 (single channel, minimum scanning call).
      * Set to 0 to skip scanning call entirely (target known on fixed channel).
      */
     void set_target_scan_channels(uint32_t n) { target_scan_channels = n; }
+
+    /**
+     * Setze Slot-Nummer und Wartezeit für One-to-Many-Protokolle (A.5.5.4.1.3).
+     * slot = 0 und tswt_ms = 0 für Individual Calls (kein Warten).
+     * Muss vor dem HANDSHAKE-Eintritt gesetzt werden.
+     */
+    void set_slot_number(uint32_t slot, uint32_t tswt_ms) {
+        slot_number_ = slot;
+        tswt_ms_     = tswt_ms;
+    }
 
     /**
      * Set the ordered list of channels SAM will try when calling.
@@ -226,6 +277,7 @@ public:
     uint32_t       get_call_cycles_in_phase() const { return call_cycles_in_phase; }
     CallingPhase   get_calling_phase()        const { return calling_phase; }
     HandshakePhase get_handshake_phase()      const { return handshake_phase; }
+    SoundingPhase  get_sounding_phase()       const { return sounding_phase_; }
     uint32_t       get_words_pending()        const { return words_pending; }
     bool           is_emergency_active()      const { return emergency_active; }
     const std::string& get_to_address()      const { return to_address; }
@@ -287,6 +339,7 @@ private:
     // ── State machine ─────────────────────────────────────────────────────
     ALEState current_state;
     ALEState previous_state;
+    ALEState pre_link_state_;   ///< Rückkehrzustand nach gescheitertem/beendetem Link (T-01)
 
     // ── Configuration ─────────────────────────────────────────────────────
     ALEChannelManager channel_manager_;
@@ -298,6 +351,7 @@ private:
     uint32_t         link_start_time_ms;
     uint32_t         last_word_time_ms;
     MessageAssembler message_assembler;
+    bool             linked_terminating_;  ///< true = TWAS-Terminierungsframe läuft (T-07)
 
     // ── Calling sub-state (MIL-STD A.5.5.3.1) ────────────────────────────
     CallingPhase calling_phase;          ///< Current phase within CALLING
@@ -308,6 +362,9 @@ private:
     uint32_t     words_pending;          ///< Words enqueued but not yet acked by on_word_complete()
     uint32_t     leading_frame_idx_;     ///< Index of next word to send in leading_frame_ (reset on CALLING entry)
     uint32_t     listening_start_ms;     ///< Timestamp when LISTENING phase began (for Twr timeout)
+
+    bool     active_call_is_group;     ///< true = Star-Group-Call (T-11)
+    uint32_t group_scan_word_idx_;    ///< Index im group_scan_frame_ (T-11)
 
     // ── Pre-computed TX frames ───────────────────────────────────────────────
     // Computed once in initiate_call() / initiate_net_call() via ALEFrameBuilder;
@@ -320,7 +377,8 @@ private:
     // conclusion_frame_ — full TIS address, sent once (A.5.2.3.2.2)
     Frame scanning_frame_;    ///< 1 word — TO first-word only
     Frame leading_frame_;     ///< 2×wpa words — full TO address doubled (Tlc)
-    Frame conclusion_frame_;  ///< TIS own address — sent once in CONCLUSION
+    Frame conclusion_frame_;  ///< TIS own address — sent once
+    Frame group_scan_frame_;  ///< THRU/REP-Paar für GROUP_SCANNING_CALL (T-11) in CONCLUSION
 
     // ── LBT and tuning (AC-LINK-017-1/2) ─────────────────────────────────
     uint32_t     lbt_start_ms;           ///< When LBT phase started (for Twt timeout)
@@ -339,6 +397,9 @@ private:
 
     // ── Handshake sub-state (MIL-STD A.5.5.3.2–4, JOE side) ─────────────
     HandshakePhase handshake_phase;       ///< Current sub-phase within HANDSHAKE
+    uint32_t       slot_number_;          ///< Slot-Nummer für SLOT_WAIT (T-09); 0 = Individual
+    uint32_t       tswt_ms_;             ///< Berechnete Slot-Wartezeit in ms (T-09)
+    uint32_t       slot_wait_start_ms_;  ///< Startzeit des SLOT_WAIT (T-09)
     uint32_t       twce_ms;              ///< Twce = 2 × own Ts, computed on HANDSHAKE entry
     uint32_t       twce_start_ms;        ///< Timestamp when HANDSHAKE was entered
     uint32_t       hs_tlww_start_ms;     ///< Tlww in WAIT_CYCLE_END and WAIT_ACK; 0 = not yet
@@ -357,6 +418,13 @@ private:
 
     // ── Pending orderwire message (MESSAGE phase, stub) ───────────────────
     PendingMessage pending_message;
+
+    // ── Scanning sub-state (T-10) ────────────────────────────────────────
+    ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING
+    uint32_t      allcall_pause_start_ms_;   ///< Startzeit der AllCall-Pause (T-10)
+
+    // ── Sounding sub-state (T-08) ─────────────────────────────────────────
+    SoundingPhase sounding_phase_;       ///< Aktuelle Phase innerhalb SOUNDING
 
     // ── Target scan channels ──────────────────────────────────────────────
     uint32_t target_scan_channels;       ///< Assumed scan channels of target (for Tsc)
@@ -389,7 +457,6 @@ private:
     void react_calling(const WordEvent& ev);
     void react_handshake(const WordEvent& ev, const ALEWord& word);
 
-    void handle_idle();
     void handle_scanning();
     void handle_calling();
     void handle_handshake();
@@ -426,6 +493,7 @@ private:
      * to LEADING_CALL after C × 2 slots (A.5.2.5.1).
      */
     void build_scanning_word();
+    void build_group_scanning_word();  ///< T-11: THRU/REP-Paar für GROUP_SCANNING_CALL
 
     /**
      * LEADING_CALL: transmit the full leading_words_ sequence once.

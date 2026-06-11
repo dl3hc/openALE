@@ -85,7 +85,7 @@ constexpr uint32_t Twa_ms     = 30000;                   // Activity timeout = 3
 constexpr uint32_t calc_twce_ms(uint32_t n_channels) {
     return 2u * n_channels * static_cast<uint32_t>(Tdrw_ms);
 }
-constexpr uint32_t Twt_ms     = 2000;                    // Listen-before-TX = 2 s (voice/general)
+constexpr uint32_t Twt_ms     = 2000;                    // voice/general LBT = 2 s — unused in ALE-only mode
 constexpr uint32_t Twt_ale_ms = 2 * TRW_MS;              // ALE-only LBT = Tdrw = 784 ms
 constexpr uint32_t LINK_TIMEOUT_MS = 120000;             // Link maintenance = 120 s
 // Annex B says 45 min, Table A-XV says 30 min — Table A-XV used:

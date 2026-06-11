@@ -83,4 +83,16 @@ Frame ALEFrameBuilder::response_frame(const std::string& caller_addr,
     return Frame(std::move(words));
 }
 
+Frame ALEFrameBuilder::termination_frame(const std::string& peer_addr,
+                                          const std::string& self_addr) {
+    auto peer_words = AddressEncoder::encode(peer_addr, PreambleType::TO);
+    std::vector<ALEWord> words;
+    words.reserve(peer_words.size() * 2 + AddressEncoder::encode(self_addr, PreambleType::TWAS).size());
+    words.insert(words.end(), peer_words.begin(), peer_words.end());
+    words.insert(words.end(), peer_words.begin(), peer_words.end());
+    auto twas_words = AddressEncoder::encode(self_addr, PreambleType::TWAS);
+    words.insert(words.end(), twas_words.begin(), twas_words.end());
+    return Frame(std::move(words));
+}
+
 } // namespace ale

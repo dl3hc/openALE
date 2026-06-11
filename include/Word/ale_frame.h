@@ -140,6 +140,13 @@ public:
     static Frame response_frame(const std::string& caller_addr,
                                  const std::string& self_addr,
                                  bool is_reject = false);
+
+    /**
+     * Terminierungsrahmen (A.5.5.3.5): TO [peer_addr] × 2 + TWAS [self_addr].
+     * Wird von terminate_link() gesendet bevor der Link abgebaut wird.
+     */
+    static Frame termination_frame(const std::string& peer_addr,
+                                    const std::string& self_addr);
 };
 
 } // namespace ale

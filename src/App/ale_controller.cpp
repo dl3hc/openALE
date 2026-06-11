@@ -97,7 +97,7 @@ void ALEController::reject_call()
 void ALEController::terminate_link()
 {
     emit_status("Terminating link");
-    sm_.process_event(ALEEvent::LINK_TERMINATED);
+    sm_.terminate_link();  // T-07: sendet TO×2+TWAS, dann LINK_TERMINATED
 }
 
 void ALEController::emergency_stop()

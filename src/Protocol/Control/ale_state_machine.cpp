@@ -30,13 +30,13 @@ static const char* EVENT_NAMES[] = {
 
 // Must match CallingPhase enum order exactly.
 static const char* PHASE_NAMES[] = {
-    "LBT", "TUNING", "SCANNING_CALL", "LEADING_CALL", "MESSAGE",
-    "CONCLUSION", "LISTENING", "SENDING_ACK", "NET_CALL_STUB"
+    "LBT", "TUNING", "SCANNING_CALL", "GROUP_SCANNING_CALL", "LEADING_CALL", "MESSAGE",
+    "CONCLUSION", "LISTENING", "SENDING_ACK"
 };
 
 // Must match HandshakePhase enum order exactly.
 static const char* HS_PHASE_NAMES[] = {
-    "WAIT_CYCLE_END", "CHANNEL_CHECK", "SENDING_RESPONSE", "WAIT_ACK"
+    "WAIT_CYCLE_END", "SLOT_WAIT", "CHANNEL_CHECK", "SENDING_RESPONSE", "WAIT_ACK"
 };
 
 // ============================================================================
@@ -46,10 +46,13 @@ static const char* HS_PHASE_NAMES[] = {
 ALEStateMachine::ALEStateMachine()
     : current_state(ALEState::IDLE),
       previous_state(ALEState::IDLE),
+      pre_link_state_(ALEState::IDLE),
       link_start_time_ms(0),
       last_word_time_ms(0),
       calling_phase(CallingPhase::LBT),
       active_call_is_net(false),
+      active_call_is_group(false),
+      group_scan_word_idx_(0),
       first_call_tx_ms(0),
       call_cycle_count(0),
       call_cycles_in_phase(0),
@@ -77,7 +80,14 @@ ALEStateMachine::ALEStateMachine()
       contiguous_errors(0),
       hs_lbt_start_ms(0),
       hs_message_start_ms(0),
-      pending_reject_(false)
+      pending_reject_(false),
+      linked_terminating_(false),
+      sounding_phase_(SoundingPhase::TRANSMITTING),
+      slot_number_(0),
+      tswt_ms_(0),
+      slot_wait_start_ms_(0),
+      scanning_phase_(ScanningPhase::HOPPING),
+      allcall_pause_start_ms_(0)
 {}
 
 // ============================================================================
@@ -110,11 +120,12 @@ bool ALEStateMachine::process_event(ALEEvent event) {
             if (event == ALEEvent::STOP_SCAN)        return transition_to(ALEState::IDLE);
             if (event == ALEEvent::CALL_DETECTED)    return transition_to(ALEState::HANDSHAKE);
             if (event == ALEEvent::CALL_REQUEST)     return transition_to(ALEState::CALLING);
+            if (event == ALEEvent::SOUNDING_REQUEST) return transition_to(ALEState::SOUNDING);  // T-04
             break;
 
         case ALEState::CALLING:
             if (event == ALEEvent::HANDSHAKE_COMPLETE) return transition_to(ALEState::LINKED);
-            if (event == ALEEvent::LINK_TIMEOUT)       return transition_to(ALEState::IDLE);
+            if (event == ALEEvent::LINK_TIMEOUT)       return transition_to(pre_link_state_);  // T-01
             break;
 
         case ALEState::HANDSHAKE:
@@ -124,17 +135,17 @@ bool ALEStateMachine::process_event(ALEEvent event) {
 
         case ALEState::LINKED:
             if (event == ALEEvent::LINK_TERMINATED ||
-                event == ALEEvent::LINK_TIMEOUT)       return transition_to(ALEState::IDLE);
+                event == ALEEvent::LINK_TIMEOUT)       return transition_to(pre_link_state_);  // T-01
             break;
 
         case ALEState::SOUNDING:
             if (event == ALEEvent::SOUNDING_COMPLETE)  return transition_to(ALEState::SCANNING);
+            if (event == ALEEvent::CALL_DETECTED)      return transition_to(ALEState::HANDSHAKE);  // T-08
             break;
 
         case ALEState::ERROR:
             if (event == ALEEvent::START_SCAN) return transition_to(ALEState::SCANNING);
             else                               return transition_to(ALEState::IDLE);
-            break;
     }
 
     if (event == ALEEvent::ERROR_OCCURRED)
@@ -187,10 +198,14 @@ bool ALEStateMachine::transition_to(ALEState new_state) {
 void ALEStateMachine::enter_state(ALEState new_state) {
     switch (new_state) {
         case ALEState::SCANNING:
+            scanning_phase_          = ScanningPhase::HOPPING;
+            allcall_pause_start_ms_  = 0;
             channel_manager_.start(current_time_ms);
             break;
 
         case ALEState::CALLING:
+            pre_link_state_                = previous_state;  // T-01: IDLE oder SCANNING
+            group_scan_word_idx_           = 0;
             link_start_time_ms             = current_time_ms;
             // DD-006: first_call_tx_ms is the Trw-grid anchor; set at end of TUNING
             // so that slot 0 fires exactly when the radio is tuned and ready (AC-LINK-017-2).
@@ -218,7 +233,9 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             break;
 
         case ALEState::HANDSHAKE:
-            link_start_time_ms  = current_time_ms;
+            pre_link_state_       = ALEState::SCANNING;  // T-01: nur von SCANNING erreichbar
+            slot_wait_start_ms_   = 0;
+            link_start_time_ms    = current_time_ms;
             // ── Handshake sub-state init (Fix 2/3/4) ─────────────────────
             twce_start_ms       = current_time_ms;
             hs_tlww_start_ms    = 0;
@@ -243,11 +260,14 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             break;
 
         case ALEState::LINKED:
-            link_start_time_ms = current_time_ms;
-            last_word_time_ms  = current_time_ms;
+            link_start_time_ms  = current_time_ms;
+            last_word_time_ms   = current_time_ms;
+            linked_terminating_ = false;
             break;
 
         case ALEState::SOUNDING:
+            sounding_phase_ = SoundingPhase::TRANSMITTING;
+            if (rx_enabled_callback) rx_enabled_callback(false);
             if (!address_book.get_self_address().empty())
                 transmit_words(
                     ALEFrameBuilder::conclusion(address_book.get_self_address()).words());
@@ -285,9 +305,14 @@ void ALEStateMachine::exit_state(ALEState old_state) {
 // State handlers
 // ============================================================================
 
-void ALEStateMachine::handle_idle() {}
-
 void ALEStateMachine::handle_scanning() {
+    if (scanning_phase_ == ScanningPhase::ALLCALL_PAUSE) {
+        // T-10: Tcc_max Timeout (A.5.5.4.4: Tcc_max ≈ 22×Trw = 8624 ms)
+        const uint32_t Tcc_max_ms = 22u * ALETimingConstants::Trw_ms;
+        if ((current_time_ms - allcall_pause_start_ms_) > Tcc_max_ms)
+            scanning_phase_ = ScanningPhase::HOPPING;
+        return;  // kein Hop während AllCall-Pause
+    }
     if (channel_manager_.check_dwell_timeout(current_time_ms))
         channel_manager_.hop_next(current_time_ms);
 }
@@ -337,8 +362,11 @@ void ALEStateMachine::handle_calling() {
             if ((current_time_ms - tune_start_ms) >= ALETimingConstants::Tt_ms) {
                 first_call_tx_ms     = current_time_ms;
                 call_cycles_in_phase = 0;
-                if (active_call_is_net) {
-                    calling_phase = CallingPhase::NET_CALL_STUB;
+                // T-06: Net calls laufen über denselben SAM-Pfad wie Individual Calls
+                // T-11: Group calls nutzen GROUP_SCANNING_CALL (THRU/REP statt TO)
+                if (active_call_is_group && target_scan_channels > 0) {
+                    calling_phase        = CallingPhase::GROUP_SCANNING_CALL;
+                    group_scan_word_idx_ = 0;
                 } else if (target_scan_channels > 0) {
                     calling_phase = CallingPhase::SCANNING_CALL;
                 } else {
@@ -357,6 +385,18 @@ void ALEStateMachine::handle_calling() {
                                    + call_cycle_count * ALETimingConstants::Trw_ms;
             if (current_time_ms >= next_tx)
                 build_scanning_word();
+            break;
+        }
+
+        // ── GROUP_SCANNING_CALL ───────────────────────────────────────────
+        // T-11: THRU/REP-Paar pro Slot (A.5.5.4.3), rotiert bis Tsc abgelaufen.
+        // Phase transitions in on_word_complete().
+        case CallingPhase::GROUP_SCANNING_CALL: {
+            if (words_pending > 0) break;
+            const uint32_t next_tx = first_call_tx_ms
+                                   + call_cycle_count * ALETimingConstants::Trw_ms;
+            if (current_time_ms >= next_tx)
+                build_group_scanning_word();
             break;
         }
 
@@ -452,9 +492,6 @@ void ALEStateMachine::handle_calling() {
             break;
         }
 
-        // ── NET_CALL_STUB ──────────────────────────────────────────────────
-        case CallingPhase::NET_CALL_STUB:
-            break;
     }
 }
 
@@ -480,13 +517,24 @@ void ALEStateMachine::handle_handshake() {
                 process_event(ALEEvent::LINK_TIMEOUT);
                 return;
             }
-            // Conclusion received + Tlww elapsed → LBT before response (A.5.5.3.3, AC-LINK-019-1)
+            // Conclusion received + Tlww elapsed → SLOT_WAIT (T-09) before LBT
             if (hs_conclusion_rcvd && hs_tlww_start_ms > 0 &&
                 (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tlww_ms) {
-                SM_TRACE("[TRACE] handle_handshake: Tlww elapsed → CHANNEL_CHECK\n");
+                SM_TRACE("[TRACE] handle_handshake: Tlww elapsed → SLOT_WAIT\n");
+                handshake_phase     = HandshakePhase::SLOT_WAIT;
+                slot_wait_start_ms_ = current_time_ms;
+                // RX bleibt offen während Slot-Wait
+            }
+            break;
+        }
+
+        // ── SLOT_WAIT ─────────────────────────────────────────────────────
+        // T-09: warte tswt_ms_ (0 bei Individual Call) bevor LBT beginnt.
+        case HandshakePhase::SLOT_WAIT: {
+            if ((current_time_ms - slot_wait_start_ms_) >= tswt_ms_) {
+                SM_TRACE("[TRACE] handle_handshake: SLOT_WAIT elapsed → CHANNEL_CHECK\n");
                 handshake_phase = HandshakePhase::CHANNEL_CHECK;
                 hs_lbt_start_ms = current_time_ms;
-                // RX stays open during LBT to detect channel activity
             }
             break;
         }
@@ -544,9 +592,22 @@ void ALEStateMachine::handle_linked() {
 }
 
 void ALEStateMachine::handle_sounding() {
-    uint32_t elapsed = current_time_ms - state_entry_time_ms;
-    if (elapsed > ALETimingConstants::Trw_ms)
+    // Fallback: wenn alle TX-Wörter durch sind aber on_word_complete() nicht gefeuert
+    // hat (z.B. keine Adresse → kein Wort gesendet), Übergang direkt hier auslösen.
+    // state_entry_time_ms wird NICHT überschrieben — der SOUNDING-Eintritts-Zeitpunkt
+    // dient als Fensterbeginn.
+    if (sounding_phase_ == SoundingPhase::TRANSMITTING && words_pending == 0) {
+        sounding_phase_ = SoundingPhase::LISTENING;
+        if (rx_enabled_callback) rx_enabled_callback(true);
+        // Kein return: LISTENING-Timeout-Check folgt direkt unten
+    }
+    if (sounding_phase_ == SoundingPhase::TRANSMITTING) return;  // Wörter noch ausstehend
+
+    // LISTENING: Trw-Fenster auf eingehenden Ruf warten (A.5.3.4)
+    if ((current_time_ms - state_entry_time_ms) > ALETimingConstants::Trw_ms) {
+        if (rx_enabled_callback) rx_enabled_callback(false);
         process_event(ALEEvent::SOUNDING_COMPLETE);
+    }
 }
 
 // ============================================================================
@@ -576,6 +637,7 @@ bool ALEStateMachine::initiate_call(const std::string& to_address) {
     active_call_to        = to_address;
     active_call_from      = address_book.get_self_address();
     active_call_is_net    = false;
+    active_call_is_group  = false;
     calling_channel_index = 0;
 
     // Pre-compute all TX frames for this call via ALEFrameBuilder.
@@ -598,6 +660,7 @@ bool ALEStateMachine::initiate_net_call(const std::string& net_address) {
     active_call_to        = net_address;
     active_call_from      = address_book.get_self_address();
     active_call_is_net    = true;
+    active_call_is_group  = false;
     calling_channel_index = 0;
 
     // Pre-compute TX frames (same structure as individual call; net call
@@ -605,6 +668,25 @@ bool ALEStateMachine::initiate_net_call(const std::string& net_address) {
     scanning_frame_   = ALEFrameBuilder::scanning_individual(net_address);
     leading_frame_    = ALEFrameBuilder::leading_individual(net_address);
     conclusion_frame_ = ALEFrameBuilder::conclusion(address_book.get_self_address());
+
+    return process_event(ALEEvent::CALL_REQUEST);
+}
+
+bool ALEStateMachine::initiate_group_call(const std::string& relay, const std::string& dest) {
+    if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
+        return false;
+
+    active_call_to        = dest;
+    active_call_from      = address_book.get_self_address();
+    active_call_is_net    = false;
+    active_call_is_group  = true;
+    calling_channel_index = 0;
+
+    group_scan_frame_ = ALEFrameBuilder::scanning_group(relay, dest);
+    leading_frame_    = ALEFrameBuilder::leading_group(relay, dest);
+    conclusion_frame_ = ALEFrameBuilder::conclusion(address_book.get_self_address());
+    // scanning_frame_ nicht benötigt bei Group-Calls (group_scan_frame_ übernimmt)
+    scanning_frame_   = group_scan_frame_;
 
     return process_event(ALEEvent::CALL_REQUEST);
 }
@@ -625,6 +707,15 @@ bool ALEStateMachine::send_sounding() {
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
         return false;
     return process_event(ALEEvent::SOUNDING_REQUEST);
+}
+
+void ALEStateMachine::terminate_link() {
+    if (current_state != ALEState::LINKED) return;
+    linked_terminating_ = true;
+    // T-07: TO [peer] × 2 + TWAS [self] — Gegenseite soll sofort zurück in available state
+    transmit_words(ALEFrameBuilder::termination_frame(
+        active_call_to, address_book.get_self_address()).words());
+    if (rx_enabled_callback) rx_enabled_callback(false);
 }
 
 void ALEStateMachine::emergency_manual_control() {
@@ -660,6 +751,24 @@ void ALEStateMachine::react_scanning(const WordEvent& ev) {
     if (ev.type == WordEvent::Type::TO_SELF) {
         active_call_to = ev.address;
         process_event(ALEEvent::CALL_DETECTED);
+        return;
+    }
+    // T-10: AllCall/AnyCall-Erkennung — Adresse beginnt mit '@' (A.5.2.4.7)
+    if (current_state == ALEState::SCANNING
+        && scanning_phase_ == ScanningPhase::HOPPING
+        && ev.type == WordEvent::Type::NONE) {
+        // WordEvent::NONE mit TO-Preamble und '@'-Adresse = AllCall
+        // (Erkennung über das rohe Adressfeld im WordEvent ist hier nicht direkt
+        // verfügbar; die Logik nutzt ev.address das vom Decoder gesetzt wird)
+        if (!ev.address.empty() && ev.address[0] == '@') {
+            scanning_phase_         = ScanningPhase::ALLCALL_PAUSE;
+            allcall_pause_start_ms_ = current_time_ms;
+        }
+    }
+    // TWAS während AllCall-Pause → Pause beenden (A.5.5.4.4)
+    if (scanning_phase_ == ScanningPhase::ALLCALL_PAUSE
+        && ev.type == WordEvent::Type::TWAS_REJECTION) {
+        scanning_phase_ = ScanningPhase::HOPPING;
     }
 }
 
@@ -797,6 +906,16 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
         case ALEState::SCANNING:  react_scanning(ev);        break;
         case ALEState::CALLING:   react_calling(ev);         break;
         case ALEState::HANDSHAKE: react_handshake(ev, word); break;
+        case ALEState::LINKED:
+            // T-03: Gegenseite sendet TWAS → Link sofort beenden (A.5.5.3.5)
+            if (ev.type == WordEvent::Type::TWAS_REJECTION)
+                process_event(ALEEvent::LINK_TERMINATED);
+            break;
+        case ALEState::SOUNDING:
+            // T-08: im LISTENING-Fenster kann eine Station sofort zurückrufen (A.5.3.4)
+            if (sounding_phase_ == SoundingPhase::LISTENING)
+                react_scanning(ev);  // TO_SELF → CALL_DETECTED → HANDSHAKE
+            break;
         default: break;
     }
 
@@ -832,14 +951,17 @@ const Channel* ALEStateMachine::select_best_channel() const {
 // ============================================================================
 
 bool ALEStateMachine::check_link_timeout() {
-    uint32_t timeout_ms = 0;
     switch (current_state) {
-        case ALEState::CALLING:   timeout_ms = compute_calling_timeout_ms(); break;
-        case ALEState::HANDSHAKE: timeout_ms = ALETimingConstants::Twa_ms;   break;
-        case ALEState::LINKED:    timeout_ms = ALETimingConstants::LINK_TIMEOUT_MS; break;
-        default: return false;
+        case ALEState::CALLING:
+            return (current_time_ms - state_entry_time_ms) > compute_calling_timeout_ms();
+        case ALEState::HANDSHAKE:
+            return (current_time_ms - state_entry_time_ms) > ALETimingConstants::Twa_ms;
+        case ALEState::LINKED:
+            // T-02: Inaktivitäts-Timer — zurücksetzen bei jedem empfangenen Wort
+            return (current_time_ms - last_word_time_ms) > ALETimingConstants::LINK_TIMEOUT_MS;
+        default:
+            return false;
     }
-    return (current_time_ms - state_entry_time_ms) > timeout_ms;
 }
 
 uint32_t ALEStateMachine::compute_calling_timeout_ms() const {
@@ -900,6 +1022,16 @@ void ALEStateMachine::try_next_calling_channel() {
 //
 // For the receive path (ACK, response) the remote address is not known at
 // initiate_call() time, so AddressEncoder::encode() is called at send time.
+
+void ALEStateMachine::build_group_scanning_word() {
+    // T-11: Sendet das nächste Wort aus dem THRU/REP-Paar (group_scan_frame_).
+    // Rotiert automatisch: index wraps nach group_scan_frame_.size().
+    const auto& words = group_scan_frame_.words();
+    if (!words.empty()) {
+        transmit_word(words[group_scan_word_idx_ % words.size()]);
+        ++group_scan_word_idx_;
+    }
+}
 
 void ALEStateMachine::build_scanning_word() {
     // Transmit the single word in scanning_frame_ for the current Trw slot.
@@ -966,6 +1098,28 @@ void ALEStateMachine::transmit_words(const std::vector<ALEWord>& words) {
 // ============================================================================
 
 void ALEStateMachine::on_word_complete() {
+    // ── LINKED termination path (T-07) ────────────────────────────────────
+    // terminate_link() sendet TO×2 + TWAS; erst wenn alle Wörter durch sind
+    // wird LINK_TERMINATED gefeuert.
+    if (current_state == ALEState::LINKED && linked_terminating_) {
+        if (words_pending > 0) { --words_pending; return; }
+        linked_terminating_ = false;
+        process_event(ALEEvent::LINK_TERMINATED);
+        return;
+    }
+
+    // ── SOUNDING path (T-05 + T-08) ──────────────────────────────────────
+    if (current_state == ALEState::SOUNDING) {
+        if (words_pending > 0) { --words_pending; return; }
+        // Alle Wörter gesendet — RX-Fenster öffnen (A.5.3.4)
+        if (sounding_phase_ == SoundingPhase::TRANSMITTING) {
+            sounding_phase_     = SoundingPhase::LISTENING;
+            state_entry_time_ms = current_time_ms;  // Fenster-Timer neu starten
+            if (rx_enabled_callback) rx_enabled_callback(true);
+        }
+        return;
+    }
+
     // ── MESSAGE stub guard ────────────────────────────────────────────────
     // MESSAGE sends 0 words; transition to CONCLUSION without touching word counters.
     // Triggered synthetically by handle_calling() per DD-013.
@@ -990,6 +1144,21 @@ void ALEStateMachine::on_word_complete() {
                              + std::to_string(tsc_slots) + ")\n");
                     calling_phase        = CallingPhase::LEADING_CALL;
                     call_cycles_in_phase = 0;
+                    leading_frame_idx_   = 0;
+                }
+                break;
+            }
+
+            case CallingPhase::GROUP_SCANNING_CALL: {
+                // T-11: 2 Wörter (THRU+REP) pro Slot; tsc_slots nach target_scan_channels × 2
+                // group_scan_frame_.size() = 2 Wörter → je 2 on_word_complete pro Slot
+                const uint32_t words_per_slot = static_cast<uint32_t>(group_scan_frame_.size());
+                const uint32_t tsc_total = target_scan_channels * 2u * words_per_slot;
+                if (call_cycles_in_phase >= tsc_total) {
+                    SM_TRACE("[TRACE] on_word_complete: GROUP_SCANNING_CALL → LEADING_CALL\n");
+                    calling_phase        = CallingPhase::LEADING_CALL;
+                    call_cycles_in_phase = 0;
+                    leading_frame_idx_   = 0;
                 }
                 break;
             }
