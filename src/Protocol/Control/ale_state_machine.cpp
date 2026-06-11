@@ -307,9 +307,8 @@ void ALEStateMachine::exit_state(ALEState old_state) {
 
 void ALEStateMachine::handle_scanning() {
     if (scanning_phase_ == ScanningPhase::ALLCALL_PAUSE) {
-        // T-10: Tcc_max Timeout (A.5.5.4.4: Tcc_max ≈ 22×Trw = 8624 ms)
-        const uint32_t Tcc_max_ms = 22u * ALETimingConstants::Trw_ms;
-        if ((current_time_ms - allcall_pause_start_ms_) > Tcc_max_ms)
+        // T-10: Tcc_max Timeout (A.5.5.4.4) — named constant aus ale_timing.h
+        if ((current_time_ms - allcall_pause_start_ms_) > ALETimingConstants::Tcc_max_ms)
             scanning_phase_ = ScanningPhase::HOPPING;
         return;  // kein Hop während AllCall-Pause
     }

@@ -181,14 +181,16 @@ private:
  * significant state transition.
  */
 struct OperatingParameters {
-    uint32_t scan_dwell_ms       = 500;     ///< Dwell time per channel during scan
-    uint32_t sounding_period_ms  = 600000;  ///< Inter-sounding interval (default 10 min)
-    uint32_t call_timeout_ms     = 30000;   ///< Max wait for response to a call
+    // scan_dwell_ms: TD2_MS (500 ms, 2 chps minimum) per MIL-STD-188-141B Annex B.
+    uint32_t scan_dwell_ms       = static_cast<uint32_t>(ale::TD2_MS);  ///< Dwell time per channel during scan
+    uint32_t sounding_period_ms  = 600000;  ///< Inter-sounding interval (default 10 min; not an ALE spec constant)
+    // call_timeout_ms: Twa_ms (30 s activity timeout) per MIL-STD-188-141B Table A-XV.
+    uint32_t call_timeout_ms     = ale::Twa_ms;  ///< Max wait for response to a call
     uint32_t amd_max_length      = 90;      ///< Max AMD message length (MIL-STD-188-141B)
     bool     lqa_enabled         = true;    ///< Record and use LQA scores
     bool     amd_enabled         = true;    ///< Accept AMD (Automatic Message Display) calls
     bool     lbt_enabled         = true;    ///< Listen-Before-Transmit
-    uint32_t lbt_listen_ms       = 1000;    ///< LBT listen window duration
+    uint32_t lbt_listen_ms       = 1000;    ///< LBT listen window (SW default; ALE spec: Twt_ale_ms = 784 ms)
 };
 
 } // namespace ale

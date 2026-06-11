@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "Protocol/Control/ale_timing.h"
 
 namespace ale {
 
@@ -59,7 +60,8 @@ struct ScanConfig {
     uint32_t channel_index;
     bool     enabled;
 
-    ScanConfig() : dwell_time_ms(200), channel_index(0), enabled(false) {}
+    // dwell_time_ms default = TD5_MS (200 ms, 5 chps basic) per MIL-STD-188-141B Annex B.
+    ScanConfig() : dwell_time_ms(static_cast<uint32_t>(ale::TD5_MS)), channel_index(0), enabled(false) {}
 };
 
 /**

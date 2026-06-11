@@ -17,6 +17,7 @@
 #include <complex>
 #include <array>
 #include <vector>
+#include "Protocol/Control/ale_timing.h"
 
 namespace ale {
 
@@ -27,7 +28,8 @@ constexpr uint32_t TONE_SPACING_HZ     = 250;
 constexpr uint32_t NUM_TONES           = 8;
 constexpr uint32_t BITS_PER_SYMBOL     = 3;
 constexpr uint32_t BANDWIDTH_HZ        = 1750;
-constexpr uint32_t SYMBOL_DURATION_MS  = 8;
+// Derived from ale::TTONE_MS (ale_timing.h) — single source of truth for symbol duration.
+constexpr uint32_t SYMBOL_DURATION_MS  = static_cast<uint32_t>(ale::TTONE_MS);  // 8 ms
 // Word timing (number of symbols that form one ALE word on the air)
 constexpr uint32_t SYMBOLS_PER_WORD    = 49;
 // Physical redundancy: each word is transmitted this many times (A.5.2.2.4)

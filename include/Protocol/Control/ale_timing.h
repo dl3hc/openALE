@@ -190,11 +190,14 @@ namespace ALETimingConstants {
     constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;                                // 120 000 ms
 
     // ── Derived protocol limits (integer, for SM comparisons) ────────────────
-    constexpr uint32_t Tx_max_ms  = 5u  * Trw_ms;   // Max conclusion length  = 5×Trw = 1960 ms
+    constexpr uint32_t Tx_max_ms  = 5u  * Trw_ms;   // Max conclusion length  = 5×Trw  = 1960 ms
     constexpr uint32_t Tm_max_ms  = 30u * Trw_ms;   // Max message section    = 30×Trw = 11760 ms
     // Trc_min: minimum receiving call time (Annex B: Tlww + LBT + Trd_sw = 3×Trw = 1176 ms).
     // Used as the LISTENING and WAIT_ACK base window for this SW-decoder implementation.
     constexpr uint32_t Trc_min_ms = 3u  * Trw_ms;   // 1176 ms
+    // Tcc_max: max complete call cycle ≈ Tsc(C=10) + Tlc(1-word) = 22×Trw (A.5.5.4.4).
+    // Used as the AllCall-Pause timeout in SCANNING (T-10).
+    constexpr uint32_t Tcc_max_ms = 22u * Trw_ms;   // 8624 ms
 
     // ── Protocol count constants (spec-defined, non-timing) ──────────────────
     // A.5.5.3.2: up to this many contiguous FEC-uncorrectable words tolerated
