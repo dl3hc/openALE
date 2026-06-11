@@ -78,10 +78,13 @@ public:
     /**
      * Scanning-Iteration, Einzelruf (Figuren b, d).
      *
-     * Liefert die vollständige Adressfolge von dest mit TO-Anker:
-     *   dest ≤ 3 Zeichen  →  [TO:dest]
-     *   dest ≤ 6 Zeichen  →  [TO:dest_part1, DATA:dest_part2]
-     *   …
+     * Sendet ausschließlich das erste Adresswort (erste 3 Zeichen, TO-Preamble).
+     * DATA/REP-Extensionwörter sind im Scanning-Abschnitt verboten — A.5.2.5.1.
+     * Die vollständige Adresse wird erst im Leading-Call-Abschnitt übertragen.
+     *
+     * Immer genau 1 Wort, unabhängig von der Länge von dest:
+     *   "BOB"    → [TO:BOB]
+     *   "SAMUEL" → [TO:SAM]   (nur erste 3 Chars)
      */
     static Frame scanning_individual(const std::string& dest);
 

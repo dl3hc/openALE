@@ -9,7 +9,6 @@
 namespace ale {
 
 ALE2GModem::ALE2GModem()
-    : copies_remaining_(0), word_enqueued_(false)
 {
     symbol_buf_.fill(0);
     sample_buf_.fill(0);
@@ -25,7 +24,7 @@ void ALE2GModem::enqueue_frame(const Frame& frame) {
 }
 
 void ALE2GModem::enqueue_tx49_(uint64_t tx49) {
-    if (copies_remaining_ > 0) {
+    if (word_playing_ || word_enqueued_) {
         // Modem busy — queue for later (normal for multi-word address sequences).
         assert(tx49_queue_.size() < ALETimingConstants::MAX_TX_SEQUENCE_WORDS &&
                "ALE2GModem queue overflow — SM enqueued more words than one full "
@@ -34,9 +33,8 @@ void ALE2GModem::enqueue_tx49_(uint64_t tx49) {
         tx49_queue_.push(tx49);
         return;
     }
-    pending_tx49_     = tx49;
-    copies_remaining_ = 1;   // one Trw block of 49 symbols (A.5.1.3)
-    word_enqueued_    = true;
+    pending_tx49_  = tx49;
+    word_enqueued_ = true;
     build_symbols();
 }
 
@@ -67,22 +65,26 @@ void ALE2GModem::send_one_copy() {
     if (tx_cb_) tx_cb_(sample_buf_.data(), SAMPLES_PER_WORD);
 }
 
-void ALE2GModem::update(uint32_t /*current_time_ms*/) {
-    if (!word_enqueued_) return;
-
-    word_enqueued_    = false;
-    copies_remaining_ = 0;
-    send_one_copy();
-    if (done_cb_) done_cb_();
-    advance_queue_();
+void ALE2GModem::update(uint32_t current_time_ms) {
+    if (word_enqueued_) {
+        word_enqueued_  = false;
+        word_playing_   = true;
+        word_tx_end_ms_ = current_time_ms + ALETimingConstants::Trw_ms;
+        send_one_copy();
+        return;
+    }
+    if (word_playing_ && current_time_ms >= word_tx_end_ms_) {
+        word_playing_ = false;
+        if (done_cb_) done_cb_();
+        advance_queue_();
+    }
 }
 
 void ALE2GModem::advance_queue_() {
     if (tx49_queue_.empty()) return;
-    pending_tx49_     = tx49_queue_.front();
+    pending_tx49_  = tx49_queue_.front();
     tx49_queue_.pop();
-    copies_remaining_ = 1;
-    word_enqueued_    = true;
+    word_enqueued_ = true;
     build_symbols();
 }
 

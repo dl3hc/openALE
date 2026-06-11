@@ -449,10 +449,12 @@ bool test_full_call_cycle() {
     sm.set_self_address("SAM");
 
     // ── Constants for this run ────────────────────────────────────────────
-    const uint32_t Twt = ALETimingConstants::Twt_ms;   // 784 ms
-    const uint32_t Tt  = ALETimingConstants::Tt_ms;    // 1045 ms
-    const uint32_t Trw = ALETimingConstants::Trw_ms;   // 392 ms
-    const uint32_t Twr = ALETimingConstants::Twr_ms;   // 653 ms
+    const uint32_t Twt     = ALETimingConstants::Twt_ms;     // 784 ms
+    const uint32_t Tt      = ALETimingConstants::Tt_ms;      // 1045 ms
+    const uint32_t Trw     = ALETimingConstants::Trw_ms;     // 392 ms
+    // LISTENING timeout = Trc_min + Trw = 4×Trw = 1568 ms (SW-decoder reply window)
+    const uint32_t Tlisten = ALETimingConstants::Trc_min_ms
+                           + ALETimingConstants::Trw_ms;     // 1568 ms
 
     const uint32_t tx0 = Twt + Tt; // first TX slot: 1829 ms
 
@@ -472,7 +474,7 @@ bool test_full_call_cycle() {
     send_slot(tx0 + 2 * Trw);           // slot 2: TO "JOE" (leading pass 1)
     send_slot(tx0 + 3 * Trw);           // slot 3: TO "JOE" (leading pass 2) → CONCLUSION
     send_slot(tx0 + 4 * Trw);           // slot 4: TIS "SAM" (conclusion) → LISTENING
-    sm.update(tx0 + 4 * Trw + Twr);     // Twr timeout → IDLE
+    sm.update(tx0 + 4 * Trw + Tlisten); // LISTENING timeout (1568 ms) → IDLE
 
     // ── Print phase/word trace ────────────────────────────────────────────
     const char* type_names[] = {"DATA","THRU","TO","TWAS","FROM","TIS","CMD","REP"};

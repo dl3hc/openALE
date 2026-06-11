@@ -148,7 +148,10 @@ struct CallingBudgetParams {
 constexpr uint32_t calc_calling_timeout_ms(const CallingBudgetParams& p) {
     const uint32_t tsc    = p.target_scan_channels * 2u * TRW_MS;
     const uint32_t tlc    = p.leading_frame_words * TRW_MS;
-    const uint32_t twr    = p.multi_channel ? Twrt_fast_int : Twr_fast_int;
+    // Use Twr_slow_int: our SW decoder needs Trd_sw = Trw (full word), which is
+    // equivalent to 7×Tw = Twr_slow in the Table A-XV formula.
+    const uint32_t twr    = p.multi_channel ? (Twr_slow_int + static_cast<uint32_t>(Tt_fast_ms + 0.5))
+                                             : Twr_slow_int;
     const uint32_t per_ch = Twt_ale_ms
                           + static_cast<uint32_t>(TT_BLIND_MS + 0.5)
                           + tsc + tlc + twr;
@@ -189,6 +192,9 @@ namespace ALETimingConstants {
     // ── Derived protocol limits (integer, for SM comparisons) ────────────────
     constexpr uint32_t Tx_max_ms  = 5u  * Trw_ms;   // Max conclusion length  = 5×Trw = 1960 ms
     constexpr uint32_t Tm_max_ms  = 30u * Trw_ms;   // Max message section    = 30×Trw = 11760 ms
+    // Trc_min: minimum receiving call time (Annex B: Tlww + LBT + Trd_sw = 3×Trw = 1176 ms).
+    // Used as the LISTENING and WAIT_ACK base window for this SW-decoder implementation.
+    constexpr uint32_t Trc_min_ms = 3u  * Trw_ms;   // 1176 ms
 
     // ── Protocol count constants (spec-defined, non-timing) ──────────────────
     // A.5.5.3.2: up to this many contiguous FEC-uncorrectable words tolerated

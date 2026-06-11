@@ -78,23 +78,25 @@ public:
      * Drive the modem forward in time.
      *
      * Call this in the same integration loop as ALEStateMachine::update(), passing
-     * the same timestamp.  The modem transmits the pending 49-symbol block on the
-     * first tick after enqueue_word() and fires done_cb_ immediately after.
+     * the same timestamp.  The modem starts transmitting the pending 49-symbol block
+     * on the first tick after enqueue_word(); done_cb_ fires after Trw_ms (392 ms)
+     * of airtime has elapsed, not immediately.
      *
-     * \param current_time_ms  Absolute wall-clock time in milliseconds (unused internally)
+     * \param current_time_ms  Absolute wall-clock time in milliseconds
      */
     void update(uint32_t current_time_ms);
 
-    bool is_transmitting() const { return copies_remaining_ > 0; }
+    bool is_transmitting() const { return word_playing_ || word_enqueued_; }
 
 private:
     // 49 symbols × 64 samples/symbol = 3136 samples per word = 392 ms = Trw (exact)
     static constexpr uint32_t SAMPLES_PER_WORD =
         SYMBOLS_PER_WORD * (SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD);  // 3136
 
-    uint64_t pending_tx49_     = 0;
-    uint8_t  copies_remaining_ = 0;
-    bool     word_enqueued_    = false;
+    uint64_t pending_tx49_  = 0;
+    bool     word_enqueued_ = false;
+    bool     word_playing_  = false;
+    uint32_t word_tx_end_ms_ = 0;   // wall-clock time when current word's airtime expires
     std::queue<uint64_t> tx49_queue_;
 
     std::array<uint8_t, SYMBOLS_PER_WORD> symbol_buf_;   // 49 on-air symbols

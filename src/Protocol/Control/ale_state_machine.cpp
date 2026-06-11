@@ -402,7 +402,9 @@ void ALEStateMachine::handle_calling() {
         // Three distinct sub-phases driven by response detection:
         //
         // (a) !response_to_detected:
-        //     Waiting for JOE's first "TO SAM" word within Twr/Twrt.
+        //     Waiting for JOE's first "TO SAM" word within Trc_min + Trw.
+        //     JOE's minimum response delay = Tlww (392) + LBT (392) + Trw (392) = 3×Trw.
+        //     + one extra Trw margin for WinMM audio buffer latency.
         //     Timeout → AC-LINK-019-6 → try_next_calling_channel().
         //
         // (b) response_to_detected && tlww_start_ms == 0:
@@ -414,10 +416,12 @@ void ALEStateMachine::handle_calling() {
         //     Tlww elapsed → close RX, → SENDING_ACK.
         case CallingPhase::LISTENING: {
             if (!response_to_detected) {
-                // (a) — Twr / Twrt window
-                const uint32_t wait_ms = (calling_channels.size() > 1)
-                                         ? ALETimingConstants::Twrt_ms
-                                         : ALETimingConstants::Twr_ms;
+                // (a) — Trc_min + Trw window (= 4×Trw = 1568 ms).
+                // AC-LINK-019-6/4: Twr for single channel, Twrt for multi.
+                // For this SW decoder: JOE needs Tlww + LBT + decode = 3×Trw before
+                // SAM can detect "TO SAM"; +1×Trw absorbs WinMM round-trip latency.
+                const uint32_t wait_ms = ALETimingConstants::Trc_min_ms
+                                       + ALETimingConstants::Trw_ms; // 4×Trw = 1568 ms
                 if ((current_time_ms - listening_start_ms) >= wait_ms)
                     try_next_calling_channel(); // AC-LINK-019-6
             } else if (tlww_start_ms == 0) {
@@ -488,11 +492,13 @@ void ALEStateMachine::handle_handshake() {
         }
 
         // ── CHANNEL_CHECK ─────────────────────────────────────────────────
-        // Listen-Before-Transmit: 2×Trw per A.5.5.3.3 / AC-LINK-019-1.
+        // Listen-Before-Transmit: 1×Trw per A.5.5.3.3 / AC-LINK-019-1.
+        // The calling station just finished TX; channel is clear by protocol.
+        // One Trw window detects any collision from a third station.
         // Any word received here signals channel busy → abort (AC-LINK-019-3).
         // process_received_word() handles the busy-detection path.
         case HandshakePhase::CHANNEL_CHECK: {
-            if ((current_time_ms - hs_lbt_start_ms) >= 2u * ALETimingConstants::Trw_ms) {
+            if ((current_time_ms - hs_lbt_start_ms) >= 1u * ALETimingConstants::Trw_ms) {
                 SM_TRACE("[TRACE] handle_handshake: LBT clear → SENDING_RESPONSE\n");
                 if (rx_enabled_callback) rx_enabled_callback(false);
                 handshake_phase   = HandshakePhase::SENDING_RESPONSE;
@@ -509,12 +515,14 @@ void ALEStateMachine::handle_handshake() {
             break;
 
         // ── WAIT_ACK ─────────────────────────────────────────────────────
-        // Wait Twr for calling station's ACK frame (TO JOE × 2 + TIS SAM).
+        // Wait Trc_min for calling station's ACK frame (TO JOE × 2 + TIS SAM).
+        // SAM needs Tlww (392) + first ACK word (392) = 2×Trw before JOE sees it;
+        // +1×Trw absorbs WinMM round-trip latency → 3×Trw = 1176 ms total.
         // Incoming words are processed by process_received_word().
         case HandshakePhase::WAIT_ACK: {
-            // Twr timeout: no ACK received → abort (A.5.5.3.4)
-            if ((current_time_ms - hs_ack_start_ms) >= ALETimingConstants::Twr_ms) {
-                SM_TRACE("[TRACE] handle_handshake: WAIT_ACK Twr timeout → LINK_TIMEOUT\n");
+            // Trc_min timeout: no ACK received → abort (A.5.5.3.4 / AC-LINK-020-2)
+            if ((current_time_ms - hs_ack_start_ms) >= ALETimingConstants::Trc_min_ms) {
+                SM_TRACE("[TRACE] handle_handshake: WAIT_ACK Trc_min timeout → LINK_TIMEOUT\n");
                 process_event(ALEEvent::LINK_TIMEOUT);
                 return;
             }
@@ -658,8 +666,13 @@ void ALEStateMachine::react_scanning(const WordEvent& ev) {
 // JOE's response frame per A.5.5.3.2: TO SAM [DATA]* TIS JOE [DATA]*
 //   TO_SELF      → "TO SAM": JOE has begun his response; arm AC-LINK-019-8 timer.
 //   TIS_CALLER   → "TIS JOE" (first conclusion word); arm Tlww.
-//   DATA_EXTENSION → extended JOE address; Tlww reset each time (Fix 5).
+//   DATA_EXTENSION → extended JOE address; Tlww reset each time.
 //   TWAS_REJECTION → call rejected (AC-LINK-019-10).
+//
+// AC-LINK-019-7 (Ungültige Preamble-Sequenz → nächster Kanal) is NOT enforced
+// here: WordEvent::NONE conflates unrelated QRM (TO:OTHER) with genuinely
+// broken sequences.  Triggering a channel hop on QRM would cause false aborts.
+// The existing AC-LINK-019-6/8 timeouts provide sufficient protection.
 void ALEStateMachine::react_calling(const WordEvent& ev) {
     if (calling_phase != CallingPhase::LISTENING) return;
 
