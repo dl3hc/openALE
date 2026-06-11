@@ -2,7 +2,7 @@
  * \file ale_word_decoder.cpp
  */
 
-#include "Protocol/Control/ale_word_decoder.h"
+#include "Word/ale_word_decoder.h"
 #include "Word/address_encoder.h"
 
 namespace ale {
@@ -28,8 +28,12 @@ WordEvent ALEWordDecoder::decode(const ALEWord& word,
     }
 
     // TO oder TWAS an uns → Ruf an eigene Adresse erkannt.
+    // Per A.5.2.5.1 trägt das Scanning-TO-Word nur die ersten ≤3 Zeichen der
+    // Zieladresse; self_address kann länger sein → Präfix-Vergleich nötig.
     if ((word.type == PreambleType::TO || word.type == PreambleType::TWAS)
-        && addr == ctx.self_address) {
+        && !addr.empty()
+        && ctx.self_address.size() >= addr.size()
+        && ctx.self_address.compare(0, addr.size(), addr) == 0) {
         ev.type    = WordEvent::Type::TO_SELF;
         ev.address = addr;
         return ev;

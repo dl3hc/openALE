@@ -7,7 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(MSVC)
     # MSVC sets /Od /Zi (Debug) and /O2 /DNDEBUG (Release) automatically per build type.
     # /bigobj is required for large translation units; /W4 enables high-level warnings.
-    add_compile_options(/bigobj /W4)
+    # /utf-8 sets both source and execution character sets to UTF-8 (suppresses C4566).
+    add_compile_options(/bigobj /W4 /utf-8)
 else()
     set(CMAKE_CXX_FLAGS_DEBUG  "-g -O0 -Wall -Wextra")
     set(CMAKE_CXX_FLAGS_RELEASE "-O3")
@@ -93,7 +94,7 @@ target_link_libraries(ale_modem ale_protocol ale_fsk_core ale_fec)
 add_library(ale_link
     src/Protocol/Control/ale_state_machine.cpp
     src/Protocol/Control/ale_channel_manager.cpp
-    src/Protocol/Control/ale_word_decoder.cpp
+    src/Word/ale_word_decoder.cpp
 )
 
 target_include_directories(ale_link PUBLIC
@@ -151,6 +152,49 @@ target_include_directories(ale_channel PUBLIC
 target_link_libraries(ale_channel ale_stores ale_lqa ale_protocol ale_fsk_core ale_fec)
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
+# ── App layer (ALEController + ALERxPipeline) ─────────────────────────────────
+
+add_library(ale_app_core
+    src/App/ale_rx_pipeline.cpp
+    src/App/ale_controller.cpp
+)
+
+target_include_directories(ale_app_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(ale_app_core
+    ale_link ale_modem ale_protocol ale_fsk_core ale_fec
+)
+
+# ── Audio I/O device (platform-specific) ──────────────────────────────────────
+
+add_library(ale_audio_device
+    src/App/audio_device.cpp
+)
+
+target_include_directories(ale_audio_device PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+if(WIN32)
+    # WASAPI (mmdeviceapi/audioclient) + COM device enumeration.
+    # ole32: COM; uuid: PKEY_Device_FriendlyName property key.
+    target_link_libraries(ale_audio_device ole32 uuid)
+endif()
+
+# ── ALE CLI executable ────────────────────────────────────────────────────────
+
+add_executable(ale_cli apps/ale_cli.cpp)
+
+target_include_directories(ale_cli PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(ale_cli ale_app_core ale_audio_device ale_stores)
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 enable_testing()
 

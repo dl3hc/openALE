@@ -25,7 +25,7 @@
 #include "Word/address_encoder.h"
 #include "Stores/address_book.h"
 #include "Protocol/Control/ale_timing.h"
-#include "Protocol/Control/ale_word_decoder.h"
+#include "Word/ale_word_decoder.h"
 #include <cstdint>
 #include <vector>
 #include <string>
