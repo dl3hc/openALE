@@ -117,7 +117,7 @@ int main() {
 
     // ── Build system ─────────────────────────────────────────────
     ALEStateMachine sm;
-    ALE2GModem      modem;
+    ALE2GModem::Modulator      modem;
     ToneGenerator   gen;
 
     sm.set_transmit_callback([&](const ALEWord& w) {

@@ -5,7 +5,7 @@
  * Part 1 (AC-FRAME-002): Frame class unit tests — encode() correctness and
  *   roundtrip via ALEFECCodec::deinterleave_word().
  *
- * Part 2 (AC-FRAME-001): ALEStateMachine / ALE2GModem integration tests —
+ * Part 2 (AC-FRAME-001): ALEStateMachine / ALE2GModem::Modulator integration tests —
  *   slot timing, phase sequencing, and modem 3× copy behaviour.
  *
  * Timing model (DD-013):
@@ -136,7 +136,7 @@ bool test_ac_002_4_empty_frame()
 
 struct FrameHarness {
     ALEStateMachine sm;
-    ALE2GModem      modem;
+    ALE2GModem::Modulator      modem;
 
     std::vector<ALEWord>              tx_words;           // logical words sent by SM
     std::vector<std::vector<uint8_t>> tx_bufs;            // symbol frames from modem
@@ -186,15 +186,15 @@ private:
 };
 
 // ============================================================================
-// AC-FRAME-001-2 (row 1) — ALE2GModem emits exactly one symbol frame of
+// AC-FRAME-001-2 (row 1) — ALE2GModem::Modulator emits exactly one symbol frame of
 // SYMBOLS_PER_WORD (49) values per logical word; symbols are in range 0–7.
 // ============================================================================
 
 bool test_ac_001_2_modem_symbol_frame_per_word()
 {
-    std::cout << "\n[AC-FRAME-001-2] ALE2GModem: one symbol frame (49 symbols, 0-7) per word\n";
+    std::cout << "\n[AC-FRAME-001-2] ALE2GModem::Modulator: one symbol frame (49 symbols, 0-7) per word\n";
 
-    ALE2GModem modem;
+    ALE2GModem::Modulator modem;
 
     ALEWord word = ALEWord();
     word.type       = PreambleType::TO;
@@ -571,7 +571,7 @@ int run_all_tests()
         test_ac_002_4_empty_frame());
 
     // ── SM / modem integration timing tests ──────────────────────────────────
-    run("AC-FRAME-001-2 (modem) ALE2GModem emits one symbol frame (49 symbols) per word",
+    run("AC-FRAME-001-2 (modem) ALE2GModem::Modulator emits one symbol frame (49 symbols) per word",
         test_ac_001_2_modem_symbol_frame_per_word());
 
     run("AC-FRAME-001-2 (SM)    call_cycle_count increments in on_word_complete()",

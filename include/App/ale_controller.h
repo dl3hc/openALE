@@ -2,7 +2,7 @@
  * \file App/ale_controller.h
  * \brief ALEController — single operator-facing entry point for ALE 2G.
  *
- * Wires ALEStateMachine ↔ ALE2GModem ↔ ALERxPipeline.
+ * Wires ALEStateMachine ↔ ALE2GModem::Modulator ↔ ALE2GModem::Demodulator.
  * The CLI or GUI only talks to this class; it never touches the state machine
  * or modem directly.
  *
@@ -31,7 +31,6 @@
 #pragma once
 #include "Protocol/Control/ale_state_machine.h"
 #include "Modem/ale2g_modem.h"
-#include "App/ale_rx_pipeline.h"
 #include "App/audio_device.h"
 #include <functional>
 #include <string>
@@ -160,9 +159,9 @@ public:
     std::string self()  const { return self_addr_; }
 
 private:
-    ALEStateMachine sm_;
-    ALE2GModem      modem_;
-    ALERxPipeline   rx_pipeline_;
+    ALEStateMachine          sm_;
+    ALE2GModem::Modulator    modulator_;
+    ALE2GModem::Demodulator  demodulator_;
     AudioDevice*    audio_device_ = nullptr;
     std::string     self_addr_;
     std::string     last_caller_;   // caller address as it arrives (TIS + DATA)

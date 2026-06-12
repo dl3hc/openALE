@@ -20,7 +20,7 @@ void ALEController::wire_callbacks()
     // it fires frame completion through AudioDevice::arm_frame_complete → tick().
     // In offline mode (no audio device) update() drains pending frames directly.
     sm_.set_transmit_callback([this](const ALEWord& w) {
-        modem_.enqueue_word(w);
+        modulator_.enqueue_word(w);
         if (audio_device_)
             audio_device_->arm_frame_complete([this]() { sm_.on_word_complete(); });
     });
@@ -41,13 +41,13 @@ void ALEController::wire_callbacks()
     });
 
     // RX pipeline word → SM
-    rx_pipeline_.set_word_callback([this](const ALEWord& w) {
+    demodulator_.set_word_callback([this](const ALEWord& w) {
         on_received_word(w);
     });
 
     // SM RX-enable control → pipeline (SM disables RX during TX phases)
     sm_.set_rx_enabled_callback([this](bool on) {
-        rx_pipeline_.set_enabled(on);
+        demodulator_.set_enabled(on);
     });
 }
 
@@ -58,7 +58,7 @@ void ALEController::set_audio_device(AudioDevice* dev)
     audio_device_ = dev;
     if (dev)
         dev->set_symbol_source([this](uint8_t* out) {
-            return modem_.pull_symbol_frame(out);
+            return modulator_.pull_symbol_frame(out);
         });
 }
 
@@ -87,7 +87,7 @@ void ALEController::start_available()
     emit_status("Available — fixed channel, listening for incoming calls");
     // SM stays in IDLE; enable RX pipeline directly since enter_state(IDLE)
     // is not called at construction (only on re-entry via transition_to).
-    rx_pipeline_.set_enabled(true);
+    demodulator_.set_enabled(true);
 }
 
 void ALEController::start_scanning()
@@ -130,14 +130,14 @@ void ALEController::update(uint32_t now_ms)
     // pulling all pending symbol frames and firing on_word_complete per frame.
     if (!audio_device_) {
         uint8_t syms[SYMBOLS_PER_WORD];
-        while (modem_.pull_symbol_frame(syms))
+        while (modulator_.pull_symbol_frame(syms))
             sm_.on_word_complete();
     }
 }
 
 void ALEController::feed_audio(const int16_t* samples, uint32_t count)
 {
-    rx_pipeline_.push_samples(samples, count);
+    demodulator_.push_samples(samples, count);
 }
 
 // ── Private callbacks ─────────────────────────────────────────────────────────

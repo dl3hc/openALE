@@ -93,7 +93,7 @@ target_link_libraries(ale_codec ale_fec ale_protocol ale_fsk_core)
 
 # ALE 2G Modem — word-level TX with 3× redundancy (A.5.2.2.4)
 add_library(ale_modem
-    src/Modem/ale2g_modem.cpp
+    src/Modem/ale2g_modem.cpp   # Modulator + Demodulator
 )
 
 target_include_directories(ale_modem PUBLIC
@@ -168,7 +168,6 @@ target_link_libraries(ale_channel ale_stores ale_lqa ale_protocol ale_fsk_core a
 # ── App layer (ALEController + ALERxPipeline) ─────────────────────────────────
 
 add_library(ale_app_core
-    src/App/ale_rx_pipeline.cpp
     src/App/ale_controller.cpp
 )
 
@@ -177,7 +176,7 @@ target_include_directories(ale_app_core PUBLIC
 )
 
 target_link_libraries(ale_app_core
-    ale_link ale_modem ale_codec ale_protocol ale_fsk_core ale_fec
+    ale_link ale_modem ale_protocol ale_fsk_core ale_fec
 )
 
 # ── Audio I/O device (platform-specific) ──────────────────────────────────────

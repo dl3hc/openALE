@@ -1,33 +1,48 @@
 /**
  * \file Modem/ale2g_modem.cpp
- * \brief ALE 2G Modem implementation
+ * \brief ALE 2G Modem — Modulator and Demodulator implementations.
  */
 
 #include "Modem/ale2g_modem.h"
 #include "Codec/ale_encoder.h"
+#include "Codec/ale_decoder.h"
+#include "FEC/ale_fec_codec.h"
+#include "FEC/golay.h"
 #include <cassert>
+#include <cmath>
+#include <cstring>
+#include <algorithm>
+
+#ifndef M_PI
+static constexpr double M_PI = 3.14159265358979323846;
+#endif
 
 namespace ale {
+namespace ALE2GModem {
 
-ALE2GModem::ALE2GModem()
+// ════════════════════════════════════════════════════════════════════════════
+// Modulator
+// ════════════════════════════════════════════════════════════════════════════
+
+Modulator::Modulator()
 {
     symbol_buf_.fill(0);
 }
 
-void ALE2GModem::enqueue_word(const ALEWord& word)
+void Modulator::enqueue_word(const ALEWord& word)
 {
     std::lock_guard<std::mutex> lk(mtx_);
     enqueue_tx49_(word.encode());
 }
 
-void ALE2GModem::enqueue_frame(const Frame& frame)
+void Modulator::enqueue_frame(const Frame& frame)
 {
     std::lock_guard<std::mutex> lk(mtx_);
     for (uint64_t tx49 : frame.encode())
         enqueue_tx49_(tx49);
 }
 
-bool ALE2GModem::pull_symbol_frame(uint8_t* out)
+bool Modulator::pull_symbol_frame(uint8_t* out)
 {
     std::lock_guard<std::mutex> lk(mtx_);
     if (!word_enqueued_) return false;
@@ -37,20 +52,18 @@ bool ALE2GModem::pull_symbol_frame(uint8_t* out)
     return true;
 }
 
-bool ALE2GModem::is_transmitting() const
+bool Modulator::is_transmitting() const
 {
     std::lock_guard<std::mutex> lk(mtx_);
     return word_enqueued_ || !tx49_queue_.empty();
 }
 
-// ── Internal helpers (all called under mtx_) ─────────────────────────────────
-
-void ALE2GModem::enqueue_tx49_(uint64_t tx49)
+void Modulator::enqueue_tx49_(uint64_t tx49)
 {
     if (word_enqueued_) {
         assert(tx49_queue_.size() < ALETimingConstants::MAX_TX_SEQUENCE_WORDS &&
-               "ALE2GModem queue overflow — SM enqueued more words than one full "
-               "contiguous calling sequence (scanning + leading + conclusion); "
+               "ALE2GModem::Modulator queue overflow — SM enqueued more words than one "
+               "full contiguous calling sequence (scanning + leading + conclusion); "
                "likely a loop or double-transmit bug");
         tx49_queue_.push(tx49);
         return;
@@ -60,10 +73,8 @@ void ALE2GModem::enqueue_tx49_(uint64_t tx49)
     symbol_buf_    = ALEEncoder::encode_tx49(pending_tx49_);
 }
 
-void ALE2GModem::advance_queue_()
+void Modulator::advance_queue_()
 {
-    // Called under mtx_ after pull_symbol_frame() clears word_enqueued_.
-    // If the re-entrant enqueue path somehow set it again, respect that.
     if (word_enqueued_) return;
     if (tx49_queue_.empty()) return;
     pending_tx49_  = tx49_queue_.front();
@@ -72,4 +83,122 @@ void ALE2GModem::advance_queue_()
     symbol_buf_    = ALEEncoder::encode_tx49(pending_tx49_);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Demodulator
+// ════════════════════════════════════════════════════════════════════════════
+
+Demodulator::Demodulator()
+    : ring_(BUF_CAP, 0)
+{}
+
+void Demodulator::reset()
+{
+    std::fill(ring_.begin(), ring_.end(), int16_t(0));
+    write_pos_     = 0;
+    step_accum_    = 0;
+    grid_locked_   = false;
+    grid_anchor_   = 0;
+    silence_count_ = 0;
+}
+
+void Demodulator::push_samples(const int16_t* samples, uint32_t count)
+{
+    if (!enabled_) return;
+
+    for (uint32_t i = 0; i < count; ++i) {
+        const int16_t s = samples[i];
+        ring_[write_pos_ % BUF_CAP] = s;
+        ++write_pos_;
+
+        // Silence-gap grid reset: prolonged absence of signal indicates the
+        // previous transmission has ended.  Reset the grid lock so the next
+        // transmission can re-anchor at its own sub-symbol phase offset.
+        if (s > -SILENCE_THRESHOLD && s < SILENCE_THRESHOLD) {
+            if (++silence_count_ >= SILENCE_RESET_SAMPLES) {
+                grid_locked_   = false;
+                silence_count_ = SILENCE_RESET_SAMPLES;
+            }
+        } else {
+            silence_count_ = 0;
+        }
+
+        if (++step_accum_ >= DECODE_STEP) {
+            step_accum_ = 0;
+            if (write_pos_ < WORD_SAMPLES) continue;
+
+            ALEWord word;
+            Golay::DecodeResult fec;
+            if (try_decode(word, fec) && accept_word_(fec) && word_cb_)
+                word_cb_(word);
+        }
+    }
+}
+
+float Demodulator::goertzel_power(const int16_t* block, float freq_hz)
+{
+    const float w     = 2.0f * static_cast<float>(M_PI) * freq_hz / 8000.0f;
+    const float coeff = 2.0f * std::cos(w);
+    float q1 = 0.0f, q2 = 0.0f;
+    for (uint32_t n = 0; n < FFT_SIZE; ++n) {
+        const float q0 = coeff * q1 - q2 + static_cast<float>(block[n]);
+        q2 = q1; q1 = q0;
+    }
+    return q1 * q1 + q2 * q2 - coeff * q1 * q2;
+}
+
+uint8_t Demodulator::symbol_from_block(const int16_t* block)
+{
+    float   best = -1.0f;
+    uint8_t rank = 0;
+    for (uint8_t r = 0; r < NUM_TONES; ++r) {
+        float p = goertzel_power(block, static_cast<float>(TONE_FREQS_HZ[r]));
+        if (p > best) { best = p; rank = r; }
+    }
+    return FREQ_TO_SYMBOL[rank];
+}
+
+bool Demodulator::accept_word_(const Golay::DecodeResult& fec)
+{
+    if (grid_locked_) {
+        const uint32_t dist = write_pos_ - grid_anchor_;
+
+        if (dist < WORD_SAMPLES - FFT_SIZE)
+            return false;
+
+        if (fec.flag == Golay::DECODE_OK) {
+            grid_anchor_ = write_pos_;
+            return true;
+        }
+
+        const uint32_t mod = dist % WORD_SAMPLES;
+        if (mod <= FFT_SIZE || mod >= WORD_SAMPLES - FFT_SIZE) {
+            grid_anchor_ = write_pos_;
+            return true;
+        }
+        return false;
+    }
+
+    if (fec.flag == Golay::DECODE_OK) {
+        grid_locked_ = true;
+        grid_anchor_ = write_pos_;
+        return true;
+    }
+    return false;
+}
+
+bool Demodulator::try_decode(ALEWord& out, Golay::DecodeResult& fec) const
+{
+    const uint32_t base = write_pos_ - WORD_SAMPLES;
+    int16_t blk[FFT_SIZE];
+    uint8_t sym[SYMBOLS_PER_WORD];
+    for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
+        const uint32_t bk = base + k * FFT_SIZE;
+        for (uint32_t j = 0; j < FFT_SIZE; ++j)
+            blk[j] = ring_at(bk + j);
+        sym[k] = symbol_from_block(blk);
+    }
+    return ALEDecoder::decode(sym, out, fec);
+}
+
+} // namespace ALE2GModem
 } // namespace ale

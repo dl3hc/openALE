@@ -15,7 +15,6 @@
 
 #include "Protocol/Control/ale_state_machine.h"
 #include "Modem/ale2g_modem.h"
-#include "App/ale_rx_pipeline.h"
 #include "App/resampler.h"
 #include "FSK/tone_generator.h"
 
@@ -33,7 +32,7 @@ int main()
 
     // ── TX side: Frame c (TO:SAM DATA:UEL TO:SAM DATA:UEL TIS:JOE) ─────────
     ALEStateMachine sm;
-    ALE2GModem      modem;
+    ALE2GModem::Modulator modem;
     ToneGenerator   gen;
 
     sm.set_transmit_callback([&](const ALEWord& w) { modem.enqueue_word(w); });
@@ -73,7 +72,7 @@ int main()
         down.process(dev48.data(), dev48.size(), rx8);
 
         // RX pipeline decode.
-        ALERxPipeline pipe;
+        ALE2GModem::Demodulator pipe;
         int got = 0;
         pipe.set_word_callback([&](const ALEWord& w) {
             (void)w;

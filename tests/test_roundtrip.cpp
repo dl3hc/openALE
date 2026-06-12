@@ -3,7 +3,7 @@
  * \brief TX→PCM→Demodulation→Decoding roundtrip test for ALE Frame c.
  *
  * Proves that all 5 Frame-c words survive the full physical-layer pipeline:
- *   ALEStateMachine → ALE2GModem → PCM → Goertzel → majority-vote → FEC → ALEWord
+ *   ALEStateMachine → ALE2GModem::Modulator → PCM → Goertzel → majority-vote → FEC → ALEWord
  *
  * Expected words (MIL-STD-188-141B Figure A-14c, call SAMUEL from JOE):
  *   0  TO:SAM    1  DATA:UEL   2  TO:SAM   3  DATA:UEL   4  TIS:JOE
@@ -122,7 +122,7 @@ int main()
     std::vector<int16_t> pcm;
 
     ALEStateMachine sm;
-    ALE2GModem      modem;
+    ALE2GModem::Modulator      modem;
     ToneGenerator   gen;
 
     sm.set_transmit_callback([&](const ALEWord& w) {
