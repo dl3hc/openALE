@@ -3,6 +3,7 @@
  */
 
 #include "App/ale_rx_pipeline.h"
+#include "Codec/ale_decoder.h"
 #include "FEC/ale_fec_codec.h"
 #include "FEC/golay.h"
 #include <cmath>
@@ -22,8 +23,11 @@ ALERxPipeline::ALERxPipeline()
 void ALERxPipeline::reset()
 {
     std::fill(ring_.begin(), ring_.end(), int16_t(0));
-    write_pos_  = 0;
-    step_accum_ = 0;
+    write_pos_    = 0;
+    step_accum_   = 0;
+    grid_locked_  = false;
+    grid_anchor_  = 0;
+    silence_count_ = 0;
 }
 
 void ALERxPipeline::push_samples(const int16_t* samples, uint32_t count)
@@ -31,17 +35,31 @@ void ALERxPipeline::push_samples(const int16_t* samples, uint32_t count)
     if (!enabled_) return;
 
     for (uint32_t i = 0; i < count; ++i) {
-        ring_[write_pos_ % BUF_CAP] = samples[i];
+        const int16_t s = samples[i];
+        ring_[write_pos_ % BUF_CAP] = s;
         ++write_pos_;
 
-        if (++step_accum_ >= FFT_SIZE) {
+        // Silence-gap grid reset: prolonged absence of signal indicates the
+        // previous transmission has ended.  Reset the grid lock so the next
+        // transmission can re-anchor at its own sub-symbol phase offset.
+        if (s > -SILENCE_THRESHOLD && s < SILENCE_THRESHOLD) {
+            if (++silence_count_ >= SILENCE_RESET_SAMPLES) {
+                grid_locked_   = false;
+                silence_count_ = SILENCE_RESET_SAMPLES; // clamp, avoid overflow
+            }
+        } else {
+            silence_count_ = 0;
+        }
+
+        if (++step_accum_ >= DECODE_STEP) {
             step_accum_ = 0;
 
             // Need at least one full word in the buffer before attempting decode.
             if (write_pos_ < WORD_SAMPLES) continue;
 
             ALEWord word;
-            if (try_decode(word) && word_cb_)
+            Golay::DecodeResult fec;
+            if (try_decode(word, fec) && accept_word_(fec) && word_cb_)
                 word_cb_(word);
         }
     }
@@ -72,12 +90,49 @@ uint8_t ALERxPipeline::symbol_from_block(const int16_t* block)
     return FREQ_TO_SYMBOL[rank];
 }
 
-bool ALERxPipeline::try_decode(ALEWord& out) const
+bool ALERxPipeline::accept_word_(const Golay::DecodeResult& fec)
 {
-    // Base of the last WORD_SAMPLES (3136) samples in the ring.
-    const uint32_t base = write_pos_ - WORD_SAMPLES;
+    if (grid_locked_) {
+        const uint32_t dist = write_pos_ - grid_anchor_;
 
-    // Step 1: Detect 49 symbols, each from a non-overlapping 64-sample block.
+        // Deduplication: attempt offsets closer than one word to the last
+        // accepted word re-decode the SAME on-air word — drop them.
+        if (dist < WORD_SAMPLES - FFT_SIZE)
+            return false;
+
+        // Clean decodes always re-anchor the grid (handles peer clock drift
+        // and the start of a new transmission at arbitrary phase).
+        if (fec.flag == Golay::DECODE_OK) {
+            grid_anchor_ = write_pos_;
+            return true;
+        }
+
+        // Corrected decodes are trusted only on the anchored grid (±1 symbol):
+        // a misaligned window over real signal passes Golay with "corrections"
+        // in roughly a third of all attempts and would yield phantom words.
+        const uint32_t mod = dist % WORD_SAMPLES;
+        if (mod <= FFT_SIZE || mod >= WORD_SAMPLES - FFT_SIZE) {
+            grid_anchor_ = write_pos_;
+            return true;
+        }
+        return false;
+    }
+
+    // Unlocked: only a clean decode may establish the word grid.
+    if (fec.flag == Golay::DECODE_OK) {
+        grid_locked_ = true;
+        grid_anchor_ = write_pos_;
+        return true;
+    }
+    return false;
+}
+
+bool ALERxPipeline::try_decode(ALEWord& out, Golay::DecodeResult& fec) const
+{
+    // Step 1: Goertzel symbol detection — extract 49 FSK symbols from the
+    // last WORD_SAMPLES (3136) samples in the ring buffer.
+    // Each symbol is detected from a non-overlapping 64-sample block.
+    const uint32_t base = write_pos_ - WORD_SAMPLES;
     int16_t blk[FFT_SIZE];
     uint8_t sym[SYMBOLS_PER_WORD];
     for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
@@ -87,36 +142,8 @@ bool ALERxPipeline::try_decode(ALEWord& out) const
         sym[k] = symbol_from_block(blk);
     }
 
-    // Step 2: Unpack 3-bit symbols → 147-bit stream (MSB-first).
-    //   stream[3k+0] = bit2 (MSB), stream[3k+1] = bit1, stream[3k+2] = bit0.
-    //   This matches the modem's build_symbols() packing convention.
-    uint8_t stream[SYMBOLS_PER_WORD * BITS_PER_SYMBOL];
-    for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
-        stream[3*k + 0] = (sym[k] >> 2) & 1u;
-        stream[3*k + 1] = (sym[k] >> 1) & 1u;
-        stream[3*k + 2] =  sym[k]       & 1u;
-    }
-
-    // Step 3: Stride-49 majority vote → 49-bit tx49.
-    //   Bit i is the majority of stream[i], stream[i+49], stream[i+98].
-    uint64_t tx49 = 0;
-    for (uint32_t i = 0; i < SYMBOLS_PER_WORD; ++i) {
-        const uint32_t votes = stream[i]
-                             + stream[i + SYMBOLS_PER_WORD]
-                             + stream[i + 2u * SYMBOLS_PER_WORD];
-        if (votes >= 2u)
-            tx49 |= (1ULL << i);
-    }
-
-    // Step 4: Deinterleave + Golay FEC decode → 24-bit ALE word.
-    Golay::DecodeResult fec;
-    const uint32_t word24 = ALEFECCodec::deinterleave_word(tx49, fec);
-    if (fec.flag == Golay::DECODE_UNCORRECTABLE)
-        return false;
-
-    // Step 5: Parse to ALEWord structure.
-    WordParser parser;
-    return parser.parse_from_bits(word24, out);
+    // Steps 2–4: majority vote → Golay FEC → parse  (ALEDecoder).
+    return ALEDecoder::decode(sym, out, fec);
 }
 
 } // namespace ale

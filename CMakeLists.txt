@@ -79,6 +79,18 @@ target_include_directories(ale_aqc PUBLIC
 
 target_link_libraries(ale_aqc ale_protocol ale_fsk_core ale_fec)
 
+# ALE 2G Codec — word ↔ symbol-frame pipeline (encoder + decoder)
+add_library(ale_codec
+    src/Codec/ale_encoder.cpp
+    src/Codec/ale_decoder.cpp
+)
+
+target_include_directories(ale_codec PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(ale_codec ale_fec ale_protocol ale_fsk_core)
+
 # ALE 2G Modem — word-level TX with 3× redundancy (A.5.2.2.4)
 add_library(ale_modem
     src/Modem/ale2g_modem.cpp
@@ -88,7 +100,7 @@ target_include_directories(ale_modem PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(ale_modem ale_protocol ale_fsk_core ale_fec)
+target_link_libraries(ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
 
 # ALE state machine (link layer)
 add_library(ale_link
@@ -165,7 +177,7 @@ target_include_directories(ale_app_core PUBLIC
 )
 
 target_link_libraries(ale_app_core
-    ale_link ale_modem ale_protocol ale_fsk_core ale_fec
+    ale_link ale_modem ale_codec ale_protocol ale_fsk_core ale_fec
 )
 
 # ── Audio I/O device (platform-specific) ──────────────────────────────────────
@@ -273,10 +285,20 @@ target_link_libraries(test_frame_c ale_link ale_modem ale_protocol ale_fsk_core 
 target_include_directories(test_frame_c PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FrameC COMMAND test_frame_c)
 
+add_executable(test_resampler_path tests/test_resampler_path.cpp)
+target_link_libraries(test_resampler_path ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_resampler_path PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ResamplerPath COMMAND test_resampler_path)
+
 add_executable(test_roundtrip tests/test_roundtrip.cpp)
 target_link_libraries(test_roundtrip ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_roundtrip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME Roundtrip COMMAND test_roundtrip)
+
+add_executable(test_codec tests/test_codec.cpp)
+target_link_libraries(test_codec ale_codec ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_codec PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME Codec COMMAND test_codec)
 
 add_executable(debug_fft tests/debug_fft.cpp)
 target_link_libraries(debug_fft ale_fsk_core ale_fec)
