@@ -1,12 +1,54 @@
 /**
  * \file Protocol/Control/ale_timing.h
- * \brief ALE protocol timing constants per MIL-STD-188-141B Annex A & B
+ * \brief ALE protocol timing constants — MIL-STD-188-141D Appendix A, Annex B
  *
- * Base constants:
- *   - Trw = 392 ms (exact, integer: 49 × Ttone = 49 × 8)
- *   - Tw  = Trw/3 = 130.666... ms (non-integer, stored as double)
+ * Derivation hierarchy (each level builds exclusively on the level above):
  *
- * All derived timings use formulas from Annex B.
+ *  Level 0  Waveform fundamentals  (spec-fixed, cannot be derived further)
+ *    TTONE_MS = 8 ms                    symbol period at 125 baud
+ *
+ *  Level 1  On-air word period  (Annex B §"Basic system timing")
+ *    TW_MS = (49/3) × TTONE_MS = 130.666… ms
+ *    (one ALE word = 49 bits ÷ 3 bits/symbol = 16.333… symbols on-air)
+ *
+ *  Level 2  Redundant word  ← the spec's smallest addressable unit
+ *    TRW_MS = 3 × TW = 49 × TTONE = 392 ms   (exact integer — Trw)
+ *
+ *  Level 3  Protocol timing limits  (multiples of Trw, Annex B §"System timing limits")
+ *    Tal     = Trw      =  392 ms   address first-word time
+ *    Tlww    = Trw      =  392 ms   T₁ww — last-word-wait delay
+ *    Ta_max  = 5×Trw    = 1960 ms   max individual/net address (5 words)
+ *    Tc_max  = 12×Trw   = 4704 ms   max call time (12 one-word addresses)
+ *    Tx_max  = Ta_max              max termination section (= Ta_max)
+ *    Tm_max  = 30×Trw   = 11760 ms  max message section — basic (without AMD/DTM/DBM)
+ *    Tdrw    = 2×Trw    =  784 ms   detect-redundant-word window (= 6×Tw)
+ *    Tdrrw   = 3×Trw    = 1176 ms   detect-rotating-redundant-word window (= 9×Tw)
+ *
+ *  Level 4  Equipment-class timing  (multiples of Tw = Trw/3, §"Individual calling")
+ *    T1d      = Tw      =  131 ms   T₁d — late-detect additional delay
+ *    Tta_fast = 0                   turnaround, fast (solid-state) equipment
+ *    Tta_slow = 2×Tw    =  261 ms   turnaround, slow equipment
+ *    Tt_fast  = Tw      =  131 ms   tune time, solid-state tuner
+ *    Tt_slow  = 8×Tw    = 1045 ms   tune time, relay tuner
+ *    Twr_fast = 5×Tw    =  653 ms   Twr — wait-for-reply, fast equipment
+ *    Twr_slow = 7×Tw    =  915 ms   Twr — wait-for-reply, slow equipment
+ *    Twrt_fast = Twr_fast + Tt_fast = 6×Tw  =  784 ms
+ *    Twrt_slow = Twr_slow + Tt_slow = 15×Tw = 1960 ms
+ *
+ *  Level 5  Programmable defaults  (network manager can override, §"Programmable timing")
+ *    TD5_MS    = 200 ms   Td(5) — dwell, 5 chps basic scan rate
+ *    TD2_MS    = 500 ms   Td(2) — dwell, 2 chps minimum scan rate
+ *    Tds_ms    ≤ TD5_MS   detect-signaling period (≤ Td(5))
+ *    Twt_ale   = Tdrw = 784 ms    LBT for ALE-only channels (spec: Twt = Tdrw)
+ *    Twt_voice = 2000 ms           LBT for voice/general-purpose channels
+ *    Tt_blind  = 8×Tw = 1045 ms   default blind tune, first call (unknown equipment)
+ *    Tps       = 45 min            periodic sounding interval (Annex B §"Programmable")
+ *    Twa       = 30 s              wait-for-activity after link/use
+ *
+ * Formula functions for protocol-variable quantities (Tsc, Tlc, Tcc, Twce, …)
+ * are at the bottom of the ale:: namespace; they encode the Annex B formulas.
+ *
+ * State-machine code uses the ALETimingConstants:: namespace (integer aliases).
  */
 
 #pragma once
@@ -14,198 +56,252 @@
 
 namespace ale {
 
-// ── Base Timing Constants (Annex B: Basic system timing) ──
+// ────────────────────────────────────────────────────────────────────────────
+// Level 0 — Waveform fundamentals
+// ────────────────────────────────────────────────────────────────────────────
 
-constexpr uint32_t TRW_MS            = 392;                // Trw = 3×Tw = 49×Ttone (exact)
-constexpr double   TW_MS             = TRW_MS / 3.0;       // Tw = Trw/3 = 130.666... ms
-constexpr double   TTONE_MS          = 8.0;                // Ttone = 8 ms (125 baud)
-constexpr double   T_SYMBOLS_PER_WORD = 49.0 / 3.0;        // 16.333... symbols/word
+constexpr double TTONE_MS           = 8.0;         // Ttone: symbol period, 125 baud
+constexpr double T_SYMBOLS_PER_WORD = 49.0 / 3.0;  // 16.333… symbols per on-air word
 
-static_assert(TRW_MS == 392, "Trw must be exactly 392 ms");
+// ────────────────────────────────────────────────────────────────────────────
+// Level 1 — On-air word period
+// ────────────────────────────────────────────────────────────────────────────
 
-// ── System Timing Limits (Annex B: System timing limits) ──
+// Tw = (49/3) × Ttone = 130.666… ms
+constexpr double TW_MS = T_SYMBOLS_PER_WORD * TTONE_MS;
 
-constexpr double Ta_max_ms  = 5.0  * TRW_MS;              // Max address time = 5×Trw = 1960 ms
-constexpr double Tc_max_ms  = 12.0 * TRW_MS;              // Max call time = 12×Trw = 4704 ms
-constexpr double Tlc_max_ms = 2.0  * Tc_max_ms;           // Max leading call = 2×Tc_max = 24×Trw
-constexpr double Tcl_max_ms = 5.0  * TRW_MS;              // Max group first-words = 5×Trw = 1960 ms
-constexpr double Tx_max_ms  = 5.0  * TRW_MS;              // Max termination = Ta_max = 1960 ms
-constexpr double Tm_max_ms  = 30.0 * TRW_MS;              // Max message section = 30×Trw = 11760 ms
+// ────────────────────────────────────────────────────────────────────────────
+// Level 2 — Redundant word (the spec's basic addressable unit)
+// ────────────────────────────────────────────────────────────────────────────
 
-// ── Individual Calling (Annex B) ──
+// Trw = 3×Tw = 49×Ttone = 392 ms  (exact integer by waveform design)
+constexpr uint32_t TRW_MS = 392u;
+static_assert(TRW_MS == 392u, "Trw must be exactly 392 ms");
 
-constexpr double Tlww_ms    = static_cast<double>(TRW_MS); // Last word wait delay = Trw = 392 ms
-constexpr double Tld_ms     = TW_MS;                       // Late detect delay = Tw = 130.66... ms
-constexpr double Tlrw_ms    = 2.0 * TRW_MS;               // Leading redundant words = 2×Trw = 784 ms
-// Example values for C=10 channels, single one-word address (Annex B p.222):
-// Tsc and Tcc are variable formulas (Table A-XV), not fixed constants.
-//   Tsc(n) = n × Tcl  (Tcl per channel, ≥ Ts)
-//   Tcc(n) = Tsc(n) + Tlc  (Tlc = 2 × wpa × Trw, grows with address length)
-constexpr double Tsc_c10_1word_ms = 20.0 * TRW_MS;              // Tsc example: C=10, 1-word addr = 20×Trw
-constexpr double Trc_min_ms       = 3.0  * TRW_MS;              // Trc min = 2×Trw + Trw = 3×Trw = 1176 ms
-constexpr double Tcc_c10_1word_ms = Tsc_c10_1word_ms + 2.0 * TRW_MS; // Tcc example: C=10, 1-word = 22×Trw
+// ────────────────────────────────────────────────────────────────────────────
+// Level 3 — Protocol timing limits  (Annex B §"System timing limits")
+// All values are integer multiples of Trw = 392 ms.
+// ────────────────────────────────────────────────────────────────────────────
 
-// Fast equipment (solid-state tuner, Annex B):
-constexpr double Twr_fast_ms  = 5.0 * TW_MS;              // Wait for reply = 5×Tw = 653.33 ms
-constexpr double Tt_fast_ms   = 1.0 * TW_MS;              // Tune time (solid-state) ≥ Tw = 130.66 ms
-constexpr double Twrt_fast_ms = Twr_fast_ms + Tt_fast_ms;  // Wait+tune = 6×Tw = 784 ms
-constexpr double Tta_fast_ms  = 0.0;                       // Turnaround (fast) = 0
+// Address-related limits
+constexpr uint32_t TAL_MS     = TRW_MS;         // Tal = Trw     =  392 ms   first-word address time
+constexpr double   Ta_max_ms  = 5.0  * TRW_MS;  // Ta max = 5×Trw = 1960 ms  max address (5 words)
+constexpr double   Tcl_max_ms = 5.0  * TRW_MS;  // Tcl max = 5×Trw = 1960 ms max group first-words
+constexpr double   Tc_max_ms  = 12.0 * TRW_MS;  // Tc max = 12×Trw = 4704 ms max call (12 words)
+constexpr double   Tx_max_ms  = Ta_max_ms;       // Tx max = Ta max = 1960 ms  max termination section
 
-// Slow equipment (relay tuner, Annex B):
-constexpr double Twr_slow_ms  = 7.0 * TW_MS;              // Wait for reply = 7×Tw = 914.66 ms
-constexpr double Tt_slow_ms   = 8.0 * TW_MS;              // Tune time (relay) ≥ 8×Tw = 1045.33 ms
-constexpr double Twrt_slow_ms = Twr_slow_ms + Tt_slow_ms;  // Wait+tune = 15×Tw = 1960 ms
-constexpr double Tta_slow_ms  = 2.0 * TW_MS;              // Turnaround (slow) = 2×Tw = 261.33 ms
+// Message section limit (basic — extended by AMD/DTM/DBM per Annex B note)
+constexpr double   Tm_max_ms  = 30.0 * TRW_MS;  // Tm max = 30×Trw = 11760 ms
 
-// Tune timing (Annex B, Table A-XV):
-constexpr double   TT_BLIND_MS    = 8.0 * TW_MS;          // Tt blind first call = 8×Tw = 1045.33 ms
-constexpr uint32_t TT_NEXT_TRY_MS = 20000;                // Tt next try = 20 s (blind calls)
+// Last-word-wait delay  (spec: T₁ww — subscript "1ww")
+constexpr uint32_t Tlww_ms    = TRW_MS;          // T1ww = Trw = 392 ms
 
-// ── Scanning (Annex B) ──
+// Detection windows (used during ALE scanning)
+// Tdrw = Trw + spare Trw = 6×Tw = 2×Trw = 784 ms
+constexpr double   Tdrw_ms    = 2.0 * TRW_MS;   // detect-redundant-word window
+// Tdrrw = 2×Trw + spare Trw = 9×Tw = 3×Trw = 1176 ms
+constexpr double   Tdrrw_ms   = 3.0 * TRW_MS;   // detect-rotating-redundant-word window
 
-constexpr double Ts_max_ms = 50000.0;                     // Max scan period = 50 s
-constexpr double Td_min_ms = 100.0;                       // Min dwell = 100 ms (10 chps, DO)
-constexpr double TD5_MS    = 200.0;                       // Td(5) = 200 ms (5 chps basic)
-constexpr double TD2_MS    = 500.0;                       // Td(2) = 500 ms (2 chps min)
-constexpr double Tds_ms    = TD5_MS;                      // Detect signaling period ≤ Td(5) = 200 ms
-constexpr double Tdrw_ms   = 2.0 * TRW_MS;               // Detect redundant word = 2×Trw = 784 ms
-constexpr double Tdrrw_ms  = 3.0 * TRW_MS;               // Detect rotating redundant word = 3×Trw = 1176 ms
+// Detect-signaling period (≤ Td(5) = 200 ms — evaluated at start of dwell)
+constexpr double   TD5_MS     = 200.0;           // Td(5) = 200 ms  (5 chps basic scan)
+constexpr double   TD2_MS     = 500.0;           // Td(2) = 500 ms  (2 chps minimum scan)
+constexpr double   Td_min_ms  = 100.0;           // Td(10) = 100 ms (10 chps, DO variant)
+constexpr double   Tds_ms     = TD5_MS;          // Tds ≤ Td(5) = 200 ms
+constexpr double   Ts_max_ms  = 50000.0;         // Ts max = 50 s  (max scan period)
 
-// ── Sounding (Annex B, p.225) ──
+// Scanning call examples  (C=10 channels, single 1-word address, Td=Tdrw)
+constexpr double Tsc_c10_1word_ms = 20.0 * TRW_MS;              // Tsc = 20×Trw = 7840 ms
+constexpr double Trc_min_ms       = 3.0  * TRW_MS;              // Trc min = 3×Trw = 1176 ms
+constexpr double Tcc_c10_1word_ms = Tsc_c10_1word_ms + 2.0 * TRW_MS; // Tcc = 22×Trw = 8624 ms
 
-constexpr double Trs_min_ms = 2.0 * TRW_MS;              // Trs min = 2×Trw = 784 ms (single-word)
-// Tss  = n × Ta(caller) ≥ Ts  — variable, no constant
-// Tsrs = Tss + Trs ≥ Ts + Trs — variable, no constant
+// ────────────────────────────────────────────────────────────────────────────
+// Level 4 — Equipment-class timing  (Annex B §"Individual calling")
+// Expressed in multiples of Tw = Trw/3 = 130.666… ms.
+// ────────────────────────────────────────────────────────────────────────────
 
-// ── Operational Timing (non-standard, conservative defaults) ──
+// Late-detect additional delay  (spec: T₁d — subscript "1d")
+// T1d = Tw = 130.666… ms
+constexpr double T1d_ms = TW_MS;
 
-constexpr uint32_t Twa_ms     = 30000;                   // Activity timeout = 30 s (Table A-XV)
-// Twce = 2 × own_Ts (Table A-XV).  own_Ts = n_channels × Tdrw_ms.
-// Not a compile-time constant — depends on the station's scan-list length.
+// Turnaround time  (Tta = Trd + Tdek + Tenk + Ttc + Ttk + Ttd — see Annex B)
+constexpr double Tta_fast_ms = 0.0;              // fast equipment: ≈ 0
+constexpr double Tta_slow_ms = 2.0 * TW_MS;     // slow equipment: 2×Tw ≈ 261 ms
+
+// Tune time
+constexpr double Tt_fast_ms  = 1.0 * TW_MS;     // solid-state tuner: ≥ Tw ≈ 131 ms
+constexpr double Tt_slow_ms  = 8.0 * TW_MS;     // relay tuner:      ≥ 8×Tw ≈ 1045 ms
+
+// Wait-for-reply  (Twr = Ttd + Tp + T1ww + T1d + Tta + Trwp + Tp + Trd)
+constexpr double Twr_fast_ms = 5.0 * TW_MS;     // fast equipment: 5×Tw ≈ 653 ms
+constexpr double Twr_slow_ms = 7.0 * TW_MS;     // slow equipment: 7×Tw ≈ 915 ms
+
+// Wait-for-response-and-tune  (Twrt = Twr + Tt)
+constexpr double Twrt_fast_ms = Twr_fast_ms + Tt_fast_ms;  // 6×Tw ≈  784 ms
+constexpr double Twrt_slow_ms = Twr_slow_ms + Tt_slow_ms;  // 15×Tw = 1960 ms
+
+// ────────────────────────────────────────────────────────────────────────────
+// Level 5 — Programmable defaults  (Annex B §"Programmable timing parameters")
+// Network manager can override all values in this section.
+// ────────────────────────────────────────────────────────────────────────────
+
+// Listen-Before-Transmit
+// Spec: Twt = Tdrw = 784 ms for ALE and data-only channels
+constexpr uint32_t Twt_ale_ms   = 2u * TRW_MS;  // = Tdrw = 784 ms  (ALE-only channels)
+constexpr uint32_t Twt_voice_ms = 2000u;         // 2 s  (voice / general-purpose channels)
+
+// Default blind tune allowance (unknown equipment)
+constexpr double   TT_BLIND_MS    = 8.0 * TW_MS; // first call:  8×Tw ≈ 1045 ms
+constexpr uint32_t TT_NEXT_TRY_MS = 20000u;       // second call: 20 s
+
+// Periodic sounding interval  (Annex B §"Programmable timing")
+// Spec: Tps = 45 minutes when enabled.
+constexpr uint32_t Tps_ms             = 45u * 60u * 1000u;  // 45 min = 2 700 000 ms
+constexpr uint32_t SOUNDING_INTERVAL_MS = Tps_ms;           // legacy alias
+
+// Wait-for-activity after link/use
+constexpr uint32_t Twa_ms = 30000u;  // Twa = 30 s
+
+// Link maintenance timeout  (implementation-defined — not a spec symbol)
+constexpr uint32_t LINK_TIMEOUT_MS = 120000u;  // 120 s
+
+// ────────────────────────────────────────────────────────────────────────────
+// Star calling  (Annex B §"Star calling")
+// ────────────────────────────────────────────────────────────────────────────
+
+constexpr double Tsw_std_ms      = 14.0 * TW_MS;  // min slot, standard replies  = 14×Tw ≈ 1829 ms
+constexpr double Tsw_lqa_ms      = 17.0 * TW_MS;  // min slot, LQA replies       = 17×Tw ≈ 2221 ms
+constexpr double Tsw_tight_ms    = 9.0  * TW_MS;  // min slot, tight fixed        =  9×Tw = 1176 ms
+constexpr double Twan_max_std_ms = 188.0 * TW_MS; // Twan max late arrival, std   = 188×Tw
+constexpr double Twan_max_lqa_ms = 227.0 * TW_MS; // Twan max late arrival, LQA   = 227×Tw
+constexpr double Tta_tt_slot0_ms = 360.0;          // Tta+Tt limit, slot 0         = 360 ms
+constexpr double Tta_tt_slot1_ms = 2100.0;         // Tta+Tt limit, slot 1         = 2100 ms
+constexpr double Tta_tt_other_ms = 1500.0;         // Tta+Tt limit, slots 2+       = 1500 ms
+
+// ────────────────────────────────────────────────────────────────────────────
+// Integer variants  (round-to-nearest; used internally by ALETimingConstants)
+// ────────────────────────────────────────────────────────────────────────────
+
+constexpr uint32_t Twr_fast_int  = static_cast<uint32_t>(0.5 + Twr_fast_ms);   //  653 ms
+constexpr uint32_t Twr_slow_int  = static_cast<uint32_t>(0.5 + Twr_slow_ms);   //  915 ms
+constexpr uint32_t Twrt_fast_int = static_cast<uint32_t>(0.5 + Twrt_fast_ms);  //  784 ms
+
+// ────────────────────────────────────────────────────────────────────────────
+// Formula functions for protocol-variable quantities
+// ────────────────────────────────────────────────────────────────────────────
+
+// Twce = 2 × own_Ts = 2 × C × Tdrw  (Table A-XV; depends on station's channel count)
 constexpr uint32_t calc_twce_ms(uint32_t n_channels) {
     return 2u * n_channels * static_cast<uint32_t>(Tdrw_ms);
 }
-constexpr uint32_t Twt_ms     = 2000;                    // voice/general LBT = 2 s — unused in ALE-only mode
-constexpr uint32_t Twt_ale_ms = 2 * TRW_MS;              // ALE-only LBT = Tdrw = 784 ms
-constexpr uint32_t LINK_TIMEOUT_MS = 120000;             // Link maintenance = 120 s
-// Annex B says 45 min, Table A-XV says 30 min — Table A-XV used:
-constexpr uint32_t SOUNDING_INTERVAL_MS = 30 * 60 * 1000; // Tps = 30 min
 
-// ── Frame-Duration Formulas (MIL-STD-188-141B Table A-XV, Annex B) ──
-//
-// n_channels             = C: number of channels in the scan list
-// scan_words_per_channel = words in one scanning iteration (1 for 1-word addr,
-//                          2 for 2-word individual or group THRU+REP pair)
-// leading_words_half     = words in one half of the leading-call section
-//                          (Tlc = 2 × half; e.g. 1 for TO:SAM, 2 for TO:SAM DATA:UEL)
-// conclusion_words       = words in the TIS conclusion (1 for ≤3-char self-id)
-
-// Tsc: scanning-call duration  (sum over all channels, one scan pass)
+// Tsc = n_channels × scan_words_per_channel × Trw  (Annex B §"Individual calling")
 constexpr double calc_tsc_ms(uint32_t n_channels, uint32_t scan_words_per_channel) {
     return static_cast<double>(n_channels) * scan_words_per_channel * TRW_MS;
 }
 
-// Tlc: leading-call duration  (full address × 2)
+// Tlc = 2 × leading_words_half × Trw  (leading_words_half = Tc in Trw units; Tlc = 2×Tc)
 constexpr double calc_tlc_ms(uint32_t leading_words_half) {
     return 2.0 * leading_words_half * TRW_MS;
 }
 
-// Tcc: complete call cycle  (Tsc + Tlc, excluding Tx)
+// Tcc = Tsc + Tlc  (complete call cycle, excluding termination section Tx)
 constexpr double calc_tcc_ms(uint32_t n_channels, uint32_t scan_words_per_channel,
                               uint32_t leading_words_half) {
     return calc_tsc_ms(n_channels, scan_words_per_channel)
          + calc_tlc_ms(leading_words_half);
 }
 
-// Tx: conclusion (termination) duration
+// Tx = conclusion_words × Trw  (termination section duration)
 constexpr double calc_tx_ms(uint32_t conclusion_words) {
     return static_cast<double>(conclusion_words) * TRW_MS;
 }
 
-// ── Integer Variants (round-to-nearest, for arrays/bounds) ──
-
-constexpr uint32_t Twr_fast_int  = static_cast<uint32_t>(0.5 + Twr_fast_ms);
-constexpr uint32_t Twr_slow_int  = static_cast<uint32_t>(0.5 + Twr_slow_ms);
-constexpr uint32_t Twrt_fast_int = static_cast<uint32_t>(0.5 + Twrt_fast_ms);
-constexpr uint32_t Tsc_c10_1word_int = static_cast<uint32_t>(0.5 + Tsc_c10_1word_ms);
-
-// ── Calling-Timeout Budget (MIL-STD-188-141B Annex B, Table A-XV) ──────────
+// ────────────────────────────────────────────────────────────────────────────
+// Calling timeout budget  (Annex B, Table A-XV)
 //
-// Encodes the protocol-level formula:
-//   timeout = n_channels × (Twt + Tt + Tsc + Tlc + Twr/Twrt) + 2 s margin
+// Global safety net for the entire CALLING state.  It must be LOOSER than the
+// sum of all per-phase windows on one channel, because the per-phase timeouts
+// (LISTENING a/b, AC-LINK-019-6/8) handle channel hopping themselves:
 //
-// leading_frame_words: already-doubled word count (size of leading_frame_ vector),
-//   so one multiply by Trw directly yields Tlc.
-// multi_channel: true  → use Twrt (Twr + Tt, fast equip.)
-//                false → use Twr alone (single channel, no retune)
+//   per_ch = Twt + Tt                          pre-TX (LBT + blind tune)
+//          + Tsc + Tlc + Tx                    full TX sequence on air
+//          + (Twrt_slow + Tdrw)                LISTENING(a): no-response window
+//          + 5×Trw                             LISTENING(b): conclusion collect
+//          + Tlww                              LISTENING(c): settle
+//
+//   timeout = n_channels × per_ch + 2 s margin
+//
+// The LISTENING windows already include the SW-decoder detect time and the
+// round-trip audio latency (see handle_calling LISTENING docs).
+//
+// leading_frame_words: already-doubled word count so one × Trw gives Tlc.
+// conclusion_words:    termination section size (Tx = words × Trw).
+// ────────────────────────────────────────────────────────────────────────────
+
 struct CallingBudgetParams {
     uint32_t n_channels;           // calling_channels.size(), min 1
-    uint32_t target_scan_channels; // channels in the scan list
-    uint32_t leading_frame_words;  // already-doubled leading frame size
-    bool     multi_channel;        // Twrt vs Twr
+    uint32_t target_scan_channels; // channels in the target's scan list
+    uint32_t leading_frame_words;  // already-doubled leading frame size (→ Tlc)
+    uint32_t conclusion_words;     // conclusion frame size (→ Tx)
 };
 
 constexpr uint32_t calc_calling_timeout_ms(const CallingBudgetParams& p) {
     const uint32_t tsc    = p.target_scan_channels * 2u * TRW_MS;
-    const uint32_t tlc    = p.leading_frame_words * TRW_MS;
-    // Use Twr_slow_int: our SW decoder needs Trd_sw = Trw (full word), which is
-    // equivalent to 7×Tw = Twr_slow in the Table A-XV formula.
-    const uint32_t twr    = p.multi_channel ? (Twr_slow_int + static_cast<uint32_t>(Tt_fast_ms + 0.5))
-                                             : Twr_slow_int;
+    const uint32_t tlc    = p.leading_frame_words  * TRW_MS;
+    const uint32_t tx     = p.conclusion_words     * TRW_MS;
+    const uint32_t listen = static_cast<uint32_t>(0.5 + Twrt_slow_ms)   // 1960
+                          + static_cast<uint32_t>(Tdrw_ms)              // + 784
+                          + 5u * TRW_MS                                 // + 1960
+                          + Tlww_ms;                                    // +  392
     const uint32_t per_ch = Twt_ale_ms
                           + static_cast<uint32_t>(TT_BLIND_MS + 0.5)
-                          + tsc + tlc + twr;
+                          + tsc + tlc + tx + listen;
     return per_ch * p.n_channels + 2000u;
 }
 
-// ── Star Calling (Annex B, pp.226-227) ──
-
-constexpr double TAL_MS          = static_cast<double>(TRW_MS); // Tal = Trw = 392 ms
-constexpr double Tsw_std_ms      = 14.0 * TW_MS;          // Min slot standard = 14×Tw = 1829.33 ms
-constexpr double Tsw_lqa_ms      = 17.0 * TW_MS;          // Min slot LQA = 17×Tw = 2221.33 ms
-constexpr double Tsw_tight_ms    = 9.0  * TW_MS;          // Min slot tight = 9×Tw = 1176 ms
-constexpr double Twan_max_std_ms = 188.0 * TW_MS;         // Twan max late arrival standard = 188×Tw
-// Table A-XV: 227 Tw (mit LQA).  Annex B text says 277 Tw — Table A-XV governs.
-constexpr double Twan_max_lqa_ms = 227.0 * TW_MS;         // Twan max late arrival LQA = 227×Tw
-constexpr double Tta_tt_slot0_ms = 360.0;                  // Tta+Tt limit slot 0 = 360 ms
-constexpr double Tta_tt_slot1_ms = 2100.0;                 // Tta+Tt limit slot 1 = 2100 ms
-constexpr double Tta_tt_other_ms = 1500.0;                 // Tta+Tt limit other slots = 1500 ms
-
 } // namespace ale
 
-// ── ALETimingConstants — named aliases for the state machine and tests ────────
+// ────────────────────────────────────────────────────────────────────────────
+// ALETimingConstants — named integer aliases for state machine consumption
 //
-// Defined in the global namespace so ale-internal code can write
-// ALETimingConstants::Trw_ms without ambiguity with ale::TRW_MS.
-// Twr_ms uses Twr_fast_int (solid-state equipment, 5×Tw ≈ 653 ms).
+// All values are derived from ale:: constants above.
+// State machine code uses these names; the ale:: namespace is the single
+// source of truth for formulas and documentation.
+// ────────────────────────────────────────────────────────────────────────────
 namespace ALETimingConstants {
-    constexpr uint32_t Trw_ms          = ale::TRW_MS;                                        // 392 ms
-    constexpr double   Tw_ms           = ale::TW_MS;                                          // 130.666... ms
-    constexpr uint32_t Twr_ms          = ale::Twr_fast_int;                                   // 653 ms (fast equip.)
-    constexpr uint32_t Twrt_ms         = ale::Twrt_fast_int;                                  // 784 ms (Twr+Tt fast)
-    constexpr uint32_t Twt_ms          = ale::Twt_ale_ms;                                     // 784 ms (ALE-only LBT)
-    constexpr uint32_t Tt_ms           = static_cast<uint32_t>(ale::TT_BLIND_MS + 0.5);       // 1045 ms (blind tune)
-    constexpr uint32_t Tlww_ms         = ale::TRW_MS;                                         // 392 ms (= Trw)
-    constexpr uint32_t Twa_ms          = ale::Twa_ms;                                         // 30 000 ms
-    constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;                                // 120 000 ms
 
-    // ── Derived protocol limits (integer, for SM comparisons) ────────────────
-    constexpr uint32_t Tx_max_ms  = 5u  * Trw_ms;   // Max conclusion length  = 5×Trw  = 1960 ms
-    constexpr uint32_t Tm_max_ms  = 30u * Trw_ms;   // Max message section    = 30×Trw = 11760 ms
-    // Trc_min: minimum receiving call time (Annex B: Tlww + LBT + Trd_sw = 3×Trw = 1176 ms).
-    // Used as the LISTENING and WAIT_ACK base window for this SW-decoder implementation.
-    constexpr uint32_t Trc_min_ms = 3u  * Trw_ms;   // 1176 ms
-    // Tcc_max: max complete call cycle ≈ Tsc(C=10) + Tlc(1-word) = 22×Trw (A.5.5.4.4).
+    // ── Fundamental ──────────────────────────────────────────────────────────
+    constexpr uint32_t Trw_ms = ale::TRW_MS;     // 392 ms — redundant word (Trw)
+    constexpr double   Tw_ms  = ale::TW_MS;       // 130.666… ms — one word (Tw)
+
+    // ── Equipment defaults (fast SW-decoder profile) ──────────────────────
+    constexpr uint32_t Twr_ms  = ale::Twr_fast_int;   //  653 ms  (5×Tw, fast equipment)
+    constexpr uint32_t Twrt_ms = ale::Twrt_fast_int;  //  784 ms  (6×Tw = Twr+Tt fast)
+    constexpr uint32_t Twt_ms  = ale::Twt_ale_ms;     //  784 ms  (= Tdrw, ALE-only LBT)
+    constexpr uint32_t Tt_ms   = static_cast<uint32_t>(ale::TT_BLIND_MS + 0.5);  // 1045 ms
+    constexpr uint32_t Tlww_ms = ale::Tlww_ms;        //  392 ms  (= Trw, T1ww)
+    constexpr uint32_t Twa_ms  = ale::Twa_ms;         // 30 000 ms
+    constexpr uint32_t Tps_ms  = ale::Tps_ms;         // 2 700 000 ms (45 min)
+    constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;  // 120 000 ms
+
+    // ── Derived protocol limits (integer, for SM comparisons) ────────────
+    constexpr uint32_t Tx_max_ms  = 5u  * Trw_ms;  // max termination  = 5×Trw  = 1960 ms
+    constexpr uint32_t Tm_max_ms  = 30u * Trw_ms;  // max message      = 30×Trw = 11760 ms
+    // Trc_min: minimum receiving-call window (Annex B: 2×Tc + Tx = 3×Trw for 1-word addr).
+    // Also used as the LISTENING / WAIT_ACK base window for this SW-decoder implementation.
+    constexpr uint32_t Trc_min_ms = 3u  * Trw_ms;  // 1176 ms
+    // Tcc_max: Tsc(C=10,1-word) + Tlc(1-word) = 20+2 = 22×Trw.
     // Used as the AllCall-Pause timeout in SCANNING (T-10).
-    constexpr uint32_t Tcc_max_ms = 22u * Trw_ms;   // 8624 ms
+    constexpr uint32_t Tcc_max_ms = 22u * Trw_ms;  // 8624 ms
 
-    // ── Protocol count constants (spec-defined, non-timing) ──────────────────
-    // A.5.5.3.2: up to this many contiguous FEC-uncorrectable words tolerated
-    // during receipt of a scanning call before the frame is rejected.
+    // ── Protocol count constants (spec-defined, non-timing) ──────────────
+    // A.5.5.3.2: max contiguous FEC-uncorrectable words before frame rejection.
     constexpr uint32_t MAX_SCANNING_CALL_ERRORS = 3u;
+    // Max words in one contiguous TX sequence handed to the modem.
+    // The full calling sequence is enqueued in one piece at tune-complete:
+    //   scanning section (C×2 slots; group calls C×2×pair words, C ≤ 10)
+    //   + leading call (2 × max_addr(5) = 10) + conclusion (max_addr(5)).
+    // Individual C=10 → 20+10+5 = 35; group headroom → 64.
+    constexpr uint32_t MAX_TX_SEQUENCE_WORDS    = 64u;
 
-    // Max words in one response or ACK TX sequence:
-    //   2 × max_addr_words(5) + max_addr_words(5) = 15
-    // Used to size / assert the modem word queue.
-    constexpr uint32_t MAX_TX_SEQUENCE_WORDS = 15u;
-}
+} // namespace ALETimingConstants

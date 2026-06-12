@@ -8,17 +8,17 @@
  * Part 2 (AC-FRAME-001): ALEStateMachine / ALE2GModem integration tests —
  *   slot timing, phase sequencing, and modem 3× copy behaviour.
  *
- * Timing model (DD-013, DD-006):
- *   ALEStateMachine is callback-driven: on_word_complete() is called once per
- *   Trw-slot (after ALE2GModem finishes all 3 copies).  update() only triggers
- *   the next word if words_pending == 0 and current_time_ms >= next_tx.
- *
- *   Slot schedule (DD-006):
- *     next_tx = first_call_tx_ms + call_cycle_count × Trw_ms
+ * Timing model (DD-013):
+ *   ALEStateMachine is callback-driven: at tune-complete the COMPLETE calling
+ *   TX sequence (scanning + leading + conclusion) is enqueued back-to-back;
+ *   on_word_complete() is fired once per symbol frame physically consumed by
+ *   the audio layer and advances call_cycle_count / the calling phases.
+ *   The Trw grid is defined by the sample stream (one word = 49 symbols ×
+ *   8 ms = 392 ms), never by wall time.
  *
  *   Test drive pattern:
- *     sm.update(first_call_tx_ms + N * Trw_ms)   → word N enqueued
- *     sm.on_word_complete()                        → call_cycle_count becomes N+1
+ *     sm.update(Twt + Tt)       → full TX sequence enqueued (words_pending = N)
+ *     sm.on_word_complete()     → call_cycle_count increments, phases advance
  */
 
 #include "Protocol/Control/ale_state_machine.h"
@@ -26,6 +26,7 @@
 #include "Word/ale_frame.h"
 #include "FEC/ale_fec_codec.h"
 #include "FSK/ale_waveform.h"
+#include "FSK/tone_generator.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>
@@ -137,10 +138,10 @@ struct FrameHarness {
     ALEStateMachine sm;
     ALE2GModem      modem;
 
-    std::vector<ALEWord>   tx_words;         // logical words sent by SM
-    std::vector<std::vector<int16_t>> tx_bufs; // PCM buffers from modem
-    std::vector<uint32_t>  word_complete_times; // times of on_word_complete() calls
-    std::vector<CallingPhase> phase_at_complete; // calling_phase at each on_word_complete
+    std::vector<ALEWord>              tx_words;           // logical words sent by SM
+    std::vector<std::vector<uint8_t>> tx_bufs;            // symbol frames from modem
+    std::vector<uint32_t>             word_complete_times; // times of on_word_complete() calls
+    std::vector<CallingPhase>         phase_at_complete;  // calling_phase at each on_word_complete
 
     FrameHarness(const std::string& self, const std::string& to_addr,
                  uint32_t scan_ch)
@@ -156,40 +157,28 @@ struct FrameHarness {
             modem.enqueue_word(w);
         });
 
-        modem.set_tx_callback([this](const int16_t* s, uint32_t n) {
-            tx_bufs.emplace_back(s, s + n);
-        });
-
-        modem.set_word_done_callback([this]() {
-            word_complete_times.push_back(current_ms_);
-            phase_at_complete.push_back(sm.get_calling_phase());
-            sm.on_word_complete();
-        });
-
         sm.initiate_call(to_addr);
     }
 
-    // Advance both SM and modem to timestamp t.
-    // The modem fires done_cb_ → on_word_complete() as copies complete.
+    // Advance SM and pull any pending symbol frames from modem.
+    // Fires on_word_complete() once per pulled frame.
     void tick(uint32_t t) {
         current_ms_ = t;
         sm.update(t);
-        modem.update(t);
+        uint8_t syms[SYMBOLS_PER_WORD];
+        while (modem.pull_symbol_frame(syms)) {
+            tx_bufs.emplace_back(syms, syms + SYMBOLS_PER_WORD);
+            word_complete_times.push_back(t);
+            phase_at_complete.push_back(sm.get_calling_phase());
+            sm.on_word_complete();
+        }
     }
 
-    // Drive N full Trw slots starting at t0.  Each slot:
-    //   tick(t0 + i*Trw)          – trigger word transmission
-    //   tick(t0 + i*Trw + Trw-1)  – complete all 3 copies
+    // Drive N full Trw slots starting at t0 — one tick per slot.
     void drive_slots(uint32_t t0, uint32_t n_slots) {
         const uint32_t Trw = ALETimingConstants::Trw_ms;
-        for (uint32_t i = 0; i < n_slots; ++i) {
+        for (uint32_t i = 0; i < n_slots; ++i)
             tick(t0 + i * Trw);
-            // Advance modem time so all 3 copies of this word complete.
-            // TW_INT_MS = Trw/3 (≈130 ms); 3 copies finish by t + 3×TW_INT_MS.
-            uint32_t tw = Trw / SYMBOL_REPETITION;
-            tick(t0 + i * Trw + tw);
-            tick(t0 + i * Trw + 2 * tw);
-        }
     }
 
 private:
@@ -197,20 +186,15 @@ private:
 };
 
 // ============================================================================
-// AC-FRAME-001-2 (row 1) — ALE2GModem produces exactly 3 identical PCM buffers
-// per logical word; no other module generates repetitions.
+// AC-FRAME-001-2 (row 1) — ALE2GModem emits exactly one symbol frame of
+// SYMBOLS_PER_WORD (49) values per logical word; symbols are in range 0–7.
 // ============================================================================
 
-bool test_ac_001_2_modem_3x_identical_copies()
+bool test_ac_001_2_modem_symbol_frame_per_word()
 {
-    std::cout << "\n[AC-FRAME-001-2] ALE2GModem: 3 identical PCM copies per word\n";
+    std::cout << "\n[AC-FRAME-001-2] ALE2GModem: one symbol frame (49 symbols, 0-7) per word\n";
 
     ALE2GModem modem;
-    std::vector<std::vector<int16_t>> bufs;
-
-    modem.set_tx_callback([&](const int16_t* s, uint32_t n) {
-        bufs.emplace_back(s, s + n);
-    });
 
     ALEWord word = ALEWord();
     word.type       = PreambleType::TO;
@@ -219,37 +203,31 @@ bool test_ac_001_2_modem_3x_identical_copies()
     word.valid       = true;
     modem.enqueue_word(word);
 
-    // Drive through 3 copies: each copy fires at TW_INT_MS intervals.
-    // TW_INT_MS = Trw_ms / SYMBOL_REPETITION = 392 / 3 = 130 ms (integer).
-    constexpr uint32_t Tw = ALETimingConstants::Trw_ms / SYMBOL_REPETITION;
-    modem.update(0);          // first copy (word_enqueued_ branch)
-    modem.update(Tw);         // second copy
-    modem.update(2 * Tw);     // third copy
+    uint8_t syms[SYMBOLS_PER_WORD];
+    const bool pulled = modem.pull_symbol_frame(syms);
 
-    bool count_ok = (bufs.size() == 3);
-    std::cout << "  tx_callback fired 3 times: "
-              << (count_ok ? "PASS" : "FAIL")
-              << " (got " << bufs.size() << ")\n";
+    bool count_ok = pulled;
+    std::cout << "  pull_symbol_frame returns true: "
+              << (count_ok ? "PASS" : "FAIL") << "\n";
 
-    bool size_ok = count_ok;
-    bool identical_01 = count_ok;
-    bool identical_12 = count_ok;
+    bool size_ok = count_ok;  // pull fills exactly SYMBOLS_PER_WORD values
+    std::cout << "  symbol frame has " << SYMBOLS_PER_WORD << " symbols: "
+              << (size_ok ? "PASS" : "FAIL") << "\n";
 
-    if (count_ok) {
-        size_ok = (bufs[0].size() == bufs[1].size()) &&
-                  (bufs[1].size() == bufs[2].size());
-        std::cout << "  all 3 buffers same size: " << (size_ok ? "PASS" : "FAIL")
-                  << " (" << bufs[0].size() << " samples each)\n";
-
-        if (size_ok) {
-            identical_01 = (bufs[0] == bufs[1]);
-            identical_12 = (bufs[1] == bufs[2]);
-            std::cout << "  copy 0 == copy 1: " << (identical_01 ? "PASS" : "FAIL") << "\n";
-            std::cout << "  copy 1 == copy 2: " << (identical_12 ? "PASS" : "FAIL") << "\n";
+    bool range_ok = size_ok;
+    if (size_ok) {
+        for (uint32_t i = 0; i < SYMBOLS_PER_WORD; ++i) {
+            if (syms[i] > 7) { range_ok = false; break; }
         }
     }
+    std::cout << "  all symbols in 0-7 range: " << (range_ok ? "PASS" : "FAIL") << "\n";
 
-    return count_ok && size_ok && identical_01 && identical_12;
+    // A second pull with no enqueued word must return false
+    const bool no_extra = !modem.pull_symbol_frame(syms);
+    std::cout << "  idle pull returns false: "
+              << (no_extra ? "PASS" : "FAIL") << "\n";
+
+    return count_ok && size_ok && range_ok && no_extra;
 }
 
 // ============================================================================
@@ -280,36 +258,35 @@ bool test_ac_001_2_cycle_count_increments_in_callback()
               << (pre_ok ? "PASS" : "FAIL") << "\n";
 
     // Advance through LBT (Twt=784 ms) and TUNING (Tt=1045 ms) — AC-LINK-017-1/2.
-    // No words are transmitted during these pre-TX phases.
+    // No words are transmitted during these pre-TX phases.  At tune-complete
+    // the full sequence is enqueued: leading "BOB"×2 + conclusion TIS "SAM" = 3.
     const uint32_t T_LBT = ALETimingConstants::Twt_ms;
     const uint32_t T_TX  = T_LBT + ALETimingConstants::Tt_ms;
     sm.update(T_LBT);   // LBT ends → TUNING
-    sm.update(T_TX);    // TUNING ends → LEADING_CALL, first_call_tx_ms = T_TX
+    sm.update(T_TX);    // TUNING ends → LEADING_CALL, full TX sequence enqueued
 
-    // update(T_TX) → first word fires (slot 0: current_time_ms >= first_call_tx_ms)
-    sm.update(T_TX);
-    bool tx_fired  = (transmit_count == 1);
+    bool tx_fired  = (transmit_count == 3);
     bool count_unchanged = (sm.get_call_cycle_count() == 0);  // NOT yet incremented
-    bool pending_up      = (sm.get_words_pending() == 1);
+    bool pending_up      = (sm.get_words_pending() == 3);
 
-    std::cout << "  after update(0): transmit_word called 1×: "
+    std::cout << "  after tune-complete: transmit_word called 3×: "
               << (tx_fired ? "PASS" : "FAIL") << " (got " << transmit_count << ")\n";
-    std::cout << "  after update(0): call_cycle_count still 0: "
+    std::cout << "  after tune-complete: call_cycle_count still 0: "
               << (count_unchanged ? "PASS" : "FAIL")
               << " (got " << sm.get_call_cycle_count() << ")\n";
-    std::cout << "  after update(0): words_pending=1: "
+    std::cout << "  after tune-complete: words_pending=3: "
               << (pending_up ? "PASS" : "FAIL")
               << " (got " << sm.get_words_pending() << ")\n";
 
     // Fire on_word_complete → call_cycle_count must now be 1
     sm.on_word_complete();
     bool count_incremented = (sm.get_call_cycle_count() == 1);
-    bool pending_down      = (sm.get_words_pending() == 0);
+    bool pending_down      = (sm.get_words_pending() == 2);
 
     std::cout << "  after on_word_complete(): call_cycle_count=1: "
               << (count_incremented ? "PASS" : "FAIL")
               << " (got " << sm.get_call_cycle_count() << ")\n";
-    std::cout << "  after on_word_complete(): words_pending=0: "
+    std::cout << "  after on_word_complete(): words_pending=2: "
               << (pending_down ? "PASS" : "FAIL")
               << " (got " << sm.get_words_pending() << ")\n";
 
@@ -433,73 +410,50 @@ bool test_ac_001_3_phase_sequence_via_callback_only()
 }
 
 // ============================================================================
-// AC-FRAME-001-4 (row 1) — Slot times match first_call_tx_ms + N × Trw_ms.
-// Deviation must be < 1 ms.
+// AC-FRAME-001-4 (row 1) — Deterministic render contract: the complete TX
+// sequence is enqueued at tune-complete and consumed as contiguous symbol
+// frames.  Word boundaries are defined by the sample stream (one word =
+// SYMBOLS_PER_WORD × FFT_SIZE samples), so word N starts exactly at sample
+// N × 3136 — no wall-clock scheduling involved.
 // ============================================================================
 
-bool test_ac_001_4_slot_timing_formula()
+bool test_ac_001_4_contiguous_sequence_at_tune_complete()
 {
-    std::cout << "\n[AC-FRAME-001-4] Slot times = first_call_tx_ms + N × Trw_ms\n";
+    std::cout << "\n[AC-FRAME-001-4] TX sequence enqueued at tune-complete; "
+                 "word grid = sample count\n";
 
     // scan_ch=1 (Tsc=2), addr="BOB" (1 word), self="SAM" (1 word).
-    // Total logical words until end of CONCLUSION: 2 + 2 + 1 = 5.
-    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    // Total logical words: 2 scan + 2 leading + 1 conclusion = 5.
+    FrameHarness h("SAM", "BOB", 1);
 
-    ALEStateMachine sm;
-    sm.set_self_address("SAM");
-    sm.set_target_scan_channels(1);
-    sm.set_state_callback([](ALEState, ALEState){});
-    sm.set_rx_enabled_callback([](bool){});
-
-    std::vector<uint32_t> tx_times;  // timestamp of each transmit_word() call
-    sm.set_transmit_callback([&](const ALEWord&) {
-        tx_times.push_back(0);  // placeholder; will be set below
-    });
-
-    sm.initiate_call("BOB");
-
-    // Advance through LBT (Twt=784 ms) and TUNING (Tt=1045 ms).
-    // first_call_tx_ms is set at end of TUNING — that timestamp becomes the slot anchor.
     const uint32_t T_LBT = ALETimingConstants::Twt_ms;
-    const uint32_t T_TX  = T_LBT + ALETimingConstants::Tt_ms;   // = first_call_tx_ms
-    sm.update(T_LBT);   // LBT ends → TUNING
-    sm.update(T_TX);    // TUNING ends → LEADING_CALL, first_call_tx_ms = T_TX
+    const uint32_t T_TX  = T_LBT + ALETimingConstants::Tt_ms;
 
-    // Slot anchor: first word at T_TX + 0*Trw, second at T_TX + 1*Trw, etc.
-    const uint32_t t0 = T_TX;
+    h.tick(T_LBT);  // LBT ends → TUNING; no TX during pre-TX phases
+    bool none_before = h.tx_bufs.empty();
+    std::cout << "  no symbol frames before tune-complete: "
+              << (none_before ? "PASS" : "FAIL") << "\n";
 
-    // Drive 5 slots: tick at t = t0 + N × Trw, ack after each
-    for (uint32_t slot = 0; slot < 5; ++slot) {
-        uint32_t t = t0 + slot * Trw;
-        // Record time just before triggering so we can match to transmit
-        size_t before = tx_times.size();
-        // Patch transmit_callback to record actual time
-        sm.set_transmit_callback([&, t](const ALEWord&) {
-            tx_times.push_back(t);
-        });
-        sm.update(t);
-        sm.on_word_complete();
+    h.tick(T_TX);   // TUNING ends → full sequence enqueued and pulled gap-free
 
-        (void)before;
-    }
+    bool five = (h.tx_bufs.size() == 5);
+    std::cout << "  5 contiguous symbol frames after tune-complete: "
+              << (five ? "PASS" : "FAIL") << " (got " << h.tx_bufs.size() << ")\n";
 
-    bool all_ok = (tx_times.size() == 5);
-    std::cout << "  5 words transmitted: "
-              << (all_ok ? "PASS" : "FAIL")
-              << " (got " << tx_times.size() << ")\n";
+    // Each frame carries exactly SYMBOLS_PER_WORD symbols → in the audio layer
+    // word N occupies samples [N×3136, (N+1)×3136); the Trw grid (392 ms) is a
+    // pure property of the sample stream.
+    bool sizes_ok = true;
+    for (const auto& buf : h.tx_bufs)
+        sizes_ok &= (buf.size() == SYMBOLS_PER_WORD);
+    std::cout << "  every frame has " << SYMBOLS_PER_WORD << " symbols: "
+              << (sizes_ok ? "PASS" : "FAIL") << "\n";
 
-    for (size_t i = 0; i < tx_times.size(); ++i) {
-        uint32_t expected = t0 + static_cast<uint32_t>(i) * Trw;
-        int32_t  deviation = static_cast<int32_t>(tx_times[i]) - static_cast<int32_t>(expected);
-        bool ok = (deviation >= -1 && deviation <= 1);
-        all_ok &= ok;
-        std::cout << "  slot " << i << ": expected t=" << expected
-                  << " ms, got t=" << tx_times[i]
-                  << " ms, dev=" << deviation
-                  << " ms: " << (ok ? "PASS" : "FAIL") << "\n";
-    }
+    bool listening = (h.sm.get_calling_phase() == CallingPhase::LISTENING);
+    std::cout << "  phase LISTENING after last completion: "
+              << (listening ? "PASS" : "FAIL") << "\n";
 
-    return all_ok;
+    return none_before && five && sizes_ok && listening;
 }
 
 // ============================================================================
@@ -617,8 +571,8 @@ int run_all_tests()
         test_ac_002_4_empty_frame());
 
     // ── SM / modem integration timing tests ──────────────────────────────────
-    run("AC-FRAME-001-2 (modem) ALE2GModem sends 3 identical PCM copies",
-        test_ac_001_2_modem_3x_identical_copies());
+    run("AC-FRAME-001-2 (modem) ALE2GModem emits one symbol frame (49 symbols) per word",
+        test_ac_001_2_modem_symbol_frame_per_word());
 
     run("AC-FRAME-001-2 (SM)    call_cycle_count increments in on_word_complete()",
         test_ac_001_2_cycle_count_increments_in_callback());
@@ -626,8 +580,8 @@ int run_all_tests()
     run("AC-FRAME-001-3         phase sequence via callback only",
         test_ac_001_3_phase_sequence_via_callback_only());
 
-    run("AC-FRAME-001-4 (timing) slot times = first_call_tx_ms + N×Trw_ms",
-        test_ac_001_4_slot_timing_formula());
+    run("AC-FRAME-001-4 (timing) contiguous TX sequence at tune-complete",
+        test_ac_001_4_contiguous_sequence_at_tune_complete());
 
     run("AC-FRAME-001-4 (formulas) Tsc/Tlc/Tcc in Trw-slot counts",
         test_ac_001_4_timing_formulas());

@@ -146,7 +146,7 @@ enum class SoundingPhase {
 enum class HandshakePhase {
     WAIT_CYCLE_END,    ///< Twce: listen for SAM's conclusion (A.5.5.3.2)
     SLOT_WAIT,         ///< Tswt: warte zugewiesenen Slot vor LBT (0 ms bei Individual Call, T-09)
-    CHANNEL_CHECK,     ///< 2×Trw LBT before response TX (AC-LINK-019-1, A.5.5.3.3)
+    CHANNEL_CHECK,     ///< 1×Trw LBT before response TX (AC-LINK-019-1, A.5.5.3.3)
     SENDING_RESPONSE,  ///< TO caller × 2 + TIS self — Figure A-30
     WAIT_ACK,          ///< Twr: wait for SAM's ACK — Figure A-31
 };
@@ -264,11 +264,12 @@ public:
     const Channel* select_best_channel() const;
 
     /**
-     * Called by ALE2GModem (via done_cb_) after all 3 copies of one logical
-     * word have been sent.  Increments call_cycle_count and call_cycles_in_phase
-     * by 1 and handles inner-state transitions (DD-009, DD-013).
-     * Must be wired up by the integration layer:
-     *   modem.set_word_done_callback([&sm]{ sm.on_word_complete(); });
+     * Called once per transmitted symbol frame to advance the calling phase.
+     * Increments call_cycle_count / call_cycles_in_phase and handles inner-state
+     * transitions (DD-009, DD-013).
+     *
+     * In RT mode: fired from ALEController via AudioDevice::arm_frame_complete().
+     * In offline mode: fired from ALEController::update() after pull_symbol_frame().
      */
     void on_word_complete();
 
@@ -356,15 +357,13 @@ private:
     // ── Calling sub-state (MIL-STD A.5.5.3.1) ────────────────────────────
     CallingPhase calling_phase;          ///< Current phase within CALLING
     bool         active_call_is_net;     ///< true = net call (TWAS), false = individual (TO)
-    uint32_t     first_call_tx_ms;       ///< Trw-grid anchor (DD-006): set after LBT+Tune, never modified
+    uint32_t     first_call_tx_ms;       ///< Informational: TX-sequence start, set after LBT+Tune
     uint32_t     call_cycle_count;       ///< Total Trw-slots completed (incremented in on_word_complete() only)
     uint32_t     call_cycles_in_phase;   ///< Trw-slots completed within current inner phase (reset on transition)
     uint32_t     words_pending;          ///< Words enqueued but not yet acked by on_word_complete()
-    uint32_t     leading_frame_idx_;     ///< Index of next word to send in leading_frame_ (reset on CALLING entry)
     uint32_t     listening_start_ms;     ///< Timestamp when LISTENING phase began (for Twr timeout)
 
     bool     active_call_is_group;     ///< true = Star-Group-Call (T-11)
-    uint32_t group_scan_word_idx_;    ///< Index im group_scan_frame_ (T-11)
 
     // ── Pre-computed TX frames ───────────────────────────────────────────────
     // Computed once in initiate_call() / initiate_net_call() via ALEFrameBuilder;
@@ -407,6 +406,7 @@ private:
     std::string    caller_address;       ///< Calling station identity (from TIS word)
     uint32_t       hs_words_in_phase;    ///< TX word counter for SENDING_RESPONSE
     uint32_t       hs_ack_start_ms;      ///< Timestamp when WAIT_ACK started
+    uint32_t       hs_ack_to_ms;         ///< "TO JOE" (ACK start) detected in WAIT_ACK; 0 = not yet
     bool           hs_ack_tis_rcvd;      ///< TIS [caller] received in WAIT_ACK
     uint8_t        contiguous_errors;    ///< Contiguous FEC-fail count (A.5.5.3.2, Fix 6)
     uint32_t       hs_lbt_start_ms;      ///< When CHANNEL_CHECK LBT started; 0 = not active
@@ -479,30 +479,24 @@ private:
      */
     uint32_t compute_calling_timeout_ms() const;
 
-    // ── Word builders per calling phase ──────────────────────────────────
+    // ── TX sequence builders ─────────────────────────────────────────────
     //
-    // Each builder transmits words from the pre-computed vectors filled by
+    // The builders transmit words from the pre-computed frames filled by
     // initiate_call().  None of them re-processes address strings.
     //
     // For ACK and response, addresses are known only during the receive path,
     // so they are encoded on-the-fly via AddressEncoder::encode() at that point.
 
     /**
-     * SCANNING_CALL: transmit scanning_word_ once for the current slot.
-     * Called once per Trw slot; on_word_complete() counts slots and transitions
-     * to LEADING_CALL after C × 2 slots (A.5.2.5.1).
+     * Enqueue the complete calling TX sequence back-to-back at tune-complete:
+     * scanning section (C × 2 slots) + leading call (pre-doubled) + conclusion.
+     *
+     * The audio layer renders the queued symbol frames as one contiguous
+     * transmission; the Trw grid is defined by the sample stream (49 symbols
+     * × 8 ms per word), not by wall time.  on_word_complete() advances the
+     * calling phases against exactly these word counts.
      */
-    void build_scanning_word();
-    void build_group_scanning_word();  ///< T-11: THRU/REP-Paar für GROUP_SCANNING_CALL
-
-    /**
-     * LEADING_CALL: transmit the full leading_words_ sequence once.
-     * Called twice by the slot counter (Tlc = 2 × Tc) per A.5.5.3.1.
-     */
-    void build_leading_call_word();
-
-    /** CONCLUSION: transmit conclusion_words_ once (A.5.2.3.2.2). */
-    void build_conclusion_words();
+    void enqueue_call_sequence_();
 
     /**
      * SENDING_ACK: third handshake frame per REQ-LINK-008 / A.5.5.3.4.

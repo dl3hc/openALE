@@ -4,18 +4,26 @@
  *
  * Every instance starts in the idle (scanning) state and runs the full
  * protocol — call, 3-way handshake, linked — automatically.  Whether an
- * instance calls or just listens is decided purely by the options:
+ * instance calls or just listens is decided by --call at startup or by a
+ * CMD:CALL command sent to stdin at runtime.
  *
  *   No --call    → idle: scan and auto-respond to calls addressed to --self.
- *   --call ADDR  → calling: initiate an individual call to ADDR, then idle.
+ *   --call ADDR  → calling: initiate an individual call to ADDR on startup.
  *
  * --self is always required: even an idle station needs its own callsign so
  * the state machine can recognise calls addressed to it.
  *
+ * Runtime commands (sent to stdin while running):
+ *   CMD:CALL <ADDR>  — initiate individual call
+ *   CMD:TERMINATE    — terminate current link
+ *   CMD:REJECT       — reject incoming call (TWAS)
+ *   CMD:LISTEN       — re-enter scanning state
+ *   CMD:STATUS       — print current SM state
+ *   CMD:HELP         — list commands
+ *
  * Options
  *   --self       ADDR    Own ALE address (3–15 Basic 38 uppercase chars)  [required]
- *   --call       ADDR    Target address to call (omit to stay idle)
- *   --device     NAME    Audio device substring for both RX and TX
+ *   --call       ADDR    Target address to call on startup (optional)
  *   --in-device  NAME    Audio input  device substring (RX, waveIn)
  *   --out-device NAME    Audio output device substring (TX, waveOut)
  *   --list-devices       Print available audio devices and exit
@@ -23,17 +31,19 @@
  *
  * Single-PC full-duplex loopback with VB-Audio CABLE A+B
  * ───────────────────────────────────────────────────────
- *   Idle (BOB):  ale_cli --self BOB --in-device "CABLE-A Output" --out-device "CABLE-B Input"
- *   Call (SAM):  ale_cli --self SAM --call BOB --in-device "CABLE-B Output" --out-device "CABLE-A Input"
+ *   Station BOB:  ale_cli --self BOB --in-device "CABLE-A Output" --out-device "CABLE-B Input"
+ *   Station SAM:  ale_cli --self SAM --in-device "CABLE-B Output" --out-device "CABLE-A Input"
  *
  *   CABLE-A carries SAM→BOB audio, CABLE-B carries BOB→SAM audio.
  *   Use --list-devices to find exact device name substrings.
+ *   Initiate the call at runtime: type  CMD:CALL BOB  in SAM's terminal.
  *
- * Two-PC loopback (physical or virtual cable)
- * ────────────────────────────────────────────
+ * Two-PC test (physical or virtual cable)
+ * ────────────────────────────────────────
  *   PC 1 (BOB):  ale_cli --self BOB
- *   PC 2 (SAM):  ale_cli --self SAM --call BOB
+ *   PC 2 (SAM):  ale_cli --self SAM
  *   Connect speaker out of PC 2 to mic in of PC 1 and vice versa.
+ *   Type  CMD:CALL BOB  in SAM's terminal to initiate.
  *
  * The device runs at its native rate (48 kHz); the 8 kHz modem audio is
  * resampled internally, so no manual sample-rate setup is required.
@@ -47,6 +57,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
 #endif
 
 #include <chrono>
@@ -57,6 +69,9 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <mutex>
+#include <queue>
+#include <iostream>
 
 using namespace ale;
 
@@ -65,6 +80,21 @@ using namespace ale;
 static std::atomic<bool> g_running{true};
 
 static void sig_handler(int) { g_running = false; }
+
+// ── Stdin command reader ───────────────────────────────────────────────────────
+
+static std::mutex              g_cmd_mutex;
+static std::queue<std::string> g_cmd_queue;
+
+static void stdin_reader()
+{
+    std::string line;
+    while (g_running && std::getline(std::cin, line))
+        if (!line.empty()) {
+            std::lock_guard<std::mutex> lk(g_cmd_mutex);
+            g_cmd_queue.push(std::move(line));
+        }
+}
 
 // ── Monotonic time helper ─────────────────────────────────────────────────────
 
@@ -92,7 +122,6 @@ static void print_usage(const char* prog)
         "Options:\n"
         "  --self       ADDR   Own ALE address (3-15 uppercase alphanumeric)  [required]\n"
         "  --call       ADDR   Target address to call (omit to stay idle)\n"
-        "  --device     NAME   Audio device substring for both RX and TX\n"
         "  --in-device  NAME   Audio input  device substring (RX, waveIn)\n"
         "  --out-device NAME   Audio output device substring (TX, waveOut)\n"
         "  --list-devices      Print available audio devices\n"
@@ -108,17 +137,25 @@ static void print_usage(const char* prog)
 
 static void print_banner(const std::string& self,
                           bool               call_mode,
+                          bool               no_scan,
                           const std::string& target,
                           const std::string& in_device,
                           const std::string& out_device)
 {
+    const char* mode_str;
+    if (call_mode)
+        mode_str = ("CALL → " + target).c_str();
+    else if (no_scan)
+        mode_str = "IDLE — available (auto-accept)";
+    else
+        mode_str = "IDLE → SCANNING (auto-accept)";
+
     std::printf("\n");
     std::printf("╔═══════════════════════════════════════════════════════╗\n");
     std::printf("║             ALE 2G CLI  —  MIL-STD-188-141B          ║\n");
     std::printf("╠═══════════════════════════════════════════════════════╣\n");
     std::printf("║  Self   : %-44s ║\n", self.c_str());
-    std::printf("║  Mode   : %-44s ║\n",
-                call_mode ? ("CALL → " + target).c_str() : "IDLE — scanning (auto-accept)");
+    std::printf("║  Mode   : %-44s ║\n", mode_str);
     if (!in_device.empty() || !out_device.empty()) {
         const std::string rx_label = in_device.empty()  ? "(default)" : in_device;
         const std::string tx_label = out_device.empty() ? "(default)" : out_device;
@@ -130,6 +167,10 @@ static void print_banner(const std::string& self,
         }
     }
     std::printf("╠═══════════════════════════════════════════════════════╣\n");
+    std::printf("║  Runtime commands (stdin):                            ║\n");
+    std::printf("║    CMD:CALL <ADDR>  CMD:ADD_CHANNEL <CH>  CMD:STATUS  ║\n");
+    std::printf("║    CMD:TERMINATE    CMD:REJECT       CMD:SCAN         ║\n");
+    std::printf("║    CMD:HELP                                           ║\n");
     std::printf("║  Ctrl+C to quit                                       ║\n");
     std::printf("╚═══════════════════════════════════════════════════════╝\n");
     std::printf("\n");
@@ -157,9 +198,6 @@ int main(int argc, char* argv[])
         } else if ((std::strcmp(argv[i], "--call")   == 0 ||
                     std::strcmp(argv[i], "--target") == 0) && i + 1 < argc) {
             target_addr = argv[++i];
-        } else if (std::strcmp(argv[i], "--device") == 0 && i + 1 < argc) {
-            // --device sets both in and out to the same name
-            in_device = out_device = argv[++i];
         } else if (std::strcmp(argv[i], "--in-device") == 0 && i + 1 < argc) {
             in_device = argv[++i];
         } else if (std::strcmp(argv[i], "--out-device") == 0 && i + 1 < argc) {
@@ -196,6 +234,13 @@ int main(int argc, char* argv[])
     std::signal(SIGINT,  sig_handler);
     std::signal(SIGTERM, sig_handler);
 
+    // ── Windows timer resolution ──────────────────────────────────────────
+    // Without this, Sleep(1) / sleep_for(1ms) resolves to ~15.6 ms on Windows.
+    // 1 ms resolution keeps SM timing error within 0.3% of any protocol window.
+#ifdef _WIN32
+    timeBeginPeriod(1);
+#endif
+
     // ── Setup audio device ────────────────────────────────────────────────
     auto audio = make_audio_device();
     if (!audio->open(in_device, out_device)) {
@@ -211,10 +256,8 @@ int main(int argc, char* argv[])
     ctrl.set_self_address(self_addr);
     ctrl.set_target_scan_channels(no_scan ? 0u : 1u);
 
-    // Wire TX audio: controller PCM → audio output
-    ctrl.on_tx_audio = [&](const int16_t* s, uint32_t n) {
-        audio->write_tx(s, n);
-    };
+    // Wire audio device: TX routing and sample-accurate completion tracking.
+    ctrl.set_audio_device(audio.get());
 
     // Status messages
     ctrl.on_status_changed = [](const std::string& msg) {
@@ -248,7 +291,7 @@ int main(int argc, char* argv[])
         std::fflush(stdout);
     };
 
-    print_banner(self_addr, call_mode, target_addr, in_device, out_device);
+    print_banner(self_addr, call_mode, no_scan, target_addr, in_device, out_device);
 
     // ── Start ALE operation ───────────────────────────────────────────────
     if (call_mode) {
@@ -257,12 +300,21 @@ int main(int argc, char* argv[])
                     static_cast<double>(ALETimingConstants::Twt_ms),
                     static_cast<double>(ALETimingConstants::Tt_ms));
         std::fflush(stdout);
+    } else if (no_scan) {
+        ctrl.start_available();
+        std::printf("[>>] Available — waiting for calls addressed to %s\n\n",
+                    self_addr.c_str());
+        std::fflush(stdout);
     } else {
-        ctrl.start_listening();
-        std::printf("[>>] Scanning — waiting for incoming calls addressed to %s\n\n",
+        ctrl.start_scanning();
+        std::printf("[>>] Scanning — waiting for calls addressed to %s\n\n",
                     self_addr.c_str());
         std::fflush(stdout);
     }
+
+    // ── Start stdin command reader thread ────────────────────────────────
+    std::thread cmd_thread(stdin_reader);
+    cmd_thread.detach();
 
     // ── Main event loop ───────────────────────────────────────────────────
     std::vector<int16_t> rx_buf;
@@ -278,6 +330,19 @@ int main(int argc, char* argv[])
         if (!rx_buf.empty())
             ctrl.feed_audio(rx_buf.data(), static_cast<uint32_t>(rx_buf.size()));
 
+        // Dispatch pending stdin commands
+        {
+            std::lock_guard<std::mutex> lk(g_cmd_mutex);
+            while (!g_cmd_queue.empty()) {
+                const std::string resp = ctrl.process_command(g_cmd_queue.front());
+                g_cmd_queue.pop();
+                if (!resp.empty()) {
+                    std::printf("[CMD] %s\n", resp.c_str());
+                    std::fflush(stdout);
+                }
+            }
+        }
+
         // ~1 ms sleep: keeps CPU usage low while meeting all ALE timing windows.
         // The tightest timing window is Tlww = 392 ms; 1 ms resolution is fine.
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -286,6 +351,9 @@ int main(int argc, char* argv[])
     // ── Clean up ──────────────────────────────────────────────────────────
     ctrl.emergency_stop();
     audio->close();
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
     std::printf("[ALE CLI] Exiting.\n");
     return 0;
 }

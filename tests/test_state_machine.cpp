@@ -452,9 +452,11 @@ bool test_full_call_cycle() {
     const uint32_t Twt     = ALETimingConstants::Twt_ms;     // 784 ms
     const uint32_t Tt      = ALETimingConstants::Tt_ms;      // 1045 ms
     const uint32_t Trw     = ALETimingConstants::Trw_ms;     // 392 ms
-    // LISTENING timeout = Trc_min + Trw = 4×Trw = 1568 ms (SW-decoder reply window)
-    const uint32_t Tlisten = ALETimingConstants::Trc_min_ms
-                           + ALETimingConstants::Trw_ms;     // 1568 ms
+    // LISTENING(a) timeout = Twrt_slow + Tdrw = 1960 + 784 = 2744 ms.
+    // Covers the responder's turnaround (Tlww + CHANNEL_CHECK LBT + first word),
+    // the SW-decoder detect window, and round-trip audio latency (A.5.5.3.1).
+    const uint32_t Tlisten = static_cast<uint32_t>(0.5 + ale::Twrt_slow_ms)
+                           + static_cast<uint32_t>(ale::Tdrw_ms);  // 2744 ms
 
     const uint32_t tx0 = Twt + Tt; // first TX slot: 1829 ms
 

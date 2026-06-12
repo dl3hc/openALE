@@ -27,6 +27,7 @@
 #include "Protocol/Control/ale_state_machine.h"
 #include "Protocol/Control/ale_timing.h"
 #include "Modem/ale2g_modem.h"
+#include "FSK/tone_generator.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -117,20 +118,13 @@ int main() {
     // ── Build system ─────────────────────────────────────────────
     ALEStateMachine sm;
     ALE2GModem      modem;
+    ToneGenerator   gen;
 
     sm.set_transmit_callback([&](const ALEWord& w) {
         std::printf("  TX  %-4s  %c%c%c\n",
             WordParser::word_type_name(w.type),
             w.address[0], w.address[1], w.address[2]);
         modem.enqueue_word(w);
-    });
-
-    modem.set_tx_callback([&](const int16_t* s, uint32_t n) {
-        pcm.insert(pcm.end(), s, s + n);
-    });
-
-    modem.set_word_done_callback([&]() {
-        sm.on_word_complete();
     });
 
     // ── Configure ────────────────────────────────────────────────
@@ -142,17 +136,18 @@ int main() {
     sm.initiate_call("SAMUEL");
 
     // ── Drive ────────────────────────────────────────────────────
-    // Tick at 10 ms — fine enough to not skip any timing threshold.
+    // Tick at 1 ms — fine enough to not skip any timing threshold.
     //
-    // Expected timeline:
+    // Expected timeline (protocol time):
     //   t=0      SM enters CALLING → LBT starts
     //   t=784    LBT done (Twt_ms) → TUNING starts
-    //   t=1829   Tuning done (Tt_ms) → LEADING_CALL starts, first TX
-    //   t=2221   word 1 done (Trw) → word 2 TX
-    //   t=2613   word 2 done → word 3 TX
-    //   t=3005   word 3 done → word 4 TX
-    //   t=3397   word 4 done → CONCLUSION, word 5 TX
-    //   t=3789   word 5 done → LISTENING
+    //   t=1829   Tuning done (Tt_ms) → LEADING_CALL; the COMPLETE TX
+    //            sequence (4 leading + 1 conclusion words) is enqueued
+    //            back-to-back.  The pull loop below renders all 5 symbol
+    //            frames contiguously and fires on_word_complete() per
+    //            frame → phases advance to LISTENING.
+    //   On air each word occupies exactly 392 ms (49 symbols × 8 ms);
+    //   the Trw grid is defined by the sample stream, not by wall time.
 
     const uint32_t tick_ms = 1;
     const uint32_t timeout_ms =
@@ -164,9 +159,14 @@ int main() {
     uint32_t t = 0;
     while (t < timeout_ms) {
         sm.update(t);
-        modem.update(t);
+        uint8_t syms[SYMBOLS_PER_WORD];
+        while (modem.pull_symbol_frame(syms)) {
+            const size_t off = pcm.size();
+            pcm.resize(off + SYMBOLS_PER_WORD * FFT_SIZE);
+            gen.generate_symbols(syms, SYMBOLS_PER_WORD, pcm.data() + off, 0.7f);
+            sm.on_word_complete();
+        }
         t += tick_ms;
-
         if (sm.get_calling_phase() == CallingPhase::LISTENING)
             break;
     }

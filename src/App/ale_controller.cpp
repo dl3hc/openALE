@@ -15,19 +15,14 @@ ALEController::ALEController()
 
 void ALEController::wire_callbacks()
 {
-    // SM → Modem: TX word
+    // SM → Modem: enqueue word for TX, and arm one frame-completion notification.
+    // The audio thread pulls symbol frames autonomously via the registered source;
+    // it fires frame completion through AudioDevice::arm_frame_complete → tick().
+    // In offline mode (no audio device) update() drains pending frames directly.
     sm_.set_transmit_callback([this](const ALEWord& w) {
         modem_.enqueue_word(w);
-    });
-
-    // Modem done → SM: word-complete notification
-    modem_.set_word_done_callback([this]() {
-        sm_.on_word_complete();
-    });
-
-    // Modem PCM output → operator audio callback
-    modem_.set_tx_callback([this](const int16_t* s, uint32_t n) {
-        if (on_tx_audio) on_tx_audio(s, n);
+        if (audio_device_)
+            audio_device_->arm_frame_complete([this]() { sm_.on_word_complete(); });
     });
 
     // SM state transitions
@@ -56,6 +51,17 @@ void ALEController::wire_callbacks()
     });
 }
 
+// ── Audio device ──────────────────────────────────────────────────────────────
+
+void ALEController::set_audio_device(AudioDevice* dev)
+{
+    audio_device_ = dev;
+    if (dev)
+        dev->set_symbol_source([this](uint8_t* out) {
+            return modem_.pull_symbol_frame(out);
+        });
+}
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 void ALEController::set_self_address(const std::string& addr)
@@ -76,9 +82,17 @@ void ALEController::set_calling_channels(const std::vector<Channel>& channels)
 
 // ── Operator actions ──────────────────────────────────────────────────────────
 
-void ALEController::start_listening()
+void ALEController::start_available()
 {
-    emit_status("Starting ALE scanner — listening for calls");
+    emit_status("Available — fixed channel, listening for incoming calls");
+    // SM stays in IDLE; enable RX pipeline directly since enter_state(IDLE)
+    // is not called at construction (only on re-entry via transition_to).
+    rx_pipeline_.set_enabled(true);
+}
+
+void ALEController::start_scanning()
+{
+    emit_status("Starting ALE scanner — channel hopping");
     sm_.process_event(ALEEvent::START_SCAN);
 }
 
@@ -111,7 +125,14 @@ void ALEController::emergency_stop()
 void ALEController::update(uint32_t now_ms)
 {
     sm_.update(now_ms);
-    modem_.update(now_ms);
+
+    // Offline mode: no audio device, so drive word-completion directly by
+    // pulling all pending symbol frames and firing on_word_complete per frame.
+    if (!audio_device_) {
+        uint8_t syms[SYMBOLS_PER_WORD];
+        while (modem_.pull_symbol_frame(syms))
+            sm_.on_word_complete();
+    }
 }
 
 void ALEController::feed_audio(const int16_t* samples, uint32_t count)
@@ -203,6 +224,58 @@ void ALEController::on_received_word(const ALEWord& word)
 void ALEController::emit_status(const std::string& msg)
 {
     if (on_status_changed) on_status_changed(msg);
+}
+
+// ── Command interface ─────────────────────────────────────────────────────────
+
+static std::string cmd_trim(const std::string& s)
+{
+    const auto first = s.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "";
+    return s.substr(first, s.find_last_not_of(" \t\r\n") - first + 1);
+}
+
+std::string ALEController::process_command(const std::string& raw)
+{
+    const std::string cmd = cmd_trim(raw);
+    if (cmd.empty()) return "";
+
+    if (cmd.rfind("CMD:CALL ", 0) == 0) {
+        const std::string target = cmd_trim(cmd.substr(9));
+        if (target.empty())
+            return "ERROR: CMD:CALL requires a target address";
+        if (!initiate_call(target))
+            return std::string("ERROR: cannot call in state ")
+                   + ALEStateMachine::state_name(state());
+        return "OK: calling " + target;
+    }
+    if (cmd == "CMD:TERMINATE") {
+        terminate_link();
+        return "OK: terminating link";
+    }
+    if (cmd == "CMD:REJECT") {
+        reject_call();
+        return "OK: rejecting call";
+    }
+    if (cmd == "CMD:SCAN") {
+        start_scanning();
+        return "OK: scanning";
+    }
+    if (cmd == "CMD:STATUS") {
+        return std::string("STATUS: ") + ALEStateMachine::state_name(state());
+    }
+    if (cmd.rfind("CMD:ADD_CHANNEL ", 0) == 0) {
+        const std::string ch = cmd_trim(cmd.substr(16));
+        if (ch.empty())
+            return "ERROR: CMD:ADD_CHANNEL requires a channel argument";
+        // TODO: implement channel scanning — store ch in scan list and reconfigure SM
+        return "TODO: CMD:ADD_CHANNEL " + ch + " (channel scanning not yet implemented)";
+    }
+    if (cmd == "CMD:HELP") {
+        return "Commands: CMD:CALL <ADDR>  CMD:ADD_CHANNEL <CH>  CMD:SCAN"
+               "  CMD:TERMINATE  CMD:REJECT  CMD:STATUS";
+    }
+    return "ERROR: unknown command — try CMD:HELP";
 }
 
 } // namespace ale

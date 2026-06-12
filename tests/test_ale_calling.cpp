@@ -6,8 +6,8 @@
  *
  * Timing model for state-machine tests (callback-driven, DD-013):
  *   Phase transitions happen in on_word_complete(), not in update().
- *   After each update() that enqueues words, call on_word_complete() once per
- *   word to advance the SM as ALE2GModem would via done_cb_.
+ *   These tests drive the SM in isolation — no modem, no audio device.
+ *   on_word_complete() is called directly to simulate audio-frame completion.
  *
  *   With set_target_scan_channels(0) the CALLING state enters LEADING_CALL
  *   directly. For a 3-char address addr = "ABC" (1 word), Tc = 1 × Trw:
@@ -52,21 +52,15 @@ static ALEStateMachine make_sm(WordCapture& cap,
     return sm;
 }
 
-// Drive through LBT+TUNING, leading call (2 slots of 1 word each), into CONCLUSION.
-// Works for 3-char TO address (leading_frame_ = 2 words, 1 per slot) and any self.
-// Calls on_word_complete() after each word so phase transitions fire correctly.
-static void advance_to_conclusion(ALEStateMachine& sm, WordCapture& cap)
+// Drive through LBT+TUNING.  At tune-complete the SM enqueues the COMPLETE
+// TX sequence back-to-back (leading call + conclusion; plus scanning section
+// when scan_ch > 0), so cap then holds every word of the call in order.
+// The conclusion (TIS self [+DATA/REP]) is the tail of the capture.
+static void advance_to_tx_start(ALEStateMachine& sm)
 {
-    const uint32_t Trw  = ALETimingConstants::Trw_ms;
     const uint32_t T_TX = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
     sm.update(ALETimingConstants::Twt_ms);  // LBT → TUNING
-    sm.update(T_TX);                         // TUNING → LEADING_CALL
-    sm.update(T_TX);            // slot 0: LEADING word 0 fires
-    sm.on_word_complete();      // ack → call_cycles_in_phase=1 (still LEADING)
-    sm.update(T_TX + Trw);     // slot 1: LEADING word 1 fires
-    sm.on_word_complete();      // ack → call_cycles_in_phase=2 = tlc_slots → CONCLUSION
-    cap.clear();
-    sm.update(T_TX + 2 * Trw); // CONCLUSION fires (TIS self)
+    sm.update(T_TX);                         // TUNING ends → full sequence enqueued
 }
 
 // ============================================================================
@@ -270,18 +264,19 @@ bool test_tis_conclusion_word_type()
     WordCapture cap;
     ALEStateMachine sm = make_sm(cap, /*self=*/"SAM", 0);
     sm.initiate_call("ABC");
-    advance_to_conclusion(sm, cap);  // cap now holds conclusion words
+    advance_to_tx_start(sm);
+    // cap = leading TO "ABC" × 2 + conclusion TIS "SAM" (3 words total)
 
-    bool has_tis = !cap.empty() && cap.words[0].type == PreambleType::TIS;
-    std::cout << "  conclusion first word = TIS: " << (has_tis ? "PASS" : "FAIL");
-    if (!cap.empty())
-        std::cout << " (got " << WordParser::word_type_name(cap.words[0].type) << ")";
+    bool has_tis = cap.size() == 3 && cap.words[2].type == PreambleType::TIS;
+    std::cout << "  conclusion word = TIS: " << (has_tis ? "PASS" : "FAIL");
+    if (cap.size() >= 3)
+        std::cout << " (got " << WordParser::word_type_name(cap.words[2].type) << ")";
     std::cout << "\n";
 
-    bool addr_ok = has_tis && strncmp(cap.words[0].address, "SAM", 3) == 0;
+    bool addr_ok = has_tis && strncmp(cap.words[2].address, "SAM", 3) == 0;
     std::cout << "  TIS address = \"SAM\": " << (addr_ok ? "PASS" : "FAIL");
     if (has_tis)
-        std::cout << " (got \"" << std::string(cap.words[0].address, 3) << "\")";
+        std::cout << " (got \"" << std::string(cap.words[2].address, 3) << "\")";
     std::cout << "\n";
 
     return has_tis && addr_ok;
@@ -295,28 +290,19 @@ bool test_tis_extended_address()
     WordCapture cap;
     ALEStateMachine sm = make_sm(cap, "SAMUELB", 0);
     sm.initiate_call("ABC");
+    advance_to_tx_start(sm);
+    // cap = leading TO "ABC" × 2 + conclusion TIS+DATA+REP (5 words total)
 
-    // tc_ms for "ABC" = 1 × Trw. Drive through LBT+TUNING then 2 leading slots.
-    const uint32_t Trw  = ALETimingConstants::Trw_ms;
-    const uint32_t T_TX4 = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
-    sm.update(ALETimingConstants::Twt_ms);   // LBT → TUNING
-    sm.update(T_TX4);                         // TUNING → LEADING_CALL
-    sm.update(T_TX4);       sm.on_word_complete();  // slot 0: LEADING word 0 ack
-    sm.update(T_TX4 + Trw); sm.on_word_complete();  // slot 1: LEADING word 1 ack → CONCLUSION
-    cap.clear();
-    sm.update(T_TX4 + 2 * Trw);    // CONCLUSION fires
-
-    // Own address is 7 chars → 3 logical words: TIS + DATA + REP
-    bool count_ok = cap.size() >= 3;
-    bool type_tis  = count_ok && cap.words[0].type == PreambleType::TIS;
-    bool type_data = count_ok && cap.words[1].type == PreambleType::DATA;
-    bool type_rep  = count_ok && cap.words[2].type == PreambleType::REP;
+    bool count_ok  = cap.size() == 5;
+    bool type_tis  = count_ok && cap.words[2].type == PreambleType::TIS;
+    bool type_data = count_ok && cap.words[3].type == PreambleType::DATA;
+    bool type_rep  = count_ok && cap.words[4].type == PreambleType::REP;
     bool pass = type_tis && type_data && type_rep;
 
     std::cout << "  TIS+DATA+REP for \"SAMUELB\": " << (pass ? "PASS" : "FAIL");
     std::cout << " (" << cap.size() << " words [";
-    for (size_t i = 0; i < cap.size() && i < 3; ++i) {
-        if (i) std::cout << ",";
+    for (size_t i = 2; i < cap.size() && i < 5; ++i) {
+        if (i > 2) std::cout << ",";
         std::cout << WordParser::word_type_name(cap.words[i].type);
     }
     std::cout << "])\n";

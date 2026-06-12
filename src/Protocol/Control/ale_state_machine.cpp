@@ -52,7 +52,6 @@ ALEStateMachine::ALEStateMachine()
       calling_phase(CallingPhase::LBT),
       active_call_is_net(false),
       active_call_is_group(false),
-      group_scan_word_idx_(0),
       first_call_tx_ms(0),
       call_cycle_count(0),
       call_cycles_in_phase(0),
@@ -113,6 +112,7 @@ bool ALEStateMachine::process_event(ALEEvent event) {
         case ALEState::IDLE:
             if (event == ALEEvent::START_SCAN)       return transition_to(ALEState::SCANNING);
             if (event == ALEEvent::CALL_REQUEST)     return transition_to(ALEState::CALLING);
+            if (event == ALEEvent::CALL_DETECTED)    return transition_to(ALEState::HANDSHAKE);
             if (event == ALEEvent::SOUNDING_REQUEST) return transition_to(ALEState::SOUNDING);
             break;
 
@@ -130,7 +130,7 @@ bool ALEStateMachine::process_event(ALEEvent event) {
 
         case ALEState::HANDSHAKE:
             if (event == ALEEvent::HANDSHAKE_COMPLETE) return transition_to(ALEState::LINKED);
-            if (event == ALEEvent::LINK_TIMEOUT)       return transition_to(ALEState::SCANNING);
+            if (event == ALEEvent::LINK_TIMEOUT)       return transition_to(pre_link_state_);  // T-01
             break;
 
         case ALEState::LINKED:
@@ -158,8 +158,8 @@ bool ALEStateMachine::process_event(ALEEvent event) {
 // Periodic update
 // ============================================================================
 
-void ALEStateMachine::update(uint32_t current_time_ms) {
-    this->current_time_ms = current_time_ms;
+void ALEStateMachine::update(uint32_t now_ms) {
+    this->current_time_ms = now_ms;
 
     if (check_link_timeout()) {
         process_event(ALEEvent::LINK_TIMEOUT);
@@ -197,25 +197,29 @@ bool ALEStateMachine::transition_to(ALEState new_state) {
 
 void ALEStateMachine::enter_state(ALEState new_state) {
     switch (new_state) {
+        case ALEState::IDLE:
+            // Available state: RX on, fixed channel, wait for incoming calls.
+            if (rx_enabled_callback) rx_enabled_callback(true);
+            break;
+
         case ALEState::SCANNING:
             scanning_phase_          = ScanningPhase::HOPPING;
             allcall_pause_start_ms_  = 0;
             channel_manager_.start(current_time_ms);
+            if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
         case ALEState::CALLING:
             pre_link_state_                = previous_state;  // T-01: IDLE oder SCANNING
-            group_scan_word_idx_           = 0;
             link_start_time_ms             = current_time_ms;
-            // DD-006: first_call_tx_ms is the Trw-grid anchor; set at end of TUNING
-            // so that slot 0 fires exactly when the radio is tuned and ready (AC-LINK-017-2).
+            // first_call_tx_ms: informational TX-sequence start; set at end of
+            // TUNING when the radio is tuned and ready (AC-LINK-017-2).
             first_call_tx_ms               = 0;
             lbt_start_ms                   = current_time_ms;
             tune_start_ms                  = 0;
             call_cycle_count               = 0;
             call_cycles_in_phase           = 0;
             words_pending                  = 0;
-            leading_frame_idx_             = 0;
             listening_start_ms             = 0;
             response_to_detected           = false;
             response_rx_start_ms           = 0;
@@ -233,7 +237,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             break;
 
         case ALEState::HANDSHAKE:
-            pre_link_state_       = ALEState::SCANNING;  // T-01: nur von SCANNING erreichbar
+            pre_link_state_       = previous_state;  // T-01: Rückkehr in Zustand vor HANDSHAKE
             slot_wait_start_ms_   = 0;
             link_start_time_ms    = current_time_ms;
             // ── Handshake sub-state init (Fix 2/3/4) ─────────────────────
@@ -243,6 +247,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             caller_address.clear();
             hs_words_in_phase   = 0;
             hs_ack_start_ms     = 0;
+            hs_ack_to_ms        = 0;
             hs_ack_tis_rcvd     = false;
             contiguous_errors   = 0;
             words_pending       = 0;
@@ -263,6 +268,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             link_start_time_ms  = current_time_ms;
             last_word_time_ms   = current_time_ms;
             linked_terminating_ = false;
+            if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
         case ALEState::SOUNDING:
@@ -321,23 +327,27 @@ void ALEStateMachine::handle_scanning() {
  *
  * Phase sequence (Figure A-29):
  *
- *  LBT:           listen Twt (784 ms) — AC-LINK-017-1
- *  TUNING:        tune Tt (1045 ms) — AC-LINK-017-2; sets first_call_tx_ms
- *  SCANNING_CALL: TO first-word, 1 Trw/slot, C×2 slots total — AC-LINK-017-5/6
- *  LEADING_CALL:  full TO address × 2 (Tlc = 2×Tc) — AC-LINK-017-7
- *  MESSAGE:       optional AMD orderwire (stub: immediately falls to CONCLUSION)
- *  CONCLUSION:    TIS SAM — frame terminator; opens RX window → LISTENING
- *  LISTENING:     wait Twr (single-ch) / Twrt (multi-ch) for JOE's response
+ *  LBT:           listen Twt (784 ms) — AC-LINK-017-1            [protocol time]
+ *  TUNING:        tune Tt (1045 ms) — AC-LINK-017-2              [protocol time]
+ *                   → at tune-complete the COMPLETE deterministic TX sequence
+ *                     (scanning + leading + conclusion) is enqueued back-to-back
+ *                     via enqueue_call_sequence_().
+ *  SCANNING_CALL / GROUP_SCANNING_CALL / LEADING_CALL / CONCLUSION:
+ *                 passive — the audio layer consumes the queued symbol frames
+ *                 gap-free; each physically consumed frame fires
+ *                 on_word_complete(), which advances counters and phases.
+ *                 The Trw grid is a property of the sample stream itself
+ *                 (one word = 49 symbols × 8 ms = 392 ms), never of wall time.
+ *  LISTENING:     wait Twr/Twrt for JOE's response               [protocol time]
  *                   "TO SAM" → arm response tracking; "TIS JOE" → arm Tlww
  *                   Tlww elapsed → SENDING_ACK
- *  SENDING_ACK:   TO JOE + TIS SAM — third handshake frame (REQ-LINK-008)
+ *  SENDING_ACK:   TO JOE × 2 + TIS SAM (REQ-LINK-008), enqueued as one frame
  *                   complete → HANDSHAKE_COMPLETE → LINKED
  *
- * Responsibility of this function: decide WHEN to start the next TX.
- * Counter updates and phase transitions are in on_word_complete() (DD-009).
- *
- * Slot schedule (DD-006):
- *   next_tx = first_call_tx_ms + call_cycle_count × Trw_ms
+ * Responsibility of this function: protocol-time windows (LBT, TUNING,
+ * LISTENING) and starting RX-dependent TX (SENDING_ACK).  TX progress is
+ * never derived from time here — frame-completion events are the only TX
+ * clock (DD-009/DD-013; signal time vs. protocol time separation).
  */
 void ALEStateMachine::handle_calling() {
     switch (calling_phase) {
@@ -356,7 +366,8 @@ void ALEStateMachine::handle_calling() {
 
         // ── TUNING ───────────────────────────────────────────────────────────────
         // Blind tune Tt (1045 ms) — AC-LINK-017-2.
-        // Sets first_call_tx_ms (Trw-grid anchor) so slot 0 starts at tune-complete.
+        // At tune-complete the full TX sequence is handed to the modem so the
+        // audio layer can render it as one contiguous transmission.
         case CallingPhase::TUNING: {
             if ((current_time_ms - tune_start_ms) >= ALETimingConstants::Tt_ms) {
                 first_call_tx_ms     = current_time_ms;
@@ -364,86 +375,47 @@ void ALEStateMachine::handle_calling() {
                 // T-06: Net calls laufen über denselben SAM-Pfad wie Individual Calls
                 // T-11: Group calls nutzen GROUP_SCANNING_CALL (THRU/REP statt TO)
                 if (active_call_is_group && target_scan_channels > 0) {
-                    calling_phase        = CallingPhase::GROUP_SCANNING_CALL;
-                    group_scan_word_idx_ = 0;
+                    calling_phase = CallingPhase::GROUP_SCANNING_CALL;
                 } else if (target_scan_channels > 0) {
                     calling_phase = CallingPhase::SCANNING_CALL;
                 } else {
                     calling_phase = CallingPhase::LEADING_CALL;
                 }
+                enqueue_call_sequence_();
             }
             break;
         }
 
-        // ── SCANNING_CALL ─────────────────────────────────────────────────
-        // One TO word per slot (first address chunk only), no DATA/REP.
-        // Phase transitions in on_word_complete().
-        case CallingPhase::SCANNING_CALL: {
-            if (words_pending > 0) break;
-            const uint32_t next_tx = first_call_tx_ms
-                                   + call_cycle_count * ALETimingConstants::Trw_ms;
-            if (current_time_ms >= next_tx)
-                build_scanning_word();
+        // ── TX phases ─────────────────────────────────────────────────────
+        // All words were enqueued at tune-complete; the audio layer renders
+        // them without gaps.  Phase transitions happen in on_word_complete().
+        // MESSAGE is a zero-word AMD stub (AC-LINK-009-3): when implemented,
+        // message words are inserted into enqueue_call_sequence_().
+        case CallingPhase::SCANNING_CALL:
+        case CallingPhase::GROUP_SCANNING_CALL:
+        case CallingPhase::LEADING_CALL:
+        case CallingPhase::MESSAGE:
+        case CallingPhase::CONCLUSION:
             break;
-        }
-
-        // ── GROUP_SCANNING_CALL ───────────────────────────────────────────
-        // T-11: THRU/REP-Paar pro Slot (A.5.5.4.3), rotiert bis Tsc abgelaufen.
-        // Phase transitions in on_word_complete().
-        case CallingPhase::GROUP_SCANNING_CALL: {
-            if (words_pending > 0) break;
-            const uint32_t next_tx = first_call_tx_ms
-                                   + call_cycle_count * ALETimingConstants::Trw_ms;
-            if (current_time_ms >= next_tx)
-                build_group_scanning_word();
-            break;
-        }
-
-        // ── LEADING_CALL ──────────────────────────────────────────────────
-        // Full TO address twice (Tlc = 2 × Tc). Phase transitions in on_word_complete().
-        case CallingPhase::LEADING_CALL: {
-            if (words_pending > 0) break;
-            const uint32_t next_tx = first_call_tx_ms
-                                   + call_cycle_count * ALETimingConstants::Trw_ms;
-            if (current_time_ms >= next_tx)
-                build_leading_call_word();
-            break;
-        }
-
-        // ── MESSAGE ───────────────────────────────────────────────────────
-        // Stub (AC-LINK-009-3 not yet implemented): no words to send.
-        // Per DD-013, phase transitions are driven by on_word_complete(), not update().
-        // The stub synthesises the callback here so the transition stays in on_word_complete().
-        // TODO: when AMD is implemented, replace this with build_message_words() and
-        //       let on_word_complete() handle the word-count guard normally.
-        case CallingPhase::MESSAGE: {
-            on_word_complete();
-            break;
-        }
-
-        // ── CONCLUSION ────────────────────────────────────────────────────
-        // TIS SAM — sent once. RX window opens after last word in on_word_complete().
-        // Uses same Trw slot timer as LEADING_CALL so the conclusion starts exactly
-        // at call_cycle_count × Trw from first_call_tx_ms, not immediately after
-        // the last leading-word's 3rd copy (which finishes 132 ms before the slot).
-        case CallingPhase::CONCLUSION: {
-            if (words_pending > 0) break;
-            if (call_cycles_in_phase == 0) {
-                const uint32_t next_tx = first_call_tx_ms
-                                       + call_cycle_count * ALETimingConstants::Trw_ms;
-                if (current_time_ms >= next_tx)
-                    build_conclusion_words();
-            }
-            break;
-        }
 
         // ── LISTENING ─────────────────────────────────────────────────────
         // Three distinct sub-phases driven by response detection:
         //
         // (a) !response_to_detected:
-        //     Waiting for JOE's first "TO SAM" word within Trc_min + Trw.
-        //     JOE's minimum response delay = Tlww (392) + LBT (392) + Trw (392) = 3×Trw.
-        //     + one extra Trw margin for WinMM audio buffer latency.
+        //     Waiting for JOE's first "TO SAM" word.  This is a TX→RX window:
+        //     it spans from SAM's own conclusion (a local TX event) to JOE's
+        //     first received word, so it accumulates the full round-trip audio
+        //     latency 2×L on top of JOE's protocol turnaround.
+        //
+        //     JOE's turnaround after SAM's conclusion ends (T0):
+        //       Tlww (392, post-conclusion wait)
+        //       + Trw  (392, JOE's CHANNEL_CHECK / LBT)
+        //       + Trw  (392, JOE transmits its first response word)
+        //       → SAM's pipeline recognises it at  T0 + 1176 + 2×L.
+        //     Twrt_slow (1960) covers the 1176 turnaround with margin; +Tdrw
+        //     (784) absorbs ~390 ms/direction of WASAPI + virtual-cable latency.
+        //     Identical for single- and multi-channel: the per-channel responder
+        //     turnaround does not depend on the caller's channel count.
         //     Timeout → AC-LINK-019-6 → try_next_calling_channel().
         //
         // (b) response_to_detected && tlww_start_ms == 0:
@@ -455,12 +427,11 @@ void ALEStateMachine::handle_calling() {
         //     Tlww elapsed → close RX, → SENDING_ACK.
         case CallingPhase::LISTENING: {
             if (!response_to_detected) {
-                // (a) — Trc_min + Trw window (= 4×Trw = 1568 ms).
-                // AC-LINK-019-6/4: Twr for single channel, Twrt for multi.
-                // For this SW decoder: JOE needs Tlww + LBT + decode = 3×Trw before
-                // SAM can detect "TO SAM"; +1×Trw absorbs WinMM round-trip latency.
-                const uint32_t wait_ms = ALETimingConstants::Trc_min_ms
-                                       + ALETimingConstants::Trw_ms; // 4×Trw = 1568 ms
+                // (a) — Twrt_slow + Tdrw: responder turnaround + decode + 2×L latency.
+                // AC-LINK-019-6: abort if TO_SELF not decoded within this window.
+                const uint32_t wait_ms =
+                      static_cast<uint32_t>(0.5 + ale::Twrt_slow_ms)  // 1960 ms
+                    + static_cast<uint32_t>(ale::Tdrw_ms);            // + 784 ms = 2744 ms
                 if ((current_time_ms - listening_start_ms) >= wait_ms)
                     try_next_calling_channel(); // AC-LINK-019-6
             } else if (tlww_start_ms == 0) {
@@ -562,18 +533,48 @@ void ALEStateMachine::handle_handshake() {
             break;
 
         // ── WAIT_ACK ─────────────────────────────────────────────────────
-        // Wait Trc_min for calling station's ACK frame (TO JOE × 2 + TIS SAM).
-        // SAM needs Tlww (392) + first ACK word (392) = 2×Trw before JOE sees it;
-        // +1×Trw absorbs WinMM round-trip latency → 3×Trw = 1176 ms total.
-        // Incoming words are processed by process_received_word().
+        // Wait for SAM's ACK frame (TO JOE × 2 + TIS SAM — Figure A-31).
+        // Per A.5.5.3.4 + NOTE 1 this has two sub-phases, mirroring SAM's
+        // LISTENING(a)/(b)/(c).  All windows are measured from JOE's response
+        // end (Rb = hs_ack_start_ms), a TX→RX boundary that carries the full
+        // round-trip audio latency 2×L on top of the protocol path.
+        //
+        // (1) hs_ack_to_ms == 0 — "TO JOE" must *start* within Twr (the narrow
+        //     window of NOTE 1 that prevents the ACK being mistaken for a new
+        //     call → ping-pong).  SAM's ACK turnaround, measured from Rb:
+        //       SAM detects JOE conclusion ≈ Rb + L
+        //       + Tlww (392) → SAM starts ACK
+        //       + Trw  (392) first "TO JOE" word on air
+        //       + L + Trw (SW-pipeline decode) → JOE recognises ≈ Rb + 784 + 2L
+        //     SAM's ACK path has no CHANNEL_CHECK (unlike JOE's response), so
+        //     Twr_slow + Tdrw = 1699 ms suffices (covers ~450 ms/dir latency).
+        //     Timeout → abort; JOE returns to its pre-link state and a genuinely
+        //     late "TO JOE" is then handled as a fresh call (NOTE 1).
+        //
+        // (2) hs_ack_to_ms > 0 — "TO JOE" seen; wait for the "TIS SAM"
+        //     conclusion, now governed by the frame limit (5×Trw), not Twr.
+        //
+        // (3) hs_ack_tis_rcvd — Tlww settle → LINKED.
         case HandshakePhase::WAIT_ACK: {
-            // Trc_min timeout: no ACK received → abort (A.5.5.3.4 / AC-LINK-020-2)
-            if ((current_time_ms - hs_ack_start_ms) >= ALETimingConstants::Trc_min_ms) {
-                SM_TRACE("[TRACE] handle_handshake: WAIT_ACK Trc_min timeout → LINK_TIMEOUT\n");
-                process_event(ALEEvent::LINK_TIMEOUT);
-                return;
+            if (hs_ack_to_ms == 0) {
+                // (1) — Twr_slow + Tdrw: ACK start must arrive within the window.
+                const uint32_t wait_ms =
+                      ale::Twr_slow_int                              //  915 ms
+                    + static_cast<uint32_t>(ale::Tdrw_ms);           // + 784 ms = 1699 ms
+                if ((current_time_ms - hs_ack_start_ms) >= wait_ms) {
+                    SM_TRACE("[TRACE] handle_handshake: WAIT_ACK Twr timeout (no ACK start) → LINK_TIMEOUT\n");
+                    process_event(ALEEvent::LINK_TIMEOUT);
+                    return;
+                }
+            } else if (!hs_ack_tis_rcvd) {
+                // (2) — waiting for "TIS SAM" conclusion (5×Trw frame budget).
+                if ((current_time_ms - hs_ack_to_ms) >= 5u * ALETimingConstants::Trw_ms) {
+                    SM_TRACE("[TRACE] handle_handshake: WAIT_ACK no conclusion → LINK_TIMEOUT\n");
+                    process_event(ALEEvent::LINK_TIMEOUT);
+                    return;
+                }
             }
-            // TIS [caller] received + Tlww elapsed → LINKED (A.5.5.3.4)
+            // (3) TIS [caller] received + Tlww elapsed → LINKED (A.5.5.3.4)
             if (hs_ack_tis_rcvd && hs_tlww_start_ms > 0 &&
                 (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tlww_ms) {
                 SM_TRACE("[TRACE] handle_handshake: ACK Tlww elapsed → LINKED\n");
@@ -629,11 +630,11 @@ const Channel* ALEStateMachine::get_current_channel() const {
     return channel_manager_.current();
 }
 
-bool ALEStateMachine::initiate_call(const std::string& to_address) {
+bool ALEStateMachine::initiate_call(const std::string& target) {
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
         return false;
 
-    active_call_to        = to_address;
+    active_call_to        = target;
     active_call_from      = address_book.get_self_address();
     active_call_is_net    = false;
     active_call_is_group  = false;
@@ -645,8 +646,8 @@ bool ALEStateMachine::initiate_call(const std::string& to_address) {
     // scanning_frame_   — 1 word (first 3 chars only, A.5.2.5.1)
     // leading_frame_    — full TO address × 2 (Tlc = 2 × Tc, A.5.5.3.1)
     // conclusion_frame_ — own TIS address, sent once (A.5.2.3.2.2)
-    scanning_frame_   = ALEFrameBuilder::scanning_individual(to_address);
-    leading_frame_    = ALEFrameBuilder::leading_individual(to_address);
+    scanning_frame_   = ALEFrameBuilder::scanning_individual(target);
+    leading_frame_    = ALEFrameBuilder::leading_individual(target);
     conclusion_frame_ = ALEFrameBuilder::conclusion(address_book.get_self_address());
 
     return process_event(ALEEvent::CALL_REQUEST);
@@ -855,6 +856,13 @@ void ALEStateMachine::react_handshake(const WordEvent& ev, const ALEWord& word) 
         }
     } else if (handshake_phase == HandshakePhase::WAIT_ACK) {
         switch (ev.type) {
+        case WordEvent::Type::TO_SELF:
+            // "TO JOE" — start of SAM's ACK frame (A.5.5.3.4).  Records the
+            // arrival so handle_handshake() can switch from the narrow Twr
+            // start-window to the frame-limited conclusion wait.
+            if (hs_ack_to_ms == 0)
+                hs_ack_to_ms = current_time_ms;
+            break;
         case WordEvent::Type::TIS_CALLER:
             if (!hs_ack_tis_rcvd) {
                 hs_ack_tis_rcvd  = true;
@@ -902,6 +910,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
     const WordEvent ev = decoder_.decode(word, ctx);
 
     switch (current_state) {
+        case ALEState::IDLE:      react_scanning(ev);        break;
         case ALEState::SCANNING:  react_scanning(ev);        break;
         case ALEState::CALLING:   react_calling(ev);         break;
         case ALEState::HANDSHAKE: react_handshake(ev, word); break;
@@ -968,7 +977,7 @@ uint32_t ALEStateMachine::compute_calling_timeout_ms() const {
         calling_channels.empty() ? 1u : static_cast<uint32_t>(calling_channels.size()),
         target_scan_channels,
         static_cast<uint32_t>(leading_frame_.size()),
-        calling_channels.size() > 1
+        static_cast<uint32_t>(conclusion_frame_.size())
     };
     return ale::calc_calling_timeout_ms(p);
 }
@@ -992,7 +1001,6 @@ void ALEStateMachine::try_next_calling_channel() {
         call_cycle_count     = 0;
         call_cycles_in_phase = 0;
         words_pending        = 0;
-        leading_frame_idx_   = 0;
         listening_start_ms   = 0;
         response_to_detected = false;
         response_rx_start_ms = 0;
@@ -1008,53 +1016,51 @@ void ALEStateMachine::try_next_calling_channel() {
 }
 
 // ============================================================================
-// Word builders — one per calling phase
+// TX sequence builders
 // ============================================================================
 //
-// All build_* functions route through transmit_word() / transmit_words().
+// All builders route through transmit_word() / transmit_words().
 // transmit_word() is the single exit point: it stamps the current timestamp
 // and fires transmit_callback.  No other code sets timestamp_ms on TX words.
 //
-// For the calling path (scanning / leading / conclusion) the words are
-// pre-computed in initiate_call() via AddressEncoder and stored in
-// scanning_word_ / leading_words_ / conclusion_words_.
+// For the calling path the full sequence (scanning / leading / conclusion)
+// is pre-computed in initiate_call() via ALEFrameBuilder and enqueued in one
+// piece by enqueue_call_sequence_() at tune-complete.
 //
 // For the receive path (ACK, response) the remote address is not known at
 // initiate_call() time, so AddressEncoder::encode() is called at send time.
 
-void ALEStateMachine::build_group_scanning_word() {
-    // T-11: Sendet das nächste Wort aus dem THRU/REP-Paar (group_scan_frame_).
-    // Rotiert automatisch: index wraps nach group_scan_frame_.size().
-    const auto& words = group_scan_frame_.words();
-    if (!words.empty()) {
-        transmit_word(words[group_scan_word_idx_ % words.size()]);
-        ++group_scan_word_idx_;
+void ALEStateMachine::enqueue_call_sequence_() {
+    // The complete calling TX sequence is deterministic at tune-complete:
+    //   scanning section (C × 2 Trw slots — A.5.2.5.1 / A.5.5.4.3)
+    //   + leading call (pre-doubled by ALEFrameBuilder, Tlc = 2 × Tc)
+    //   + conclusion (TIS own address, A.5.2.3.2.2).
+    // All words are enqueued back-to-back so the audio layer renders one
+    // contiguous transmission; the Trw grid emerges from the sample stream
+    // itself (49 symbols × 8 ms per word).  on_word_complete() — fired once
+    // per frame physically consumed by the audio layer — advances the phase
+    // counters against exactly these word counts.
+    if (target_scan_channels > 0) {
+        if (active_call_is_group) {
+            // T-11: THRU/REP-Paar rotiert über C × 2 Slots (A.5.5.4.3)
+            const auto& pair = group_scan_frame_.words();
+            if (!pair.empty()) {
+                const uint32_t total = target_scan_channels * 2u
+                                     * static_cast<uint32_t>(pair.size());
+                for (uint32_t i = 0; i < total; ++i)
+                    transmit_word(pair[i % pair.size()]);
+            }
+        } else if (!scanning_frame_.empty()) {
+            // First 3 chars of the destination only; no DATA/REP in the
+            // scanning section (A.5.2.5.1).
+            const uint32_t tsc_slots = target_scan_channels * 2u;
+            for (uint32_t i = 0; i < tsc_slots; ++i)
+                transmit_word(scanning_frame_.words()[0]);
+        }
     }
-}
-
-void ALEStateMachine::build_scanning_word() {
-    // Transmit the single word in scanning_frame_ for the current Trw slot.
-    // scanning_frame_ holds only the first 3 chars of the destination address
-    // (A.5.2.5.1).  DATA/REP extension words are forbidden in the scanning
-    // section; the full address is sent only in the leading call.
-    // on_word_complete() counts slots and transitions to LEADING_CALL after
-    // C × 2 slots.
-    transmit_word(scanning_frame_.words()[0]);
-}
-
-void ALEStateMachine::build_leading_call_word() {
-    // Send exactly one word from the pre-doubled leading_frame_ per Trw slot.
-    // leading_frame_idx_ advances through the sequence; on_word_complete() counts
-    // each word individually against leading_frame_.size() total slots (Tlc = 2×Tc).
-    const auto& words = leading_frame_.words();
-    if (leading_frame_idx_ < words.size())
-        transmit_word(words[leading_frame_idx_++]);
-}
-
-void ALEStateMachine::build_conclusion_words() {
-    // Transmit conclusion_frame_ once.
-    // conclusion_frame_ encodes the own address with TIS preamble
-    // (A.5.2.3.2.2), same DATA/REP scheme as the leading frame.
+    transmit_words(leading_frame_.words());
+    // AMD orderwire (MESSAGE phase, AC-LINK-009-3): stub — message words
+    // would be inserted here, between leading call and conclusion.
     transmit_words(conclusion_frame_.words());
 }
 
@@ -1093,7 +1099,7 @@ void ALEStateMachine::transmit_words(const std::vector<ALEWord>& words) {
 }
 
 // ============================================================================
-// on_word_complete — fired by ALE2GModem after all 3 copies of one word sent
+// on_word_complete — called by ALEController once per symbol frame rendered by the audio thread
 // ============================================================================
 
 void ALEStateMachine::on_word_complete() {
@@ -1119,15 +1125,6 @@ void ALEStateMachine::on_word_complete() {
         return;
     }
 
-    // ── MESSAGE stub guard ────────────────────────────────────────────────
-    // MESSAGE sends 0 words; transition to CONCLUSION without touching word counters.
-    // Triggered synthetically by handle_calling() per DD-013.
-    if (current_state == ALEState::CALLING && calling_phase == CallingPhase::MESSAGE) {
-        calling_phase        = CallingPhase::CONCLUSION;
-        call_cycles_in_phase = 0;
-        return;
-    }
-
     // ── CALLING path (SAM side) ───────────────────────────────────────────
     if (current_state == ALEState::CALLING) {
         --words_pending;
@@ -1143,7 +1140,6 @@ void ALEStateMachine::on_word_complete() {
                              + std::to_string(tsc_slots) + ")\n");
                     calling_phase        = CallingPhase::LEADING_CALL;
                     call_cycles_in_phase = 0;
-                    leading_frame_idx_   = 0;
                 }
                 break;
             }
@@ -1157,7 +1153,6 @@ void ALEStateMachine::on_word_complete() {
                     SM_TRACE("[TRACE] on_word_complete: GROUP_SCANNING_CALL → LEADING_CALL\n");
                     calling_phase        = CallingPhase::LEADING_CALL;
                     call_cycles_in_phase = 0;
-                    leading_frame_idx_   = 0;
                 }
                 break;
             }
@@ -1165,25 +1160,22 @@ void ALEStateMachine::on_word_complete() {
             case CallingPhase::LEADING_CALL: {
                 // leading_frame_ was pre-doubled by ALEFrameBuilder::leading_individual();
                 // its size already equals 2 × wpa (Tlc = 2 × Tc = 2 × wpa × Trw).
+                // AMD orderwire (MESSAGE phase) is a stub: when implemented, the
+                // message words are inserted into enqueue_call_sequence_() and the
+                // MESSAGE phase is counted here like any other TX phase.
                 const uint32_t tlc_slots = static_cast<uint32_t>(leading_frame_.size());
                 if (call_cycles_in_phase >= tlc_slots) {
-                    SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → "
-                             + std::string(pending_message.type != PendingMessage::Type::NONE
-                                           ? "MESSAGE" : "CONCLUSION")
-                             + " (tlc_slots=" + std::to_string(tlc_slots) + ")\n");
-                    calling_phase = (pending_message.type != PendingMessage::Type::NONE)
-                                    ? CallingPhase::MESSAGE
-                                    : CallingPhase::CONCLUSION;
+                    SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → CONCLUSION (tlc_slots="
+                             + std::to_string(tlc_slots) + ")\n");
+                    calling_phase        = CallingPhase::CONCLUSION;
                     call_cycles_in_phase = 0;
                 }
                 break;
             }
 
-            case CallingPhase::MESSAGE: {
-                // Unreachable: the MESSAGE guard at the top of on_word_complete()
-                // intercepts the stub call before words_pending is decremented.
+            case CallingPhase::MESSAGE:
+                // Unreachable — AMD stub sends zero words (see enqueue_call_sequence_).
                 break;
-            }
 
             case CallingPhase::CONCLUSION: {
                 const uint32_t conclusion_slots =
@@ -1200,14 +1192,10 @@ void ALEStateMachine::on_word_complete() {
             }
 
             case CallingPhase::SENDING_ACK: {
-                 // ACK frame (Figure A-31): TO [to_address] × 2 + TIS [self_address]
-                 // to_address is set during the LISTENING phase; encode here to
-                // get the exact word count matching build_ack_words().
-                 const uint32_t ack_slots =
-                     2u * static_cast<uint32_t>(
-                              AddressEncoder::encode(to_address, PreambleType::TO).size())
-                     + static_cast<uint32_t>(conclusion_frame_.size());
-                if (call_cycles_in_phase >= ack_slots) {
+                // ACK frame (Figure A-31): TO [to_address] × 2 + TIS [self_address].
+                // Completion tied to the actual TX queue draining (words_pending == 0)
+                // rather than a re-derived slot count, so any address length works.
+                if (words_pending == 0) {
                     SM_TRACE("[TRACE] on_word_complete: SENDING_ACK → LINKED\n");
                     if (operator_callback)
                         operator_callback(OperatorEvent::LINK_ESTABLISHED);
@@ -1244,13 +1232,14 @@ void ALEStateMachine::on_word_complete() {
         if (hs_words_in_phase >= resp_slots) {
             if (pending_reject_) {
                 // Rejection sent — SAM expects no ACK; return to SCANNING.
-                SM_TRACE("[TRACE] on_word_complete: SENDING_RESPONSE (TWAS reject) → SCANNING\n");
+                SM_TRACE("[TRACE] on_word_complete: SENDING_RESPONSE (TWAS reject) → pre_link_state\n");
                 pending_reject_ = false;
                 process_event(ALEEvent::LINK_TIMEOUT);
             } else {
                 SM_TRACE("[TRACE] on_word_complete: SENDING_RESPONSE → WAIT_ACK\n");
                 handshake_phase  = HandshakePhase::WAIT_ACK;
                 hs_ack_start_ms  = current_time_ms;
+                hs_ack_to_ms     = 0;
                 hs_tlww_start_ms = 0;
                 hs_ack_tis_rcvd  = false;
                 if (rx_enabled_callback) rx_enabled_callback(true);

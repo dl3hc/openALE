@@ -6,14 +6,18 @@ Testing/
 .obsidian/
 .clinerules/
 .clineignore
+.agents/
+.claude/
 
 # Temporary / local files
 memory-bank/
 prompts/
 python/
+graphify-out/
 progress.md
 issues_preview/
 issues_preview.zip
 FEATURES_DESIGN.md
 REQUIREMENTS.md
 pc_ale_overview.md
+ALE_standard_188_141B_extracted.json

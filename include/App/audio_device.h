@@ -2,28 +2,34 @@
  * \file App/audio_device.h
  * \brief Platform audio I/O abstraction for ALE CLI (8 kHz, mono, 16-bit PCM).
  *
- * Usage pattern (main loop):
+ * Architecture
+ * ────────────
+ * The audio device is the ONLY real-time execution boundary.  A dedicated audio
+ * thread (WASAPI event-driven on Windows, or a tick-simulated NullDevice on other
+ * platforms) pulls symbol frames from a registered source, renders PCM via an
+ * internal ToneGenerator, and feeds the hardware.
  *
- *   auto dev = ale::make_audio_device();
- *   dev->open();
+ * TX data flow (pull model):
  *
- *   // From the TX callback of ALEController:
- *   dev->write_tx(pcm_samples, count);
+ *   Main thread: modem.enqueue_word(w)        — builds symbol frame, stores it
+ *   Audio thread: sym_pull(out_49)            — copies 49 symbols into out_49
+ *   Audio thread: ToneGenerator.render(syms)  — produces 8 kHz PCM
+ *   Audio thread: Resampler → WASAPI buffer   — hardware playback
  *
- *   // In the main loop at ~1 ms intervals:
- *   std::vector<int16_t> rx;
- *   dev->tick(rx);               // drains captured audio, manages buffers
- *   ctrl.feed_audio(rx.data(), rx.size());
+ * Main-loop contract:
+ *   set_symbol_source(fn)  — register modem pull function; call once after open()
+ *   arm_frame_complete(cb) — arm one-shot callback fired after next frame renders
+ *   tick(rx_out)           — drain captured audio; fires armed completions (main-loop)
  *
- * Platform implementations:
- *   Windows  — WinMM waveIn/waveOut with polling (CALLBACK_NULL)
- *   Other    — NullDevice (no-op; useful for offline / test builds)
+ * Forbidden:
+ *   write_tx() / push_symbol_frame() — push-based TX is not supported.
  *
  * Audio format: PCM, 1 channel, 8000 Hz, 16-bit signed integers.
  */
 
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -40,13 +46,6 @@ public:
 
     /**
      * Open audio input and output.
-     *
-     * \param in_device   Substring of the waveIn  device name ("" = system default).
-     * \param out_device  Substring of the waveOut device name ("" = same as in_device).
-     *
-     * Single-device shortcut:  open("CABLE-A")       — same device for both directions.
-     * Split-device loopback:   open("CABLE-B Output", "CABLE-A Input")
-     *                                                 — TX → CABLE-A, RX ← CABLE-B.
      * \return true on success
      */
     virtual bool open(const std::string& in_device  = "",
@@ -56,25 +55,40 @@ public:
     virtual void close() = 0;
 
     /**
-     * Queue PCM samples for audio output.
-     * Thread-safe; may be called from any thread.
+     * Register the symbol pull function.
+     *
+     * fn(out_49) is called by the audio thread to obtain the next 49-symbol frame.
+     * Returns true and fills out_49 when a frame is available; false for silence.
+     *
+     * Must be called from the main thread, before TX begins.
+     * Thread-safe with respect to the audio thread.
      */
-    virtual void write_tx(const int16_t* samples, uint32_t count) = 0;
+    virtual void set_symbol_source(std::function<bool(uint8_t*)> fn) = 0;
+
+    /**
+     * Arm a one-shot frame-completion notification.
+     *
+     * cb fires (from the main-loop thread, via tick()) after the NEXT symbol frame
+     * pulled from the symbol source has been fully written into the hardware render
+     * buffer.  Calls are FIFO: completions fire in the order they are armed.
+     *
+     * On NullDevice the callback is deferred to the next tick() call that drains
+     * the pending symbol frame.
+     */
+    virtual void arm_frame_complete(std::function<void()> cb) = 0;
 
     /**
      * Process done audio buffers and collect captured input.
-     * Must be called from the main loop.  Non-blocking.
-     * \param rx_out  Captured samples are appended here.
+     * Must be called from the main loop at ~1 ms intervals.  Non-blocking.
+     * Also fires armed frame-completion callbacks when their frames have rendered.
+     * \param rx_out  Captured 8 kHz samples are appended here.
      */
     virtual void tick(std::vector<int16_t>& rx_out) = 0;
 
     /** True if the device was successfully opened. */
     virtual bool is_open() const = 0;
 
-    /**
-     * Enumerate available audio device names.
-     * Each entry is a human-readable name that can be passed to open().
-     */
+    /** Enumerate available audio device names. */
     virtual std::vector<std::string> list_devices() const = 0;
 };
 

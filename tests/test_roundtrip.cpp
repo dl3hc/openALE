@@ -15,6 +15,7 @@
 #include "FEC/ale_fec_codec.h"
 #include "Word/ale_word.h"
 #include "FSK/ale_waveform.h"
+#include "FSK/tone_generator.h"
 
 #include <cmath>
 #include <cstdint>
@@ -122,15 +123,10 @@ int main()
 
     ALEStateMachine sm;
     ALE2GModem      modem;
+    ToneGenerator   gen;
 
     sm.set_transmit_callback([&](const ALEWord& w) {
         modem.enqueue_word(w);
-    });
-    modem.set_tx_callback([&](const int16_t* s, uint32_t n) {
-        pcm.insert(pcm.end(), s, s + n);
-    });
-    modem.set_word_done_callback([&]() {
-        sm.on_word_complete();
     });
 
     sm.set_self_address("JOE");
@@ -145,7 +141,13 @@ int main()
     uint32_t t = 0;
     while (t < timeout_ms) {
         sm.update(t);
-        modem.update(t);
+        uint8_t syms[SYMBOLS_PER_WORD];
+        while (modem.pull_symbol_frame(syms)) {
+            const size_t off = pcm.size();
+            pcm.resize(off + SYMBOLS_PER_WORD * FFT_SIZE);
+            gen.generate_symbols(syms, SYMBOLS_PER_WORD, pcm.data() + off, 0.7f);
+            sm.on_word_complete();
+        }
         t += tick_ms;
         if (sm.get_calling_phase() == CallingPhase::LISTENING)
             break;
