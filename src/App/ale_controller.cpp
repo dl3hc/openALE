@@ -46,8 +46,10 @@ void ALEController::wire_callbacks()
     });
 
     // SM RX-enable control → pipeline (SM disables RX during TX phases)
-    sm_.set_rx_enabled_callback([this](bool on) {
-        demodulator_.set_enabled(on);
+    // PTT transitions mirror RX enable: RX off = TX active = PTT on.
+    sm_.set_rx_enabled_callback([this](bool rx_on) {
+        demodulator_.set_enabled(rx_on);
+        emit_event(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
     });
 }
 
@@ -158,6 +160,7 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     if (from == ALEState::LINKED && to != ALEState::LINKED) {
         if (on_link_terminated)
             on_link_terminated("Link state exited");
+        emit_event(pal::EventType::ALE_LINK_TERMINATED, "Link state exited");
     }
 }
 
@@ -173,18 +176,22 @@ void ALEController::on_operator_event(OperatorEvent ev)
                 : sm_.get_caller_address();
             emit_status("LINK ESTABLISHED with " + peer);
             if (on_link_established) on_link_established(peer);
+            emit_event(pal::EventType::ALE_LINK_ESTABLISHED, peer);
             break;
         }
         case OperatorEvent::CALL_REJECTED:
             emit_status("Call rejected by remote station (TWAS)");
             if (on_link_terminated) on_link_terminated("Call rejected");
+            emit_event(pal::EventType::ALE_LINK_TERMINATED, "Call rejected");
             break;
         case OperatorEvent::NO_CHANNELS_LEFT:
             emit_status("No reply — all calling channels exhausted");
             if (on_link_terminated) on_link_terminated("No reply");
+            emit_event(pal::EventType::ALE_LINK_TERMINATED, "No reply");
             break;
         case OperatorEvent::EMERGENCY_ACTIVE:
             emit_status("Emergency manual control is now active");
+            emit_event(pal::EventType::SYSTEM_WARNING, "Emergency manual control active");
             break;
     }
 }
@@ -212,6 +219,7 @@ void ALEController::on_received_word(const ALEWord& word)
         if (word.type == PreambleType::TIS && last_caller_.empty()) {
             last_caller_ = chunk;
             if (on_call_received) on_call_received(last_caller_);
+            emit_event(pal::EventType::ALE_CALL_RECEIVED, last_caller_);
         } else if ((word.type == PreambleType::DATA || word.type == PreambleType::REP)
                    && !last_caller_.empty()) {
             last_caller_ += chunk;
@@ -219,6 +227,25 @@ void ALEController::on_received_word(const ALEWord& word)
     }
 
     sm_.process_received_word(word);
+}
+
+void ALEController::set_event_handler(pal::IEventHandler* handler)
+{
+    event_handler_ = handler;
+}
+
+void ALEController::emit_event(pal::EventType type, const std::string& msg, int32_t code)
+{
+    if (!event_handler_) return;
+    pal::Event ev{};
+    ev.type         = type;
+    ev.source       = "ALEController";
+    ev.message      = msg;
+    ev.code         = code;
+    ev.timestamp_ms = 0;
+    ev.data         = nullptr;
+    ev.data_size    = 0;
+    event_handler_->emit(ev);
 }
 
 void ALEController::emit_status(const std::string& msg)

@@ -31,7 +31,7 @@
  *        from tick() for offline use.
  */
 
-#include "App/audio_device.h"
+#include "PAL/audio_driver.h"
 #include "App/resampler.h"
 #include "FSK/tone_generator.h"
 #include "FSK/ale_waveform.h"
@@ -67,7 +67,7 @@
 
 namespace ale {
 
-static constexpr uint32_t MODEM_RATE    = AudioDevice::SAMPLE_RATE;   // 8 kHz
+static constexpr uint32_t MODEM_RATE = 8000;
 
 // WASAPI shared-mode buffer duration: 200 ms of headroom.
 static constexpr REFERENCE_TIME REQ_BUFFER_HNS = 2000000;  // 200 ms in 100-ns units
@@ -111,7 +111,7 @@ static bool format_is_float(const WAVEFORMATEX* f)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-class WasapiDevice : public AudioDevice {
+class WasapiDevice : public pal::IAudioDriver {
 public:
     ~WasapiDevice() override { close(); }
 
@@ -636,17 +636,17 @@ int16_t WasapiDevice::read_frame_mono(const BYTE* data, UINT32 i) const
     }
 }
 
-// ── factory ───────────────────────────────────────────────────────────────────
-
-std::unique_ptr<AudioDevice> make_audio_device()
-{
-    return std::make_unique<WasapiDevice>();
-}
-
 } // namespace ale
 
+namespace pal {
+std::unique_ptr<IAudioDriver> create_audio_driver()
+{
+    return std::make_unique<ale::WasapiDevice>();
+}
+} // namespace pal
+
 // ─────────────────────────────────────────────────────────────────────────────
-#else  // non-Windows: NullDevice
+#else  // non-Windows: NullAudioDriver
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include <cstdio>
@@ -654,13 +654,10 @@ std::unique_ptr<AudioDevice> make_audio_device()
 
 namespace ale {
 
-// NullDevice simulates the pull model from tick():
-//   arm_frame_complete() enqueues a deferred callback.
-//   tick() pulls any pending symbol frames then fires one callback per frame.
-class NullDevice : public AudioDevice {
+class NullDevice : public pal::IAudioDriver {
     bool open_ = false;
-    std::function<bool(uint8_t*)>   sym_pull_;
-    std::queue<std::function<void()>> pending_completions_;
+    std::function<bool(uint8_t*)>      sym_pull_;
+    std::queue<std::function<void()>>  pending_completions_;
 
 public:
     bool open(const std::string& = "", const std::string& = "") override {
@@ -682,7 +679,6 @@ public:
         if (cb) pending_completions_.push(std::move(cb));
     }
 
-    // Simulate audio callback: pull symbol frames and fire completions in tick().
     void tick(std::vector<int16_t>& /*rx_out*/) override {
         if (!sym_pull_) return;
         uint8_t syms[SYMBOLS_PER_WORD];
@@ -698,11 +694,13 @@ public:
     std::vector<std::string> list_devices() const override { return {}; }
 };
 
-std::unique_ptr<AudioDevice> make_audio_device()
-{
-    return std::make_unique<NullDevice>();
-}
-
 } // namespace ale
+
+namespace pal {
+std::unique_ptr<IAudioDriver> create_audio_driver()
+{
+    return std::make_unique<ale::NullDevice>();
+}
+} // namespace pal
 
 #endif

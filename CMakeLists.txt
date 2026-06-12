@@ -163,6 +163,20 @@ target_include_directories(ale_channel PUBLIC
 
 target_link_libraries(ale_channel ale_stores ale_lqa ale_protocol ale_fsk_core ale_fec)
 
+# ── PAL — platform abstraction implementations ────────────────────────────────
+
+add_library(ale_pal
+    src/PAL/timer.cpp
+)
+
+target_include_directories(ale_pal PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+if(WIN32)
+    target_link_libraries(ale_pal winmm)
+endif()
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 # ── App layer (ALEController + ALERxPipeline) ─────────────────────────────────
@@ -203,7 +217,7 @@ target_include_directories(ale_cli PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(ale_cli ale_app_core ale_audio_device ale_stores)
+target_link_libraries(ale_cli ale_app_core ale_audio_device ale_stores ale_pal)
 
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -32,6 +32,7 @@
 #include "Protocol/Control/ale_state_machine.h"
 #include "Modem/ale2g_modem.h"
 #include "App/audio_device.h"
+#include "PAL/events.h"
 #include <functional>
 #include <string>
 #include <vector>
@@ -68,6 +69,17 @@ public:
 
     /** Ordered list of channels to try on no-reply (multi-channel calling). */
     void set_calling_channels(const std::vector<Channel>& channels);
+
+    /**
+     * Attach a PAL event handler to receive structured ALE events.
+     *
+     * When set, the controller emits pal::Event objects alongside the individual
+     * callbacks (on_link_established, on_call_received, etc.).  Both mechanisms
+     * are active simultaneously; the handler does not replace the callbacks.
+     *
+     * Passing nullptr detaches the handler.  Ownership stays with the caller.
+     */
+    void set_event_handler(pal::IEventHandler* handler);
 
     // ── Operator actions ────────────────────────────────────────────────────
 
@@ -162,15 +174,17 @@ private:
     ALEStateMachine          sm_;
     ALE2GModem::Modulator    modulator_;
     ALE2GModem::Demodulator  demodulator_;
-    AudioDevice*    audio_device_ = nullptr;
-    std::string     self_addr_;
-    std::string     last_caller_;   // caller address as it arrives (TIS + DATA)
+    AudioDevice*             audio_device_   = nullptr;
+    pal::IEventHandler*      event_handler_  = nullptr;
+    std::string              self_addr_;
+    std::string              last_caller_;   // caller address as it arrives (TIS + DATA)
 
     void wire_callbacks();
     void on_sm_state_change(ALEState from, ALEState to);
     void on_operator_event(OperatorEvent ev);
     void on_received_word(const ALEWord& word);
     void emit_status(const std::string& msg);
+    void emit_event(pal::EventType type, const std::string& msg = "", int32_t code = 0);
 };
 
 } // namespace ale

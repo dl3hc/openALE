@@ -54,14 +54,12 @@
 
 #include "App/ale_controller.h"
 #include "App/audio_device.h"
+#include "PAL/timer.h"
 
 #ifdef _WIN32
 #include <windows.h>
-#include <timeapi.h>
-#pragma comment(lib, "winmm.lib")
 #endif
 
-#include <chrono>
 #include <thread>
 #include <csignal>
 #include <cstdio>
@@ -94,16 +92,6 @@ static void stdin_reader()
             std::lock_guard<std::mutex> lk(g_cmd_mutex);
             g_cmd_queue.push(std::move(line));
         }
-}
-
-// ── Monotonic time helper ─────────────────────────────────────────────────────
-
-static uint32_t now_ms()
-{
-    static const auto t0 = std::chrono::steady_clock::now();
-    return static_cast<uint32_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - t0).count());
 }
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
@@ -234,12 +222,7 @@ int main(int argc, char* argv[])
     std::signal(SIGINT,  sig_handler);
     std::signal(SIGTERM, sig_handler);
 
-    // ── Windows timer resolution ──────────────────────────────────────────
-    // Without this, Sleep(1) / sleep_for(1ms) resolves to ~15.6 ms on Windows.
-    // 1 ms resolution keeps SM timing error within 0.3% of any protocol window.
-#ifdef _WIN32
-    timeBeginPeriod(1);
-#endif
+    auto timer = pal::create_timer();
 
     // ── Setup audio device ────────────────────────────────────────────────
     auto audio = make_audio_device();
@@ -319,7 +302,7 @@ int main(int argc, char* argv[])
     // ── Main event loop ───────────────────────────────────────────────────
     std::vector<int16_t> rx_buf;
     while (g_running) {
-        const uint32_t t = now_ms();
+        const uint32_t t = static_cast<uint32_t>(timer->get_time_ms());
 
         // Drive state machine and modem
         ctrl.update(t);
@@ -343,17 +326,12 @@ int main(int argc, char* argv[])
             }
         }
 
-        // ~1 ms sleep: keeps CPU usage low while meeting all ALE timing windows.
-        // The tightest timing window is Tlww = 392 ms; 1 ms resolution is fine.
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        timer->sleep_ms(1);
     }
 
     // ── Clean up ──────────────────────────────────────────────────────────
     ctrl.emergency_stop();
     audio->close();
-#ifdef _WIN32
-    timeEndPeriod(1);
-#endif
     std::printf("[ALE CLI] Exiting.\n");
     return 0;
 }
