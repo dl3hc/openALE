@@ -10,42 +10,51 @@ namespace ale {
 bool ALEDecoder::decode(const uint8_t* symbols_49,
                         ALEWord& out,
                         Golay::DecodeResult& fec,
-                        uint8_t* bad_votes_out)
+                        uint8_t* unanimous_votes_out,
+                        GolayMode golay_mode)
 {
-    // Step 1: Unpack 3-bit symbols → 147-bit stream (MSB-first per symbol).
-    // stream[3k+0] = bit2 (MSB), stream[3k+1] = bit1, stream[3k+2] = bit0.
-    uint8_t stream[SYMBOLS_PER_WORD * BITS_PER_SYMBOL];
-    for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
-        stream[3*k + 0] = (symbols_49[k] >> 2) & 1u;
-        stream[3*k + 1] = (symbols_49[k] >> 1) & 1u;
-        stream[3*k + 2] =  symbols_49[k]        & 1u;
+    // ── 2/3 majority voter + unanimous-vote count (A.5.2.6.3) ───────────────
+    // Triple redundancy (A.5.2.2.4): each of the 49 transmitted-word bits is
+    // carried THREE times within the single 49-symbol word.  The three copies
+    // of bit `b` occupy on-air bit positions b, b+49 and b+98 of the 147-bit
+    // stream those 49 symbols carry (BITS_PER_SYMBOL bits per symbol, MSB first):
+    // on-air bit position p lives in symbol p / BITS_PER_SYMBOL, sub-bit lane
+    // (BITS_PER_SYMBOL - 1 - p % BITS_PER_SYMBOL).
+    //
+    // For every bit we take the 2/3 majority and tally the UNANIMOUS positions
+    // (all three copies agree) — the standard's "threshold of unanimous votes in
+    // the 2/3 majority voter decoder" quality / triple-redundant-phase metric.
+    uint64_t tx49            = 0;
+    uint8_t  unanimous_votes = 0;
+    for (uint32_t bit = 0; bit < SYMBOLS_PER_WORD; ++bit) {
+        uint8_t ones = 0;   // number of '1's among this bit's three copies
+        for (uint32_t copy = 0; copy < SYMBOL_REPETITION; ++copy) {
+            const uint32_t p    = bit + copy * SYMBOLS_PER_WORD;        // 0..146
+            const uint8_t  cbit = (symbols_49[p / BITS_PER_SYMBOL]
+                                   >> (BITS_PER_SYMBOL - 1u - p % BITS_PER_SYMBOL)) & 1u;
+            ones = static_cast<uint8_t>(ones + cbit);
+        }
+        if (ones == 0u || ones == SYMBOL_REPETITION)   // all three copies agree
+            ++unanimous_votes;
+        if (ones * 2u > SYMBOL_REPETITION)             // 2/3 majority → bit is 1
+            tx49 |= (1ULL << bit);
     }
+    out.unanimous_votes = unanimous_votes;
+    if (unanimous_votes_out)
+        *unanimous_votes_out = unanimous_votes;
 
-    // Step 2: Stride-49 majority vote → 49-bit tx49.
-    // Bit i = majority of stream[i], stream[i+49], stream[i+98].
-    // bad_votes counts non-unanimous positions (1 or 2 out of 3 voters).
-    // A clean word has bad_votes = 0; high values indicate noise or misalignment.
-    // Adapted from LinuxALE modem.c (Brain / Toivanen 2001).
-    uint64_t tx49      = 0;
-    uint32_t bad_votes = 0;
-    for (uint32_t i = 0; i < SYMBOLS_PER_WORD; ++i) {
-        const uint32_t sum = stream[i]
-                           + stream[i + SYMBOLS_PER_WORD]
-                           + stream[i + 2u * SYMBOLS_PER_WORD];
-        if (sum == 1u || sum == 2u)
-            ++bad_votes;
-        if (sum >= 2u)
-            tx49 |= (1ULL << i);
-    }
-    if (bad_votes_out)
-        *bad_votes_out = static_cast<uint8_t>(bad_votes < 255u ? bad_votes : 255u);
-
-    // Step 3: Deinterleave + Golay FEC → 24-bit word.
-    const uint32_t word24 = ALEFECCodec::deinterleave_word(tx49, fec);
+    // ── Successful Golay decode of the "A" and "B" word bits (A.5.2.6.3) ────
+    // Deinterleave the two Golay channels (A.5.2.2.3) and FEC-decode both halves.
+    // DECODE_DETECTED on either half = an uncorrectable error → not a successful
+    // decode; DECODE_OK / DECODE_CORRECTED = all errors within the code's power.
+    const uint32_t word24 = ALEFECCodec::deinterleave_word(tx49, fec, golay_mode);
+    out.fec_errors = fec.errors_corrected;
     if (fec.flag != Golay::DECODE_OK && fec.flag != Golay::DECODE_CORRECTED)
         return false;
 
-    // Step 4: Parse to ALEWord.
+    // ── Acceptable character bits (A.5.2.6.3) ───────────────────────────────
+    // parse_from_bits validates each of the three characters against the word's
+    // ASCII subset (Basic 38 for address words, Expanded 64 for DATA / REP).
     WordParser parser;
     return parser.parse_from_bits(word24, out);
 }

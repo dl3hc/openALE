@@ -29,11 +29,20 @@
  * Goertzel detection + ALEDecoder (majority vote + Golay FEC).  Accepted words
  * are delivered via word_cb_.
  *
- * Word-boundary sync:
- *   - DECODE_OK anchors / re-anchors the word grid.
- *   - DECODE_CORRECTED accepted only on the anchored grid (±1 symbol).
- *   - Silence-gap reset: 100 ms below threshold releases the grid lock so the
- *     next transmission re-anchors at its own sub-symbol phase.
+ * Word acquisition / tracking (MIL-STD-188-141B A.5.2.6.3):
+ *   Every word — during both initial and continuing sync — must satisfy all
+ *   applicable criteria, NOT a zero-error decode.  The 3× symbol redundancy and
+ *   Golay(24,12) exist so a receiver can acquire through residual symbol errors
+ *   (channel noise, resampling smear, sub-sample phase) that any real or
+ *   foreign-encoder signal carries — such words decode as DECODE_CORRECTED, not
+ *   DECODE_OK.  The criteria applied here:
+ *     - unanimous 2/3-vote count ≥ threshold  (primary BER / phase discriminator)
+ *     - successful Golay decode of both A and B halves (DECODE_OK or _CORRECTED)
+ *     - valid ASCII for the word's character set      (enforced in ALEDecoder)
+ *     - acceptable leading preamble (TO / TWAS / TIS) for INITIAL acquisition
+ *     - correct triple-redundant word phase (on-grid once locked)
+ *   Silence-gap reset: 100 ms below threshold releases the grid lock so the
+ *   next transmission re-acquires at its own sub-symbol phase.
  */
 
 #pragma once
@@ -94,6 +103,57 @@ private:
     void advance_queue_();
 };
 
+// ── Adaptive FEC policy (MIL-STD-188-141B A.5.2.6.3 "DO") ───────────────────────
+//
+// "Automatic adjustment of the unanimous-vote threshold and Golay mode should be
+//  provided to optimize performance under varying conditions."
+//
+// Tracks an EWMA of the per-word unanimous-vote count (0..SYMBOLS_PER_WORD) of
+// accepted words and maps that running signal-quality estimate to a recommended
+// Golay correction power and unanimous-vote acceptance threshold:
+//
+//   high quality (clean channel)   → less correction power (fewer miscorrections)
+//                                     and a higher threshold (fewer false accepts)
+//   low quality (marginal channel) → full correction power and a lower threshold
+//                                     (maintain sensitivity)
+//
+// The threshold is bounded so it can never block re-acquisition.  Pure and
+// deterministic — unit-testable in isolation of the demodulator.
+class AdaptiveFec {
+public:
+    void reset() { quality_ = INIT_QUALITY; }
+
+    /// Fold one accepted word's unanimous-vote count into the running estimate.
+    void observe(uint8_t unanimous_votes) {
+        quality_ += ALPHA * (static_cast<float>(unanimous_votes) - quality_);
+    }
+
+    float quality() const { return quality_; }
+
+    GolayMode mode() const {
+        if (quality_ >= CLEAN_HI) return GolayMode::Mode1_6;  // very clean link
+        if (quality_ >= CLEAN_LO) return GolayMode::Mode2_5;  // clean link
+        return GolayMode::Mode3_4;                            // marginal / unknown
+    }
+
+    uint8_t threshold() const {
+        float t = quality_ - MARGIN;
+        if (t < MIN_THRESHOLD) t = MIN_THRESHOLD;
+        if (t > MAX_THRESHOLD) t = MAX_THRESHOLD;
+        return static_cast<uint8_t>(t + 0.5f);
+    }
+
+private:
+    static constexpr float   ALPHA         = 0.125f;
+    static constexpr float   MARGIN        = 8.0f;
+    static constexpr float   CLEAN_LO      = 45.0f;
+    static constexpr float   CLEAN_HI      = 48.0f;
+    static constexpr float   INIT_QUALITY  = 40.0f;  // neutral start: Mode3_4, threshold 32
+    static constexpr uint8_t MIN_THRESHOLD = 30;
+    static constexpr uint8_t MAX_THRESHOLD = 42;
+    float quality_ = INIT_QUALITY;
+};
+
 // ── Demodulator ───────────────────────────────────────────────────────────────
 
 class Demodulator {
@@ -119,12 +179,40 @@ public:
 
     void reset();
 
+    // ── FEC / sync configuration (A.5.2.6.3, manufacturer-tunable) ──────────
+    // These set the BASE operating point used for word acquisition.  Default is
+    // the most tolerant point (full Golay correction, MIN_UNANIMOUS_VOTES) so any
+    // spec-compliant signal can be acquired.
+
+    /// Select the Golay correction power applied during decode (A.5.2.6.3).
+    void      set_golay_mode(GolayMode m) { base_golay_mode_ = m; golay_mode_ = m; }
+    GolayMode golay_mode() const          { return golay_mode_; }
+
+    /// Set the minimum unanimous 2/3-vote count required to accept a word (0..49).
+    void    set_min_unanimous_votes(uint8_t v) { base_min_unanimous_ = v; min_unanimous_votes_ = v; }
+    uint8_t min_unanimous_votes() const        { return min_unanimous_votes_; }
+
+    /// A.5.2.6.3 "DO": enable automatic adjustment of Golay mode + unanimous-vote
+    /// threshold from observed signal quality.  Off by default → fixed operating
+    /// point.  Adaptation runs only while the word grid is locked (tracking);
+    /// acquisition always uses the configured base point so a degraded signal can
+    /// still be acquired.
+    void set_adaptive_fec(bool on) { adaptive_ = on; if (!on) restore_base_operating_point_(); }
+    bool adaptive_fec() const      { return adaptive_; }
+
 private:
     static constexpr uint32_t WORD_SAMPLES         = SYMBOLS_PER_WORD * FFT_SIZE; // 3136
     static constexpr uint32_t BUF_CAP              = WORD_SAMPLES + FFT_SIZE;     // 3200
     static constexpr uint32_t DECODE_STEP          = FFT_SIZE / 4;                // 16
     static constexpr uint32_t SILENCE_RESET_SAMPLES = 800;  // 100 ms at 8 kHz
     static constexpr int16_t  SILENCE_THRESHOLD    = 200;
+
+    // A.5.2.6.3 criterion 1: minimum unanimous 2/3-votes (out of 49) required to
+    // accept a word.  This is the standard's primary, manufacturer-tunable BER /
+    // signal-quality discriminator; it also enforces "correct triple-redundant
+    // word phase" — a misaligned window makes the three copies disagree, dropping
+    // the unanimous count far below threshold.  A clean (bit-exact) peer scores 49.
+    static constexpr uint8_t  MIN_UNANIMOUS_VOTES  = 33;   // ~67 % of 49
 
     WordCallback         word_cb_;
     bool                 enabled_       = true;
@@ -135,11 +223,28 @@ private:
     uint32_t             grid_anchor_   = 0;
     uint32_t             silence_count_ = 0;
 
+    // FEC / sync operating point (A.5.2.6.3).  base_* = configured acquisition
+    // point; the active golay_mode_ / min_unanimous_votes_ equal base_* except
+    // while adaptive tracking is in effect.
+    GolayMode   base_golay_mode_     = GolayMode::Mode3_4;
+    uint8_t     base_min_unanimous_  = MIN_UNANIMOUS_VOTES;
+    GolayMode   golay_mode_          = GolayMode::Mode3_4;
+    uint8_t     min_unanimous_votes_ = MIN_UNANIMOUS_VOTES;
+    bool        adaptive_            = false;
+    AdaptiveFec adaptive_fec_;
+
+    void restore_base_operating_point_() {
+        golay_mode_          = base_golay_mode_;
+        min_unanimous_votes_ = base_min_unanimous_;
+        adaptive_fec_.reset();
+    }
+
     static float   goertzel_power(const int16_t* block, float freq_hz);
     static uint8_t symbol_from_block(const int16_t* block);
     int16_t        ring_at(uint32_t abs_pos) const { return ring_[abs_pos % BUF_CAP]; }
-    bool           try_decode(ALEWord& out, Golay::DecodeResult& fec) const;
-    bool           accept_word_(const Golay::DecodeResult& fec);
+    bool           try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes) const;
+    bool           accept_word_(const Golay::DecodeResult& fec, const ALEWord& word,
+                                uint8_t unanimous_votes);
 };
 
 } // namespace ALE2GModem

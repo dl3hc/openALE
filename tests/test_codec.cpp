@@ -56,12 +56,12 @@ static void test_roundtrip_basic_preambles()
 
         ALEWord decoded;
         Golay::DecodeResult fec;
-        uint8_t bad_votes = 0xFF;
-        const bool ok = ALEDecoder::decode(frame.data(), decoded, fec, &bad_votes);
+        uint8_t unanimous = 0xFF;
+        const bool ok = ALEDecoder::decode(frame.data(), decoded, fec, &unanimous);
 
         check(ok, "decode returned false");
         check(fec.flag == Golay::DECODE_OK, "expected DECODE_OK for clean signal");
-        check(bad_votes == 0, "expected 0 bad_votes for clean signal");
+        check(unanimous == SYMBOLS_PER_WORD, "expected all-unanimous votes for clean signal");
         check(decoded.type == word.type, "preamble type mismatch");
         check(std::strcmp(decoded.address, word.address) == 0, "address mismatch");
     }
@@ -83,19 +83,20 @@ static void test_roundtrip_extended_address()
     printf("PASS  test_roundtrip_extended_address\n");
 }
 
-static void test_bad_votes_zero_on_clean_frame()
+static void test_unanimous_votes_full_on_clean_frame()
 {
     const ALEWord word = make(PreambleType::TO, "BOB");
     const SymbolFrame frame = ALEEncoder::encode(word);
 
     ALEWord out;
     Golay::DecodeResult fec;
-    uint8_t bv = 0xFF;
-    ALEDecoder::decode(frame.data(), out, fec, &bv);
+    uint8_t uv = 0xFF;
+    ALEDecoder::decode(frame.data(), out, fec, &uv);
 
-    // A clean encoded frame has all three copies of each bit identical → 0 bad votes.
-    check(bv == 0, "bad_votes should be 0 for a perfectly encoded frame");
-    printf("PASS  test_bad_votes_zero_on_clean_frame\n");
+    // A clean encoded frame has all three copies of each bit identical → every
+    // one of the 49 positions is unanimous (A.5.2.6.3).
+    check(uv == SYMBOLS_PER_WORD, "unanimous votes should be 49 for a perfectly encoded frame");
+    printf("PASS  test_unanimous_votes_full_on_clean_frame\n");
 }
 
 static void test_majority_vote_recovers_single_symbol_error()
@@ -115,17 +116,18 @@ static void test_majority_vote_recovers_single_symbol_error()
 
     ALEWord out;
     Golay::DecodeResult fec;
-    uint8_t bv = 0;
-    const bool ok = ALEDecoder::decode(frame.data(), out, fec, &bv);
+    uint8_t uv = SYMBOLS_PER_WORD;
+    const bool ok = ALEDecoder::decode(frame.data(), out, fec, &uv);
 
     // The vote is 2:1 in favour of the correct bit for each position in symbol 0,
-    // so majority vote still wins.  bad_votes must be > 0 (the 3 flipped bits are non-unanimous).
+    // so the majority vote still wins.  unanimous votes must drop below 49 (the
+    // flipped bits make their positions non-unanimous).
     check(ok, "decode should succeed with one corrupted symbol");
     check(out.type == word.type, "type mismatch after error injection");
     check(std::strcmp(out.address, word.address) == 0, "address mismatch after error injection");
-    check(bv > 0, "expected non-zero bad_votes for corrupted frame");
-    printf("PASS  test_majority_vote_recovers_single_symbol_error  (bad_votes=%u)\n",
-           static_cast<unsigned>(bv));
+    check(uv < SYMBOLS_PER_WORD, "expected non-unanimous votes for corrupted frame");
+    printf("PASS  test_majority_vote_recovers_single_symbol_error  (unanimous=%u)\n",
+           static_cast<unsigned>(uv));
 }
 
 static void test_encode_tx49_matches_encode_word()
@@ -148,11 +150,11 @@ static void test_all_zero_word_decodes_to_data()
     ALEWord out;
     Golay::DecodeResult fec;
     const bool ok = ALEDecoder::decode(frame.data(), out, fec);
-    // If Golay accepts it, verify that bad_votes == 0.
+    // If Golay accepts it, verify that all positions are unanimous.
     if (ok) {
-        uint8_t bv = 0xFF;
-        ALEDecoder::decode(frame.data(), out, fec, &bv);
-        check(bv == 0, "all-zero frame should have no bad votes");
+        uint8_t uv = 0;
+        ALEDecoder::decode(frame.data(), out, fec, &uv);
+        check(uv == SYMBOLS_PER_WORD, "all-zero frame should be fully unanimous");
     }
     // We don't assert ok here — whether the all-zero tx49 is a valid Golay
     // codeword is a property of the Golay encoder, not of the codec layer.
@@ -165,7 +167,7 @@ int main()
 {
     test_roundtrip_basic_preambles();
     test_roundtrip_extended_address();
-    test_bad_votes_zero_on_clean_frame();
+    test_unanimous_votes_full_on_clean_frame();
     test_majority_vote_recovers_single_symbol_error();
     test_encode_tx49_matches_encode_word();
     test_all_zero_word_decodes_to_data();

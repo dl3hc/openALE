@@ -4,7 +4,7 @@
  *
  * Key changes vs. previous revision
  * -----------------------------------
- * AC-WORD-001-5  parse_from_bits / parse_word now accept and store timestamp_ms.
+ * AC-WORD-001-5  parse_from_bits accepts and stores timestamp_ms.
  *
  * AC-WORD-002-1  ALE_ASCII_64[] table removed (was dead code).
  *                Two separate predicates replace the single is_valid_ale_char():
@@ -24,7 +24,6 @@
  */
 
 #include "Word/ale_word.h"
-#include "FSK/symbol_decoder.h"
 #include "FEC/ale_fec_codec.h"
 #include <cstring>
 #include <cctype>
@@ -42,35 +41,6 @@ static const char* WORD_TYPE_NAMES[] = {
 // ============================================================================
 
 WordParser::WordParser() : last_timestamp_ms(0) {}
-
-bool WordParser::parse_word(const WordVoteBuffer& symbols,
-                             ALEWord& output,
-                             uint32_t timestamp_ms)
-{
-    // Step 1: majority voting across 3 word repetitions → 49-bit transmitted word
-    uint64_t transmitted = 0;
-    output.unanimous_votes = SymbolDecoder::decode_word_with_voting(symbols, transmitted);
-
-    // A.5.2.6.3: reject word if vote quality is below threshold (too many disagreements)
-    if (output.unanimous_votes < VOTE_THRESHOLD_BAD) {
-        output.valid = false;
-        return false;
-    }
-
-    // Step 2: deinterleave per A.5.2.2.3 + Golay error correction → 24-bit ALE word
-    Golay::DecodeResult fec;
-    const uint32_t ale_word = ALEFECCodec::deinterleave_word(transmitted, fec);
-
-    if (fec.flag == Golay::DECODE_DETECTED) {
-        output.valid = false;
-        return false;
-    }
-
-    output.fec_errors = fec.errors_corrected;
-
-    // Step 3: parse preamble + payload from the corrected ALE word
-    return parse_from_bits(ale_word, output, timestamp_ms);
-}
 
 bool WordParser::parse_from_bits(uint32_t word_bits,
                                   ALEWord& output,

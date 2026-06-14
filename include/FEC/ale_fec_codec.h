@@ -66,9 +66,11 @@ public:
      *
      * \param codeword  24-bit received codeword (after majority voting)
      * \param output    [out] 12-bit corrected information word
+     * \param mode      Golay correction power (A.5.2.6.3); default Mode3_4.
      * \return          DecodeResult (DECODE_OK / DECODE_CORRECTED / DECODE_DETECTED)
      */
-    static Golay::DecodeResult decode_word(uint32_t codeword, uint16_t& output);
+    static Golay::DecodeResult decode_word(uint32_t codeword, uint16_t& output,
+                                           GolayMode mode = GolayMode::Mode3_4);
 
     /**
      * Interleave symbol bursts for data channel protection.
@@ -109,9 +111,12 @@ public:
      *
      * \param transmitted  49-bit received word
      * \param fec_out      [out] combined Golay decode result
+     * \param mode         Golay correction power (A.5.2.6.3) applied to both
+     *                     halves; default Mode3_4 (full correction).
      * \return             24-bit corrected ALE word
      */
-    static uint32_t deinterleave_word(uint64_t transmitted, Golay::DecodeResult& fec_out);
+    static uint32_t deinterleave_word(uint64_t transmitted, Golay::DecodeResult& fec_out,
+                                      GolayMode mode = GolayMode::Mode3_4);
 };
 
 } // namespace ale

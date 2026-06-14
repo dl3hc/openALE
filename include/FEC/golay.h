@@ -20,6 +20,31 @@
 
 namespace ale {
 
+/**
+ * Golay correction mode (MIL-STD-188-141B A.5.2.6.3).
+ *
+ * The (24,12) Extended Golay code has minimum distance 8.  The standard lets a
+ * manufacturer trade correction against detection in one of four modes, written
+ * "n/m" = "up to n errors detected AND corrected, up to m errors detected but
+ * NOT correctable" (n + m = 7).  The enum value IS n (the correction power):
+ *
+ *   Mode3_4 (n=3): correct ≤3, detect ≤4   — maximum power (default)
+ *   Mode2_5 (n=2): correct ≤2, detect ≤5
+ *   Mode1_6 (n=1): correct ≤1, detect ≤6
+ *   Mode0_7 (n=0): correct 0,  detect ≤7   — detection only
+ *
+ * An error whose weight is within the code's range but exceeds the selected
+ * mode's correction power is reported as DECODE_DETECTED (not corrected).
+ * Per A.5.2.6.3 the mode "should be chosen by the manufacturer to optimize
+ * performance" and may be adjusted automatically under varying conditions.
+ */
+enum class GolayMode : uint8_t {
+    Mode0_7 = 0,
+    Mode1_6 = 1,
+    Mode2_5 = 2,
+    Mode3_4 = 3,
+};
+
 class Golay {
 public:
     /**
@@ -67,9 +92,13 @@ public:
      * \param output   [out] 12-bit decoded information word
      *                 Corrected value on DECODE_CORRECTED;
      *                 raw (uncorrected) info field on DECODE_DETECTED.
+     * \param mode     Correction power (A.5.2.6.3).  Errors heavier than the
+     *                 mode's power are detected (DECODE_DETECTED) but not
+     *                 corrected.  Defaults to Mode3_4 (full correction).
      * \return         DecodeResult with flag and errors_corrected count
      */
-    static DecodeResult decode(uint32_t codeword, uint16_t& output);
+    static DecodeResult decode(uint32_t codeword, uint16_t& output,
+                               GolayMode mode = GolayMode::Mode3_4);
     
     /**
      * Extract information bits from codeword (no error correction)

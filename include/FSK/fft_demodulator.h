@@ -1,6 +1,14 @@
 /**
  * \file fft_demodulator.h
- * \brief FFT-based 8-FSK demodulator
+ * \brief FFT-based 8-FSK demodulator (block 64-point DFT, one block per symbol).
+ *
+ * STATUS: currently UNUSED by the live receiver.  The live RX path demodulates
+ * with the Goertzel algorithm inside ALE2GModem::Demodulator (tone energy
+ * evaluated directly at the 8 ALE frequencies — leaner than a full FFT) and
+ * decodes words via ALEDecoder::decode().  This FFT front end is kept
+ * intentionally as an alternative, should a full-FFT detector ever be preferred
+ * over Goertzel; it is exercised only by examples/tests, not wired into
+ * ALEController.
  * 
 * Implements block 64-point DFT, one block per symbol
 * (8000 Hz / 125 baud = 64 samples/symbol = one non-overlapping DFT block)

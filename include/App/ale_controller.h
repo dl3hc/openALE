@@ -166,6 +166,24 @@ public:
      */
     std::string process_command(const std::string& cmd);
 
+    // ── FEC / sync tuning (MIL-STD-188-141B A.5.2.6.3) ──────────────────────
+    // Forwarded to the receive demodulator.  Defaults are the most tolerant
+    // operating point (full Golay correction + MIN_UNANIMOUS_VOTES) so any
+    // spec-compliant signal can be acquired; tune only for special conditions.
+
+    /// Select the Golay correction power: Mode3_4 (default) / 2_5 / 1_6 / 0_7.
+    void      set_golay_mode(GolayMode m)        { demodulator_.set_golay_mode(m); }
+    GolayMode golay_mode() const                 { return demodulator_.golay_mode(); }
+
+    /// Minimum unanimous 2/3-vote count to accept a word (0..49; default 33).
+    void    set_min_unanimous_votes(uint8_t v)   { demodulator_.set_min_unanimous_votes(v); }
+    uint8_t min_unanimous_votes() const          { return demodulator_.min_unanimous_votes(); }
+
+    /// A.5.2.6.3 "DO": auto-adjust Golay mode + unanimous-vote threshold to the
+    /// observed signal quality (off by default).
+    void set_adaptive_fec(bool on)               { demodulator_.set_adaptive_fec(on); }
+    bool adaptive_fec() const                    { return demodulator_.adaptive_fec(); }
+
     // ── Inspection ──────────────────────────────────────────────────────────
     ALEState    state() const { return sm_.get_state(); }
     std::string self()  const { return self_addr_; }

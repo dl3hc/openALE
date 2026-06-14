@@ -2,17 +2,19 @@
  * \file test_fec_golay.cpp
  * \brief Unit tests for Extended Golay (24,12) FEC codec and word interleaver
  *
- * Covers: AC-FEC-004-1/2, AC-FEC-005-1/2/3, AC-FEC-006-1,
+ * Covers: AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
  *         AC-FEC-012-1/2/3, AC-FEC-013-1/2/3/4
  * Spec: MIL-STD-188-141B A.5.2.2, A.5.2.2.3
+ *
+ * (The full ALE decode path — 2/3 majority voting + Golay — is covered by
+ *  test_codec, test_pcale_interop and test_decoder_robustness.)
  */
 
 #include "FEC/golay.h"
 #include "FEC/ale_fec_codec.h"
 #include "FEC/word_interleaver.h"
-#include "FSK/symbol_decoder.h"
 
 #include <iostream>
 #include <iomanip>
@@ -40,33 +42,6 @@ static std::vector<uint32_t> make_golay_error_masks_upto_3() {
                 masks.push_back((1u << i) | (1u << j) | (1u << k));
 
     return masks;
-}
-
-// AC-FEC-004-1/2: FEC + majority voting in the full ALE decode path
-bool test_golay_ale_word_decode() {
-    std::cout << "\n[TEST FEC-1] ALE decode path (SymbolDecoder + Golay)\n";
-    std::cout << "-------------------------------------------------------\n";
-
-    WordVoteBuffer dummy_symbols;
-    for (uint32_t i = 0; i < WordVoteBuffer::SIZE; ++i)
-        dummy_symbols[i] = i % 8;
-
-    std::cout << "  symbol stream pattern: i % 8 (deterministic)\n";
-    std::cout << "  total symbols per word: " << WordVoteBuffer::SIZE << "\n";
-
-    uint64_t word     = 0;
-    uint8_t unanimous = SymbolDecoder::decode_word_with_voting(dummy_symbols, word);
-
-    std::cout << "  decoded=0x" << std::hex << word << std::dec
-              << " unanimous_votes=" << unanimous << "/" << VOTE_BUFFER_LENGTH << "\n";
-
-    if (word == 0 && unanimous == 0) {
-        std::cout << "FAIL: invalid decode result\n";
-        return false;
-    }
-
-    std::cout << "PASS\n";
-    return true;
 }
 
 // AC-FEC-005-1: all 2325 error patterns up to weight 3 must be corrected
@@ -440,6 +415,72 @@ bool test_feat_fec_003_stuff_bit_ignored() {
     return true;
 }
 
+// A.5.2.6.3: the four Golay correction modes (3/4, 2/5, 1/6, 0/7).
+// In mode n/m, errors of weight ≤ n are corrected; heavier (still detectable)
+// errors are reported DECODE_DETECTED.
+bool test_golay_correction_modes() {
+    std::cout << "\n[TEST FEC-10] Golay correction modes 3/4, 2/5, 1/6, 0/7 (A.5.2.6.3)\n";
+    std::cout << "--------------------------------------------------------------------\n";
+
+    static constexpr uint16_t REF = 0x5A5;
+    const uint32_t cw = Golay::encode(REF);
+
+    struct ModeCase { GolayMode mode; uint8_t power; const char* name; };
+    const ModeCase modes[] = {
+        { GolayMode::Mode3_4, 3, "3/4" },
+        { GolayMode::Mode2_5, 2, "2/5" },
+        { GolayMode::Mode1_6, 1, "1/6" },
+        { GolayMode::Mode0_7, 0, "0/7" },
+    };
+    // Error masks of weight 0,1,2,3,4 (parity bits) — weights 1..3 are unique
+    // coset leaders, weight 4 exceeds the code's correction range entirely.
+    const uint32_t masks[5] = { 0x0u, 0x1u, 0x3u, 0x7u, 0xFu };
+
+    for (const auto& m : modes) {
+        for (uint8_t w = 0; w <= 4; ++w) {
+            uint16_t out = 0;
+            Golay::DecodeResult r = Golay::decode(cw ^ masks[w], out, m.mode);
+
+            if (w == 0) {
+                if (r.flag != Golay::DECODE_OK) {
+                    std::cout << "FAIL: mode " << m.name << " w=0 expected DECODE_OK\n";
+                    return false;
+                }
+            } else if (w <= m.power) {
+                if (r.flag != Golay::DECODE_CORRECTED || r.errors_corrected != w || out != REF) {
+                    std::cout << "FAIL: mode " << m.name << " w=" << (int)w
+                              << " expected DECODE_CORRECTED/REF, got flag=0x"
+                              << std::hex << (int)r.flag << std::dec
+                              << " errors=" << (int)r.errors_corrected << "\n";
+                    return false;
+                }
+            } else {
+                if (r.flag != Golay::DECODE_DETECTED) {
+                    std::cout << "FAIL: mode " << m.name << " w=" << (int)w
+                              << " expected DECODE_DETECTED (above mode power), got flag=0x"
+                              << std::hex << (int)r.flag << std::dec << "\n";
+                    return false;
+                }
+            }
+        }
+        std::cout << "  mode " << m.name << " (correct <=" << (int)m.power
+                  << "): correct/detect split OK\n";
+    }
+
+    // The default (no mode argument) must behave as Mode3_4 (full correction).
+    {
+        uint16_t out = 0;
+        Golay::DecodeResult r = Golay::decode(cw ^ 0x7u, out);   // weight 3
+        if (r.flag != Golay::DECODE_CORRECTED || out != REF) {
+            std::cout << "FAIL: default mode must correct weight-3 (== Mode3_4)\n";
+            return false;
+        }
+    }
+    std::cout << "  default decode() == Mode3_4 OK\n";
+    std::cout << "PASS\n";
+    return true;
+}
+
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "===========================================\n";
@@ -450,7 +491,6 @@ int run_all_tests() {
     int pass_count = 0;
     int fail_count = 0;
 
-    if (test_golay_ale_word_decode())         { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }
@@ -459,6 +499,7 @@ int run_all_tests() {
     if (test_feat_fec_003_stuff_bit())        { pass_count++; } else { fail_count++; }
     if (test_feat_fec_003_parity_inversion()) { pass_count++; } else { fail_count++; }
     if (test_feat_fec_003_stuff_bit_ignored()) { pass_count++; } else { fail_count++; }
+    if (test_golay_correction_modes())        { pass_count++; } else { fail_count++; }
 
     std::cout << "\n===========================================\n";
     std::cout << "  Passed: " << pass_count

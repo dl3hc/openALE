@@ -37,9 +37,9 @@ uint32_t ALEFECCodec::encode_half(uint16_t info)
     return Golay::encode(info);
 }
 
-Golay::DecodeResult ALEFECCodec::decode_word(uint32_t codeword, uint16_t& output)
+Golay::DecodeResult ALEFECCodec::decode_word(uint32_t codeword, uint16_t& output, GolayMode mode)
 {
-    return Golay::decode(codeword, output);
+    return Golay::decode(codeword, output, mode);
 }
 
 void ALEFECCodec::interleave_symbols(uint8_t* symbols, uint32_t count)
@@ -63,7 +63,8 @@ uint64_t ALEFECCodec::interleave_word(const GolayCoded& coded)
     return WordInterleaver::interleave(coded.coder_a, coded.coder_b);
 }
 
-uint32_t ALEFECCodec::deinterleave_word(uint64_t transmitted, Golay::DecodeResult& fec_out)
+uint32_t ALEFECCodec::deinterleave_word(uint64_t transmitted, Golay::DecodeResult& fec_out,
+                                        GolayMode mode)
 {
     uint32_t seq_a = 0, seq_b = 0;
     WordInterleaver::deinterleave(transmitted, seq_a, seq_b);
@@ -74,8 +75,8 @@ uint32_t ALEFECCodec::deinterleave_word(uint64_t transmitted, Golay::DecodeResul
 
     uint16_t corrected_upper = 0;
     uint16_t corrected_lower = 0;
-    Golay::DecodeResult fec_a = Golay::decode(seq_a,         corrected_upper);
-    Golay::DecodeResult fec_b = Golay::decode(seq_b_natural, corrected_lower);
+    Golay::DecodeResult fec_a = Golay::decode(seq_a,         corrected_upper, mode);
+    Golay::DecodeResult fec_b = Golay::decode(seq_b_natural, corrected_lower, mode);
 
     if (fec_a.flag == Golay::DECODE_DETECTED || fec_b.flag == Golay::DECODE_DETECTED) {
         fec_out = { Golay::DECODE_DETECTED, 0 };

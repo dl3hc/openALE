@@ -313,6 +313,16 @@ target_link_libraries(test_codec ale_codec ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_codec PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME Codec COMMAND test_codec)
 
+add_executable(test_pcale_interop tests/test_pcale_interop.cpp)
+target_link_libraries(test_pcale_interop ale_codec ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_pcale_interop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME PCALEInterop COMMAND test_pcale_interop)
+
+add_executable(test_decoder_robustness tests/test_decoder_robustness.cpp)
+target_link_libraries(test_decoder_robustness ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_decoder_robustness PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME DecoderRobustness COMMAND test_decoder_robustness)
+
 add_executable(debug_fft tests/debug_fft.cpp)
 target_link_libraries(debug_fft ale_fsk_core ale_fec)
 target_include_directories(debug_fft PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

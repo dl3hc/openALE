@@ -32,29 +32,12 @@ constexpr uint32_t BANDWIDTH_HZ        = 1750;
 constexpr uint32_t SYMBOL_DURATION_MS  = static_cast<uint32_t>(ale::TTONE_MS);  // 8 ms
 // Word timing (number of symbols that form one ALE word on the air)
 constexpr uint32_t SYMBOLS_PER_WORD    = 49;
-// Physical redundancy: each word is transmitted this many times (A.5.2.2.4)
+// Triple redundancy (A.5.2.2.4): each of the 49 transmitted-word bits appears
+// this many times WITHIN the single 49-symbol word — the three copies of bit b
+// sit at on-air bit positions b, b+49 and b+98 of the 147-bit stream the 49
+// symbols carry (NOT three separate word transmissions).  Used by the 2/3
+// majority voter in ALEDecoder::decode().
 constexpr uint32_t SYMBOL_REPETITION   = 3;
-// Symbols per one physical copy: ceil(49/3) = 17; last symbol uses only 1 of 3 bits
-constexpr uint32_t SYMBOLS_PER_COPY    = (SYMBOLS_PER_WORD + SYMBOL_REPETITION - 1) / SYMBOL_REPETITION;
-
-/**
- * Type-safe buffer holding one complete ALE word across all three physical
- * copies for majority-vote decoding (A.5.2.2.4 / A.5.2.6.3).
- *
- * Layout: copy k of symbol i is at data[i + k * SYMBOLS_PER_WORD].
- *   copy 0: data[  0 ..  48]
- *   copy 1: data[ 49 ..  97]
- *   copy 2: data[ 98 .. 146]
- *
- * Replaces the misleading `const uint8_t symbols[SYMBOLS_PER_WORD]` parameter
- * that previously under-declared the required buffer size by factor 3.
- */
-struct WordVoteBuffer {
-    static constexpr uint32_t SIZE = SYMBOLS_PER_WORD * SYMBOL_REPETITION; // 147
-    uint8_t data[SIZE] = {};
-    uint8_t&       operator[](uint32_t i)       { return data[i]; }
-    const uint8_t& operator[](uint32_t i) const { return data[i]; }
-};
 
 // (1) Tone frequencies (Hz) in ASCENDING order, indexed by frequency rank (0 = lowest).
 //     A pure physical list — carries NO symbol assignment.

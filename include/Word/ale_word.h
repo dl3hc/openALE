@@ -91,20 +91,6 @@ public:
     WordParser();
 
     /**
-     * Parse one received word from a triple-copy vote buffer.
-     * Applies majority voting, then extracts preamble and payload.
-     *
-     * \param symbols      WordVoteBuffer with 3 × 49 received symbols
-     * \param output [out] Decoded ALE word
-     * \param timestamp_ms Reception timestamp in milliseconds
-     * \return true if word passed FEC, character validation, and vote quality
-     *         threshold (unanimous_votes >= VOTE_THRESHOLD_BAD, A.5.2.6.3)
-     */
-    bool parse_word(const WordVoteBuffer& symbols,
-                    ALEWord& output,
-                    uint32_t timestamp_ms = 0);
-
-    /**
      * Parse from a raw 24-bit word (after majority voting).
      *
      * \param word_bits    24-bit decoded word

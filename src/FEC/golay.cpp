@@ -580,7 +580,7 @@ uint16_t Golay::compute_syndrome(uint32_t codeword) {
     return syndrome;
 }
 
-Golay::DecodeResult Golay::decode(uint32_t codeword, uint16_t& output) {
+Golay::DecodeResult Golay::decode(uint32_t codeword, uint16_t& output, GolayMode mode) {
     std::call_once(syndrome_init_flag, init_syndrome_table);
 
     // Compute syndrome s = yH^T  (MIL-STD-188-141B A.5.2.2.2.2)
@@ -605,19 +605,27 @@ Golay::DecodeResult Golay::decode(uint32_t codeword, uint16_t& output) {
         return {DECODE_DETECTED, 0};
     }
 
+    // Weight of the coset-leader error pattern (number of bit errors).
+    uint8_t error_weight = 0;
+    for (uint32_t temp = error_pattern; temp; temp >>= 1)
+        error_weight += (temp & 1u);
+
+    // A.5.2.6.3 correction-power gate: in mode n/m, correct only errors of
+    // weight ≤ n; heavier (but still detectable) errors are flagged
+    // DECODE_DETECTED and left uncorrected.  For the default Mode3_4 the
+    // syndrome table holds only weight-≤3 leaders, so this never triggers and
+    // behaviour is identical to full correction.
+    const uint8_t max_correct = static_cast<uint8_t>(mode);
+    if (error_weight > max_correct) {
+        output = (codeword >> 12) & 0xFFF;   // raw, uncorrected info field
+        return {DECODE_DETECTED, 0};
+    }
+
     // Correct the codeword: x_hat = y XOR e
     uint32_t corrected = codeword ^ error_pattern;
     output = (corrected >> 12) & 0xFFF;
 
-    // Count the number of bit errors corrected (weight of error pattern)
-    uint8_t errors_corrected = 0;
-    uint32_t temp = error_pattern;
-    while (temp) {
-        errors_corrected += (temp & 1);
-        temp >>= 1;
-    }
-
-    return {DECODE_CORRECTED, errors_corrected};
+    return {DECODE_CORRECTED, error_weight};
 }
 
 uint16_t Golay::extract_info(uint32_t codeword) {

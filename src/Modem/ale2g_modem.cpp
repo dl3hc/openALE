@@ -99,6 +99,7 @@ void Demodulator::reset()
     grid_locked_   = false;
     grid_anchor_   = 0;
     silence_count_ = 0;
+    restore_base_operating_point_();   // fresh acquisition uses the base point
 }
 
 void Demodulator::push_samples(const int16_t* samples, uint32_t count)
@@ -115,6 +116,10 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
         // transmission can re-anchor at its own sub-symbol phase offset.
         if (s > -SILENCE_THRESHOLD && s < SILENCE_THRESHOLD) {
             if (++silence_count_ >= SILENCE_RESET_SAMPLES) {
+                // Transmission ended: release the grid and return to the base
+                // (acquisition) operating point so the next transmission — which
+                // may be weaker — re-acquires with full tolerance.
+                if (grid_locked_) restore_base_operating_point_();
                 grid_locked_   = false;
                 silence_count_ = SILENCE_RESET_SAMPLES;
             }
@@ -128,8 +133,18 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
 
             ALEWord word;
             Golay::DecodeResult fec;
-            if (try_decode(word, fec) && accept_word_(fec) && word_cb_)
-                word_cb_(word);
+            uint8_t unanimous_votes = 0;
+            if (try_decode(word, fec, unanimous_votes) &&
+                accept_word_(fec, word, unanimous_votes)) {
+                // A.5.2.6.3 "DO": once tracking, fold the accepted word's quality
+                // into the adaptive estimate and update the operating point.
+                if (adaptive_) {
+                    adaptive_fec_.observe(unanimous_votes);
+                    golay_mode_          = adaptive_fec_.mode();
+                    min_unanimous_votes_ = adaptive_fec_.threshold();
+                }
+                if (word_cb_) word_cb_(word);
+            }
         }
     }
 }
@@ -157,24 +172,52 @@ uint8_t Demodulator::symbol_from_block(const int16_t* block)
     return FREQ_TO_SYMBOL[rank];
 }
 
-bool Demodulator::accept_word_(const Golay::DecodeResult& fec)
+// A MIL-STD-188-141B transmission always begins with a TO, TWAS, or TIS word;
+// these are the only word types a receiver acquires INITIAL word-sync on (cf.
+// A.5.2.6.3 "acceptable preamble", and the reference WordSync()/PreambleOK()).
+// DATA / REP / CMD / FROM / THRU occur only mid-frame and are read once the grid
+// is locked.
+static bool is_acquisition_anchor(PreambleType t)
 {
-    // A "clean" decode passed Golay with no bit corrections; it is the most
-    // trustworthy evidence of a real word boundary.
+    return t == PreambleType::TO || t == PreambleType::TWAS || t == PreambleType::TIS;
+}
+
+bool Demodulator::accept_word_(const Golay::DecodeResult& fec, const ALEWord& word,
+                               uint8_t unanimous_votes)
+{
+    // ── A.5.2.6.3 criterion 1: unanimous-vote (signal-quality) threshold ────
+    // Applied to EVERY word, initial and continuing.  This is the standard's
+    // primary BER discriminator and simultaneously enforces "correct triple
+    // redundant word phase": a misaligned decode window makes the three symbol
+    // copies disagree, collapsing the unanimous count below the threshold.  It
+    // is what keeps the FEC-tolerant acquisition below from locking onto noise.
+    if (unanimous_votes < min_unanimous_votes_)
+        return false;
+
+    // "Successful Golay decode" per A.5.2.6.3 means all detected errors were
+    // within the correction power of the code — i.e. DECODE_OK *or*
+    // DECODE_CORRECTED.  (try_decode only returns true for those two, and only
+    // after ASCII validation, so criteria 2/3/5/6/7 are already met here.)
     const bool clean_decode = (fec.flag == Golay::DECODE_OK);
 
-    // Not yet synchronised to the word grid.  Only a clean decode is reliable
-    // enough to anchor the grid on; a merely FEC-corrected word might be noise.
+    // ── Initial acquisition ─────────────────────────────────────────────────
+    // Acquire USING the FEC, not by demanding a zero-error decode.  Requiring
+    // DECODE_OK would only ever lock onto a bit-exact peer (two ale_cli
+    // instances); a real or foreign-encoder transmission (e.g. PCALE) presents
+    // residual symbol errors at every alignment and so decodes as
+    // DECODE_CORRECTED.  Criterion 4 (acceptable leading preamble) plus the
+    // unanimous-vote gate above guard against false locks.
     if (!grid_locked_) {
-        if (!clean_decode)
+        if (!is_acquisition_anchor(word.type))
             return false;
         grid_locked_ = true;
         grid_anchor_ = write_pos_;
         return true;
     }
 
-    // Grid is locked: grid_anchor_ holds the sample position of the last word
-    // boundary we accepted.  Words are one WORD_SAMPLES apart on the grid.
+    // ── Continuing sync (grid locked) ───────────────────────────────────────
+    // grid_anchor_ holds the sample position of the last accepted word boundary;
+    // words are one WORD_SAMPLES apart on the grid.
     const uint32_t samples_since_last_word = write_pos_ - grid_anchor_;
 
     // The FFT window slides forward every DECODE_STEP samples, so the same word
@@ -191,7 +234,8 @@ bool Demodulator::accept_word_(const Golay::DecodeResult& fec)
     }
 
     // A FEC-corrected decode is trusted only when it lands on the word grid,
-    // i.e. within one symbol (FFT_SIZE samples) of an expected word boundary.
+    // i.e. within one symbol (FFT_SIZE samples) of an expected word boundary
+    // (A.5.2.6.3 criterion 9: correct triple-redundant word phase).
     const uint32_t phase_in_word    = samples_since_last_word % WORD_SAMPLES;
     const bool     on_word_boundary = (phase_in_word <= FFT_SIZE) ||
                                       (phase_in_word >= WORD_SAMPLES - FFT_SIZE);
@@ -202,7 +246,7 @@ bool Demodulator::accept_word_(const Golay::DecodeResult& fec)
     return false;
 }
 
-bool Demodulator::try_decode(ALEWord& out, Golay::DecodeResult& fec) const
+bool Demodulator::try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes) const
 {
     const uint32_t base = write_pos_ - WORD_SAMPLES;
     int16_t blk[FFT_SIZE];
@@ -213,7 +257,7 @@ bool Demodulator::try_decode(ALEWord& out, Golay::DecodeResult& fec) const
             blk[j] = ring_at(bk + j);
         sym[k] = symbol_from_block(blk);
     }
-    return ALEDecoder::decode(sym, out, fec);
+    return ALEDecoder::decode(sym, out, fec, &unanimous_votes, golay_mode_);
 }
 
 } // namespace ALE2GModem
