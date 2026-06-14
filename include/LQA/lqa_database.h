@@ -44,12 +44,28 @@ struct LQAEntry {
     /**
      * @brief Default constructor
      */
-    LQAEntry() 
+    LQAEntry()
         : frequency_hz(0), remote_station(""), snr_db(0.0f), ber(0.0f),
-          sinad_db(0.0f), fec_errors(0), total_words(0), 
+          sinad_db(0.0f), fec_errors(0), total_words(0),
           multipath_score(0.0f), noise_floor_dbm(-120.0f),
           last_sounding_ms(0), last_contact_ms(0), score(0.0f),
           sample_count(0) {}
+
+    /**
+     * @brief Timestamp of the most recent activity on this channel/station.
+     *
+     * An entry is touched in one of two ways: by a real contact with a named
+     * station (updates last_contact_ms) or by a channel sounding with no
+     * specific station (updates last_sounding_ms). "How recently did we last
+     * see anything here?" is therefore the later of the two timestamps.
+     * Used for recency scoring and for pruning stale entries.
+     *
+     * @return The later of last_contact_ms and last_sounding_ms (ms since epoch)
+     */
+    uint32_t last_activity_ms() const {
+        return (last_contact_ms > last_sounding_ms) ? last_contact_ms
+                                                    : last_sounding_ms;
+    }
 };
 
 /**

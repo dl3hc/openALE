@@ -159,27 +159,43 @@ uint8_t Demodulator::symbol_from_block(const int16_t* block)
 
 bool Demodulator::accept_word_(const Golay::DecodeResult& fec)
 {
-    if (grid_locked_) {
-        const uint32_t dist = write_pos_ - grid_anchor_;
+    // A "clean" decode passed Golay with no bit corrections; it is the most
+    // trustworthy evidence of a real word boundary.
+    const bool clean_decode = (fec.flag == Golay::DECODE_OK);
 
-        if (dist < WORD_SAMPLES - FFT_SIZE)
+    // Not yet synchronised to the word grid.  Only a clean decode is reliable
+    // enough to anchor the grid on; a merely FEC-corrected word might be noise.
+    if (!grid_locked_) {
+        if (!clean_decode)
             return false;
-
-        if (fec.flag == Golay::DECODE_OK) {
-            grid_anchor_ = write_pos_;
-            return true;
-        }
-
-        const uint32_t mod = dist % WORD_SAMPLES;
-        if (mod <= FFT_SIZE || mod >= WORD_SAMPLES - FFT_SIZE) {
-            grid_anchor_ = write_pos_;
-            return true;
-        }
-        return false;
+        grid_locked_ = true;
+        grid_anchor_ = write_pos_;
+        return true;
     }
 
-    if (fec.flag == Golay::DECODE_OK) {
-        grid_locked_ = true;
+    // Grid is locked: grid_anchor_ holds the sample position of the last word
+    // boundary we accepted.  Words are one WORD_SAMPLES apart on the grid.
+    const uint32_t samples_since_last_word = write_pos_ - grid_anchor_;
+
+    // The FFT window slides forward every DECODE_STEP samples, so the same word
+    // would otherwise be decoded many times in a row.  Ignore any candidate
+    // closer than (almost) one full word to the previous accepted word.
+    const uint32_t min_spacing = WORD_SAMPLES - FFT_SIZE;  // one word, minus one symbol of slack
+    if (samples_since_last_word < min_spacing)
+        return false;
+
+    // A clean decode is always trusted and re-anchors the grid.
+    if (clean_decode) {
+        grid_anchor_ = write_pos_;
+        return true;
+    }
+
+    // A FEC-corrected decode is trusted only when it lands on the word grid,
+    // i.e. within one symbol (FFT_SIZE samples) of an expected word boundary.
+    const uint32_t phase_in_word    = samples_since_last_word % WORD_SAMPLES;
+    const bool     on_word_boundary = (phase_in_word <= FFT_SIZE) ||
+                                      (phase_in_word >= WORD_SAMPLES - FFT_SIZE);
+    if (on_word_boundary) {
         grid_anchor_ = write_pos_;
         return true;
     }

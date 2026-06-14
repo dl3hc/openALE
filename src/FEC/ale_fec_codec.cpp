@@ -7,6 +7,18 @@
 
 namespace ale {
 
+// MIL-STD-188-141B A.5.2.2.3: Coder B inverts the 12 Golay check bits (the low
+// 12 bits of the 24-bit codeword) and leaves the upper 12 bits unchanged.  This
+// lets a receiver tell a Coder-A word from a Coder-B word.  The operation is its
+// own inverse, so the same helper both applies the inversion (on encode) and
+// removes it (on decode).
+static uint32_t flip_coder_b_check_bits(uint32_t golay_codeword)
+{
+    const uint32_t unchanged_high_12 = golay_codeword & 0xFFF000u;
+    const uint32_t inverted_check_12 = (~golay_codeword) & 0xFFFu;
+    return unchanged_high_12 | inverted_check_12;
+}
+
 GolayCoded ALEFECCodec::encode_word(uint32_t ale_word)
 {
     const uint16_t w_upper = static_cast<uint16_t>((ale_word >> 12) & 0xFFF);
@@ -14,9 +26,8 @@ GolayCoded ALEFECCodec::encode_word(uint32_t ale_word)
 
     const uint32_t coder_a = Golay::encode(w_upper);
 
-    // Coder B: Golay encode, then invert check bits per A.5.2.2.3
-    const uint32_t cw_b    = Golay::encode(w_lower);
-    const uint32_t coder_b = (cw_b & 0xFFF000u) | ((~cw_b) & 0xFFFu);
+    // Coder B: Golay encode, then invert the check bits per A.5.2.2.3.
+    const uint32_t coder_b = flip_coder_b_check_bits(Golay::encode(w_lower));
 
     return { coder_a, coder_b };
 }
@@ -57,8 +68,9 @@ uint32_t ALEFECCodec::deinterleave_word(uint64_t transmitted, Golay::DecodeResul
     uint32_t seq_a = 0, seq_b = 0;
     WordInterleaver::deinterleave(transmitted, seq_a, seq_b);
 
-    // seq_b carries inverted check bits per A.5.2.2.3 — uninvert before Golay decode
-    const uint32_t seq_b_natural = (seq_b & 0xFFF000u) | ((~seq_b) & 0xFFFu);
+    // seq_b carries inverted check bits per A.5.2.2.3 — undo the inversion
+    // (same self-inverse operation as on encode) before Golay decode.
+    const uint32_t seq_b_natural = flip_coder_b_check_bits(seq_b);
 
     uint16_t corrected_upper = 0;
     uint16_t corrected_lower = 0;

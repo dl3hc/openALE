@@ -66,11 +66,13 @@ void LQADatabase::update_entry(uint32_t frequency_hz,
         entry.total_words += total_words;
         entry.sample_count++;
         
-        // Update timestamps
-        if (!remote_station.empty()) {
-            entry.last_contact_ms = now;
-        } else {
+        // An empty station address means this measurement came from a channel
+        // sounding (no specific peer); a named station means a real contact.
+        const bool is_sounding = remote_station.empty();
+        if (is_sounding) {
             entry.last_sounding_ms = now;
+        } else {
+            entry.last_contact_ms = now;
         }
         
         // Recompute score
@@ -87,10 +89,13 @@ void LQADatabase::update_entry(uint32_t frequency_hz,
         entry.total_words = total_words;
         entry.sample_count = 1;
         
-        if (!remote_station.empty()) {
-            entry.last_contact_ms = now;
-        } else {
+        // An empty station address means this measurement came from a channel
+        // sounding (no specific peer); a named station means a real contact.
+        const bool is_sounding = remote_station.empty();
+        if (is_sounding) {
             entry.last_sounding_ms = now;
+        } else {
+            entry.last_contact_ms = now;
         }
         
         // Compute initial score
@@ -131,11 +136,13 @@ void LQADatabase::update_entry_extended(uint32_t frequency_hz,
         entry.total_words += total_words;
         entry.sample_count++;
         
-        // Update timestamps
-        if (!remote_station.empty()) {
-            entry.last_contact_ms = now;
-        } else {
+        // An empty station address means this measurement came from a channel
+        // sounding (no specific peer); a named station means a real contact.
+        const bool is_sounding = remote_station.empty();
+        if (is_sounding) {
             entry.last_sounding_ms = now;
+        } else {
+            entry.last_contact_ms = now;
         }
         
         // Recompute score
@@ -155,10 +162,13 @@ void LQADatabase::update_entry_extended(uint32_t frequency_hz,
         entry.total_words = total_words;
         entry.sample_count = 1;
         
-        if (!remote_station.empty()) {
-            entry.last_contact_ms = now;
-        } else {
+        // An empty station address means this measurement came from a channel
+        // sounding (no specific peer); a named station means a real contact.
+        const bool is_sounding = remote_station.empty();
+        if (is_sounding) {
             entry.last_sounding_ms = now;
+        } else {
+            entry.last_contact_ms = now;
         }
         
         // Compute initial score
@@ -214,9 +224,8 @@ int LQADatabase::prune_stale_entries() {
     auto it = entries_.begin();
     while (it != entries_.end()) {
         const LQAEntry& entry = it->second;
-        uint32_t last_activity = std::max(entry.last_contact_ms, entry.last_sounding_ms);
-        
-        if ((now - last_activity) > config_.max_age_ms) {
+
+        if ((now - entry.last_activity_ms()) > config_.max_age_ms) {
             it = entries_.erase(it);
             removed++;
         } else {
@@ -251,8 +260,8 @@ float LQADatabase::compute_score(const LQAEntry& entry) const {
     // Recency component (0-31 scale)
     // Recent contact = 31, old contact = 0
     uint32_t now = get_current_time_ms();
-    uint32_t last_activity = std::max(entry.last_contact_ms, entry.last_sounding_ms);
-    
+    uint32_t last_activity = entry.last_activity_ms();
+
     if (last_activity > 0) {
         uint32_t age_ms = now - last_activity;
         float age_factor = 1.0f - (static_cast<float>(age_ms) / config_.max_age_ms);

@@ -102,9 +102,9 @@ std::shared_ptr<ChannelRank> LQAAnalyzer::get_best_channel_for_station(
     if (best->score < config_.min_acceptable_score) {
         return nullptr;
     }
-    
-    uint32_t last_update = std::max(best->last_contact_ms, best->last_sounding_ms);
-    
+
+    uint32_t last_update = best->last_activity_ms();
+
     return std::make_shared<ChannelRank>(
         best->frequency_hz,
         best->score,
@@ -133,9 +133,9 @@ std::shared_ptr<ChannelRank> LQAAnalyzer::get_best_channel() const {
     if (best->score < config_.min_acceptable_score) {
         return nullptr;
     }
-    
-    uint32_t last_update = std::max(best->last_contact_ms, best->last_sounding_ms);
-    
+
+    uint32_t last_update = best->last_activity_ms();
+
     return std::make_shared<ChannelRank>(
         best->frequency_hz,
         best->score,
@@ -176,8 +176,7 @@ std::vector<ChannelRank> LQAAnalyzer::rank_all_channels() const {
         uint32_t latest_update = 0;
         for (const auto& e : entries) {
             aggregate_score += e.score;
-            uint32_t update = std::max(e.last_contact_ms, e.last_sounding_ms);
-            latest_update = std::max(latest_update, update);
+            latest_update = std::max(latest_update, e.last_activity_ms());
         }
         aggregate_score /= entries.size();
         
@@ -205,8 +204,8 @@ std::vector<ChannelRank> LQAAnalyzer::rank_channels_for_station(
     auto entries = database_->get_entries_for_station(station);
     
     for (const auto& entry : entries) {
-        uint32_t last_update = std::max(entry.last_contact_ms, entry.last_sounding_ms);
-        ranks.emplace_back(entry.frequency_hz, entry.score, station, last_update);
+        ranks.emplace_back(entry.frequency_hz, entry.score, station,
+                           entry.last_activity_ms());
     }
     
     // Sort by score (highest first)

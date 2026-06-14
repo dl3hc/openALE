@@ -84,13 +84,9 @@ bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
     if (words.empty()) {
         return false;
     }
-    
-    // Minimum complete sequence: TIS (sounding) or TO+FROM (individual call)
-    if (words.size() < 1) {
-        return false;
-    }
-    
-    // Check for common complete patterns
+
+    // Minimum complete sequence: TIS (sounding) or TO+FROM (individual call).
+    // Scan the words once and remember which key preamble types appeared.
     bool has_to = false;
     bool has_from = false;
     bool has_tis = false;
