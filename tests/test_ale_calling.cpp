@@ -63,6 +63,13 @@ static void advance_to_tx_start(ALEStateMachine& sm)
     sm.update(T_TX);                         // TUNING ends → full sequence enqueued
 }
 
+// Build a received address word from a 3-char address (for process_received_word).
+static ALEWord rx_word(PreambleType t, const char a3[3])
+{
+    const char ch[3] = { a3[0], a3[1], a3[2] };
+    return WordParser::make_word(t, ch);
+}
+
 // ============================================================================
 // AC-WORD-003-1 — TO for individual calls
 // REQ-WORD-003: "TO shall be used in individual call protocols for single
@@ -771,6 +778,100 @@ bool test_group_call_max_5_targets()
 }
 
 // ============================================================================
+// T-07 — Caller-side link termination returns to the pre-link state.
+//
+// Regression: terminate_link() (CMD:TERMINATE) sends TO peer ×2 + TWAS self
+// and must fire LINK_TERMINATED on the LAST sent word so the calling station
+// leaves LINKED and returns to its pre-link state (here IDLE).  The previous
+// "decrement-and-return" accounting in on_word_complete() waited for one
+// frame-completion too many — that event never arrives, so the caller stayed
+// stuck in LINKED while the (correctly-behaving) responder went back.
+// ============================================================================
+
+bool test_caller_terminate_returns_to_prelink_state()
+{
+    std::cout << "\n[T-07] Caller CMD:TERMINATE returns to pre-link state\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, "SAM", /*scan_ch=*/0);
+    sm.initiate_call("JOE");            // IDLE → CALLING (pre_link_state_ = IDLE)
+    advance_to_tx_start(sm);            // enqueue leading (TO JOE ×2) + conclusion (TIS SAM)
+
+    // Drive the 3 TX words (LEADING ×2 + CONCLUSION) → LISTENING.
+    for (int i = 0; i < 3; ++i) sm.on_word_complete();
+
+    const uint32_t t0 = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+
+    // JOE's response frame: "TO SAM" then "TIS JOE".
+    sm.update(t0 + 100);
+    sm.process_received_word(rx_word(PreambleType::TO,  "SAM"));
+    sm.update(t0 + 200);
+    sm.process_received_word(rx_word(PreambleType::TIS, "JOE"));
+
+    // Tlww settle → SENDING_ACK; build + drain the ACK frame → LINKED.
+    sm.update(t0 + 200 + ALETimingConstants::Tlww_ms + 1);  // LISTENING(c) → SENDING_ACK
+    sm.update(t0 + 200 + ALETimingConstants::Tlww_ms + 2);  // SENDING_ACK → build_ack_words()
+    for (int i = 0; i < 3; ++i) sm.on_word_complete();      // ACK drained → LINKED
+
+    bool linked = (sm.get_state() == ALEState::LINKED);
+    std::cout << "  reached LINKED: " << (linked ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+
+    // Operator types CMD:TERMINATE → TO JOE ×2 + TWAS SAM, then LINK_TERMINATED.
+    sm.terminate_link();
+    for (int i = 0; i < 3; ++i) sm.on_word_complete();      // drain termination frame
+
+    bool left_linked  = (sm.get_state() != ALEState::LINKED);
+    bool back_to_idle = (sm.get_state() == ALEState::IDLE); // pre_link_state_ was IDLE
+    std::cout << "  caller left LINKED after TERMINATE: "
+              << (left_linked ? "PASS" : "FAIL") << "\n";
+    std::cout << "  caller returned to pre-link state (IDLE): "
+              << (back_to_idle ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+
+    return linked && left_linked && back_to_idle;
+}
+
+// ============================================================================
+// T-05 — SOUNDING opens the RX window on the LAST sent word.
+//
+// Regression: on_word_complete() must switch TRANSMITTING → LISTENING itself
+// when the queue drains (decrement-then-check), not rely on a later update()
+// tick.  The handle_sounding() fallback still covers the zero-word case
+// (empty self address → no word, no on_word_complete) — see test_sounding in
+// test_state_machine.cpp.
+// ============================================================================
+
+bool test_sounding_listen_window_opens_on_last_word()
+{
+    std::cout << "\n[T-05] SOUNDING opens RX window on last sent word\n";
+
+    WordCapture cap;
+    bool rx_open = false;
+    ALEStateMachine sm = make_sm(cap, "SAM", /*scan_ch=*/0);
+    sm.set_rx_enabled_callback([&rx_open](bool on){ rx_open = on; });
+
+    sm.send_sounding();  // IDLE → SOUNDING (TRANSMITTING); enqueues TIS SAM (1 word)
+
+    bool transmitting = (sm.get_sounding_phase() == SoundingPhase::TRANSMITTING);
+    bool one_word     = (sm.get_words_pending() == 1);
+    std::cout << "  TX phase, 1 word enqueued: "
+              << ((transmitting && one_word) ? "PASS" : "FAIL")
+              << " (words=" << sm.get_words_pending() << ")\n";
+
+    // The LAST sent word must open the RX window via on_word_complete() itself,
+    // without relying on a later update() tick.
+    sm.on_word_complete();
+
+    bool listening = (sm.get_sounding_phase() == SoundingPhase::LISTENING);
+    std::cout << "  on_word_complete → LISTENING (no update() needed): "
+              << (listening ? "PASS" : "FAIL") << "\n";
+    std::cout << "  RX window opened: " << (rx_open ? "PASS" : "FAIL") << "\n";
+
+    return transmitting && one_word && listening && rx_open;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 
@@ -851,6 +952,14 @@ int run_all_tests()
     // AC-WORD-006-4
     run("AC-WORD-006-4 group call max 5 THRU targets",
         test_group_call_max_5_targets());
+
+    // T-07 — caller-side termination regression
+    run("T-07 caller CMD:TERMINATE returns to pre-link state",
+        test_caller_terminate_returns_to_prelink_state());
+
+    // T-05 — sounding RX-window-on-last-word regression
+    run("T-05 SOUNDING opens RX window on last sent word",
+        test_sounding_listen_window_opens_on_last_word());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

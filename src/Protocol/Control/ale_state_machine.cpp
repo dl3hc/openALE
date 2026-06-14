@@ -1107,17 +1107,27 @@ void ALEStateMachine::on_word_complete() {
     // terminate_link() sendet TO×2 + TWAS; erst wenn alle Wörter durch sind
     // wird LINK_TERMINATED gefeuert.
     if (current_state == ALEState::LINKED && linked_terminating_) {
-        if (words_pending > 0) { --words_pending; return; }
-        linked_terminating_ = false;
-        process_event(ALEEvent::LINK_TERMINATED);
+        // Decrement-first, dann auf 0 prüfen (wie SENDING_ACK): das LETZTE
+        // gesendete Wort feuert LINK_TERMINATED. Das frühere "decrement-and-
+        // return"-Muster wartete auf eine (N+1)-te Frame-Completion, die nie
+        // kommt — SAM blieb dadurch in LINKED hängen.
+        if (words_pending > 0) --words_pending;
+        if (words_pending == 0) {
+            linked_terminating_ = false;
+            process_event(ALEEvent::LINK_TERMINATED);
+        }
         return;
     }
 
     // ── SOUNDING path (T-05 + T-08) ──────────────────────────────────────
+    // Decrement-first, dann auf 0 prüfen (wie LINKED-Terminierung/SENDING_ACK):
+    // das LETZTE gesendete Wort öffnet das RX-Fenster. Der Zero-Word-Fall
+    // (leere self_address → kein Wort, kein on_word_complete) wird weiterhin
+    // vom Fallback in handle_sounding() abgedeckt.
     if (current_state == ALEState::SOUNDING) {
-        if (words_pending > 0) { --words_pending; return; }
+        if (words_pending > 0) --words_pending;
         // Alle Wörter gesendet — RX-Fenster öffnen (A.5.3.4)
-        if (sounding_phase_ == SoundingPhase::TRANSMITTING) {
+        if (words_pending == 0 && sounding_phase_ == SoundingPhase::TRANSMITTING) {
             sounding_phase_     = SoundingPhase::LISTENING;
             state_entry_time_ms = current_time_ms;  // Fenster-Timer neu starten
             if (rx_enabled_callback) rx_enabled_callback(true);
