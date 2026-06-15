@@ -145,7 +145,7 @@ bool HamlibRadio::configure_port() {
     // Hamlib akzeptiert network:port-Ziele; rigctld arbeitet selbst über TCP.
     // Der konkrete Backend-Transport wird hier über den Porttyp festgelegt.
     if (port_.rfind("tcp://", 0) == 0 || port_.rfind("rigctld://", 0) == 0) {
-        rig_->state.rigport.type = RIG_PORT_NETWORK;
+        rig_->state.rigport.type.rig = RIG_PORT_NETWORK;
         std::string endpoint = port_;
 
         if (endpoint.rfind("tcp://", 0) == 0) {
@@ -154,14 +154,14 @@ bool HamlibRadio::configure_port() {
             endpoint.erase(0, 10);
         }
 
-        std::strncpy(rig_->state.rigport.pathname, endpoint.c_str(), FILPATHLEN);
-        rig_->state.rigport.pathname[FILPATHLEN - 1] = '\0';
+        std::strncpy(rig_->state.rigport.pathname, endpoint.c_str(), HAMLIB_FILPATHLEN);
+        rig_->state.rigport.pathname[HAMLIB_FILPATHLEN - 1] = '\0';
         return true;
     }
 
-    rig_->state.rigport.type = RIG_PORT_SERIAL;
-    std::strncpy(rig_->state.rigport.pathname, port_.c_str(), FILPATHLEN);
-    rig_->state.rigport.pathname[FILPATHLEN - 1] = '\0';
+    rig_->state.rigport.type.rig = RIG_PORT_SERIAL;
+    std::strncpy(rig_->state.rigport.pathname, port_.c_str(), HAMLIB_FILPATHLEN);
+    rig_->state.rigport.pathname[HAMLIB_FILPATHLEN - 1] = '\0';
     rig_->state.rigport.parm.serial.rate = 19200;
 
     return true;
