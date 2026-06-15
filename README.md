@@ -121,10 +121,13 @@ Hamlib-Modell-IDs: `rigctl -l` listet alle unterstützten Geräte.
 | Option | Beschreibung |
 |--------|-------------|
 | `--no-scan` | Scanning-Abschnitt überspringen (Zielstation auf Festkanal) |
+| `--channels FILE` | Channel-Liste aus `.ale`-Datei laden; Änderungen via CMD werden automatisch zurückgeschrieben |
 
 ### Laufzeit-Kommandos (stdin)
 
 Während `ale_cli` läuft, können Kommandos über stdin eingegeben werden:
+
+**Verbindungssteuerung:**
 
 | Kommando | Beschreibung |
 |----------|-------------|
@@ -133,7 +136,18 @@ Während `ale_cli` läuft, können Kommandos über stdin eingegeben werden:
 | `CMD:REJECT` | Eingehenden Anruf ablehnen (TWAS) |
 | `CMD:SCAN` | Scanner-Modus starten |
 | `CMD:STATUS` | Aktuellen SM-Zustand ausgeben |
-| `CMD:HELP` | Kommandoliste |
+| `CMD:HELP` | Vollständige Kommandoliste |
+
+**Channel-Verwaltung:**
+
+| Kommando | Beschreibung |
+|----------|-------------|
+| `CMD:ADD_CHANNEL rx_hz[:tx_hz] [mode] [label]` | Channel hinzufügen oder überschreiben |
+| `CMD:DEL_CHANNEL rx_hz` | Channel per RX-Frequenz entfernen |
+| `CMD:LIST_CHANNELS` | Aktuelle Channel-Liste ausgeben |
+| `CMD:CLEAR_CHANNELS` | Alle Channels entfernen |
+| `CMD:SAVE_CHANNELS [path]` | Channel-Liste in Datei schreiben |
+| `CMD:LOAD_CHANNELS path` | Channel-Liste aus Datei laden |
 
 ---
 
@@ -188,6 +202,71 @@ In Terminal 1 ist dann live zu sehen:
 [TRX] PTT ON  ←── TX
 [TRX] PTT OFF ──► RX
 ```
+
+---
+
+## 📻 Channel-Verwaltung
+
+Channels steuern, auf welcher Frequenz (und in welchem Modus) `ale_cli` sendet und empfängt.
+Ohne konfigurierte Channels bleibt das Radio auf der Frequenz, auf der es vor dem Start war.
+
+### Channel-Format
+
+```
+CMD:ADD_CHANNEL rx_hz[:tx_hz]  [mode]  [label]
+```
+
+| Feld | Beschreibung |
+|------|-------------|
+| `rx_hz` | RX-Frequenz in Hz (Pflicht) |
+| `tx_hz` | TX-Frequenz in Hz (optional; 0 oder fehlt = Simplexbetrieb) |
+| `mode` | Modulationsart: `USB` (Standard), `LSB`, `AM`, `FM`, `CW`, `DATA_USB`, … |
+| `label` | Freitext-Label (optional, beliebig lang) |
+
+**Beispiele:**
+
+```
+CMD:ADD_CHANNEL 14250000                          # 14,250 MHz USB Simplex
+CMD:ADD_CHANNEL 14250000 USB 40m-Calling          # mit Label
+CMD:ADD_CHANNEL 3500000:3600000 LSB 80m-DX        # Duplex RX/TX getrennt
+CMD:ADD_CHANNEL 14074000 DATA_USB FT8             # Datenmodus
+```
+
+### Non-Volatile-Speicherung (`.ale`-Dateiformat)
+
+Channels werden in einer einfachen Textdatei mit der Endung `.ale` gespeichert —
+eine Zeile pro Channel, Kommentare beginnen mit `#`:
+
+```
+# PC-ALE channel list — MIL-STD-188-141B
+# rx_hz tx_hz mode [label]
+14250000 0 USB 40m-Calling
+7100000 0 USB
+3500000 3600000 LSB 80m-DX
+14074000 0 DATA_USB FT8
+```
+
+### Verwendung mit `--channels`
+
+```powershell
+# Beim Start laden (Datei muss nicht existieren — wird beim ersten Speichern angelegt):
+ale_cli.exe --self SAM --channels meine_channels.ale
+
+# Danach Channels zur Laufzeit hinzufügen — werden sofort in meine_channels.ale geschrieben:
+CMD:ADD_CHANNEL 14250000 USB 40m-Calling
+CMD:ADD_CHANNEL 7100000 USB
+
+# Vollständiges Beispiel mit Radio:
+ale_cli.exe --self SAM \
+            --channels meine_channels.ale \
+            --radio hamlib:229:tcp://127.0.0.1:4532 \
+            --in-device "CABLE-B Output" --out-device "CABLE-A Input"
+```
+
+Wenn `--channels` gesetzt ist:
+- `CMD:ADD_CHANNEL`, `CMD:DEL_CHANNEL` und `CMD:CLEAR_CHANNELS` schreiben die Datei automatisch.
+- `CMD:SAVE_CHANNELS` speichert explizit (auch ohne `--channels`).
+- Beim nächsten Start werden alle Channels sofort wiederhergestellt.
 
 ---
 
