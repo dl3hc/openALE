@@ -244,20 +244,58 @@ endif()
 
 if(HAMLIB_FOUND)
     target_sources(ale_pal PRIVATE src/PAL/radios/hamlib_radio.cpp)
-    target_include_directories(ale_pal PRIVATE "${_hamlib_inc}")
     target_link_libraries(ale_pal "${_hamlib_lib}")
     target_compile_definitions(ale_pal PUBLIC HAVE_HAMLIB)
 
-    # DLL-Build: libhamlib-4.dll + Runtime-DLLs neben ale_cli.exe kopieren
-    if(DEFINED _hamlib_bin)
-        file(GLOB _hamlib_dlls "${_hamlib_bin}/*.dll")
-        foreach(_dll ${_hamlib_dlls})
-            add_custom_command(TARGET ale_cli POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_dll}" "$<TARGET_FILE_DIR:ale_cli>"
-                COMMENT "Kopiere $(notdir ${_dll})"
-            )
-        endforeach()
+    if(MSVC)
+        # Hamlib's rig.h inkludiert <pthread.h> — MSVC hat das nicht.
+        # MinGW winpthreads definiert alle pthread-Typen als Pointer (8 Byte auf 64-Bit).
+        # Dieser Stub gibt MSVC die nötigen Typdeklarationen ohne MinGW-Abhängigkeiten.
+        # Stub wird VOR Hamlib-Include gesetzt, damit <pthread.h> hier zuerst gefunden wird.
+        set(_pthread_compat_dir "${CMAKE_BINARY_DIR}/hamlib_msvc_compat")
+        file(MAKE_DIRECTORY "${_pthread_compat_dir}")
+        file(WRITE "${_pthread_compat_dir}/pthread.h"
+"/* Auto-generated MSVC stub — pthread types as in MinGW winpthreads (pointer-sized) */\n\
+#pragma once\n\
+#ifndef HAMLIB_PTHREAD_STUB_H\n\
+#define HAMLIB_PTHREAD_STUB_H\n\
+typedef void* pthread_t;\n\
+typedef void* pthread_mutex_t;\n\
+typedef void* pthread_cond_t;\n\
+typedef void* pthread_rwlock_t;\n\
+typedef int   pthread_mutexattr_t;\n\
+typedef int   pthread_condattr_t;\n\
+typedef int   pthread_rwlockattr_t;\n\
+typedef int   pthread_attr_t;\n\
+typedef int   pthread_key_t;\n\
+typedef int   pthread_once_t;\n\
+#define PTHREAD_MUTEX_INITIALIZER ((pthread_mutex_t)0)\n\
+#define PTHREAD_COND_INITIALIZER  ((pthread_cond_t)0)\n\
+#define PTHREAD_RWLOCK_INITIALIZER ((pthread_rwlock_t)0)\n\
+#define PTHREAD_ONCE_INIT 0\n\
+#endif\n")
+        file(WRITE "${_pthread_compat_dir}/sched.h"
+"#pragma once\n\
+#ifndef HAMLIB_SCHED_STUB_H\n\
+#define HAMLIB_SCHED_STUB_H\n\
+#define SCHED_OTHER 0\n\
+#define SCHED_FIFO  1\n\
+#define SCHED_RR    2\n\
+struct sched_param { int sched_priority; };\n\
+#endif\n")
+        file(WRITE "${_pthread_compat_dir}/semaphore.h"
+"#pragma once\n\
+#ifndef HAMLIB_SEMAPHORE_STUB_H\n\
+#define HAMLIB_SEMAPHORE_STUB_H\n\
+typedef void* sem_t;\n\
+#endif\n")
+        # Compat-Dir VOR Hamlib-Include — Compiler findet pthread.h hier zuerst
+        target_include_directories(ale_pal PRIVATE
+            "${_pthread_compat_dir}"
+            "${_hamlib_inc}"
+        )
+    else()
+        target_include_directories(ale_pal PRIVATE "${_hamlib_inc}")
     endif()
 endif()
 
@@ -314,6 +352,18 @@ target_include_directories(ale_cli PRIVATE
 )
 
 target_link_libraries(ale_cli ale_app_core ale_audio_device ale_stores ale_pal)
+
+# DLL-Build: libhamlib-4.dll + Runtime-DLLs neben ale_cli.exe kopieren
+# (muss nach add_executable stehen)
+if(HAMLIB_FOUND AND DEFINED _hamlib_bin)
+    file(GLOB _hamlib_dlls "${_hamlib_bin}/*.dll")
+    foreach(_dll ${_hamlib_dlls})
+        add_custom_command(TARGET ale_cli POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_dll}" "$<TARGET_FILE_DIR:ale_cli>"
+        )
+    endforeach()
+endif()
 
 # ─────────────────────────────────────────────────────────────────────────────
 
