@@ -234,20 +234,20 @@ constexpr double calc_tx_ms(uint32_t conclusion_words) {
 // The LISTENING windows already include the SW-decoder detect time and the
 // round-trip audio latency (see handle_calling LISTENING docs).
 //
-// leading_frame_words: already-doubled word count so one × Trw gives Tlc.
-// conclusion_words:    termination section size (Tx = words × Trw).
+// leading_seq_words: already-doubled word count from leading_seq_.size() (→ Tlc).
+// conclusion_words:  conclusion section size from conclusion_seq_.size() (→ Tx).
 // ────────────────────────────────────────────────────────────────────────────
 
 struct CallingBudgetParams {
     uint32_t n_channels;           // calling_channels.size(), min 1
     uint32_t target_scan_channels; // channels in the target's scan list
-    uint32_t leading_frame_words;  // already-doubled leading frame size (→ Tlc)
-    uint32_t conclusion_words;     // conclusion frame size (→ Tx)
+    uint32_t leading_seq_words;    // already-doubled leading seq size (→ Tlc)
+    uint32_t conclusion_words;     // conclusion seq size (→ Tx)
 };
 
 constexpr uint32_t calc_calling_timeout_ms(const CallingBudgetParams& p) {
     const uint32_t tsc    = p.target_scan_channels * 2u * TRW_MS;
-    const uint32_t tlc    = p.leading_frame_words  * TRW_MS;
+    const uint32_t tlc    = p.leading_seq_words    * TRW_MS;
     const uint32_t tx     = p.conclusion_words     * TRW_MS;
     const uint32_t listen = static_cast<uint32_t>(0.5 + Twrt_slow_ms)   // 1960
                           + static_cast<uint32_t>(Tdrw_ms)              // + 784
@@ -280,6 +280,12 @@ namespace ALETimingConstants {
     constexpr uint32_t Twt_ms  = ale::Twt_ale_ms;     //  784 ms  (= Tdrw, ALE-only LBT)
     constexpr uint32_t Tt_ms   = static_cast<uint32_t>(ale::TT_BLIND_MS + 0.5);  // 1045 ms
     constexpr uint32_t Tlww_ms = ale::Tlww_ms;        //  392 ms  (= Trw, T1ww)
+    // Detect-following-(redundant)-word window (= Tdrw = 2×Trw).  Used as the
+    // settle after a conclusion's last word: it must exceed one on-grid word
+    // period (Trw) so a trailing DATA/REP address-extension word is collected
+    // before the receiver leaves the collecting phase, independent of the
+    // update()/word-arrival ordering at the boundary.
+    constexpr uint32_t Tdrw_ms = 2u * ale::TRW_MS;    //  784 ms  (= 2×Trw, Tdrw)
     constexpr uint32_t Twa_ms  = ale::Twa_ms;         // 30 000 ms
     constexpr uint32_t Tps_ms  = ale::Tps_ms;         // 2 700 000 ms (45 min)
     constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;  // 120 000 ms

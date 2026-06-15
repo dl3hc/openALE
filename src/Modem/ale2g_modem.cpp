@@ -35,10 +35,10 @@ void Modulator::enqueue_word(const ALEWord& word)
     enqueue_tx49_(word.encode());
 }
 
-void Modulator::enqueue_frame(const Frame& frame)
+void Modulator::enqueue_sequence(const ALESequence& seq)
 {
     std::lock_guard<std::mutex> lk(mtx_);
-    for (uint64_t tx49 : frame.encode())
+    for (uint64_t tx49 : seq.encode())
         enqueue_tx49_(tx49);
 }
 

@@ -70,6 +70,168 @@ static ALEWord rx_word(PreambleType t, const char a3[3])
     return WordParser::make_word(t, ch);
 }
 
+// Deliver one received word at protocol time t: advance the SM clock to t, then
+// feed the word.  update(t) runs the WAIT_CYCLE_END / WAIT_ACK timeout checks at
+// the word boundary, exactly as the real RX path does between word arrivals.
+static void rx_at(ALEStateMachine& sm, uint32_t t, PreambleType type, const char* a3)
+{
+    const char ch[3] = { a3[0], a3[1], a3[2] };
+    sm.update(t);
+    sm.process_received_word(WordParser::make_word(type, ch));
+}
+
+// ============================================================================
+// RX MULTI-WORD — receiving (accepting) calls whose addresses exceed 3 chars.
+//
+// A calling cycle for an N-char address carries TO + DATA + REP + … extension
+// words; the leading call sends the WHOLE address twice (Tlc = 2 × Tc).  The
+// longer the address, the later the conclusion (TIS) arrives relative to the
+// moment the called station detects its own first word and enters HANDSHAKE.
+// These tests drive that RX timeline word-by-word and verify the conclusion is
+// still collected (regression for the WAIT_CYCLE_END timeout being measured
+// from frame start instead of from the last received word).
+// ============================================================================
+
+// Helper: feed a full incoming individual call (scanning + leading + conclusion)
+// for self-address `self`, called by `caller`, on the SM grid (one word / Trw).
+// Returns the SM after the conclusion word has been delivered.
+static void feed_incoming_call(ALEStateMachine& sm,
+                               const std::string& self,
+                               const std::string& caller,
+                               uint32_t t0 = 1000)
+{
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+
+    // What SAM (caller) transmits to reach `self`:
+    //   scanning: TO <self first-word>            × 2 slots
+    //   leading : full TO <self address>          × 2  (Tlc = 2 × Tc)
+    //   conclusion: TIS <caller address>
+    const auto self_to   = AddressEncoder::encode(self,   PreambleType::TO);
+    const auto caller_tis = AddressEncoder::encode(caller, PreambleType::TIS);
+
+    uint32_t slot = 0;
+    auto at = [&](){ return t0 + (slot++) * Trw; };
+
+    // Scanning section: first word of the destination, twice.
+    rx_at(sm, at(), PreambleType::TO, self_to.front().address);
+    rx_at(sm, at(), PreambleType::TO, self_to.front().address);
+
+    // Leading call: whole destination address, sent twice.
+    for (int copy = 0; copy < 2; ++copy)
+        for (const auto& w : self_to)
+            rx_at(sm, at(), w.type, w.address);
+
+    // Conclusion: caller's whole address (TIS + DATA/REP extensions).
+    for (const auto& w : caller_tis)
+        rx_at(sm, at(), w.type, w.address);
+}
+
+// JOE has a >3-char own address; a 3-char SAM calls it.  The leading call (full
+// JOE address, doubled) pushes the conclusion well past the old Twce window.
+bool test_rx_multiword_self_address()
+{
+    std::cout << "\n[RX-MULTIWORD] Accept call addressed to a >3-char own address\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"JOEMAN", 0);
+    sm.process_event(ALEEvent::START_SCAN);
+
+    feed_incoming_call(sm, /*self=*/"JOEMAN", /*caller=*/"SAM");
+
+    bool detected   = sm.get_state() == ALEState::HANDSHAKE
+                   || sm.get_state() == ALEState::LINKED;
+    bool got_concl  = sm.is_hs_conclusion_rcvd();
+    bool caller_ok  = sm.get_caller_address() == "SAM";
+
+    std::cout << "  reached/stayed in HANDSHAKE: " << (detected ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+    std::cout << "  conclusion (TIS) collected: " << (got_concl ? "PASS" : "FAIL") << "\n";
+    std::cout << "  caller address = \"SAM\": " << (caller_ok ? "PASS" : "FAIL")
+              << " (got \"" << sm.get_caller_address() << "\")\n";
+
+    return detected && got_concl && caller_ok;
+}
+
+// Reconstruct a whole address from a contiguous run of TX words (anchor word
+// followed by DATA/REP extension words), mirroring how a peer reassembles it.
+static std::string reassemble(const std::vector<ALEWord>& w, size_t begin, size_t count)
+{
+    std::string a;
+    for (size_t i = begin; i < begin + count && i < w.size(); ++i)
+        a += trim_ale_address(w[i].address);
+    return a;
+}
+
+// Full accept path at the maximum 15-char address length, for BOTH endpoints:
+// JOE must collect SAM's whole 15-char address from the conclusion and then
+// transmit a response that re-addresses that whole address (TO caller × 2) and
+// announces its own whole 15-char address (TIS self).
+bool test_rx_multiword_full_accept_15char()
+{
+    std::cout << "\n[RX-MULTIWORD] Full accept path at 15-char addresses\n";
+
+    const std::string self   = "VERYLONGCALLSIG";  // 15 chars (5 words)
+    const std::string caller = "SAMUELBRAVOXRAY";  // 15 chars (5 words)
+
+    WordCapture cap;  // captures JOE's transmitted response words
+    ALEStateMachine sm = make_sm(cap, self, 0);
+    sm.process_event(ALEEvent::START_SCAN);
+
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
+
+    feed_incoming_call(sm, self, caller);            // scanning + leading + conclusion
+
+    bool caller_ok = sm.get_caller_address() == caller;
+    std::cout << "  whole caller address collected: " << (caller_ok ? "PASS" : "FAIL")
+              << " (got \"" << sm.get_caller_address() << "\")\n";
+
+    // Drive JOE through the conclusion settle → SLOT_WAIT → CHANNEL_CHECK (LBT
+    // clear, no words) → SENDING_RESPONSE, which builds the response frame.
+    uint32_t t = 1000u + 16u * Trw;                  // time of last conclusion word
+    sm.update(t + Tdrw + 1);                          // WAIT_CYCLE_END settle → SLOT_WAIT
+    sm.update(t + Tdrw + 2);                          // SLOT_WAIT (Tswt=0) → CHANNEL_CHECK
+    sm.update(t + Tdrw + 2 + Trw + 1);                // CHANNEL_CHECK clear → SENDING_RESPONSE
+
+    // Response frame (Figure A-30): TO caller × 2 + TIS self.
+    bool count_ok = cap.size() == 15;                 // 5 (TO) × 2 + 5 (TIS)
+    bool to_addr_ok  = count_ok && reassemble(cap.words, 0, 5)  == caller
+                                && reassemble(cap.words, 5, 5)  == caller;
+    bool tis_addr_ok = count_ok && cap.words[10].type == PreambleType::TIS
+                                && reassemble(cap.words, 10, 5) == self;
+
+    std::cout << "  response = TO caller ×2 + TIS self (" << cap.size() << " words): "
+              << (count_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  response re-addresses whole 15-char caller: "
+              << (to_addr_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  response announces whole 15-char self: "
+              << (tis_addr_ok ? "PASS" : "FAIL") << "\n";
+
+    return caller_ok && count_ok && to_addr_ok && tis_addr_ok;
+}
+
+// 3-char JOE accepts a call from a >3-char SAM.  The caller address must be
+// reassembled from TIS + DATA across the conclusion.
+bool test_rx_multiword_caller_address()
+{
+    std::cout << "\n[RX-MULTIWORD] Reassemble a >3-char caller address from TIS+DATA\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
+    sm.process_event(ALEEvent::START_SCAN);
+
+    feed_incoming_call(sm, /*self=*/"JOE", /*caller=*/"SAMUEL");
+
+    bool got_concl = sm.is_hs_conclusion_rcvd();
+    bool caller_ok = sm.get_caller_address() == "SAMUEL";
+
+    std::cout << "  conclusion (TIS) collected: " << (got_concl ? "PASS" : "FAIL") << "\n";
+    std::cout << "  caller address = \"SAMUEL\": " << (caller_ok ? "PASS" : "FAIL")
+              << " (got \"" << sm.get_caller_address() << "\")\n";
+
+    return got_concl && caller_ok;
+}
+
 // ============================================================================
 // AC-WORD-003-1 — TO for individual calls
 // REQ-WORD-003: "TO shall be used in individual call protocols for single
@@ -808,9 +970,9 @@ bool test_caller_terminate_returns_to_prelink_state()
     sm.update(t0 + 200);
     sm.process_received_word(rx_word(PreambleType::TIS, "JOE"));
 
-    // Tlww settle → SENDING_ACK; build + drain the ACK frame → LINKED.
-    sm.update(t0 + 200 + ALETimingConstants::Tlww_ms + 1);  // LISTENING(c) → SENDING_ACK
-    sm.update(t0 + 200 + ALETimingConstants::Tlww_ms + 2);  // SENDING_ACK → build_ack_words()
+    // Conclusion settle (Tdrw = 2×Trw) → SENDING_ACK; build + drain ACK → LINKED.
+    sm.update(t0 + 200 + ALETimingConstants::Tdrw_ms + 1);  // LISTENING(c) → SENDING_ACK
+    sm.update(t0 + 200 + ALETimingConstants::Tdrw_ms + 2);  // SENDING_ACK → build_ack_words()
     for (int i = 0; i < 3; ++i) sm.on_word_complete();      // ACK drained → LINKED
 
     bool linked = (sm.get_state() == ALEState::LINKED);
@@ -952,6 +1114,14 @@ int run_all_tests()
     // AC-WORD-006-4
     run("AC-WORD-006-4 group call max 5 THRU targets",
         test_group_call_max_5_targets());
+
+    // RX multi-word address regression (accepting calls > 3 chars)
+    run("RX-MULTIWORD accept call to >3-char own address",
+        test_rx_multiword_self_address());
+    run("RX-MULTIWORD reassemble >3-char caller address",
+        test_rx_multiword_caller_address());
+    run("RX-MULTIWORD full accept path at 15-char addresses",
+        test_rx_multiword_full_accept_15char());
 
     // T-07 — caller-side termination regression
     run("T-07 caller CMD:TERMINATE returns to pre-link state",

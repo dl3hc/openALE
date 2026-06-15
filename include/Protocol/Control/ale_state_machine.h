@@ -21,7 +21,7 @@
 #include "Protocol/Control/ale_channel_manager.h"
 #include "Protocol/Message/ale_message.h"
 #include "Word/ale_word.h"
-#include "Word/ale_frame.h"
+#include "Word/ale_sequence.h"
 #include "Word/address_encoder.h"
 #include "Stores/address_book.h"
 #include "Protocol/Control/ale_timing.h"
@@ -259,6 +259,17 @@ public:
      */
     void emergency_manual_control();
 
+    /**
+     * Signal any user-layer activity (voice PTT, data TX/RX, AMD) to the
+     * ALE controller.  Resets the Twa inactivity timer (§A.5.5.3.5.2) so
+     * that automatic link termination is deferred.
+     *
+     * No-op when not in LINKED state.  The application layer must call this
+     * whenever traffic flows on the link — ALE itself only sees ALE words,
+     * so it cannot observe voice or data activity on its own.
+     */
+    void on_link_activity();
+
     void process_received_word(const ALEWord& word);
     void update_link_quality(const LinkQuality& lq);
     const Channel* select_best_channel() const;
@@ -365,19 +376,19 @@ private:
 
     bool     active_call_is_group;     ///< true = Star-Group-Call (T-11)
 
-    // ── Pre-computed TX frames ───────────────────────────────────────────────
-    // Computed once in initiate_call() / initiate_net_call() via ALEFrameBuilder;
-    // the raw address string is not re-processed after that point.
+    // ── Pre-computed TX sequences ────────────────────────────────────────────
+    // Built once in initiate_call() / initiate_net_call() via ALESequenceBuilder.
+    // The raw address string is never re-processed after that point.
     //
-    // scanning_frame_   — one word (A.5.2.5.1, first 3 chars only)
-    // leading_frame_    — full TO address × 2 (Tlc = 2 × Tc, A.5.5.3.1)
-    //                     ALEFrameBuilder::leading_individual() pre-doubles the sequence;
-    //                     on_word_complete() counts leading_frame_.size() total slots.
-    // conclusion_frame_ — full TIS address, sent once (A.5.2.3.2.2)
-    Frame scanning_frame_;    ///< 1 word — TO first-word only
-    Frame leading_frame_;     ///< 2×wpa words — full TO address doubled (Tlc)
-    Frame conclusion_frame_;  ///< TIS own address — sent once
-    Frame group_scan_frame_;  ///< THRU/REP-Paar für GROUP_SCANNING_CALL (T-11) in CONCLUSION
+    // scanning_seq_   — scan_channels×2 words (§A.5.2.5.1, first 3 chars only)
+    // leading_seq_    — full TO address × 2 (Tlc = 2×Tc, §A.5.5.3.1)
+    //                   ALESequenceBuilder::leading_call() pre-doubles the sequence;
+    //                   on_word_complete() counts leading_seq_.size() total slots.
+    // conclusion_seq_ — TIS own address, sent once (§A.5.2.3.2.2)
+    ALESequence scanning_seq_;    ///< scan_channels×2 words — TO first-word repeated
+    ALESequence leading_seq_;     ///< 2×wpa words — full TO address doubled (Tlc)
+    ALESequence conclusion_seq_;  ///< TIS/TWAS own address — sent once
+    ALESequence group_scan_seq_;  ///< THRU/REP pairs for GROUP_SCANNING_CALL (T-11)
 
     // ── LBT and tuning (AC-LINK-017-1/2) ─────────────────────────────────
     uint32_t     lbt_start_ms;           ///< When LBT phase started (for Twt timeout)
@@ -389,7 +400,7 @@ private:
 
     // ── Response tracking: LISTENING → SENDING_ACK ───────────────────────
     bool         response_to_detected;         ///< true once "TO SAM" received from JOE
-    uint32_t     response_rx_start_ms;         ///< When "TO SAM" was first seen (for AC-LINK-019-8)
+    uint32_t     response_rx_start_ms;         ///< When "TO SAM" was first seen (diagnostic; the AC-LINK-019-8 conclusion wait is silence-based on last_word_time_ms)
     uint32_t     tlww_start_ms;                ///< When "TIS JOE" conclusion was received; 0 = not yet
     bool         collecting_remote_conclusion; ///< TIS received; still collecting DATA/REP (Fix 5)
     std::string  to_address;                  ///< Identity of responding station (from TIS word)
@@ -400,7 +411,7 @@ private:
     uint32_t       tswt_ms_;             ///< Berechnete Slot-Wartezeit in ms (T-09)
     uint32_t       slot_wait_start_ms_;  ///< Startzeit des SLOT_WAIT (T-09)
     uint32_t       twce_ms;              ///< Twce = 2 × own Ts, computed on HANDSHAKE entry
-    uint32_t       twce_start_ms;        ///< Timestamp when HANDSHAKE was entered
+    uint32_t       twce_start_ms;        ///< Timestamp when HANDSHAKE was entered (diagnostic; the Twce abort is silence-based on last_word_time_ms)
     uint32_t       hs_tlww_start_ms;     ///< Tlww in WAIT_CYCLE_END and WAIT_ACK; 0 = not yet
     bool           hs_conclusion_rcvd;   ///< TIS [caller] received in WAIT_CYCLE_END
     std::string    caller_address;       ///< Calling station identity (from TIS word)
@@ -479,38 +490,35 @@ private:
      */
     uint32_t compute_calling_timeout_ms() const;
 
-    // ── TX sequence builders ─────────────────────────────────────────────
+    // ── TX sequence transmitters ─────────────────────────────────────────
     //
-    // The builders transmit words from the pre-computed frames filled by
-    // initiate_call().  None of them re-processes address strings.
+    // These functions transmit words from the pre-computed sequences built by
+    // initiate_call() via ALESequenceBuilder.  None re-processes address strings.
     //
-    // For ACK and response, addresses are known only during the receive path,
-    // so they are encoded on-the-fly via AddressEncoder::encode() at that point.
+    // For ACK and response, the peer address is only known during the receive
+    // path, so those sequences are built on-the-fly at send time.
 
     /**
      * Enqueue the complete calling TX sequence back-to-back at tune-complete:
-     * scanning section (C × 2 slots) + leading call (pre-doubled) + conclusion.
+     *   scanning_seq_ (scan_channels×2 words) + leading_seq_ + conclusion_seq_.
      *
-     * The audio layer renders the queued symbol frames as one contiguous
-     * transmission; the Trw grid is defined by the sample stream (49 symbols
-     * × 8 ms per word), not by wall time.  on_word_complete() advances the
-     * calling phases against exactly these word counts.
+     * The audio layer renders these as one contiguous transmission; the Trw
+     * grid is a property of the sample stream (49 symbols × 8 ms per word).
+     * on_word_complete() advances calling phases against these word counts.
      */
     void enqueue_call_sequence_();
 
     /**
-     * SENDING_ACK: third handshake frame per REQ-LINK-008 / A.5.5.3.4.
-     * Frame: TO [to_address] × 2 + TIS [self_address]  (Figure A-31).
-     * Encoded via AddressEncoder::encode() at send time (to_address is set
-     * during the LISTENING phase, not at initiate_call() time).
+     * SENDING_ACK: third handshake frame §A.5.5.3.4 / Figure A-31.
+     * Sequence: TO [to_address] × 2 + TIS [self]
+     * Built at send time because to_address is set during LISTENING phase.
      */
     void build_ack_words();
 
     /**
-     * SENDING_RESPONSE: JOE's response frame per A.5.5.3.3 / Figure A-30.
-     * Frame: TO [caller_address] × 2 + TIS [own addr].
-     * Encoded via AddressEncoder::encode() at send time (caller_address is set
-     * during WAIT_CYCLE_END, not at initiate_call() time).
+     * SENDING_RESPONSE: JOE's response frame §A.5.5.3.3 / Figure A-30.
+     * Sequence: TO [caller_address] × 2 + TIS [self]  (or TWAS [self] if reject).
+     * Built at send time because caller_address is set during WAIT_CYCLE_END.
      */
     void build_response_words();
 

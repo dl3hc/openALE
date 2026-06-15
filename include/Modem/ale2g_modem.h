@@ -19,7 +19,7 @@
  *   49 symbols × 8 ms/symbol = 392 ms = Trw (REQ-WAVEFORM-010).
  *
  * Pull API (thread-safe):
- *   Main thread  — enqueue_word() / enqueue_frame() / is_transmitting()
+ *   Main thread  — enqueue_word() / enqueue_sequence() / is_transmitting()
  *   Audio thread — pull_symbol_frame(out_49)
  *
  * ── Demodulator ──────────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@
 #include "FEC/golay.h"
 #include "Protocol/Control/ale_timing.h"
 #include "Word/ale_word.h"
-#include "Word/ale_frame.h"
+#include "Word/ale_sequence.h"
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -77,10 +77,10 @@ public:
     void enqueue_word(const ALEWord& word);
 
     /**
-     * Enqueue all words of a Frame for sequential transmission.
+     * Enqueue all words of an ALESequence for sequential transmission.
      * Thread-safe: may be called concurrently with pull_symbol_frame().
      */
-    void enqueue_frame(const Frame& frame);
+    void enqueue_sequence(const ALESequence& seq);
 
     /**
      * Pull the next pending symbol frame (49 symbol values, 0–7) into out_49.

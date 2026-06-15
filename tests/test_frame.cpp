@@ -2,8 +2,8 @@
  * \file test_frame.cpp
  * \brief Tests for FEAT-FRAME-001 — Frame-Grundstruktur & Wortbasis
  *
- * Part 1 (AC-FRAME-002): Frame class unit tests — encode() correctness and
- *   roundtrip via ALEFECCodec::deinterleave_word().
+ * Part 1 (AC-FRAME-002): ALESequence class unit tests — encode() correctness
+ *   and roundtrip via ALEFECCodec::deinterleave_word().
  *
  * Part 2 (AC-FRAME-001): ALEStateMachine / ALE2GModem::Modulator integration tests —
  *   slot timing, phase sequencing, and modem 3× copy behaviour.
@@ -23,7 +23,7 @@
 
 #include "Protocol/Control/ale_state_machine.h"
 #include "Modem/ale2g_modem.h"
-#include "Word/ale_frame.h"
+#include "Word/ale_sequence.h"
 #include "FEC/ale_fec_codec.h"
 #include "FSK/ale_waveform.h"
 #include "FSK/tone_generator.h"
@@ -40,17 +40,17 @@ namespace ale {
 // AC-FRAME-002 — Frame class unit tests
 // ============================================================================
 
-// AC-FRAME-002-1: Frame::encode() produces one entry per word and each entry
-// equals ALEWord::encode() for that word.
+// AC-FRAME-002-1: ALESequence::encode() produces one entry per word and each
+// entry equals ALEWord::encode() for that word.
 bool test_ac_002_1_encode_delegates_to_word_encode()
 {
-    std::cout << "\n[AC-FRAME-002-1] Frame::encode() delegates to ALEWord::encode()\n";
+    std::cout << "\n[AC-FRAME-002-1] ALESequence::encode() delegates to ALEWord::encode()\n";
 
     const char addr[] = {'S', 'A', 'M'};
     ALEWord word = WordParser::make_word(PreambleType::TO, addr);
-    Frame frame({word});
+    ALESequence seq({word});
 
-    auto encoded = frame.encode();
+    auto encoded = seq.encode();
     bool size_ok  = (encoded.size() == 1);
     bool value_ok = size_ok && (encoded[0] == word.encode());
 
@@ -64,13 +64,13 @@ bool test_ac_002_1_encode_delegates_to_word_encode()
 // payload back to their original values with zero FEC errors.
 bool test_ac_002_2_encode_roundtrip()
 {
-    std::cout << "\n[AC-FRAME-002-2] Frame::encode() roundtrip via ALEFECCodec::deinterleave_word()\n";
+    std::cout << "\n[AC-FRAME-002-2] ALESequence::encode() roundtrip via ALEFECCodec::deinterleave_word()\n";
 
     const char addr[] = {'S', 'A', 'M'};
     ALEWord word = WordParser::make_word(PreambleType::TO, addr);
-    Frame frame({word});
+    ALESequence seq({word});
 
-    auto encoded = frame.encode();
+    auto encoded = seq.encode();
 
     Golay::DecodeResult fec;
     uint32_t decoded      = ALEFECCodec::deinterleave_word(encoded[0], fec);
@@ -90,18 +90,18 @@ bool test_ac_002_2_encode_roundtrip()
     return fec_ok && preamble_ok && payload_ok;
 }
 
-// AC-FRAME-002-3: multi-word Frame preserves insertion order in encode().
+// AC-FRAME-002-3: multi-word ALESequence preserves insertion order in encode().
 bool test_ac_002_3_multi_word_order()
 {
-    std::cout << "\n[AC-FRAME-002-3] Frame::encode() preserves word order\n";
+    std::cout << "\n[AC-FRAME-002-3] ALESequence::encode() preserves word order\n";
 
     const char sam[] = {'S', 'A', 'M'};
     const char bob[] = {'B', 'O', 'B'};
     ALEWord w1 = WordParser::make_word(PreambleType::TO,  sam);
     ALEWord w2 = WordParser::make_word(PreambleType::TIS, bob);
-    Frame frame({w1, w2});
+    ALESequence seq({w1, w2});
 
-    auto encoded = frame.encode();
+    auto encoded = seq.encode();
     bool size_ok  = (encoded.size() == 2);
     bool order_ok = size_ok
                     && (encoded[0] == w1.encode())
@@ -113,12 +113,12 @@ bool test_ac_002_3_multi_word_order()
     return size_ok && order_ok;
 }
 
-// AC-FRAME-002-4: empty Frame produces an empty encode() result.
+// AC-FRAME-002-4: empty ALESequence produces an empty encode() result.
 bool test_ac_002_4_empty_frame()
 {
-    std::cout << "\n[AC-FRAME-002-4] Empty Frame\n";
+    std::cout << "\n[AC-FRAME-002-4] Empty ALESequence\n";
 
-    Frame empty;
+    ALESequence empty;
     bool is_empty   = empty.empty();
     bool size_zero  = (empty.size() == 0);
     bool enc_empty  = empty.encode().empty();
@@ -557,7 +557,7 @@ int run_all_tests()
         else        { ++fail_count; std::cout << "  *** FAILED: " << name << "\n"; }
     };
 
-    // ── Frame class unit tests ────────────────────────────────────────────────
+    // ── ALESequence class unit tests ──────────────────────────────────────────
     run("AC-FRAME-002-1        encode() delegates to ALEWord::encode()",
         test_ac_002_1_encode_delegates_to_word_encode());
 
@@ -567,7 +567,7 @@ int run_all_tests()
     run("AC-FRAME-002-3        encode() preserves word order (multi-word)",
         test_ac_002_3_multi_word_order());
 
-    run("AC-FRAME-002-4        empty Frame → empty encode()",
+    run("AC-FRAME-002-4        empty ALESequence → empty encode()",
         test_ac_002_4_empty_frame());
 
     // ── SM / modem integration timing tests ──────────────────────────────────
