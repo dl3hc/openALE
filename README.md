@@ -28,48 +28,191 @@ This implementation is built **entirely from public MIL-STD specifications**, no
 
 ## 🚀 Quick Start
 
-### Build & Test
+### Build
 ```bash
-git clone https://github.com/Alex-Pennington/PC-ALE.git
+git clone https://github.com/dl3hc/PC-ALE.git
 cd PC-ALE
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build .
-ctest --verbose  # All 91 tests should pass
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --verbose
 ```
 
-### Run Examples
+### Optional: Hamlib (Radio CAT/PTT)
+
+**Linux:**
 ```bash
-./example_complete_stack      # Full 2G ALE demonstration
-./example_aqc_usage           # AQC-ALE enhanced calling
-./example_fs1052_transfer     # Reliable data transfer
-./example_ale_decoder         # Basic ALE decoding
+sudo apt install libhamlib-dev
+cmake -S . -B build   # wird automatisch erkannt
 ```
+
+**Windows:**
+Hamlib-Release-ZIP von https://github.com/Hamlib/Hamlib/releases herunterladen,
+dann in `deps/hamlib/` entpacken (siehe `deps/hamlib/README.txt`):
+```
+deps/hamlib/bin/libhamlib-4.dll
+deps/hamlib/bin/libwinpthread-1.dll
+deps/hamlib/include/hamlib/rig.h
+deps/hamlib/lib/libhamlib.dll.a
+```
+CMake findet die DLLs automatisch und kopiert sie neben `ale_cli.exe`.
+
+---
+
+## 📡 ale_cli — Verwendung
+
+### Grundprinzip
+
+Jede Instanz startet im Idle-Modus und reagiert automatisch auf Anrufe.
+`--call` initiiert beim Start einen Anruf; ohne `--call` wartet die Station.
+
+```
+ale_cli --self ADDR [--call TARGET] [Audio-Optionen] [Radio-Optionen] [RX-Tuning]
+```
+
+### Pflichtparameter
+
+| Option | Beschreibung |
+|--------|-------------|
+| `--self ADDR` | Eigene ALE-Adresse (3–15 Zeichen, Basic-38-Zeichensatz) |
+
+### Audio
+
+| Option | Beschreibung |
+|--------|-------------|
+| `--in-device NAME` | Soundkarten-Eingang (Teilstring des Gerätenamens) |
+| `--out-device NAME` | Soundkarten-Ausgang |
+| `--list-devices` | Verfügbare Audiogeräte auflisten und beenden |
+
+### Radio (CAT / PTT)
+
+| Option | Beschreibung |
+|--------|-------------|
+| `--radio hamlib:229:COM3` | IC-7300 über seriellen Port COM3 |
+| `--radio hamlib:229:tcp://127.0.0.1:4532` | IC-7300 über laufenden rigctld |
+| `--radio hamlib:2:tcp://127.0.0.1:4532` | `radio_mock.exe` (Test ohne Hardware) |
+
+Hamlib-Modell-IDs: `rigctl -l` listet alle unterstützten Geräte.
+
+### RX-Empfindlichkeit (A.5.2.6.3)
+
+| Option | Beschreibung |
+|--------|-------------|
+| `--golay-mode N` | Golay-Korrekturstärke: 3=3/4 (Standard), 2=2/5, 1=1/6, 0=0/7 |
+| `--unanimous N` | Min. übereinstimmende 2/3-Votes pro Wort (0–49, Standard 33) |
+| `--adaptive` | Golay-Modus + Votes automatisch an Signalqualität anpassen |
+| `--debug-rx` | RX-Pegel und jedes dekodierte Wort auf stdout ausgeben |
+
+### Sonstige Optionen
+
+| Option | Beschreibung |
+|--------|-------------|
+| `--no-scan` | Scanning-Abschnitt überspringen (Zielstation auf Festkanal) |
+
+### Laufzeit-Kommandos (stdin)
+
+Während `ale_cli` läuft, können Kommandos über stdin eingegeben werden:
+
+| Kommando | Beschreibung |
+|----------|-------------|
+| `CMD:CALL ADDR` | Verbindungsaufbau zu ADDR initiieren |
+| `CMD:TERMINATE` | Aktive Verbindung beenden |
+| `CMD:REJECT` | Eingehenden Anruf ablehnen (TWAS) |
+| `CMD:SCAN` | Scanner-Modus starten |
+| `CMD:STATUS` | Aktuellen SM-Zustand ausgeben |
+| `CMD:HELP` | Kommandoliste |
+
+---
+
+## 🔁 Testszenarien
+
+### Ein-PC-Test (Loopback mit VB-Audio CABLE A+B)
+
+```
+Terminal 1 (BOB — wartet):
+  ale_cli --self BOB --in-device "CABLE-A Output" --out-device "CABLE-B Input"
+
+Terminal 2 (SAM — ruft an):
+  ale_cli --self SAM --in-device "CABLE-B Output" --out-device "CABLE-A Input"
+  → CMD:CALL BOB
+```
+
+CABLE-A trägt SAM→BOB, CABLE-B trägt BOB→SAM.
+
+### Zwei-PC-Test (physisches Kabel oder Soundkarten-Loopback)
+
+```
+PC 1 (BOB):  ale_cli --self BOB
+PC 2 (SAM):  ale_cli --self SAM
+→ Lautsprecherausgang PC2 an Mikrofon PC1 (und umgekehrt)
+→ CMD:CALL BOB im SAM-Terminal
+```
+
+### Drei-Terminal-Test mit Mock-TRX
+
+Testet den vollständigen Radio-Steuer-Code-Pfad (PTT, Frequenz, Modus) ohne Hardware:
+
+```
+Terminal 1 — Mock-TRX starten:
+  radio_mock.exe
+
+Terminal 2 — BOB (wartet):
+  ale_cli --self BOB \
+          --in-device "CABLE-A Output" --out-device "CABLE-B Input" \
+          --radio hamlib:2:tcp://127.0.0.1:4532
+
+Terminal 3 — SAM (ruft an):
+  ale_cli --self SAM \
+          --in-device "CABLE-B Output" --out-device "CABLE-A Input" \
+          --radio hamlib:2:tcp://127.0.0.1:4532
+  → CMD:CALL BOB
+```
+
+In Terminal 1 ist dann live zu sehen:
+```
+[TRX] Freq  14000.000 kHz
+[TRX] Mode  USB  BW=2400 Hz
+[TRX] PTT ON  ←── TX
+[TRX] PTT OFF ──► RX
+```
+
+---
+
+## radio_mock — Mock-TRX Server
+
+`radio_mock.exe` implementiert das Hamlib rigctld-Netzwerkprotokoll und gibt
+alle CAT-Befehle, die `ale_cli` sendet, lesbar im Terminal aus — ohne jede Hardware.
+
+```bash
+radio_mock.exe [port]    # Default-Port: 4532
+```
+
+`ale_cli` verbindet sich mit `--radio hamlib:2:tcp://127.0.0.1:<port>`.
+Hamlib-Modell `2` ist `RIG_MODEL_NETRIGCTL` — der eingebaute rigctld-Client-Backend.
 
 ---
 
 ## 📊 Current Status
 
-| Phase | Component | Tests | Status |
-|-------|-----------|-------|--------|
-| 1 | 8-FSK Modem Core | 0/5 | 🔄 In Progress |
-| 2 | Word Structure & Protocol | 0/5 | 🔄 In Progress |
-| 3 | Link State Machine | 0/7 | 🔄 In Progress |
-| 4 | AQC-ALE Extensions | 0/18 | 🔄 In Progress |
-| 5 | FS-1052 ARQ Protocol | 0/19 | 🔄 In Progress |
-| 6 | LQA System | 0/37 | 🔄 In Progress |
-| **Total** | **Complete Protocol Stack** | **0/91** | **0%** |
+| Phase | Component | Status |
+|-------|-----------|--------|
+| 1 | 8-FSK Modem Core | ✅ Complete |
+| 2 | Word Structure & Protocol | ✅ Complete |
+| 3 | Link State Machine | ✅ Complete |
+| 4 | AQC-ALE Extensions | ✅ Complete |
+| 5 | FS-1052 ARQ Protocol | ✅ Complete |
+| 6 | LQA System | ✅ Complete |
+| 7 | Audio I/O (WASAPI/ALEController) | ✅ Complete |
+| 8 | Radio CAT / PTT (Hamlib + IRadio) | ✅ Complete |
 
-### What's Left to Build
-
-The protocol stack is complete. What remains are **integration layers**:
+### Integration Layers — Status
 
 | Module | Purpose | Status |
 |--------|---------|--------|
-| Audio I/O | Connect modem to soundcard (WASAPI/ALSA/CoreAudio) | ❌ Needed |
-| Radio CAT | Tune radios during scanning (Icom, Yaesu, Kenwood, Elecraft) | ❌ Needed |
-| Qt6 UI | Cross-platform user interface | ❌ Needed |
-| SDR Integration | Direct SDR connection | 🔄 In Progress |
+| Audio I/O | WASAPI (Windows); ALSA/CoreAudio geplant | ✅ Windows fertig |
+| Radio CAT/PTT | Hamlib-Backend; `ale_cli --radio` | ✅ Fertig |
+| `radio_mock` | rigctld-kompatibler Test-TRX | ✅ Fertig |
+| Qt6 UI | Cross-platform Benutzeroberfläche | ❌ Ausstehend |
+| SDR Integration | Direktanbindung SDR (SoapySDR o.ä.) | ❌ Ausstehend |
 
 ---
 
