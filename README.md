@@ -259,7 +259,7 @@ CMD:AMD 52N 013E 14250
 CMD:CALL HQ
 
 # Ohne folgende Verbindung (nur AMD, kein Link):
-# AMD wird mit jedem CMD:CALL gesendet — nur einmalig, danach gelöscht.
+# AMD wird auf jedem Kanal gesendet, solange CMD:CALL läuft (Multi-Channel-Retry).
 ```
 
 ### Empfangsausgabe
@@ -272,7 +272,8 @@ CMD:CALL HQ
 ### Hinweise
 
 - `CMD:AMD` reiht die Nachricht ein und gilt für den **nächsten** `CMD:CALL`.
-  Nach dem Senden wird sie automatisch gelöscht.
+  Bei Multi-Channel-Calling wird sie auf **jedem Kanal** erneut gesendet.
+  Nach Abschluss des Rufs (erfolgreich oder alle Kanäle erschöpft) wird sie automatisch gelöscht.
 - Eine neue `CMD:AMD`-Eingabe überschreibt die vorherige.
 - Nicht-Expanded-64-Zeichen werden durch `?` ersetzt.
 - Der Empfänger muss **nicht** im LINKED-Zustand sein — AMD funktioniert

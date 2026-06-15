@@ -389,8 +389,8 @@ void ALEStateMachine::handle_calling() {
         // ── TX phases ─────────────────────────────────────────────────────
         // All words were enqueued at tune-complete; the audio layer renders
         // them without gaps.  Phase transitions happen in on_word_complete().
-        // MESSAGE is a zero-word AMD stub (AC-LINK-009-3): when implemented,
-        // message words are inserted into enqueue_call_sequence_().
+        // MESSAGE phase: AMD orderwire words built from active_message_ in
+        // enqueue_call_sequence_() at tune-complete (AC-LINK-009-3 / A.5.7.2).
         case CallingPhase::SCANNING_CALL:
         case CallingPhase::GROUP_SCANNING_CALL:
         case CallingPhase::LEADING_CALL:
@@ -708,6 +708,11 @@ bool ALEStateMachine::initiate_call(const std::string& target) {
     scanning_seq_   = ALESequenceBuilder::scanning_call(target, target_scan_channels);
     leading_seq_    = ALESequenceBuilder::leading_call(target);
     conclusion_seq_ = ALESequenceBuilder::conclusion(address_book.get_self_address());
+
+    // Snapshot AMD orderwire and release the pending slot so the user can queue
+    // the next message immediately.  active_message_ persists across channel retries.
+    active_message_  = pending_message;
+    pending_message  = PendingMessage{};
 
     return process_event(ALEEvent::CALL_REQUEST);
 }
@@ -1154,13 +1159,14 @@ void ALEStateMachine::enqueue_call_sequence_() {
     // All words enqueued back-to-back; Trw grid emerges from the audio stream
     // (49 symbols × 8 ms per word).  on_word_complete() advances phase counters
     // against exactly these word counts.
-    if (pending_message.type == PendingMessage::Type::AMD
-            && !pending_message.content.empty()) {
-        message_seq_ = ALESequence(build_amd_words(pending_message.content));
+    if (active_message_.type == PendingMessage::Type::AMD
+            && !active_message_.content.empty()) {
+        message_seq_ = ALESequence(build_amd_words(active_message_.content));
     } else {
         message_seq_ = ALESequence{};
     }
-    pending_message = PendingMessage{};  // consumed — clear regardless of type
+    // active_message_ is NOT cleared here — it survives across channel retries
+    // so that AMD text is re-transmitted on each channel attempt.
 
     transmit_words(scanning_seq_.words());
     transmit_words(leading_seq_.words());

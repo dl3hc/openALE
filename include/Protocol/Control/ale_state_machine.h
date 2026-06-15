@@ -156,7 +156,7 @@ enum class HandshakePhase {
  */
 class ALEStateMachine {
 public:
-    /** Pending orderwire message for the MESSAGE phase (AMD, stub). */
+    /** Pending orderwire message for the MESSAGE phase (AMD). */
     struct PendingMessage {
         enum class Type { NONE, AMD } type;
         std::string content;
@@ -428,8 +428,9 @@ private:
     // ── Emergency control (REQ-LINK-007) ─────────────────────────────────
     bool emergency_active;
 
-    // ── Pending orderwire message (MESSAGE phase, stub) ───────────────────
-    PendingMessage pending_message;
+    // ── Orderwire message state ───────────────────────────────────────────
+    PendingMessage pending_message;   ///< set via set_pending_message(); consumed by initiate_call()
+    PendingMessage active_message_;   ///< snapshot taken at initiate_call() time; survives channel retries
 
     // ── Scanning sub-state (T-10) ────────────────────────────────────────
     ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING
