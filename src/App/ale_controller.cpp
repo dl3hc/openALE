@@ -4,6 +4,7 @@
 
 #include "App/ale_controller.h"
 #include "PAL/radio.h"
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -28,8 +29,17 @@ static pal::RadioMode mode_from_string(const std::string& s) {
 namespace ale {
 
 ALEController::ALEController()
+    : lqa_analyzer_(&lqa_database_)
 {
     wire_callbacks();
+
+    // LQA auto-sounding: fire sm_.send_sounding() when the scanner is
+    // currently dwelling on a channel that has stale (or absent) LQA data.
+    lqa_analyzer_.set_sounding_callback([this](uint32_t freq) {
+        const Channel* ch = sm_.get_current_channel();
+        if (ch && ch->rx_frequency_hz == freq)
+            sm_.send_sounding();
+    });
 }
 
 void ALEController::wire_callbacks()
@@ -119,6 +129,7 @@ void ALEController::set_target_scan_channels(uint32_t n)
 
 void ALEController::set_calling_channels(const std::vector<Channel>& channels)
 {
+    calling_channels_ = channels;
     sm_.set_calling_channels(channels);
 }
 
@@ -140,6 +151,27 @@ void ALEController::start_scanning()
 
 bool ALEController::initiate_call(const std::string& target_addr)
 {
+    // Reorder calling channels by LQA history for this station (best first).
+    // Falls back silently to the user-configured order when no LQA data exist.
+    if (!calling_channels_.empty()) {
+        auto ranked = lqa_analyzer_.rank_channels_for_station(target_addr);
+        if (!ranked.empty()) {
+            auto score_for = [&ranked](uint32_t freq) -> float {
+                for (const auto& r : ranked)
+                    if (r.frequency_hz == freq) return r.score;
+                return 0.0f;
+            };
+            std::vector<Channel> ordered = calling_channels_;
+            std::stable_sort(ordered.begin(), ordered.end(),
+                [&score_for](const Channel& a, const Channel& b) {
+                    return score_for(a.rx_frequency_hz) > score_for(b.rx_frequency_hz);
+                });
+            sm_.set_calling_channels(ordered);
+            emit_status("LQA: channel order optimised for " + target_addr
+                        + " (best: " + std::to_string(ordered.front().rx_frequency_hz) + " Hz)");
+        }
+    }
+
     emit_status("Initiating call to " + target_addr);
     return sm_.initiate_call(target_addr);
 }
@@ -174,6 +206,14 @@ void ALEController::update(uint32_t now_ms)
         uint8_t syms[SYMBOLS_PER_WORD];
         while (modulator_.pull_symbol_frame(syms))
             sm_.on_word_complete();
+    }
+
+    // LQA: prune stale entries and trigger auto-sounding when enabled.
+    // Throttled to once per second — the database is small but no need to
+    // iterate every audio frame.
+    if (now_ms - lqa_update_ms_ >= 1000u) {
+        lqa_analyzer_.update();
+        lqa_update_ms_ = now_ms;
     }
 }
 
@@ -212,6 +252,19 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     // Reset caller tracking when leaving HANDSHAKE
     if (from == ALEState::HANDSHAKE)
         last_caller_.clear();
+
+    // LQA: when we enter SOUNDING, record the sounding timestamp so that
+    // is_sounding_due() won't immediately re-trigger after we return to SCANNING.
+    // We read back any existing metrics so the time-weighted average is a no-op.
+    if (to == ALEState::SOUNDING) {
+        const Channel* ch = sm_.get_current_channel();
+        if (ch) {
+            auto existing = lqa_database_.get_entry(ch->rx_frequency_hz, "");
+            const float snr = existing ? existing->snr_db : 0.0f;
+            const float ber = existing ? existing->ber    : 0.0f;
+            lqa_database_.update_entry(ch->rx_frequency_hz, "", snr, ber, 0, 1);
+        }
+    }
 
     // Link exited (except via HANDSHAKE_COMPLETE → LINKED)
     if (from == ALEState::LINKED && to != ALEState::LINKED) {
@@ -295,6 +348,28 @@ void ALEController::on_received_word(const ALEWord& word)
         }
     }
 
+    // LQA sounding: record any valid foreign TIS received while listening.
+    // A TIS conclusion frame from another station is the primary LQA input;
+    // unanimous_votes (0-48) and fec_errors proxy for SNR and BER.
+    if (word.valid && word.type == PreambleType::TIS) {
+        const ALEState st = sm_.get_state();
+        if (st == ALEState::SCANNING || st == ALEState::IDLE) {
+            const Channel* ch = sm_.get_current_channel();
+            if (ch) {
+                constexpr float kMaxVotes = 48.0f;
+                const float snr_db = (word.unanimous_votes / kMaxVotes) * 31.0f;
+                const float ber    = (word.fec_errors > 0)
+                                     ? static_cast<float>(word.fec_errors) / 50.0f
+                                     : 0.0f;
+                lqa_analyzer_.process_sounding(
+                    trim_ale_address(word.address),
+                    ch->rx_frequency_hz,
+                    snr_db,
+                    ber);
+            }
+        }
+    }
+
     sm_.process_received_word(word);
 }
 
@@ -320,6 +395,25 @@ void ALEController::emit_event(pal::EventType type, const std::string& msg, int3
 void ALEController::emit_status(const std::string& msg)
 {
     if (on_status_changed) on_status_changed(msg);
+}
+
+// ── LQA ──────────────────────────────────────────────────────────────────────
+
+bool ALEController::load_lqa(const std::string& path)
+{
+    return lqa_database_.load_from_file(path);
+}
+
+bool ALEController::save_lqa(const std::string& path) const
+{
+    return lqa_database_.save_to_file(path);
+}
+
+void ALEController::enable_automatic_sounding(bool on)
+{
+    AnalyzerConfig cfg = lqa_analyzer_.get_config();
+    cfg.enable_automatic_sounding = on;
+    lqa_analyzer_.set_config(cfg);
 }
 
 // ── Command interface ─────────────────────────────────────────────────────────

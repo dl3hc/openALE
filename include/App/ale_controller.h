@@ -33,6 +33,8 @@
 #include "Modem/ale2g_modem.h"
 #include "App/audio_device.h"
 #include "PAL/events.h"
+#include "LQA/lqa_database.h"
+#include "LQA/lqa_analyzer.h"
 #include <functional>
 #include <string>
 #include <vector>
@@ -81,6 +83,32 @@ public:
 
     /** Ordered list of channels to try on no-reply (multi-channel calling). */
     void set_calling_channels(const std::vector<Channel>& channels);
+
+    // ── LQA ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Load LQA database from file (call at startup to restore channel history).
+     * \return false if file not found or format mismatch (non-fatal; empty DB used).
+     */
+    bool load_lqa(const std::string& path);
+
+    /**
+     * Save LQA database to file (call at shutdown or periodically).
+     * \return false on I/O error.
+     */
+    bool save_lqa(const std::string& path) const;
+
+    /**
+     * Enable/disable automatic periodic sounding on channels already in the LQA DB.
+     * When on, the main loop triggers sm_.send_sounding() whenever a channel's LQA
+     * data is older than the sounding_interval (default 5 min) and the SM is
+     * in SCANNING or IDLE state.
+     */
+    void enable_automatic_sounding(bool on);
+
+    /** Access the LQA analyzer for channel quality queries. */
+    LQAAnalyzer& lqa_analyzer() { return lqa_analyzer_; }
+    const LQAAnalyzer& lqa_analyzer() const { return lqa_analyzer_; }
 
     /**
      * Attach a PAL event handler to receive structured ALE events.
@@ -216,10 +244,17 @@ private:
     std::string              self_addr_;
     std::string              last_caller_;   // caller address as it arrives (TIS + DATA)
 
+    // LQA
+    LQADatabase              lqa_database_;
+    LQAAnalyzer              lqa_analyzer_;
+    std::vector<Channel>     calling_channels_;  // cached here so initiate_call() can reorder
+
     // RX diagnostics (set_debug_rx)
     bool                     debug_rx_   = false;
     int                      dbg_peak_   = 0;   // running peak |sample| since last report
     uint32_t                 dbg_count_  = 0;   // samples accumulated since last report
+
+    uint32_t                 lqa_update_ms_ = 0;
 
     void wire_callbacks();
     void on_sm_state_change(ALEState from, ALEState to);
