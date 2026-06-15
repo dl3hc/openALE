@@ -300,6 +300,18 @@ endif()
 
 add_executable(ale_cli apps/ale_cli.cpp)
 
+# ── Mock Radio Server (rigctld-kompatibel, kein Hamlib nötig) ─────────────────
+
+add_executable(radio_mock apps/radio_mock.cpp)
+
+target_include_directories(radio_mock PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+if(WIN32)
+    target_link_libraries(radio_mock ws2_32)
+endif()
+
 target_include_directories(ale_cli PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
