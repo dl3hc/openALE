@@ -1097,18 +1097,74 @@ void ALEStateMachine::try_next_calling_channel() {
 // For the receive path (ACK, response) the remote address is not known at
 // initiate_call() time, so ALESequenceBuilder is called at send time.
 
+// Build a CMD AMD word: CMD preamble (110) with Expanded-64 payload (A.5.7.2.2).
+// encode_ascii(DATA) uses is_valid_expanded64_char — same 21-bit encoding as DATA/REP
+// but transmitted with the CMD preamble so the receiver recognises it as AMD.
+static ALEWord make_cmd_amd_word(const char chars[3])
+{
+    const uint32_t payload = WordParser::encode_ascii(chars, PreambleType::DATA);
+    if (payload == 0xFFFFFFFF) return ALEWord{};  // should not happen after sanitising
+    ALEWord w{};
+    w.type        = PreambleType::CMD;
+    w.raw_payload = payload;
+    w.address[0]  = chars[0];
+    w.address[1]  = chars[1];
+    w.address[2]  = chars[2];
+    w.address[3]  = '\0';
+    w.valid       = true;
+    return w;
+}
+
+// Build the AMD orderwire word sequence for the MESSAGE section (A.5.7.2.2).
+//
+// Frame layout: CMD(chars 1-3)  DATA(4-6)  REP(7-9)  DATA(10-12) … max 30 words / 90 chars.
+// All words carry only Expanded-64 characters (0x20-0x5F); out-of-range chars become '?'.
+// Last triplet is padded with SP (0x20) as required by A.5.7.2.2.
+static std::vector<ALEWord> build_amd_words(const std::string& text)
+{
+    const size_t n = std::min(text.size(), size_t{90});   // 30 words × 3 chars (A.5.7.2.3)
+    std::vector<ALEWord> words;
+    words.reserve((n + 2) / 3);
+    for (size_t i = 0; i < n; i += 3) {
+        char c[3] = {' ', ' ', ' '};
+        for (size_t j = 0; j < 3 && i + j < n; ++j) {
+            const char ch = text[i + j];
+            c[j] = (static_cast<unsigned char>(ch) >= 0x20
+                    && static_cast<unsigned char>(ch) <= 0x5F) ? ch : '?';
+        }
+        if (words.empty()) {
+            // First word: CMD AMD preamble + Expanded-64 payload (A.5.7.2.2)
+            words.push_back(make_cmd_amd_word(c));
+        } else {
+            // Subsequent: alternating DATA / REP (words[1]=DATA, [2]=REP, [3]=DATA, …)
+            const PreambleType pt = (words.size() % 2 == 1) ? PreambleType::DATA
+                                  :                            PreambleType::REP;
+            words.push_back(WordParser::make_word(pt, c));
+        }
+    }
+    return words;
+}
+
 void ALEStateMachine::enqueue_call_sequence_() {
     // scanning_seq_ and leading_seq_ are pre-built by initiate_call*():
     //   scanning_seq_  — scan_channels × 2 words (§A.5.2.5.1 / §A.5.5.4.3)
     //   leading_seq_   — full address × 2 (Tlc = 2×Tc, §A.5.5.3.1)
+    //   message_seq_   — AMD orderwire DATA/REP words (AC-LINK-009-3), empty if none
     //   conclusion_seq_ — TIS self address (§A.5.2.3.2.2)
     // All words enqueued back-to-back; Trw grid emerges from the audio stream
     // (49 symbols × 8 ms per word).  on_word_complete() advances phase counters
     // against exactly these word counts.
+    if (pending_message.type == PendingMessage::Type::AMD
+            && !pending_message.content.empty()) {
+        message_seq_ = ALESequence(build_amd_words(pending_message.content));
+    } else {
+        message_seq_ = ALESequence{};
+    }
+    pending_message = PendingMessage{};  // consumed — clear regardless of type
+
     transmit_words(scanning_seq_.words());
     transmit_words(leading_seq_.words());
-    // AMD orderwire (MESSAGE phase, AC-LINK-009-3): stub — message words
-    // would be inserted here, between leading call and conclusion.
+    transmit_words(message_seq_.words());
     transmit_words(conclusion_seq_.words());
 }
 
@@ -1215,20 +1271,33 @@ void ALEStateMachine::on_word_complete() {
 
             case CallingPhase::LEADING_CALL: {
                 // leading_seq_ is pre-doubled (Tlc = 2×Tc, §A.5.5.3.1); its size
-                // equals 2×wpa. AMD orderwire (MESSAGE phase) is a stub.
+                // equals 2×wpa.  After leading, enter MESSAGE if AMD words were queued.
                 const uint32_t tlc_slots = static_cast<uint32_t>(leading_seq_.size());
                 if (call_cycles_in_phase >= tlc_slots) {
-                    SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → CONCLUSION (tlc_slots="
-                             + std::to_string(tlc_slots) + ")\n");
-                    calling_phase        = CallingPhase::CONCLUSION;
+                    if (!message_seq_.empty()) {
+                        SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → MESSAGE (msg_words="
+                                 + std::to_string(message_seq_.size()) + ")\n");
+                        calling_phase = CallingPhase::MESSAGE;
+                    } else {
+                        SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → CONCLUSION (tlc_slots="
+                                 + std::to_string(tlc_slots) + ")\n");
+                        calling_phase = CallingPhase::CONCLUSION;
+                    }
                     call_cycles_in_phase = 0;
                 }
                 break;
             }
 
-            case CallingPhase::MESSAGE:
-                // Unreachable — AMD stub sends zero words (see enqueue_call_sequence_).
+            case CallingPhase::MESSAGE: {
+                const uint32_t msg_slots = static_cast<uint32_t>(message_seq_.size());
+                if (call_cycles_in_phase >= msg_slots) {
+                    SM_TRACE("[TRACE] on_word_complete: MESSAGE → CONCLUSION (msg_slots="
+                             + std::to_string(msg_slots) + ")\n");
+                    calling_phase        = CallingPhase::CONCLUSION;
+                    call_cycles_in_phase = 0;
+                }
                 break;
+            }
 
             case CallingPhase::CONCLUSION: {
                 const uint32_t conclusion_slots =

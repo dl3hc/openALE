@@ -234,7 +234,7 @@ public:
      *
      * Supported commands:
      *   CMD:CALL <ADDR>   — initiate individual call to ADDR
-     *   CMD:AMD <text>    — queue AMD orderwire message for the next CMD:CALL (max 15 chars)
+     *   CMD:AMD <text>    — queue AMD orderwire for the next CMD:CALL (max 90 chars, Expanded-64)
      *   CMD:TERMINATE     — terminate current link
      *   CMD:REJECT        — reject incoming call with TWAS
      *   CMD:LISTEN        — enter scanning / listening state

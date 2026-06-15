@@ -337,6 +337,17 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     if (from == ALEState::HANDSHAKE)
         last_caller_.clear();
 
+    // Initialise AMD orderwire tracking when entering HANDSHAKE.
+    // amd_skip_count_ = 2×(n-1) where n = words in own encoded address.
+    // These are the leading-call DATA/REP extension words to skip before
+    // the message section begins (see on_received_word AMD block).
+    if (to == ALEState::HANDSHAKE) {
+        const int n    = static_cast<int>((self_addr_.length() + 2) / 3);
+        amd_skip_count_ = 2 * (n - 1);
+        amd_seen_count_ = 0;
+        amd_text_acc_.clear();
+    }
+
     // LQA: when we enter SOUNDING, record the sounding timestamp so that
     // is_sounding_due() won't immediately re-trigger after we return to SCANNING.
     // We read back any existing metrics so the time-weighted average is a no-op.
@@ -417,18 +428,45 @@ void ALEController::on_received_word(const ALEWord& word)
     // This mirrors what ALEWordDecoder + ALEStateMachine do internally, ensuring
     // our display string matches sm_.get_caller_address() at end of frame.
     if (sm_.get_state() == ALEState::HANDSHAKE
-        && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END
-        && word.valid)
+        && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END)
     {
-        const std::string chunk = trim_ale_address(word.address);
+        // ── Caller identity + DATA/REP AMD text (gated on word.valid) ──────
+        if (word.valid) {
+            const std::string chunk = trim_ale_address(word.address);
 
-        if (word.type == PreambleType::TIS && last_caller_.empty()) {
-            last_caller_ = chunk;
-            if (on_call_received) on_call_received(last_caller_);
-            emit_event(pal::EventType::ALE_CALL_RECEIVED, last_caller_);
-        } else if ((word.type == PreambleType::DATA || word.type == PreambleType::REP)
-                   && !last_caller_.empty()) {
-            last_caller_ += chunk;
+            if (word.type == PreambleType::TIS && last_caller_.empty()) {
+                // Caller's conclusion word — fire AMD callback if text was collected.
+                last_caller_ = chunk;
+                if (!amd_text_acc_.empty() && on_amd_received) {
+                    const auto p = amd_text_acc_.find_last_not_of(" @");
+                    if (p != std::string::npos)
+                        on_amd_received(last_caller_, amd_text_acc_.substr(0, p + 1));
+                }
+                if (on_call_received) on_call_received(last_caller_);
+                emit_event(pal::EventType::ALE_CALL_RECEIVED, last_caller_);
+            } else if ((word.type == PreambleType::DATA || word.type == PreambleType::REP)
+                       && !last_caller_.empty()) {
+                last_caller_ += chunk;  // caller-address extension after TIS
+            } else if ((word.type == PreambleType::DATA || word.type == PreambleType::REP)
+                       && last_caller_.empty()) {
+                // Before TIS: skip leading-call DATA/REP extensions (2×(n-1) words),
+                // then collect AMD message body words (DATA/REP after CMD AMD).
+                if (amd_seen_count_ >= amd_skip_count_)
+                    amd_text_acc_ += std::string(word.address, 3);
+                ++amd_seen_count_;
+            }
+        }
+
+        // ── CMD AMD word — first message word (A.5.7.2.2) ─────────────────
+        // CMD AMD carries Expanded-64 content (0x20-0x5F) in a CMD preamble
+        // word.  Basic-38 validation marks it invalid when the first 3 chars
+        // include spaces or symbols, so we re-decode from raw_payload regardless
+        // of word.valid.  Only collect once we are past the leading-call section.
+        if (word.type == PreambleType::CMD && last_caller_.empty()
+                && amd_seen_count_ >= amd_skip_count_) {
+            char exp64[4];
+            if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64))
+                amd_text_acc_ += std::string(exp64, 3);
         }
     }
 
@@ -656,10 +694,22 @@ std::string ALEController::process_command(const std::string& raw)
                       calling_channels_.size(), path.c_str());
         return buf;
     }
+    if (cmd.rfind("CMD:AMD ", 0) == 0) {
+        std::string text = cmd_trim(cmd.substr(8));
+        if (text.empty())
+            return "ERROR: CMD:AMD requires message text (max 90 chars, Expanded-64)";
+        if (text.length() > 90) text = text.substr(0, 90);
+        ALEStateMachine::PendingMessage msg;
+        msg.type    = ALEStateMachine::PendingMessage::Type::AMD;
+        msg.content = std::move(text);
+        sm_.set_pending_message(msg);
+        return "OK: AMD text queued — send with CMD:CALL <ADDR>";
+    }
     if (cmd == "CMD:HELP") {
         return
             "Commands:\n"
             "  CMD:CALL <ADDR>                     initiate individual call\n"
+            "  CMD:AMD <text>                      queue AMD orderwire for next call (max 90 chars)\n"
             "  CMD:TERMINATE                       terminate current link\n"
             "  CMD:REJECT                          reject incoming call (TWAS)\n"
             "  CMD:SCAN                            start channel scanning\n"

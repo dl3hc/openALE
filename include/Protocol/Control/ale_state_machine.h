@@ -387,6 +387,7 @@ private:
     // conclusion_seq_ — TIS own address, sent once (§A.5.2.3.2.2)
     ALESequence scanning_seq_;    ///< scan_channels×2 words — TO first-word repeated
     ALESequence leading_seq_;     ///< 2×wpa words — full TO address doubled (Tlc)
+    ALESequence message_seq_;     ///< AMD orderwire words — DATA/REP (empty when no message)
     ALESequence conclusion_seq_;  ///< TIS/TWAS own address — sent once
     ALESequence group_scan_seq_;  ///< THRU/REP pairs for GROUP_SCANNING_CALL (T-11)
 

@@ -175,8 +175,8 @@ static void print_banner(const std::string& self,
         std::printf("║  Radio  : %-44s ║\n", radio_spec.c_str());
     std::printf("╠═══════════════════════════════════════════════════════╣\n");
     std::printf("║  Runtime commands (stdin):                            ║\n");
-    std::printf("║    CMD:CALL <ADDR>  CMD:ADD_CHANNEL <CH>  CMD:STATUS  ║\n");
-    std::printf("║    CMD:TERMINATE    CMD:REJECT       CMD:SCAN         ║\n");
+    std::printf("║    CMD:CALL <ADDR>  CMD:AMD <text>   CMD:STATUS       ║\n");
+    std::printf("║    CMD:TERMINATE    CMD:REJECT        CMD:SCAN        ║\n");
     std::printf("║    CMD:HELP                                           ║\n");
     std::printf("║  Ctrl+C to quit                                       ║\n");
     std::printf("╚═══════════════════════════════════════════════════════╝\n");
@@ -356,6 +356,12 @@ int main(int argc, char* argv[])
     ctrl.on_call_received = [](const std::string& caller) {
         std::printf("[>>] Incoming call from: %s\n", caller.c_str());
         std::printf("[>>] Protocol response in progress...\n");
+        std::fflush(stdout);
+    };
+
+    // AMD orderwire message received with incoming call
+    ctrl.on_amd_received = [](const std::string& from, const std::string& text) {
+        std::printf("[AM] AMD from %s: %s\n", from.c_str(), text.c_str());
         std::fflush(stdout);
     };
 

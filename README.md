@@ -132,6 +132,7 @@ Während `ale_cli` läuft, können Kommandos über stdin eingegeben werden:
 | Kommando | Beschreibung |
 |----------|-------------|
 | `CMD:CALL ADDR` | Verbindungsaufbau zu ADDR initiieren |
+| `CMD:AMD TEXT` | AMD-Orderwire-Nachricht für den nächsten Anruf einreihen (max. 90 Zeichen) |
 | `CMD:TERMINATE` | Aktive Verbindung beenden |
 | `CMD:REJECT` | Eingehenden Anruf ablehnen (TWAS) |
 | `CMD:SCAN` | Scanner-Modus starten |
@@ -202,6 +203,80 @@ In Terminal 1 ist dann live zu sehen:
 [TRX] PTT ON  ←── TX
 [TRX] PTT OFF ──► RX
 ```
+
+---
+
+## 📨 AMD — Automatic Message Display (A.5.7.2)
+
+AMD ermöglicht, kurze ASCII-Klartexte im Rahmen eines normalen Anrufs zu übertragen.
+Der Text erscheint beim Empfänger sofort — ohne dass eine vollständige Verbindung
+(LINKED-Zustand) aufgebaut sein muss.
+
+### Zeichensatz
+
+AMD verwendet den **Expanded-64-Zeichensatz** (A.5.7.2.1): Großbuchstaben, Ziffern,
+Leerzeichen und gängige Sonderzeichen (0x20–0x5F).  Kleinbuchstaben sind **nicht**
+im Zeichensatz enthalten.
+
+### Ablauf
+
+```
+Sender (SAM):                        Empfänger (BOB):
+  CMD:AMD POSITION 14MHZ             [wartet im Scan-Modus]
+  CMD:CALL BOB
+    → sendet: …TO:BOB  CMD:POS  DATA:ITIO  REP:N 1  DATA:4MHZ  TIS:SAM…
+                                     [AM] AMD from SAM: POSITION 14MHZ
+                                     [>>] Incoming call from: SAM
+                                     [>>] Protocol response in progress...
+  ← 3-Wege-Handshake läuft automatisch →
+                                     LINK ESTABLISHED  Peer: SAM
+```
+
+Der AMD-Text wird **vor** der `on_call_received`-Meldung ausgegeben, damit der
+Operator den Kontext kennt, bevor die Verbindung bestätigt wird.
+
+### Frame-Aufbau (MIL-STD-188-141B A.5.7.2.2)
+
+Das erste AMD-Wort trägt den **CMD-Präambel** (Binär 110) mit den ersten 3 Zeichen.
+Alle weiteren Wörter wechseln zwischen DATA und REP:
+
+```
+CMD(Zeichen 1–3)  DATA(4–6)  REP(7–9)  DATA(10–12)  …  TIS:SAM
+```
+
+Maximal **30 Wörter = 90 Zeichen** pro Nachricht (A.5.7.2.3, Tm\_max).
+Das letzte Wort wird bei Bedarf automatisch mit Leerzeichen (0x20) aufgefüllt.
+
+### Beispiele
+
+```
+# Einfache Statusmeldung (Leerzeichen erlaubt):
+CMD:AMD QRV 14250 USB
+CMD:CALL BOB
+
+# Positionsmeldung mit Koordinaten:
+CMD:AMD 52N 013E 14250
+CMD:CALL HQ
+
+# Ohne folgende Verbindung (nur AMD, kein Link):
+# AMD wird mit jedem CMD:CALL gesendet — nur einmalig, danach gelöscht.
+```
+
+### Empfangsausgabe
+
+```
+[AM] AMD from SAM: QRV 14250 USB
+[>>] Incoming call from: SAM
+```
+
+### Hinweise
+
+- `CMD:AMD` reiht die Nachricht ein und gilt für den **nächsten** `CMD:CALL`.
+  Nach dem Senden wird sie automatisch gelöscht.
+- Eine neue `CMD:AMD`-Eingabe überschreibt die vorherige.
+- Nicht-Expanded-64-Zeichen werden durch `?` ersetzt.
+- Der Empfänger muss **nicht** im LINKED-Zustand sein — AMD funktioniert
+  während der gesamten Handshake-Phase.
 
 ---
 
