@@ -24,7 +24,7 @@ namespace ale {
  * \class ChannelStore
  * Ordered list of ALE channels used for scanning and sounding
  *
- * Channels are kept in insertion order; duplicates (same frequency_hz) are
+ * Channels are kept in insertion order; duplicates (same rx_frequency_hz) are
  * silently ignored.
  */
 class ChannelStore {
@@ -32,9 +32,9 @@ public:
     ChannelStore() = default;
 
     void add_channel(const Channel& ch);
-    void remove_channel(uint32_t frequency_hz);
-    bool has_channel(uint32_t frequency_hz) const;
-    void set_enabled(uint32_t frequency_hz, bool enabled);
+    void remove_channel(uint32_t rx_frequency_hz);
+    bool has_channel(uint32_t rx_frequency_hz) const;
+    void set_enabled(uint32_t rx_frequency_hz, bool enabled);
 
     const std::vector<Channel>& all()              const { return channels_; }
     std::vector<Channel>        enabled_channels() const;

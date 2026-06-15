@@ -66,7 +66,7 @@ public:
     std::vector<uint32_t> frequencies;
     
     void record(const Channel& ch) {
-        frequencies.push_back(ch.frequency_hz);
+        frequencies.push_back(ch.rx_frequency_hz);
     }
     
     void clear() {
@@ -318,10 +318,10 @@ bool test_lqa() {
     const Channel* best = sm.select_best_channel();
     
     std::cout << "  Best channel selection: ";
-    bool pass = (best != nullptr && best->frequency_hz == 7100000);
+    bool pass = (best != nullptr && best->rx_frequency_hz == 7100000);
     std::cout << (pass ? "PASS" : "FAIL");
     if (best) {
-        std::cout << " (" << best->frequency_hz << " Hz, score=" 
+        std::cout << " (" << best->rx_frequency_hz << " Hz, score=" 
                   << best->lqa_score << ")";
     }
     std::cout << "\n";

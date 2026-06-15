@@ -11,25 +11,25 @@ namespace ale {
 // ── ChannelStore ──────────────────────────────────────────────────────────────
 
 void ChannelStore::add_channel(const Channel& ch) {
-    if (!has_channel(ch.frequency_hz))
+    if (!has_channel(ch.rx_frequency_hz))
         channels_.push_back(ch);
 }
 
-void ChannelStore::remove_channel(uint32_t frequency_hz) {
+void ChannelStore::remove_channel(uint32_t rx_frequency_hz) {
     channels_.erase(
         std::remove_if(channels_.begin(), channels_.end(),
-            [&](const Channel& c) { return c.frequency_hz == frequency_hz; }),
+            [&](const Channel& c) { return c.rx_frequency_hz == rx_frequency_hz; }),
         channels_.end());
 }
 
-bool ChannelStore::has_channel(uint32_t frequency_hz) const {
+bool ChannelStore::has_channel(uint32_t rx_frequency_hz) const {
     return std::any_of(channels_.begin(), channels_.end(),
-        [&](const Channel& c) { return c.frequency_hz == frequency_hz; });
+        [&](const Channel& c) { return c.rx_frequency_hz == rx_frequency_hz; });
 }
 
-void ChannelStore::set_enabled(uint32_t frequency_hz, bool enabled) {
+void ChannelStore::set_enabled(uint32_t rx_frequency_hz, bool enabled) {
     for (auto& c : channels_)
-        if (c.frequency_hz == frequency_hz) { c.enabled = enabled; return; }
+        if (c.rx_frequency_hz == rx_frequency_hz) { c.enabled = enabled; return; }
 }
 
 std::vector<Channel> ChannelStore::enabled_channels() const {

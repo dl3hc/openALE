@@ -23,7 +23,7 @@ uint32_t ChannelSelector::select_for_call(const std::string& /*remote*/) const {
         case SelectionPolicy::ROUND_ROBIN: return select_round_robin(candidates);
         case SelectionPolicy::FIXED:       return fixed_freq_;
     }
-    return candidates.front().frequency_hz;
+    return candidates.front().rx_frequency_hz;
 }
 
 uint32_t ChannelSelector::select_for_sounding() const {
@@ -34,14 +34,14 @@ uint32_t ChannelSelector::select_for_sounding() const {
 uint32_t ChannelSelector::select_best_lqa(const std::vector<Channel>& candidates) const {
     std::vector<uint32_t> freqs;
     freqs.reserve(candidates.size());
-    for (const auto& c : candidates) freqs.push_back(c.frequency_hz);
+    for (const auto& c : candidates) freqs.push_back(c.rx_frequency_hz);
     uint32_t best = lqa_.best_channel(freqs);
     return best ? best : freqs.front();
 }
 
 uint32_t ChannelSelector::select_round_robin(const std::vector<Channel>& candidates) const {
     if (candidates.empty()) return 0;
-    uint32_t freq = candidates[rr_index_ % candidates.size()].frequency_hz;
+    uint32_t freq = candidates[rr_index_ % candidates.size()].rx_frequency_hz;
     ++rr_index_;
     return freq;
 }
@@ -52,9 +52,9 @@ ListenBeforeTransmit::ListenBeforeTransmit(ClearCallback is_clear,
                                            uint32_t listen_ms)
     : is_clear_(std::move(is_clear)), listen_ms_(listen_ms) {}
 
-bool ListenBeforeTransmit::check(uint32_t frequency_hz) const {
+bool ListenBeforeTransmit::check(uint32_t rx_frequency_hz) const {
     if (!enabled_) return true;
-    return is_clear_(frequency_hz);
+    return is_clear_(rx_frequency_hz);
 }
 
 } // namespace ale

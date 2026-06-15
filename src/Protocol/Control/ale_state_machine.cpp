@@ -1005,7 +1005,7 @@ void ALEStateMachine::update_link_quality(const LinkQuality& lq) {
         sample.timestamp_ms         = lq.timestamp_ms;
         const Channel* ch = channel_manager_.current();
         lqa_metrics_->add_sample(sample,
-                                  ch ? ch->frequency_hz : 0u,
+                                  ch ? ch->rx_frequency_hz : 0u,
                                   active_call_from);
     }
 

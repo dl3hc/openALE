@@ -152,7 +152,7 @@ private:
         
         // Channel change callback
         state_machine.set_channel_callback([this](const Channel& ch) {
-            radio.tune(ch.frequency_hz, ch.mode);
+            radio.tune(ch.rx_frequency_hz, ch.rx_mode);
         });
     }
     
@@ -167,8 +167,8 @@ private:
         
         std::cout << "Configured scan list:\n";
         for (const auto& ch : config.scan_list) {
-            std::cout << "  - " << ch.frequency_hz / 1000.0 << " kHz " 
-                      << ch.mode << "\n";
+            std::cout << "  - " << ch.rx_frequency_hz / 1000.0 << " kHz "
+                      << ch.rx_mode << "\n";
         }
         std::cout << "\n";
     }
@@ -196,7 +196,7 @@ private:
         // Select best channel
         const Channel* best = state_machine.select_best_channel();
         if (best) {
-            std::cout << "\nBest channel: " << best->frequency_hz / 1000.0 
+            std::cout << "\nBest channel: " << best->rx_frequency_hz / 1000.0
                       << " kHz (LQA score: " << best->lqa_score << ")\n";
         }
         
