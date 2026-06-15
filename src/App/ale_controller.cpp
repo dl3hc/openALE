@@ -6,9 +6,93 @@
 #include "PAL/radio.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <optional>
+#include <sstream>
 #include <string>
 
 namespace {
+
+static bool is_ale_mode(const std::string& s) {
+    static const char* kModes[] = {
+        "USB","LSB","AM","FM","FMW","CW","CW_R",
+        "FSK","RTTY","DATA_USB","DATA_LSB", nullptr
+    };
+    for (int i = 0; kModes[i]; ++i)
+        if (s == kModes[i]) return true;
+    return false;
+}
+
+// Parse one channel specification:
+//   rx_hz[:tx_hz]  [mode]  [label...]
+// Examples:
+//   14250000
+//   14250000 USB
+//   14250000:14260000 LSB DX-Channel
+static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
+{
+    std::string s = raw;
+    auto cpos = s.find('#');
+    if (cpos != std::string::npos) s = s.substr(0, cpos);
+    // trim
+    auto first = s.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return std::nullopt;
+    s = s.substr(first, s.find_last_not_of(" \t\r\n") - first + 1);
+    if (s.empty()) return std::nullopt;
+
+    std::istringstream iss(s);
+    std::vector<std::string> toks;
+    {
+        std::string tok;
+        while (iss >> tok) toks.push_back(std::move(tok));
+    }
+    if (toks.empty()) return std::nullopt;
+
+    // first token: rx_hz or rx_hz:tx_hz
+    uint32_t rx_hz = 0, tx_hz = 0;
+    auto colon = toks[0].find(':');
+    if (colon != std::string::npos) {
+        rx_hz = static_cast<uint32_t>(std::stoul(toks[0].substr(0, colon)));
+        const std::string tx_str = toks[0].substr(colon + 1);
+        tx_hz = tx_str.empty() ? 0u : static_cast<uint32_t>(std::stoul(tx_str));
+    } else {
+        rx_hz = static_cast<uint32_t>(std::stoul(toks[0]));
+    }
+    if (rx_hz == 0) return std::nullopt;
+
+    // second token (optional): mode string
+    std::string mode = "USB";
+    size_t label_start = 1;
+    if (toks.size() > 1 && is_ale_mode(toks[1])) {
+        mode = toks[1];
+        label_start = 2;
+    }
+
+    // remaining tokens: label
+    std::string label;
+    for (size_t i = label_start; i < toks.size(); ++i) {
+        if (!label.empty()) label += ' ';
+        label += toks[i];
+    }
+
+    ale::Channel ch(rx_hz, tx_hz, mode, mode);
+    ch.label = label;
+    return ch;
+}
+
+// Serialize one Channel to a file line (rx_hz tx_hz mode [label])
+static std::string format_channel_line(const ale::Channel& ch)
+{
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%u %u %s",
+                  ch.rx_frequency_hz,
+                  ch.tx_frequency_hz,
+                  ch.rx_mode.c_str());
+    std::string line = buf;
+    if (!ch.label.empty()) { line += ' '; line += ch.label; }
+    return line;
+}
 
 static pal::RadioMode mode_from_string(const std::string& s) {
     if (s == "LSB")      return pal::RadioMode::LSB;
@@ -416,6 +500,60 @@ void ALEController::enable_automatic_sounding(bool on)
     lqa_analyzer_.set_config(cfg);
 }
 
+// ── Channel management ────────────────────────────────────────────────────────
+
+bool ALEController::add_channel(const Channel& ch)
+{
+    // Replace existing entry with same RX frequency, or append.
+    for (auto& c : calling_channels_)
+        if (c.rx_frequency_hz == ch.rx_frequency_hz) { c = ch; goto apply; }
+    calling_channels_.push_back(ch);
+apply:
+    sm_.set_calling_channels(calling_channels_);
+    if (!channel_file_.empty()) save_channels(channel_file_);
+    return true;
+}
+
+bool ALEController::del_channel(uint32_t rx_hz)
+{
+    const size_t before = calling_channels_.size();
+    calling_channels_.erase(
+        std::remove_if(calling_channels_.begin(), calling_channels_.end(),
+            [rx_hz](const Channel& c){ return c.rx_frequency_hz == rx_hz; }),
+        calling_channels_.end());
+    if (calling_channels_.size() == before) return false;
+    sm_.set_calling_channels(calling_channels_);
+    if (!channel_file_.empty()) save_channels(channel_file_);
+    return true;
+}
+
+bool ALEController::load_channels(const std::string& path)
+{
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+
+    std::vector<Channel> loaded;
+    std::string line;
+    while (std::getline(f, line)) {
+        auto ch = parse_channel_spec(line);
+        if (ch) loaded.push_back(*ch);
+    }
+    calling_channels_ = std::move(loaded);
+    sm_.set_calling_channels(calling_channels_);
+    return true;
+}
+
+bool ALEController::save_channels(const std::string& path) const
+{
+    std::ofstream f(path);
+    if (!f.is_open()) return false;
+    f << "# PC-ALE channel list — MIL-STD-188-141B\n";
+    f << "# rx_hz tx_hz mode [label]\n";
+    for (const auto& ch : calling_channels_)
+        f << format_channel_line(ch) << '\n';
+    return f.good();
+}
+
 // ── Command interface ─────────────────────────────────────────────────────────
 
 static std::string cmd_trim(const std::string& s)
@@ -455,15 +593,83 @@ std::string ALEController::process_command(const std::string& raw)
         return std::string("STATUS: ") + ALEStateMachine::state_name(state());
     }
     if (cmd.rfind("CMD:ADD_CHANNEL ", 0) == 0) {
-        const std::string ch = cmd_trim(cmd.substr(16));
-        if (ch.empty())
-            return "ERROR: CMD:ADD_CHANNEL requires a channel argument";
-        // TODO: implement channel scanning — store ch in scan list and reconfigure SM
-        return "TODO: CMD:ADD_CHANNEL " + ch + " (channel scanning not yet implemented)";
+        const std::string spec = cmd_trim(cmd.substr(16));
+        if (spec.empty())
+            return "ERROR: CMD:ADD_CHANNEL requires: rx_hz[:tx_hz] [mode] [label]";
+        auto ch = parse_channel_spec(spec);
+        if (!ch)
+            return "ERROR: cannot parse channel spec '" + spec + "'";
+        add_channel(*ch);
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "OK: channel %u Hz added (%zu total)",
+                      ch->rx_frequency_hz, calling_channels_.size());
+        return buf;
+    }
+    if (cmd.rfind("CMD:DEL_CHANNEL ", 0) == 0) {
+        const std::string arg = cmd_trim(cmd.substr(16));
+        if (arg.empty())
+            return "ERROR: CMD:DEL_CHANNEL requires rx_hz";
+        const uint32_t rx_hz = static_cast<uint32_t>(std::stoul(arg));
+        if (!del_channel(rx_hz))
+            return "ERROR: channel " + arg + " not found";
+        char buf[80];
+        std::snprintf(buf, sizeof(buf), "OK: channel %u Hz removed (%zu remaining)",
+                      rx_hz, calling_channels_.size());
+        return buf;
+    }
+    if (cmd == "CMD:LIST_CHANNELS") {
+        if (calling_channels_.empty())
+            return "CHANNELS: (none)";
+        std::string out = "CHANNELS:\n";
+        for (const auto& c : calling_channels_) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "  %u Hz  tx=%u  %s%s%s",
+                          c.rx_frequency_hz, c.effective_tx_hz(),
+                          c.rx_mode.c_str(),
+                          c.label.empty() ? "" : "  ",
+                          c.label.c_str());
+            out += buf; out += '\n';
+        }
+        return out;
+    }
+    if (cmd == "CMD:CLEAR_CHANNELS") {
+        calling_channels_.clear();
+        sm_.set_calling_channels(calling_channels_);
+        if (!channel_file_.empty()) save_channels(channel_file_);
+        return "OK: channel list cleared";
+    }
+    if (cmd.rfind("CMD:SAVE_CHANNELS", 0) == 0) {
+        std::string path = cmd_trim(cmd.substr(17));
+        if (path.empty()) path = channel_file_;
+        if (path.empty()) return "ERROR: CMD:SAVE_CHANNELS requires a path";
+        if (!save_channels(path))
+            return "ERROR: cannot write to '" + path + "'";
+        return "OK: channels saved to " + path;
+    }
+    if (cmd.rfind("CMD:LOAD_CHANNELS ", 0) == 0) {
+        const std::string path = cmd_trim(cmd.substr(18));
+        if (path.empty()) return "ERROR: CMD:LOAD_CHANNELS requires a path";
+        if (!load_channels(path))
+            return "ERROR: cannot read '" + path + "'";
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "OK: %zu channel(s) loaded from %s",
+                      calling_channels_.size(), path.c_str());
+        return buf;
     }
     if (cmd == "CMD:HELP") {
-        return "Commands: CMD:CALL <ADDR>  CMD:ADD_CHANNEL <CH>  CMD:SCAN"
-               "  CMD:TERMINATE  CMD:REJECT  CMD:STATUS";
+        return
+            "Commands:\n"
+            "  CMD:CALL <ADDR>                     initiate individual call\n"
+            "  CMD:TERMINATE                       terminate current link\n"
+            "  CMD:REJECT                          reject incoming call (TWAS)\n"
+            "  CMD:SCAN                            start channel scanning\n"
+            "  CMD:STATUS                          print current SM state\n"
+            "  CMD:ADD_CHANNEL rx_hz[:tx_hz] [mode] [label]  add/update channel\n"
+            "  CMD:DEL_CHANNEL rx_hz               remove channel\n"
+            "  CMD:LIST_CHANNELS                   list all channels\n"
+            "  CMD:CLEAR_CHANNELS                  remove all channels\n"
+            "  CMD:SAVE_CHANNELS [path]            save channel list to file\n"
+            "  CMD:LOAD_CHANNELS <path>            load channel list from file";
     }
     return "ERROR: unknown command — try CMD:HELP";
 }

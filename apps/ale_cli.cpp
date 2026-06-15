@@ -116,6 +116,8 @@ static void print_usage(const char* prog)
         "  --out-device NAME   Audio output device substring (TX, waveOut)\n"
         "  --list-devices      Print available audio devices\n"
         "  --no-scan           Skip scanning (fixed channel, shorter frames)\n"
+        "  --channels   FILE   Load channel list from .ale file on startup;\n"
+        "                      auto-saves after CMD:ADD_CHANNEL / CMD:DEL_CHANNEL\n"
         "  --radio      SPEC   Radio CAT/PTT:\n"
         "                        hamlib:229:COM3                   IC-7300 seriell\n"
         "                        hamlib:229:tcp://127.0.0.1:4532   via rigctld\n"
@@ -195,6 +197,7 @@ int main(int argc, char* argv[])
     std::string in_device;
     std::string out_device;
     std::string radio_spec;
+    std::string channels_file;
     bool list_devs    = false;
     bool no_scan      = true;   // default: skip scanning, use leading-call only
 
@@ -228,6 +231,8 @@ int main(int argc, char* argv[])
             debug_rx_arg = true;
         } else if (std::strcmp(argv[i], "--radio") == 0 && i + 1 < argc) {
             radio_spec = argv[++i];
+        } else if (std::strcmp(argv[i], "--channels") == 0 && i + 1 < argc) {
+            channels_file = argv[++i];
         }
     }
 
@@ -282,6 +287,19 @@ int main(int argc, char* argv[])
     ALEController ctrl;
     ctrl.set_self_address(self_addr);
     ctrl.set_target_scan_channels(no_scan ? 0u : 1u);
+
+    // Channel list (non-volatile, .ale file)
+    if (!channels_file.empty()) {
+        ctrl.set_channel_file(channels_file);
+        if (ctrl.load_channels(channels_file)) {
+            std::printf("[>>] Loaded %zu channel(s) from %s\n",
+                        ctrl.channels().size(), channels_file.c_str());
+        } else {
+            std::printf("[>>] Channel file '%s' not found — starting empty\n",
+                        channels_file.c_str());
+        }
+        std::fflush(stdout);
+    }
 
     // Receiver FEC tuning (MIL-STD-188-141B A.5.2.6.3).
     ctrl.set_golay_mode(static_cast<GolayMode>(golay_mode_arg));

@@ -84,6 +84,39 @@ public:
     /** Ordered list of channels to try on no-reply (multi-channel calling). */
     void set_calling_channels(const std::vector<Channel>& channels);
 
+    /**
+     * Add a channel to the calling list (replace if same rx_frequency_hz exists).
+     * Immediately reconfigures the SM and auto-saves to channel_file_ if set.
+     */
+    bool add_channel(const Channel& ch);
+
+    /** Remove the channel with the given RX frequency.  Returns false if not found. */
+    bool del_channel(uint32_t rx_hz);
+
+    /** Read-only access to the current channel list. */
+    const std::vector<Channel>& channels() const { return calling_channels_; }
+
+    /**
+     * Load channel list from a .ale file.
+     * Format: one channel per line — rx_hz [tx_hz] [mode] [label]
+     * Lines starting with '#' are ignored.
+     * \return false if the file cannot be opened (non-fatal; old list kept).
+     */
+    bool load_channels(const std::string& path);
+
+    /**
+     * Save the current channel list to a .ale file.
+     * \return false on I/O error.
+     */
+    bool save_channels(const std::string& path) const;
+
+    /**
+     * Set the default channel file path for auto-save.
+     * When set, add_channel / del_channel / clear_channels write to this path
+     * automatically so channel changes survive restarts.
+     */
+    void set_channel_file(const std::string& path) { channel_file_ = path; }
+
     // ── LQA ─────────────────────────────────────────────────────────────────
 
     /**
@@ -248,6 +281,7 @@ private:
     LQADatabase              lqa_database_;
     LQAAnalyzer              lqa_analyzer_;
     std::vector<Channel>     calling_channels_;  // cached here so initiate_call() can reorder
+    std::string              channel_file_;       // auto-save path (empty = no auto-save)
 
     // RX diagnostics (set_debug_rx)
     bool                     debug_rx_   = false;
