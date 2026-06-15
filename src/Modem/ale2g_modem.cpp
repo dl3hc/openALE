@@ -17,6 +17,46 @@
 static constexpr double M_PI = 3.14159265358979323846;
 #endif
 
+namespace {
+
+// In-place Cooley-Tukey radix-2 DIT FFT.
+// N must be a power of 2.  re[]/im[] are overwritten with the complex spectrum.
+static void fft_inplace(float* re, float* im, size_t N)
+{
+    // Bit-reversal permutation
+    for (size_t i = 1, j = 0; i < N; ++i) {
+        size_t bit = N >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) { std::swap(re[i], re[j]); std::swap(im[i], im[j]); }
+    }
+    // Butterfly stages
+    for (size_t len = 2; len <= N; len <<= 1) {
+        const float ang  = -2.0f * static_cast<float>(M_PI) / static_cast<float>(len);
+        const float wRe  = std::cos(ang);
+        const float wIm  = std::sin(ang);
+        for (size_t i = 0; i < N; i += len) {
+            float cRe = 1.0f, cIm = 0.0f;
+            const size_t half = len >> 1;
+            for (size_t k = 0; k < half; ++k) {
+                const float uRe = re[i + k];
+                const float uIm = im[i + k];
+                const float vRe = re[i + k + half] * cRe - im[i + k + half] * cIm;
+                const float vIm = re[i + k + half] * cIm + im[i + k + half] * cRe;
+                re[i + k]        = uRe + vRe;
+                im[i + k]        = uIm + vIm;
+                re[i + k + half] = uRe - vRe;
+                im[i + k + half] = uIm - vIm;
+                const float nRe  = cRe * wRe - cIm * wIm;
+                cIm = cRe * wIm + cIm * wRe;
+                cRe = nRe;
+            }
+        }
+    }
+}
+
+} // namespace
+
 namespace ale {
 namespace ALE2GModem {
 
@@ -89,7 +129,13 @@ void Modulator::advance_queue_()
 
 Demodulator::Demodulator()
     : ring_(BUF_CAP, 0)
-{}
+{
+    // Pre-compute Hann window for the spectrum FFT.
+    // Hann reduces spectral leakage between the 8 ALE tones (250 Hz apart).
+    for (size_t k = 0; k < SPEC_FFT_N; ++k)
+        spec_window_[k] = 0.5f * (1.0f - std::cos(
+            2.0f * static_cast<float>(M_PI) * k / static_cast<float>(SPEC_FFT_N - 1)));
+}
 
 void Demodulator::reset()
 {
@@ -110,6 +156,16 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
         const int16_t s = samples[i];
         ring_[write_pos_ % BUF_CAP] = s;
         ++write_pos_;
+
+        // Spectrum analyser: independent FFT pass, throttled to ~10 Hz.
+        // Runs regardless of grid state; the ring has enough history once
+        // write_pos_ >= SPEC_FFT_N.
+        if (spectrum_cb_ && write_pos_ >= SPEC_FFT_N) {
+            if (++spec_accum_ >= SPEC_INTERVAL) {
+                spec_accum_ = 0;
+                compute_spectrum_();
+            }
+        }
 
         // Silence-gap grid reset: prolonged absence of signal indicates the
         // previous transmission has ended.  Reset the grid lock so the next
@@ -147,6 +203,35 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
             }
         }
     }
+}
+
+void Demodulator::compute_spectrum_()
+{
+    // Fill real/imag arrays from the last SPEC_FFT_N samples of the ring,
+    // scaled to [-1, +1] and weighted by the pre-computed Hann window.
+    float re[SPEC_FFT_N], im[SPEC_FFT_N];
+    constexpr float kScale = 1.0f / 32768.0f;
+    const uint32_t base = write_pos_ - static_cast<uint32_t>(SPEC_FFT_N);
+    for (size_t k = 0; k < SPEC_FFT_N; ++k) {
+        re[k] = ring_at(base + static_cast<uint32_t>(k)) * kScale * spec_window_[k];
+        im[k] = 0.0f;
+    }
+
+    fft_inplace(re, im, SPEC_FFT_N);
+
+    // Compute one-sided magnitude spectrum (bins 0 … SPEC_FFT_N/2).
+    // Normalise by N so magnitude is independent of FFT size.
+    constexpr size_t kBins = SPEC_FFT_N / 2 + 1;
+    const float kNorm = 1.0f / static_cast<float>(SPEC_FFT_N);
+    float bins[kBins];
+    bins[0] = std::sqrt(re[0] * re[0] + im[0] * im[0]) * kNorm;
+    for (size_t k = 1; k < SPEC_FFT_N / 2; ++k)
+        bins[k] = std::sqrt(re[k] * re[k] + im[k] * im[k]) * kNorm * 2.0f; // ×2: one-sided energy
+    bins[SPEC_FFT_N / 2] = std::sqrt(re[SPEC_FFT_N/2] * re[SPEC_FFT_N/2]
+                                    + im[SPEC_FFT_N/2] * im[SPEC_FFT_N/2]) * kNorm;
+
+    constexpr float kHzPerBin = 8000.0f / static_cast<float>(SPEC_FFT_N);
+    spectrum_cb_(bins, kBins, kHzPerBin);
 }
 
 float Demodulator::goertzel_power(const int16_t* block, float freq_hz)

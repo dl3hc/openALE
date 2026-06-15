@@ -218,6 +218,14 @@ public:
     /** Link terminated (reason = informational string). */
     std::function<void(const std::string& reason)> on_link_terminated;
 
+    /**
+     * AMD orderwire message received (AC-LINK-009-3).
+     * Fires when a caller's MESSAGE section is decoded during handshake.
+     * \param from  Calling station address (first 3 chars at time of TIS conclusion).
+     * \param text  Assembled orderwire text (trailing padding stripped).
+     */
+    std::function<void(const std::string& from, const std::string& text)> on_amd_received;
+
     /** Human-readable status change for logging or display. */
     std::function<void(const std::string& msg)> on_status_changed;
 
@@ -226,6 +234,7 @@ public:
      *
      * Supported commands:
      *   CMD:CALL <ADDR>   — initiate individual call to ADDR
+     *   CMD:AMD <text>    — queue AMD orderwire message for the next CMD:CALL (max 15 chars)
      *   CMD:TERMINATE     — terminate current link
      *   CMD:REJECT        — reject incoming call with TWAS
      *   CMD:LISTEN        — enter scanning / listening state
@@ -263,6 +272,28 @@ public:
     void set_debug_rx(bool on)                   { debug_rx_ = on; }
     bool debug_rx() const                        { return debug_rx_; }
 
+    // ── Spectrum / waterfall ────────────────────────────────────────────────
+    using SpectrumCallback = ALE2GModem::Demodulator::SpectrumCallback;
+
+    /**
+     * Register a callback for FFT spectrum data (waterfall / GUI).
+     *
+     * Fired ~10 times/second from the audio capture thread with 257 magnitude
+     * bins covering 0–4000 Hz (15.625 Hz/bin).  The ALE channel (750–2500 Hz)
+     * maps to bins ≈ 48–160.
+     *
+     * Pass nullptr to unregister.  The callback must be short or hand the data
+     * off to a lock-free queue — it runs on the audio thread.
+     *
+     * Typical consumer (browser WebSocket server):
+     *   ctrl.set_spectrum_callback([&ws](const float* b, size_t n, float hz) {
+     *       ws.send_binary(b, n * sizeof(float));
+     *   });
+     */
+    void set_spectrum_callback(SpectrumCallback cb) {
+        demodulator_.set_spectrum_callback(std::move(cb));
+    }
+
     // ── Inspection ──────────────────────────────────────────────────────────
     ALEState    state() const { return sm_.get_state(); }
     std::string self()  const { return self_addr_; }
@@ -276,6 +307,11 @@ private:
     pal::IRadio*             radio_          = nullptr;
     std::string              self_addr_;
     std::string              last_caller_;   // caller address as it arrives (TIS + DATA)
+
+    // AMD orderwire tracking — active while in HANDSHAKE/WAIT_CYCLE_END
+    int          amd_skip_count_ = 0;  // leading-call DATA/REP words to skip (2×(n-1))
+    int          amd_seen_count_ = 0;  // DATA/REP words seen since HANDSHAKE entry
+    std::string  amd_text_acc_;        // raw AMD chunk bytes (3 per word, untrimmed)
 
     // LQA
     LQADatabase              lqa_database_;

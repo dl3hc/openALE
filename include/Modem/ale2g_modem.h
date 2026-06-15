@@ -54,6 +54,7 @@
 #include "Protocol/Control/ale_timing.h"
 #include "Word/ale_word.h"
 #include "Word/ale_sequence.h"
+#include <array>
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -160,9 +161,27 @@ class Demodulator {
 public:
     using WordCallback = std::function<void(const ALEWord&)>;
 
+    /**
+     * Spectrum callback — fired ~10 times/second from the audio thread.
+     *
+     * \param bins       Linear FFT magnitudes for bins 0 … count-1.
+     *                   bins[k] covers frequency k * hz_per_bin Hz.
+     *                   dB conversion: 20 * log10(bins[k])  (consumer's job).
+     * \param count      Number of bins = SPEC_FFT_N / 2 + 1 = 257.
+     * \param hz_per_bin Frequency width of one bin = 8000 / SPEC_FFT_N ≈ 15.6 Hz.
+     *
+     * The ALE channel (750–2500 Hz) maps to bins ≈ 48–160.
+     * Called from the audio capture thread — keep it short or hand off to a queue.
+     */
+    using SpectrumCallback =
+        std::function<void(const float* bins, size_t count, float hz_per_bin)>;
+
     Demodulator();
 
     void set_word_callback(WordCallback cb) { word_cb_ = std::move(cb); }
+
+    /** Register a callback for spectrum/waterfall data.  Pass nullptr to disable. */
+    void set_spectrum_callback(SpectrumCallback cb) { spectrum_cb_ = std::move(cb); }
 
     /**
      * Enable / disable decoding.  Disabling resets the ring buffer and
@@ -238,6 +257,18 @@ private:
         min_unanimous_votes_ = base_min_unanimous_;
         adaptive_fec_.reset();
     }
+
+    // ── Spectrum analyser (waterfall data source) ─────────────────────────
+    // Independent 512-point FFT pass on the same PCM stream.
+    // Fired ~10 times/second; does NOT affect word decoding.
+    static constexpr size_t   SPEC_FFT_N    = 512;   // bins: 0–4000 Hz, 15.625 Hz/bin
+    static constexpr uint32_t SPEC_INTERVAL = 800;   // samples between updates (~10 Hz)
+
+    SpectrumCallback              spectrum_cb_;
+    uint32_t                      spec_accum_  = 0;
+    std::array<float, SPEC_FFT_N> spec_window_;  // pre-computed Hann window
+
+    void compute_spectrum_();
 
     static float   goertzel_power(const int16_t* block, float freq_hz);
     static uint8_t symbol_from_block(const int16_t* block);
