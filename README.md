@@ -39,22 +39,36 @@ ctest --test-dir build --verbose
 
 ### Optional: Hamlib (Radio CAT/PTT)
 
+Ohne Hamlib laufen alle Protokoll-, Audio- und Modem-Funktionen normal.
+`--radio` ist dann nicht verfügbar.
+
 **Linux:**
 ```bash
 sudo apt install libhamlib-dev
 cmake -S . -B build   # wird automatisch erkannt
+cmake --build build
 ```
 
-**Windows:**
-Hamlib-Release-ZIP von https://github.com/Hamlib/Hamlib/releases herunterladen,
-dann in `deps/hamlib/` entpacken (siehe `deps/hamlib/README.txt`):
+**Windows (einmalig in MSYS2 MinGW64-Shell):**
+
+MSYS2 von https://www.msys2.org/ installieren, dann in der MinGW64-Shell:
+```bash
+pacman -S git base-devel mingw-w64-x86_64-toolchain automake autoconf libtool
+bash scripts/build_hamlib.sh
 ```
-deps/hamlib/bin/libhamlib-4.dll
-deps/hamlib/bin/libwinpthread-1.dll
-deps/hamlib/include/hamlib/rig.h
-deps/hamlib/lib/libhamlib.dll.a
+
+Das Skript klont Hamlib 4.5.2, baut es als statische Library und installiert
+sie nach `libs/hamlib-built/`. Danach genügt ein normales CMake-Build:
+
+```powershell
+mkdir build; cd build; cmake ..; cmake --build .
 ```
-CMake findet die DLLs automatisch und kopiert sie neben `ale_cli.exe`.
+
+CMake erkennt `libs/hamlib-built/` automatisch und linkt statisch —
+keine DLLs, kein PATH-Setup nötig.
+
+> **Endnutzer** müssen das nicht selbst tun — fertig gebaute Binaries
+> werden mit jedem Release als Download bereitgestellt.
 
 ---
 
