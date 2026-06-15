@@ -1,5 +1,11 @@
 # Build output
 build/
+build_*/
+
+# Hamlib bundled binaries (binary blobs — add manually, not via git)
+deps/hamlib/bin/
+deps/hamlib/include/
+deps/hamlib/lib/
 Testing/
 
 # IDE / editor metadata
