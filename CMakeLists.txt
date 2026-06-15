@@ -165,8 +165,40 @@ target_link_libraries(ale_channel ale_stores ale_lqa ale_protocol ale_fsk_core a
 
 # ── PAL — platform abstraction implementations ────────────────────────────────
 
+# Optional: Hamlib radio control (CAT + PTT)
+# Windows: set HAMLIB_ROOT to your Hamlib install prefix, e.g.
+#   cmake -DHAMLIB_ROOT=C:/hamlib ..
+# Linux:   install libhamlib-dev, detected automatically via pkg-config
+set(HAMLIB_FOUND FALSE)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(HAMLIB QUIET hamlib)
+endif()
+if(NOT HAMLIB_FOUND)
+    set(_hamlib_hints
+        "$ENV{HAMLIB_ROOT}/lib"
+        "${HAMLIB_ROOT}/lib"
+    )
+    find_library(HAMLIB_LIBRARY NAMES hamlib libhamlib HINTS ${_hamlib_hints})
+    find_path(HAMLIB_INCLUDE_DIR NAMES hamlib/rig.h
+        HINTS "$ENV{HAMLIB_ROOT}/include" "${HAMLIB_ROOT}/include")
+    if(HAMLIB_LIBRARY AND HAMLIB_INCLUDE_DIR)
+        set(HAMLIB_FOUND TRUE)
+        set(HAMLIB_LIBRARIES   "${HAMLIB_LIBRARY}")
+        set(HAMLIB_INCLUDE_DIRS "${HAMLIB_INCLUDE_DIR}")
+    endif()
+endif()
+
+if(HAMLIB_FOUND)
+    message(STATUS "Hamlib found — building with radio CAT/PTT support")
+else()
+    message(STATUS "Hamlib not found — radio CAT/PTT disabled  "
+                   "(set HAMLIB_ROOT or install libhamlib-dev)")
+endif()
+
 add_library(ale_pal
     src/PAL/timer.cpp
+    src/PAL/radio.cpp
 )
 
 target_include_directories(ale_pal PUBLIC
@@ -175,6 +207,13 @@ target_include_directories(ale_pal PUBLIC
 
 if(WIN32)
     target_link_libraries(ale_pal winmm)
+endif()
+
+if(HAMLIB_FOUND)
+    target_sources(ale_pal PRIVATE src/PAL/radios/hamlib_radio.cpp)
+    target_include_directories(ale_pal PRIVATE ${HAMLIB_INCLUDE_DIRS})
+    target_link_libraries(ale_pal ${HAMLIB_LIBRARIES})
+    target_compile_definitions(ale_pal PUBLIC HAVE_HAMLIB)
 endif()
 
 # ── Tests ─────────────────────────────────────────────────────────────────────

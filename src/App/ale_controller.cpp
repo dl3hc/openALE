@@ -3,8 +3,27 @@
  */
 
 #include "App/ale_controller.h"
+#include "PAL/radio.h"
 #include <cstdio>
 #include <string>
+
+namespace {
+
+static pal::RadioMode mode_from_string(const std::string& s) {
+    if (s == "LSB")      return pal::RadioMode::LSB;
+    if (s == "CW")       return pal::RadioMode::CW;
+    if (s == "CW_R")     return pal::RadioMode::CW_R;
+    if (s == "FM")       return pal::RadioMode::FM;
+    if (s == "FMW")      return pal::RadioMode::FMW;
+    if (s == "AM")       return pal::RadioMode::AM;
+    if (s == "FSK")      return pal::RadioMode::FSK;
+    if (s == "RTTY")     return pal::RadioMode::RTTY;
+    if (s == "DATA_LSB") return pal::RadioMode::DATA_LSB;
+    if (s == "DATA_USB") return pal::RadioMode::DATA_USB;
+    return pal::RadioMode::USB;
+}
+
+} // namespace
 
 namespace ale {
 
@@ -49,8 +68,29 @@ void ALEController::wire_callbacks()
     // PTT transitions mirror RX enable: RX off = TX active = PTT on.
     sm_.set_rx_enabled_callback([this](bool rx_on) {
         demodulator_.set_enabled(rx_on);
+        if (radio_) radio_->set_ptt(!rx_on);
         emit_event(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
     });
+
+    // Channel hops (scan / calling) → radio frequency/mode change
+    sm_.set_channel_callback([this](const Channel& ch) {
+        if (!radio_) return;
+        pal::Channel pal_ch;
+        pal_ch.rx_frequency = ch.rx_frequency_hz;
+        pal_ch.tx_frequency = ch.effective_tx_hz();
+        pal_ch.rx_mode      = mode_from_string(ch.rx_mode);
+        pal_ch.tx_mode      = mode_from_string(ch.tx_mode);
+        pal_ch.power        = ch.power_pct;
+        pal_ch.antenna      = ch.antenna;
+        radio_->set_channel(pal_ch);
+    });
+}
+
+// ── Radio control ─────────────────────────────────────────────────────────────
+
+void ALEController::set_radio(pal::IRadio* r)
+{
+    radio_ = r;
 }
 
 // ── Audio device ──────────────────────────────────────────────────────────────

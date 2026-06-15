@@ -119,7 +119,7 @@ private:
      * @param mode Modusname, z. B. "USB" oder "LSB"
      * @return Passendes Hamlib rmode_t
      */
-    rmode_t to_hamlib_mode(const std::string& mode) const;
+    rmode_t to_hamlib_mode(RadioMode mode) const;
 
     /**
      * @brief Wendet die Portkonfiguration auf den Hamlib-Handle an.

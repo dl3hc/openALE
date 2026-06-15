@@ -38,6 +38,8 @@
 #include <vector>
 #include <cstdint>
 
+namespace pal { class IRadio; }
+
 namespace ale {
 
 class ALEController {
@@ -46,6 +48,16 @@ public:
 
     // ── Configuration ───────────────────────────────────────────────────────
     void set_self_address(const std::string& addr);
+
+    /**
+     * Attach a radio for PTT and frequency-hopping control.
+     *
+     * When set, PTT follows the RX-enable signal (PTT on = RX off = TX active)
+     * and every channel change fired by ALEStateMachine is forwarded to
+     * radio->set_channel().  Pass nullptr to detach.  Ownership stays with the caller.
+     * The radio must be initialized and started before this call.
+     */
+    void set_radio(pal::IRadio* r);
 
     /**
      * Attach the audio device used for real-time TX/RX.
@@ -200,6 +212,7 @@ private:
     ALE2GModem::Demodulator  demodulator_;
     AudioDevice*             audio_device_   = nullptr;
     pal::IEventHandler*      event_handler_  = nullptr;
+    pal::IRadio*             radio_          = nullptr;
     std::string              self_addr_;
     std::string              last_caller_;   // caller address as it arrives (TIS + DATA)
 

@@ -54,6 +54,7 @@
 
 #include "App/ale_controller.h"
 #include "App/audio_device.h"
+#include "PAL/radio.h"
 #include "PAL/timer.h"
 
 #ifdef _WIN32
@@ -115,6 +116,9 @@ static void print_usage(const char* prog)
         "  --out-device NAME   Audio output device substring (TX, waveOut)\n"
         "  --list-devices      Print available audio devices\n"
         "  --no-scan           Skip scanning (fixed channel, shorter frames)\n"
+        "  --radio      SPEC   Radio CAT/PTT: hamlib:<model_id>:<port>\n"
+        "                        e.g. hamlib:229:COM3  hamlib:229:tcp://127.0.0.1:4532\n"
+        "                        (run 'rigctl -l' to find your radio's model ID)\n"
         "\n"
         "Receiver FEC / sync tuning (MIL-STD-188-141B A.5.2.6.3):\n"
         "  --golay-mode N      Golay correction power: 3=3/4 (default), 2=2/5, 1=1/6, 0=0/7\n"
@@ -136,7 +140,8 @@ static void print_banner(const std::string& self,
                           bool               no_scan,
                           const std::string& target,
                           const std::string& in_device,
-                          const std::string& out_device)
+                          const std::string& out_device,
+                          const std::string& radio_spec)
 {
     const char* mode_str;
     if (call_mode)
@@ -162,6 +167,8 @@ static void print_banner(const std::string& self,
             std::printf("║  TX out : %-44s ║\n", tx_label.c_str());
         }
     }
+    if (!radio_spec.empty())
+        std::printf("║  Radio  : %-44s ║\n", radio_spec.c_str());
     std::printf("╠═══════════════════════════════════════════════════════╣\n");
     std::printf("║  Runtime commands (stdin):                            ║\n");
     std::printf("║    CMD:CALL <ADDR>  CMD:ADD_CHANNEL <CH>  CMD:STATUS  ║\n");
@@ -185,6 +192,7 @@ int main(int argc, char* argv[])
     std::string target_addr;
     std::string in_device;
     std::string out_device;
+    std::string radio_spec;
     bool list_devs    = false;
     bool no_scan      = true;   // default: skip scanning, use leading-call only
 
@@ -216,6 +224,8 @@ int main(int argc, char* argv[])
             adaptive_arg = true;
         } else if (std::strcmp(argv[i], "--debug-rx") == 0) {
             debug_rx_arg = true;
+        } else if (std::strcmp(argv[i], "--radio") == 0 && i + 1 < argc) {
+            radio_spec = argv[++i];
         }
     }
 
@@ -290,6 +300,32 @@ int main(int argc, char* argv[])
     // Wire audio device: TX routing and sample-accurate completion tracking.
     ctrl.set_audio_device(audio.get());
 
+    // ── Setup radio control (optional) ────────────────────────────────────
+    std::unique_ptr<pal::IRadio> radio;
+    if (!radio_spec.empty()) {
+        radio = pal::create_radio(radio_spec);
+        if (!radio) {
+            std::fprintf(stderr,
+                "ERROR: Unknown radio spec '%s'.\n"
+                "       Supported format: hamlib:<model_id>:<port>\n"
+                "       Examples: hamlib:229:COM3  hamlib:229:tcp://127.0.0.1:4532\n"
+                "       Run 'rigctl -l' to list Hamlib model IDs.\n"
+                "       (Hamlib support requires building with -DHAVE_HAMLIB)\n",
+                radio_spec.c_str());
+            return 1;
+        }
+        if (!radio->initialize() || !radio->start()) {
+            std::fprintf(stderr,
+                "ERROR: Cannot connect to radio '%s'.\n"
+                "       Check port name, baud rate, and cable.\n",
+                radio_spec.c_str());
+            return 1;
+        }
+        ctrl.set_radio(radio.get());
+        std::printf("[>>] Radio connected: %s\n", radio_spec.c_str());
+        std::fflush(stdout);
+    }
+
     // Status messages
     ctrl.on_status_changed = [](const std::string& msg) {
         std::printf("[  ] %s\n", msg.c_str());
@@ -322,7 +358,7 @@ int main(int argc, char* argv[])
         std::fflush(stdout);
     };
 
-    print_banner(self_addr, call_mode, no_scan, target_addr, in_device, out_device);
+    print_banner(self_addr, call_mode, no_scan, target_addr, in_device, out_device, radio_spec);
 
     // ── Start ALE operation ───────────────────────────────────────────────
     if (call_mode) {
@@ -379,6 +415,7 @@ int main(int argc, char* argv[])
 
     // ── Clean up ──────────────────────────────────────────────────────────
     ctrl.emergency_stop();
+    if (radio) radio->stop();
     audio->close();
     std::printf("[ALE CLI] Exiting.\n");
     return 0;
