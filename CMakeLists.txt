@@ -165,70 +165,54 @@ target_link_libraries(ale_channel ale_stores ale_lqa ale_protocol ale_fsk_core a
 
 # ── PAL — platform abstraction implementations ────────────────────────────────
 
-# Optional: Hamlib radio control (CAT + PTT)
+# ── Hamlib (Radio CAT + PTT) ──────────────────────────────────────────────────
 #
-# Windows (bundled — recommended):
-#   Copy Hamlib DLLs to deps/hamlib/bin/, headers to deps/hamlib/include/,
-#   import library to deps/hamlib/lib/.  CMake picks them up automatically
-#   and copies the DLLs next to the .exe so no PATH setup is required.
+# Hamlib hat kein CMakeLists.txt — es wird einmalig per Skript aus dem
+# Quellcode gebaut und als statische Library eingebunden.
 #
-# Windows (external install):
-#   cmake -DHAMLIB_ROOT=C:/hamlib ..   or set HAMLIB_ROOT env var
+# Einmalig in einer MSYS2 MinGW64-Shell:
+#   bash scripts/build_hamlib.sh
 #
-# Linux:
-#   sudo apt install libhamlib-dev   (detected via pkg-config automatically)
+# Danach erkennt CMake die installierte Lib automatisch.
+# CAT/PTT deaktivieren: cmake -DHAMLIB_BUILD=OFF
+
+option(HAMLIB_BUILD "Hamlib-Support einbauen (Radio CAT/PTT)" ON)
+
 set(HAMLIB_FOUND FALSE)
+set(_hamlib_inc "")
+set(_hamlib_lib "")
 
-# 1. Check bundled deps/ directory first (highest priority on all platforms)
-set(_hamlib_bundled "${CMAKE_CURRENT_SOURCE_DIR}/deps/hamlib")
-if(EXISTS "${_hamlib_bundled}/include/hamlib/rig.h")
-    find_library(HAMLIB_LIBRARY NAMES hamlib libhamlib
-        HINTS "${_hamlib_bundled}/lib" NO_DEFAULT_PATH)
-    if(HAMLIB_LIBRARY)
-        set(HAMLIB_FOUND TRUE)
-        set(HAMLIB_LIBRARIES    "${HAMLIB_LIBRARY}")
-        set(HAMLIB_INCLUDE_DIRS "${_hamlib_bundled}/include")
-        set(HAMLIB_BIN_DIR      "${_hamlib_bundled}/bin")
-        message(STATUS "Hamlib found (bundled in deps/hamlib)")
-    endif()
-endif()
-
-# 2. pkg-config (Linux / MSYS2)
-if(NOT HAMLIB_FOUND)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(HAMLIB QUIET hamlib)
-        if(HAMLIB_FOUND)
-            message(STATUS "Hamlib found via pkg-config")
+if(HAMLIB_BUILD)
+    # 1. Bevorzuge den selbst gebauten Static-Build aus scripts/build_hamlib.sh
+    set(_hamlib_prefix "${CMAKE_CURRENT_SOURCE_DIR}/libs/hamlib-built")
+    if(EXISTS "${_hamlib_prefix}/include/hamlib/rig.h")
+        find_library(_hamlib_lib NAMES hamlib
+            HINTS "${_hamlib_prefix}/lib" NO_DEFAULT_PATH)
+        if(_hamlib_lib)
+            set(HAMLIB_FOUND TRUE)
+            set(_hamlib_inc "${_hamlib_prefix}/include")
+            message(STATUS "Hamlib: statischer Build gefunden (libs/hamlib-built/)")
         endif()
     endif()
-endif()
 
-# 3. Manual HAMLIB_ROOT (CMake variable or env var)
-if(NOT HAMLIB_FOUND)
-    set(_hamlib_hints
-        "$ENV{HAMLIB_ROOT}/lib"
-        "${HAMLIB_ROOT}/lib"
-    )
-    find_library(HAMLIB_LIBRARY NAMES hamlib libhamlib HINTS ${_hamlib_hints})
-    find_path(HAMLIB_INCLUDE_DIR NAMES hamlib/rig.h
-        HINTS "$ENV{HAMLIB_ROOT}/include" "${HAMLIB_ROOT}/include")
-    if(HAMLIB_LIBRARY AND HAMLIB_INCLUDE_DIR)
-        set(HAMLIB_FOUND TRUE)
-        set(HAMLIB_LIBRARIES    "${HAMLIB_LIBRARY}")
-        set(HAMLIB_INCLUDE_DIRS "${HAMLIB_INCLUDE_DIR}")
-        # DLLs expected alongside the lib on Windows
-        get_filename_component(_hamlib_lib_dir "${HAMLIB_LIBRARY}" DIRECTORY)
-        if(WIN32 AND EXISTS "${_hamlib_lib_dir}/../bin")
-            set(HAMLIB_BIN_DIR "${_hamlib_lib_dir}/../bin")
+    # 2. Fallback: pkg-config (Linux / MSYS2 system-install)
+    if(NOT HAMLIB_FOUND)
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(HAMLIB QUIET hamlib)
+            if(HAMLIB_FOUND)
+                set(_hamlib_inc "${HAMLIB_INCLUDE_DIRS}")
+                set(_hamlib_lib "${HAMLIB_LIBRARIES}")
+                message(STATUS "Hamlib: via pkg-config gefunden")
+            endif()
         endif()
-        message(STATUS "Hamlib found via HAMLIB_ROOT")
     endif()
-endif()
 
-if(NOT HAMLIB_FOUND)
-    message(STATUS "Hamlib not found — radio CAT/PTT disabled"
-                   "  (copy to deps/hamlib/ or set HAMLIB_ROOT, or: apt install libhamlib-dev)")
+    if(NOT HAMLIB_FOUND)
+        message(STATUS "Hamlib nicht gefunden — Radio CAT/PTT deaktiviert")
+        message(STATUS "  Einmalig bauen (MSYS2 MinGW64-Shell):")
+        message(STATUS "    bash scripts/build_hamlib.sh")
+    endif()
 endif()
 
 add_library(ale_pal
@@ -246,22 +230,10 @@ endif()
 
 if(HAMLIB_FOUND)
     target_sources(ale_pal PRIVATE src/PAL/radios/hamlib_radio.cpp)
-    target_include_directories(ale_pal PRIVATE ${HAMLIB_INCLUDE_DIRS})
-    target_link_libraries(ale_pal ${HAMLIB_LIBRARIES})
+    target_include_directories(ale_pal PRIVATE "${_hamlib_inc}")
+    target_link_libraries(ale_pal "${_hamlib_lib}")
     target_compile_definitions(ale_pal PUBLIC HAVE_HAMLIB)
-
-    # On Windows, copy all DLLs from HAMLIB_BIN_DIR next to ale_cli.exe
-    # so the program runs without any PATH changes.
-    if(WIN32 AND DEFINED HAMLIB_BIN_DIR)
-        file(GLOB _hamlib_dlls "${HAMLIB_BIN_DIR}/*.dll")
-        foreach(_dll ${_hamlib_dlls})
-            add_custom_command(TARGET ale_cli POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_dll}" "$<TARGET_FILE_DIR:ale_cli>"
-                COMMENT "Copying ${_dll} → build output"
-            )
-        endforeach()
-    endif()
+    # Statische Lib — kein DLL-Copy nötig
 endif()
 
 # ── Tests ─────────────────────────────────────────────────────────────────────

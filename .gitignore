@@ -2,10 +2,13 @@
 build/
 build_*/
 
-# Hamlib bundled binaries (binary blobs — add manually, not via git)
-deps/hamlib/bin/
-deps/hamlib/include/
-deps/hamlib/lib/
+# Hamlib Build-Artefakte (via scripts/build_hamlib.sh erstellt)
+libs/hamlib-src/
+libs/hamlib-build/
+libs/hamlib-built/
+
+# Altes DLL-Bundle-Verzeichnis (nicht mehr verwendet)
+deps/
 Testing/
 
 # IDE / editor metadata
