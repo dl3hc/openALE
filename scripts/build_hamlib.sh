@@ -10,7 +10,7 @@
 #
 # Aufruf:
 #   bash scripts/build_hamlib.sh
-#   cmake -S . -B build && cmake --build build
+#   mkdir build && cd build && cmake .. && cmake --build .
 
 set -e
 
@@ -33,20 +33,20 @@ echo ""
 
 # ── 1. Quellcode holen ────────────────────────────────────────────────────────
 if [ -d "${HAMLIB_SRC}/.git" ]; then
-    echo "[1/4] Hamlib-Quellcode bereits vorhanden — überspringe Clone"
+    echo "[1/5] Hamlib-Quellcode bereits vorhanden — überspringe Clone"
 else
-    echo "[1/4] Klone Hamlib ${HAMLIB_VERSION} ..."
+    echo "[1/5] Klone Hamlib ${HAMLIB_VERSION} ..."
     git clone --depth 1 --branch "${HAMLIB_TAG}" \
         https://github.com/Hamlib/Hamlib.git "${HAMLIB_SRC}"
 fi
 
 # ── 2. Bootstrap (autotools-Makefiles generieren) ─────────────────────────────
-echo "[2/4] Bootstrap (autoconf/automake) ..."
+echo "[2/5] Bootstrap (autoconf/automake) ..."
 cd "${HAMLIB_SRC}"
 ./bootstrap
 
 # ── 3. Out-of-tree Configure ──────────────────────────────────────────────────
-echo "[3/4] Configure (statisch, keine Bindings/Tests) ..."
+echo "[3/5] Configure (statisch, Release-Optimierung, keine Bindings/Tests) ..."
 mkdir -p "${HAMLIB_BUILD}"
 cd "${HAMLIB_BUILD}"
 
@@ -60,14 +60,29 @@ cd "${HAMLIB_BUILD}"
     --without-lua-binding \
     --disable-tests \
     --disable-doc \
+    CFLAGS="-O2 -DNDEBUG" \
+    CXXFLAGS="-O2 -DNDEBUG" \
     --quiet
 
 # ── 4. Build + Install ────────────────────────────────────────────────────────
-echo "[4/4] Baue und installiere ($(nproc 2>/dev/null || echo 4) Jobs) ..."
+echo "[4/5] Baue und installiere ($(nproc 2>/dev/null || echo 4) Jobs) ..."
 make -j"$(nproc 2>/dev/null || echo 4)"
 make install
 
+# ── 5. Aufräumen ─────────────────────────────────────────────────────────────
+echo "[5/5] Räume auf ..."
+# rigctl/rigctld/rotctl usw. sind separate Tools — nicht Teil unseres Builds.
+# Sie werden extern installiert (MSYS2-Paket oder Hamlib-Release-ZIP), falls
+# der Nutzer einen echten rigctld-Daemon betreiben will.
+# libhamlib.a enthält bereits den NETRIGCTL-Client-Code zum Verbinden.
+rm -rf "${HAMLIB_PREFIX}/bin" "${HAMLIB_PREFIX}/share"
+# Debug-Symbole aus der statischen Lib entfernen (~60-70% der Dateigröße)
+strip --strip-debug "${HAMLIB_PREFIX}/lib/libhamlib.a" 2>/dev/null || true
+# Quellcode und Build-Artefakte nicht mehr nötig
+rm -rf "${HAMLIB_SRC}" "${HAMLIB_BUILD}"
+
 # ── Fertig ────────────────────────────────────────────────────────────────────
+du -sh "${HAMLIB_PREFIX}" 2>/dev/null || true
 echo ""
 echo "=== Fertig! ==="
 echo ""
@@ -76,8 +91,7 @@ echo "  ${HAMLIB_PREFIX}/include/hamlib/rig.h"
 echo "  ${HAMLIB_PREFIX}/lib/libhamlib.a"
 echo ""
 echo "Nächster Schritt — cmake in einer normalen Shell/PowerShell:"
-echo "  cmake -S . -B build"
-echo "  cmake --build build"
+echo "  mkdir build && cd build && cmake .. && cmake --build ."
 echo ""
 echo "Prüfen ob Hamlib erkannt wurde:"
-echo "  cmake -S . -B build 2>&1 | grep -i hamlib"
+echo "  cmake .. 2>&1 | grep -i hamlib"
