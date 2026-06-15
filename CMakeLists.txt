@@ -183,15 +183,29 @@ set(_hamlib_inc "")
 set(_hamlib_lib "")
 
 if(HAMLIB_BUILD)
-    # 1. Bevorzuge den selbst gebauten Static-Build aus scripts/build_hamlib.sh
+    # 1. Bevorzuge den selbst gebauten Build aus scripts/build_hamlib.sh
     set(_hamlib_prefix "${CMAKE_CURRENT_SOURCE_DIR}/libs/hamlib-built")
     if(EXISTS "${_hamlib_prefix}/include/hamlib/rig.h")
-        find_library(_hamlib_lib NAMES hamlib
-            HINTS "${_hamlib_prefix}/lib" NO_DEFAULT_PATH)
-        if(_hamlib_lib)
+        if(MSVC AND EXISTS "${_hamlib_prefix}/lib/libhamlib.lib")
+            # MSVC: Import-Library (.lib) + DLL
             set(HAMLIB_FOUND TRUE)
-            set(_hamlib_inc "${_hamlib_prefix}/include")
+            set(_hamlib_lib "${_hamlib_prefix}/lib/libhamlib.lib")
+            set(_hamlib_bin "${_hamlib_prefix}/bin")
+            message(STATUS "Hamlib: DLL-Build gefunden, MSVC Import-Library (libs/hamlib-built/)")
+        elseif(NOT MSVC AND EXISTS "${_hamlib_prefix}/lib/libhamlib.dll.a")
+            # MinGW: MinGW Import-Library (.dll.a)
+            set(HAMLIB_FOUND TRUE)
+            set(_hamlib_lib "${_hamlib_prefix}/lib/libhamlib.dll.a")
+            set(_hamlib_bin "${_hamlib_prefix}/bin")
+            message(STATUS "Hamlib: DLL-Build gefunden, MinGW Import-Library (libs/hamlib-built/)")
+        elseif(EXISTS "${_hamlib_prefix}/lib/libhamlib.a")
+            # Fallback: statische Library (alter Build ohne --enable-shared)
+            set(HAMLIB_FOUND TRUE)
+            set(_hamlib_lib "${_hamlib_prefix}/lib/libhamlib.a")
             message(STATUS "Hamlib: statischer Build gefunden (libs/hamlib-built/)")
+        endif()
+        if(HAMLIB_FOUND)
+            set(_hamlib_inc "${_hamlib_prefix}/include")
         endif()
     endif()
 
@@ -233,7 +247,18 @@ if(HAMLIB_FOUND)
     target_include_directories(ale_pal PRIVATE "${_hamlib_inc}")
     target_link_libraries(ale_pal "${_hamlib_lib}")
     target_compile_definitions(ale_pal PUBLIC HAVE_HAMLIB)
-    # Statische Lib — kein DLL-Copy nötig
+
+    # DLL-Build: libhamlib-4.dll + Runtime-DLLs neben ale_cli.exe kopieren
+    if(DEFINED _hamlib_bin)
+        file(GLOB _hamlib_dlls "${_hamlib_bin}/*.dll")
+        foreach(_dll ${_hamlib_dlls})
+            add_custom_command(TARGET ale_cli POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_dll}" "$<TARGET_FILE_DIR:ale_cli>"
+                COMMENT "Kopiere $(notdir ${_dll})"
+            )
+        endforeach()
+    endif()
 endif()
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
