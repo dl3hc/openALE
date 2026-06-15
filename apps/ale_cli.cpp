@@ -64,6 +64,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <atomic>
@@ -114,6 +115,13 @@ static void print_usage(const char* prog)
         "  --out-device NAME   Audio output device substring (TX, waveOut)\n"
         "  --list-devices      Print available audio devices\n"
         "  --no-scan           Skip scanning (fixed channel, shorter frames)\n"
+        "\n"
+        "Receiver FEC / sync tuning (MIL-STD-188-141B A.5.2.6.3):\n"
+        "  --golay-mode N      Golay correction power: 3=3/4 (default), 2=2/5, 1=1/6, 0=0/7\n"
+        "                      (n/m = up to n errors corrected, m detected)\n"
+        "  --unanimous  N      Min unanimous 2/3-votes to accept a word, 0-49 (default 33)\n"
+        "  --adaptive          Auto-adjust Golay mode + unanimous threshold to signal quality\n"
+        "  --debug-rx          Log RX peak level + every demodulated word (diagnostics)\n"
         "\n"
         "Single-PC loopback with VB-Audio CABLE A+B:\n"
         "  %s --self BOB --in-device \"CABLE-A Output\" --out-device \"CABLE-B Input\"\n"
@@ -180,6 +188,12 @@ int main(int argc, char* argv[])
     bool list_devs    = false;
     bool no_scan      = true;   // default: skip scanning, use leading-call only
 
+    // Receiver FEC / sync tuning (A.5.2.6.3); defaults = most tolerant point.
+    int  golay_mode_arg = 3;    // 3=3/4 (full correction)
+    int  unanimous_arg  = -1;   // -1 → keep demodulator default (33)
+    bool adaptive_arg   = false;
+    bool debug_rx_arg   = false;
+
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--self") == 0 && i + 1 < argc) {
             self_addr = argv[++i];
@@ -194,6 +208,14 @@ int main(int argc, char* argv[])
             list_devs = true;
         } else if (std::strcmp(argv[i], "--no-scan") == 0) {
             no_scan = true;
+        } else if (std::strcmp(argv[i], "--golay-mode") == 0 && i + 1 < argc) {
+            golay_mode_arg = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--unanimous") == 0 && i + 1 < argc) {
+            unanimous_arg = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--adaptive") == 0) {
+            adaptive_arg = true;
+        } else if (std::strcmp(argv[i], "--debug-rx") == 0) {
+            debug_rx_arg = true;
         }
     }
 
@@ -219,6 +241,16 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    // Validate receiver FEC / sync tuning (A.5.2.6.3).
+    if (golay_mode_arg < 0 || golay_mode_arg > 3) {
+        std::fprintf(stderr, "ERROR: --golay-mode must be 0..3 (3=3/4, 2=2/5, 1=1/6, 0=0/7).\n");
+        return 1;
+    }
+    if (unanimous_arg > 49) {
+        std::fprintf(stderr, "ERROR: --unanimous must be 0..49.\n");
+        return 1;
+    }
+
     std::signal(SIGINT,  sig_handler);
     std::signal(SIGTERM, sig_handler);
 
@@ -238,6 +270,22 @@ int main(int argc, char* argv[])
     ALEController ctrl;
     ctrl.set_self_address(self_addr);
     ctrl.set_target_scan_channels(no_scan ? 0u : 1u);
+
+    // Receiver FEC tuning (MIL-STD-188-141B A.5.2.6.3).
+    ctrl.set_golay_mode(static_cast<GolayMode>(golay_mode_arg));
+    if (unanimous_arg >= 0)
+        ctrl.set_min_unanimous_votes(static_cast<uint8_t>(unanimous_arg));
+    if (adaptive_arg)
+        ctrl.set_adaptive_fec(true);
+    if (debug_rx_arg) {
+        ctrl.set_debug_rx(true);
+        std::printf("[>>] RX diagnostics ON (peak level + decoded words)\n");
+    }
+    if (adaptive_arg)
+        std::printf("[>>] Adaptive FEC ON — auto Golay mode + unanimous threshold (A.5.2.6.3)\n");
+    else if (golay_mode_arg != 3 || unanimous_arg >= 0)
+        std::printf("[>>] FEC: Golay %d/%d, min unanimous votes = %u\n",
+                    golay_mode_arg, 7 - golay_mode_arg, ctrl.min_unanimous_votes());
 
     // Wire audio device: TX routing and sample-accurate completion tracking.
     ctrl.set_audio_device(audio.get());

@@ -139,6 +139,23 @@ void ALEController::update(uint32_t now_ms)
 
 void ALEController::feed_audio(const int16_t* samples, uint32_t count)
 {
+    if (debug_rx_ && count) {
+        for (uint32_t i = 0; i < count; ++i) {
+            int v = samples[i] < 0 ? -static_cast<int>(samples[i]) : samples[i];
+            if (v > dbg_peak_) dbg_peak_ = v;
+        }
+        dbg_count_ += count;
+        if (dbg_count_ >= 4000u) {   // ~0.5 s at 8 kHz
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "[RX level] peak=%d  rx=%s  state=%s",
+                          dbg_peak_,
+                          demodulator_.enabled() ? "on" : "off",
+                          ALEStateMachine::state_name(sm_.get_state()));
+            emit_status(buf);
+            dbg_peak_  = 0;
+            dbg_count_ = 0;
+        }
+    }
     demodulator_.push_samples(samples, count);
 }
 
@@ -198,6 +215,18 @@ void ALEController::on_operator_event(OperatorEvent ev)
 
 void ALEController::on_received_word(const ALEWord& word)
 {
+    if (debug_rx_) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+                      "[RX word] %-4s '%s' unanimous=%u fec_err=%u valid=%d state=%s",
+                      WordParser::word_type_name(word.type), word.address,
+                      static_cast<unsigned>(word.unanimous_votes),
+                      static_cast<unsigned>(word.fec_errors),
+                      word.valid ? 1 : 0,
+                      ALEStateMachine::state_name(sm_.get_state()));
+        emit_status(buf);
+    }
+
     // Capture caller identity as it arrives word-by-word in HANDSHAKE/WAIT_CYCLE_END.
     //
     // Protocol (A.5.2.3.2.1):  TIS:XXX [DATA:YYY [REP:ZZZ [DATA:... [REP:...]]]]

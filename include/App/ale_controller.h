@@ -184,6 +184,12 @@ public:
     void set_adaptive_fec(bool on)               { demodulator_.set_adaptive_fec(on); }
     bool adaptive_fec() const                    { return demodulator_.adaptive_fec(); }
 
+    /// Diagnostics: when on, emit (via on_status_changed) the periodic RX peak
+    /// level and every demodulated word (type/address/unanimous/fec).  Use to
+    /// see what the receiver actually decodes (e.g. during the LISTENING window).
+    void set_debug_rx(bool on)                   { debug_rx_ = on; }
+    bool debug_rx() const                        { return debug_rx_; }
+
     // ── Inspection ──────────────────────────────────────────────────────────
     ALEState    state() const { return sm_.get_state(); }
     std::string self()  const { return self_addr_; }
@@ -196,6 +202,11 @@ private:
     pal::IEventHandler*      event_handler_  = nullptr;
     std::string              self_addr_;
     std::string              last_caller_;   // caller address as it arrives (TIS + DATA)
+
+    // RX diagnostics (set_debug_rx)
+    bool                     debug_rx_   = false;
+    int                      dbg_peak_   = 0;   // running peak |sample| since last report
+    uint32_t                 dbg_count_  = 0;   // samples accumulated since last report
 
     void wire_callbacks();
     void on_sm_state_change(ALEState from, ALEState to);
