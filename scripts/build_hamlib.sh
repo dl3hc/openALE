@@ -55,12 +55,9 @@ cd "${HAMLIB_BUILD}"
     --prefix="${HAMLIB_PREFIX}" \
     --enable-shared \
     --disable-static \
-    --without-python-binding \
-    --without-perl-binding \
-    --without-tcl-binding \
-    --without-lua-binding \
-    --disable-tests \
-    --disable-doc \
+    --without-cxx-binding \
+    --without-libusb \
+    --without-readline \
     CFLAGS="-O2 -DNDEBUG" \
     CXXFLAGS="-O2 -DNDEBUG" \
     --quiet
