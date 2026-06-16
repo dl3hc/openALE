@@ -78,15 +78,15 @@ private:
 
 /**
  * Builds ALESequence objects for the protocol sections and response frames
- * defined by MIL-STD-188-141B §A.5.5.3 / Figures A-29(a)–(f).
+ * defined by MIL-STD-188-141B §A.5.5.3 (individual/net, Figure A-29) and
+ * §A.5.5.4.3 (star group calling, Figures A-34/A-35).
  *
  * Figure mapping:
  *   (a) 1-ch nonscan, 1-word, individual:  leading_call  + conclusion
  *   (b) N-ch scanning, 1-word, individual: scanning_call + leading_call + conclusion
  *   (c) 1-ch nonscan, 2-word, individual:  leading_call  + conclusion
  *   (d) N-ch scanning, 2-word, individual: scanning_call + leading_call + conclusion
- *   (e) N-ch scanning, 1-word, group:      scanning_call_group + leading_call_group + conclusion
- *   (f) N-ch scanning, 2-word, group:      scanning_call_group + leading_call_group + conclusion
+ *   §A.5.5.4.3 N-member star group call:   scanning_call_group + leading_call_group + conclusion
  *
  * The caller assembles sections into a complete call frame:
  *   scanning_call(dest, C) + leading_call(dest) + conclusion(self)
@@ -115,15 +115,22 @@ public:
                                      uint32_t scan_channels = 1);
 
     /**
-     * Scanning call section — group call (Figures e, f) §A.5.2.5.1.
+     * Scanning call section — star group call §A.5.5.4.3.1.
      *
-     * Alternating THRU:relay / REP:dest pairs, repeated scan_channels × 2 times.
-     * Only first 3 characters of each address are used.
+     * Collects the first word (first 3 chars) of every member address,
+     * drops duplicates ("sent only once during Tsc"), and caps the result
+     * at 5 unique words (A.5.5.4.3 / AC-WORD-006-4). The survivors rotate
+     * through the section alternating THRU/REP by word position, for the
+     * same total airtime as an individual scanning call (scan_channels × 2
+     * words). If only one unique first word survives, this degenerates to
+     * a plain individual/net scanning call (TO) — see scanning_call().
      *
-     * scan_channels = 0: returns an empty sequence.
+     * scan_channels = 0 or members empty: returns an empty sequence.
+     *
+     * Example (scan_channels = 3, members = {"BOB","EDGAR","SAM"}):
+     *   [THRU:BOB, REP:EDG, THRU:SAM, REP:BOB, THRU:EDG, REP:SAM]  (6 words)
      */
-    static ALESequence scanning_call_group(const std::string& relay,
-                                           const std::string& dest,
+    static ALESequence scanning_call_group(const std::vector<std::string>& members,
                                            uint32_t scan_channels = 1);
 
     /**
@@ -136,16 +143,20 @@ public:
     static ALESequence leading_call(const std::string& dest);
 
     /**
-     * Leading call section — group call (Figures e, f) §A.5.5.3.1.
+     * Leading call section — star group call §A.5.5.4.3.2.
      *
-     * Short addresses (each ≤ 3 chars, Figure e) — THRU anchor:
-     *   [THRU:relay, REP:dest,  THRU:relay, REP:dest]
+     * Complete addresses of every prospective group member, sent twice
+     * (Tlc = 2×Tc), always anchored on TO ("as usual" — THRU never appears
+     * outside the scanning section, AC-WORD-006-1/7). Address boundaries
+     * use AddressEncoder::encode_group()'s TO/REP rule: a TO following
+     * another TO becomes REP; a TO following DATA remains TO.
+     * Up to 12 address words total across all members (A.5.5.4.3).
      *
-     * Long addresses (at least one > 3 chars, Figure f) — TO anchor:
-     *   [TO:relay…, TO:dest…,  TO:relay…, TO:dest…]
+     * Example (members = {"BOB","EDGAR","SAMUEL"}):
+     *   [TO:BOB, REP:EDG, DATA:AR@, TO:SAM, DATA:UEL,
+     *    TO:BOB, REP:EDG, DATA:AR@, TO:SAM, DATA:UEL]
      */
-    static ALESequence leading_call_group(const std::string& relay,
-                                          const std::string& dest);
+    static ALESequence leading_call_group(const std::vector<std::string>& members);
 
     /**
      * Conclusion section — all figures (a–f) §A.5.2.5.3.

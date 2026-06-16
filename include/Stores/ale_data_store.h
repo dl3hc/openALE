@@ -46,12 +46,118 @@ private:
     std::vector<Channel> channels_;
 };
 
+// ── NetStore ─────────────────────────────────────────────────────────────────
+
+/**
+ * \struct Net
+ * A named net (group) and the channel IDs assigned to it.
+ *
+ * Channels carry their own scan/sounding eligibility (Channel::enabled, the
+ * Annex B "SCAN Y/N" flag); a net is just an ordered set of channel IDs.
+ */
+struct Net {
+    std::string              name;
+    std::vector<std::string> channel_ids;
+};
+
+/**
+ * \class NetStore
+ * Named nets and their channel-ID membership.
+ *
+ * Nets are kept in insertion order; duplicate names are rejected. Channel
+ * membership is by Channel::id (see ale_channel_types.h), not by frequency,
+ * so reassigning a channel's frequency doesn't disturb net membership.
+ */
+class NetStore {
+public:
+    NetStore() = default;
+
+    bool add_net(const std::string& name);
+    bool remove_net(const std::string& name);
+
+    /** Add channel_id to net's member list (no-op, returns true, if already a member). */
+    bool assign_channel(const std::string& net_name, const std::string& channel_id);
+    bool unassign_channel(const std::string& net_name, const std::string& channel_id);
+
+    /** Remove channel_id from every net's member list (e.g. after deleting a channel). */
+    void unassign_channel_everywhere(const std::string& channel_id);
+
+    const Net* find(const std::string& name) const;
+    const std::vector<Net>& all() const { return nets_; }
+    size_t size()  const { return nets_.size(); }
+    bool   empty() const { return nets_.empty(); }
+    void   clear();
+
+private:
+    std::vector<Net> nets_;
+    Net* find_mutable(const std::string& name);
+};
+
+/**
+ * Count of \p net's member channels that are currently scan/sounding-enabled
+ * (Channel::enabled, the Annex B "SCAN Y/N" flag) — this is "C" in
+ * Tsc = C × 2 × Trw for a call to a station belonging to this net.
+ */
+uint32_t net_scan_channel_count(const Net& net, const std::vector<Channel>& channels);
+
+// ── ContactStore ─────────────────────────────────────────────────────────────
+
+/**
+ * \struct Contact
+ * A GUI-facing address-book entry: a remote station plus its net membership
+ * and the channels it's reachable on.
+ */
+struct Contact {
+    std::string              callsign;
+    std::string              name;
+    bool                     enabled       = true;
+    std::vector<std::string> net_members;     ///< Net names this contact belongs to
+    std::vector<std::string> valid_channels;  ///< Channel IDs; ignored when all_channels
+    bool                     all_channels  = true;  ///< "ALL" sentinel
+};
+
+/**
+ * \class ContactStore
+ * Address book of known remote stations (GUI-facing; backs
+ * ALEController::add_contact() and friends).
+ *
+ * Keyed by callsign; add_or_update() overwrites an existing entry in place.
+ */
+class ContactStore {
+public:
+    ContactStore() = default;
+
+    bool add_or_update(const Contact& c);
+    bool remove(const std::string& callsign);
+    const Contact* find(const std::string& callsign) const;
+
+    const std::vector<Contact>& all() const { return contacts_; }
+    size_t size()  const { return contacts_.size(); }
+    bool   empty() const { return contacts_.empty(); }
+    void   clear();
+
+private:
+    std::vector<Contact> contacts_;
+};
+
 // ── SelfAddressStore ──────────────────────────────────────────────────────────
 
 /**
+ * \struct SelfAddressEntry
+ * One local station address: enabled/disabled, plus which channels it's
+ * valid on (GUI-facing; backs ALEController::add_self_address()).
+ */
+struct SelfAddressEntry {
+    std::string              address;
+    bool                     enabled       = true;
+    std::vector<std::string> valid_channels;  ///< Channel IDs; ignored when all_channels
+    bool                     all_channels  = true;  ///< "ALL" sentinel
+};
+
+/**
  * \class SelfAddressStore
- * Local station addresses: one primary address, optional secondary addresses,
- * and optional net (group) addresses
+ * Local station addresses: an ordered table of entries plus a designated
+ * primary address (the one actually used by ALEStateMachine::set_self_address).
  *
  * All addresses must be Basic 38 (A-Z, 0-9, '@', '?'), 3-15 characters.
  */
@@ -59,21 +165,24 @@ class SelfAddressStore {
 public:
     SelfAddressStore() = default;
 
-    void set_primary(const std::string& address);
-    void add_secondary(const std::string& address);
-    void add_net(const std::string& net_address);
+    /** Adds the entry; the first entry added becomes primary automatically. */
+    bool add(const SelfAddressEntry& entry);
+    bool remove(const std::string& address);
 
-    const std::string&              primary()            const { return primary_; }
-    const std::vector<std::string>& secondary_addresses() const { return secondary_; }
-    const std::vector<std::string>& net_addresses()       const { return nets_; }
+    /** Returns false if \p address isn't a known entry. */
+    bool set_primary(const std::string& address);
+    const std::string& primary() const { return primary_; }
 
-    /** Return true if \p address matches any of the local station's addresses. */
+    const SelfAddressEntry* find(const std::string& address) const;
+    const std::vector<SelfAddressEntry>& all() const { return entries_; }
+    void clear();
+
+    /** Return true if \p address matches any known (enabled or not) entry. */
     bool matches_self(const std::string& address) const;
 
 private:
-    std::string              primary_;
-    std::vector<std::string> secondary_;
-    std::vector<std::string> nets_;
+    std::vector<SelfAddressEntry> entries_;
+    std::string                   primary_;
 };
 
 // ── OtherStationStore ────────────────────────────────────────────────────────

@@ -353,6 +353,21 @@ target_include_directories(ale_cli PRIVATE
 
 target_link_libraries(ale_cli ale_app_core ale_audio_device ale_stores ale_pal)
 
+# ── WebSocket bridge (GUI↔Core) ────────────────────────────────────────────────
+
+add_executable(ale_bridge apps/ale_bridge.cpp apps/bridge/ws_server.cpp)
+
+target_include_directories(ale_bridge PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/apps
+)
+
+target_link_libraries(ale_bridge ale_app_core ale_audio_device ale_stores ale_pal)
+
+if(WIN32)
+    target_link_libraries(ale_bridge ws2_32)
+endif()
+
 # DLL-Build: libhamlib-4.dll + Runtime-DLLs neben ale_cli.exe kopieren
 # (muss nach add_executable stehen)
 if(HAMLIB_FOUND AND DEFINED _hamlib_bin)
@@ -448,6 +463,15 @@ add_executable(test_resampler_path tests/test_resampler_path.cpp)
 target_link_libraries(test_resampler_path ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_resampler_path PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ResamplerPath COMMAND test_resampler_path)
+
+add_executable(test_channel_net_store tests/test_channel_net_store.cpp)
+target_link_libraries(test_channel_net_store ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_channel_net_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ChannelNetStore COMMAND test_channel_net_store)
+
+add_executable(test_ws_bridge_utils tests/test_ws_bridge_utils.cpp)
+target_include_directories(test_ws_bridge_utils PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
+add_test(NAME WsBridgeUtils COMMAND test_ws_bridge_utils)
 
 add_executable(test_roundtrip tests/test_roundtrip.cpp)
 target_link_libraries(test_roundtrip ale_link ale_modem ale_protocol ale_fsk_core ale_fec)

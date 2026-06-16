@@ -524,6 +524,57 @@ bool test_full_call_cycle() {
 }
 
 // ============================================================================
+// TEST 9: TimingParameters — per-instance isolation
+// ============================================================================
+// set_timing_parameters() overrides must be scoped to the instance they're
+// called on. Two ALEStateMachine objects in the same process must never leak
+// an override from one into the other (no global/shared mutable state).
+bool test_timing_parameters_isolation() {
+    std::cout << "\n[TEST 9] TimingParameters — per-instance isolation\n";
+    std::cout << "==================================================\n";
+
+    ALEStateMachine sm_a;  // gets a custom (much shorter) tune delay
+    ALEStateMachine sm_b;  // stays on defaults
+
+    sm_a.set_self_address("AAA");
+    sm_b.set_self_address("BBB");
+
+    TimingParameters custom;
+    custom.Twa_ms = 999u;
+    custom.Tt_ms  = 10u;   // far shorter than the 1045 ms default
+    sm_a.set_timing_parameters(custom);
+
+    bool a_overridden = sm_a.get_timing_parameters().Twa_ms == 999u
+                      && sm_a.get_timing_parameters().Tt_ms  == 10u;
+    bool b_untouched  = sm_b.get_timing_parameters().Twa_ms == ALETimingConstants::Twa_ms
+                      && sm_b.get_timing_parameters().Tt_ms  == ALETimingConstants::Tt_ms;
+
+    std::cout << "  sm_a reflects override: " << (a_overridden ? "PASS" : "FAIL") << "\n";
+    std::cout << "  sm_b stays at defaults (no cross-instance leak): " << (b_untouched ? "PASS" : "FAIL") << "\n";
+
+    // Functional check: drive both through LBT → TUNING and sample shortly
+    // after sm_a's short Tt_ms but well before the default Tt_ms — sm_a must
+    // have already left TUNING while sm_b is still tuning.
+    const uint32_t Twt = ALETimingConstants::Twt_ms;
+    sm_a.initiate_call("JOE");
+    sm_b.initiate_call("JOE");
+    sm_a.update(Twt);
+    sm_b.update(Twt);             // both LBT → TUNING
+
+    const uint32_t t_sample = Twt + 50u;  // past sm_a's 10ms Tt, far short of sm_b's 1045ms default
+    sm_a.update(t_sample);
+    sm_b.update(t_sample);
+
+    bool a_left_tuning  = sm_a.get_calling_phase() != CallingPhase::TUNING;
+    bool b_still_tuning = sm_b.get_calling_phase() == CallingPhase::TUNING;
+
+    std::cout << "  sm_a (10ms override) left TUNING early: " << (a_left_tuning ? "PASS" : "FAIL") << "\n";
+    std::cout << "  sm_b (1045ms default) still tuning: " << (b_still_tuning ? "PASS" : "FAIL") << "\n";
+
+    return a_overridden && b_untouched && a_left_tuning && b_still_tuning;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -545,7 +596,8 @@ int run_all_tests() {
     if (test_timeouts()) { pass_count++; } else { fail_count++; }
     if (test_sounding()) { pass_count++; } else { fail_count++; }
     if (test_full_call_cycle()) { pass_count++; } else { fail_count++; }
-    
+    if (test_timing_parameters_isolation()) { pass_count++; } else { fail_count++; }
+
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
     std::cout << "║  Test Results                                              ║\n";

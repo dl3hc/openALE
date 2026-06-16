@@ -36,7 +36,7 @@ static const char* PHASE_NAMES[] = {
 
 // Must match HandshakePhase enum order exactly.
 static const char* HS_PHASE_NAMES[] = {
-    "WAIT_CYCLE_END", "SLOT_WAIT", "CHANNEL_CHECK", "SENDING_RESPONSE", "WAIT_ACK"
+    "WAIT_CYCLE_END", "AWAIT_ACCEPT", "SLOT_WAIT", "CHANNEL_CHECK", "SENDING_RESPONSE", "WAIT_ACK"
 };
 
 // ============================================================================
@@ -80,6 +80,10 @@ ALEStateMachine::ALEStateMachine()
       hs_lbt_start_ms(0),
       hs_message_start_ms(0),
       pending_reject_(false),
+      require_explicit_accept_(false),
+      accept_decided_(false),
+      await_accept_start_ms_(0),
+      accept_decision_timeout_ms_(10000),
       linked_terminating_(false),
       sounding_phase_(SoundingPhase::TRANSMITTING),
       slot_number_(0),
@@ -365,11 +369,12 @@ void ALEStateMachine::handle_calling() {
         }
 
         // ── TUNING ───────────────────────────────────────────────────────────────
-        // Blind tune Tt (1045 ms) — AC-LINK-017-2.
+        // Blind tune Tt (1045 ms default; per-instance override via
+        // set_timing_parameters(), see TimingParameters) — AC-LINK-017-2.
         // At tune-complete the full TX sequence is handed to the modem so the
         // audio layer can render it as one contiguous transmission.
         case CallingPhase::TUNING: {
-            if ((current_time_ms - tune_start_ms) >= ALETimingConstants::Tt_ms) {
+            if ((current_time_ms - tune_start_ms) >= timing_.Tt_ms) {
                 first_call_tx_ms     = current_time_ms;
                 call_cycles_in_phase = 0;
                 // T-06: Net calls laufen über denselben SAM-Pfad wie Individual Calls
@@ -519,10 +524,35 @@ void ALEStateMachine::handle_handshake() {
             // the extension was appended, truncating the caller address.
             if (hs_conclusion_rcvd && hs_tlww_start_ms > 0 &&
                 (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tdrw_ms) {
-                SM_TRACE("[TRACE] handle_handshake: conclusion settle → SLOT_WAIT\n");
+                if (require_explicit_accept_) {
+                    SM_TRACE("[TRACE] handle_handshake: conclusion settle → AWAIT_ACCEPT\n");
+                    handshake_phase        = HandshakePhase::AWAIT_ACCEPT;
+                    accept_decided_        = false;
+                    await_accept_start_ms_ = current_time_ms;
+                } else {
+                    SM_TRACE("[TRACE] handle_handshake: conclusion settle → SLOT_WAIT\n");
+                    handshake_phase     = HandshakePhase::SLOT_WAIT;
+                    slot_wait_start_ms_ = current_time_ms;
+                }
+                // RX bleibt offen während Slot-Wait / AWAIT_ACCEPT
+            }
+            break;
+        }
+
+        // ── AWAIT_ACCEPT ──────────────────────────────────────────────────
+        // Operator decision gate (only entered when manual-accept mode is on).
+        // Holds here until accept_call()/reject_call() resolves accept_decided_,
+        // or the decision timeout elapses (auto-accept fallback).
+        case HandshakePhase::AWAIT_ACCEPT: {
+            const bool timed_out =
+                (current_time_ms - await_accept_start_ms_) >= accept_decision_timeout_ms_;
+            if (accept_decided_ || timed_out) {
+                if (timed_out && !accept_decided_)
+                    SM_TRACE("[TRACE] handle_handshake: AWAIT_ACCEPT timeout → auto-accept\n");
+                else
+                    SM_TRACE("[TRACE] handle_handshake: AWAIT_ACCEPT resolved → SLOT_WAIT\n");
                 handshake_phase     = HandshakePhase::SLOT_WAIT;
                 slot_wait_start_ms_ = current_time_ms;
-                // RX bleibt offen während Slot-Wait
             }
             break;
         }
@@ -631,10 +661,11 @@ void ALEStateMachine::handle_handshake() {
 
 void ALEStateMachine::handle_linked() {
     if (linked_terminating_) return;
-    // AC-LINK-023: auto-terminate after Twa=30s of link inactivity.
+    // AC-LINK-023: auto-terminate after Twa=30s (default; per-instance override
+    // via set_timing_parameters(), see TimingParameters) of link inactivity.
     // AC-LINK-023-6: send TWAS before transitioning so the peer can return
     // to available state immediately (T-07).
-    if ((current_time_ms - last_word_time_ms) >= ALETimingConstants::Twa_ms) {
+    if ((current_time_ms - last_word_time_ms) >= timing_.Twa_ms) {
         linked_terminating_ = true;
         if (!active_call_to.empty() && !address_book.get_self_address().empty())
             transmit_words(ALESequenceBuilder::termination(
@@ -736,18 +767,24 @@ bool ALEStateMachine::initiate_net_call(const std::string& net_address) {
     return process_event(ALEEvent::CALL_REQUEST);
 }
 
-bool ALEStateMachine::initiate_group_call(const std::string& relay, const std::string& dest) {
+bool ALEStateMachine::initiate_group_call(const std::vector<std::string>& members) {
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
         return false;
+    if (members.empty())
+        return false;
 
-    active_call_to        = dest;
+    // active_call_to is only used for post-link termination/emergency frames;
+    // it is not refreshed once a specific member's response is identified
+    // (to_address / active_call_from track the actual responding peer during
+    // the handshake, same as for individual/net calls — see react_calling()).
+    active_call_to        = members.front();
     active_call_from      = address_book.get_self_address();
     active_call_is_net    = false;
     active_call_is_group  = true;
     calling_channel_index = 0;
 
-    group_scan_seq_ = ALESequenceBuilder::scanning_call_group(relay, dest, target_scan_channels);
-    leading_seq_    = ALESequenceBuilder::leading_call_group(relay, dest);
+    group_scan_seq_ = ALESequenceBuilder::scanning_call_group(members, target_scan_channels);
+    leading_seq_    = ALESequenceBuilder::leading_call_group(members);
     conclusion_seq_ = ALESequenceBuilder::conclusion(address_book.get_self_address());
     scanning_seq_   = group_scan_seq_;   // unified entry point for enqueue_call_sequence_()
 
@@ -763,7 +800,20 @@ bool ALEStateMachine::respond_to_call() {
 bool ALEStateMachine::reject_call() {
     if (current_state != ALEState::HANDSHAKE) return false;
     pending_reject_ = true;
+    accept_decided_ = true;  // resolves AWAIT_ACCEPT, if active (decline is final)
     return true;
+}
+
+bool ALEStateMachine::accept_call() {
+    if (current_state != ALEState::HANDSHAKE || handshake_phase != HandshakePhase::AWAIT_ACCEPT)
+        return false;
+    accept_decided_ = true;
+    return true;
+}
+
+void ALEStateMachine::set_require_explicit_accept(bool on, uint32_t decision_timeout_ms) {
+    require_explicit_accept_    = on;
+    accept_decision_timeout_ms_ = decision_timeout_ms;
 }
 
 bool ALEStateMachine::send_sounding() {
@@ -1033,7 +1083,7 @@ bool ALEStateMachine::check_link_timeout() {
         case ALEState::CALLING:
             return (current_time_ms - state_entry_time_ms) > compute_calling_timeout_ms();
         case ALEState::HANDSHAKE:
-            return (current_time_ms - state_entry_time_ms) > ALETimingConstants::Twa_ms;
+            return (current_time_ms - state_entry_time_ms) > timing_.Twa_ms;
         case ALEState::LINKED:
             // handle_linked() already handles Twa=30s (AC-LINK-023) with TWAS.
             // LINK_TIMEOUT_MS is a defensive safety net — it fires only if

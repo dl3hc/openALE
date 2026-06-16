@@ -37,10 +37,11 @@ public:
     void add_channel(const Channel& ch);
 
     // ── Channel access ─────────────────────────────────────────────────────
-    const Channel* current()       const;
-    const Channel* select_best()   const;
-    size_t         channel_count() const { return scan_.scan_list.size(); }
-    uint32_t       current_index() const { return scan_.channel_index; }
+    const Channel*    current()        const;
+    const Channel*    select_best()    const;
+    size_t            channel_count()  const { return scan_.scan_list.size(); }
+    uint32_t          current_index()  const { return scan_.channel_index; }
+    const ScanConfig& config()         const { return scan_; }
 
     // ── Scan lifecycle ─────────────────────────────────────────────────────
     /** Reset to channel 0 and fire callback.  Call on SCANNING entry. */

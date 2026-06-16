@@ -133,7 +133,15 @@ enum class SoundingPhase {
  *
  *   WAIT_CYCLE_END    Twce: listen for calling station's conclusion (TIS SAM)
  *                       ├─ TIS received → arm Tlww for last word wait
- *                       └─ Tlww elapsed → CHANNEL_CHECK
+ *                       └─ Tlww elapsed → AWAIT_ACCEPT (manual-accept mode) or SLOT_WAIT
+ *   AWAIT_ACCEPT      Operator decision gate (implementation-defined, not in spec figure).
+ *                     Only entered when set_require_explicit_accept(true) is active;
+ *                     otherwise WAIT_CYCLE_END goes straight to SLOT_WAIT as before.
+ *                       ├─ accept_call() → SLOT_WAIT (normal accept path)
+ *                       ├─ reject_call() → SLOT_WAIT (pending_reject_ already set)
+ *                       └─ decision_timeout elapsed, no decision → SLOT_WAIT (auto-accept
+ *                          fallback, so an unattended station never hangs here)
+ *   SLOT_WAIT         Tswt: wait assigned slot before LBT (0 ms for Individual Call, T-09)
  *   CHANNEL_CHECK     2×Trw LBT before transmitting response — AC-LINK-019-1, A.5.5.3.3
  *                       ├─ any RX activity → channel busy → abort
  *                       └─ 2×Trw clear → SENDING_RESPONSE
@@ -145,6 +153,7 @@ enum class SoundingPhase {
  */
 enum class HandshakePhase {
     WAIT_CYCLE_END,    ///< Twce: listen for SAM's conclusion (A.5.5.3.2)
+    AWAIT_ACCEPT,      ///< Operator accept/reject decision gate (manual-accept mode only)
     SLOT_WAIT,         ///< Tswt: warte zugewiesenen Slot vor LBT (0 ms bei Individual Call, T-09)
     CHANNEL_CHECK,     ///< 1×Trw LBT before response TX (AC-LINK-019-1, A.5.5.3.3)
     SENDING_RESPONSE,  ///< TO caller × 2 + TIS self — Figure A-30
@@ -173,6 +182,8 @@ public:
     static const char* event_name(ALEEvent event);
 
     void configure_scan(const ScanConfig& config);
+    /** Current scan configuration (for read-modify-write, e.g. changing just dwell_time_ms). */
+    const ScanConfig& get_scan_config() const { return channel_manager_.config(); }
     void add_scan_channel(const Channel& channel);
     void set_self_address(const std::string& address);
     const Channel* get_current_channel() const;
@@ -181,12 +192,15 @@ public:
     bool initiate_net_call(const std::string& net_address);
 
     /**
-     * Initiiert einen Star-Group-Call (A.5.5.4.3).
-     * relay  = Relay-Adresse (THRU-Anker)
-     * dest   = Ziel-Adresse (REP-Folge)
-     * Max. 12 Adresswörter gesamt, max. 5 unique first words (Spec A.5.5.4.3).
+     * Initiiert einen Star-Group-Call an eine ad-hoc Gruppe von Stationen (A.5.5.4.3).
+     * members = vollständige Adressen aller Gruppenmitglieder (>=1, Reihenfolge
+     *           bestimmt die Slot-Vergabe beim Empfänger, A.5.5.4.3.4).
+     * Max. 12 Adresswörter gesamt über alle Mitglieder, max. 5 unique first words
+     * im Scanning Call (Spec A.5.5.4.3) — Dedup/Cap erfolgt in
+     * ALESequenceBuilder::scanning_call_group().
+     * Returns false if members is empty.
      */
-    bool initiate_group_call(const std::string& relay, const std::string& dest);
+    bool initiate_group_call(const std::vector<std::string>& members);
 
     bool respond_to_call();
 
@@ -203,6 +217,31 @@ public:
      * Returns false if not in HANDSHAKE state.
      */
     bool reject_call();
+
+    /**
+     * Accept an incoming call while it is paused in the AWAIT_ACCEPT gate
+     * (see set_require_explicit_accept()). Resolves the gate so the handshake
+     * proceeds to SLOT_WAIT/CHANNEL_CHECK and the normal accept response is sent.
+     *
+     * Returns false if not in HANDSHAKE+AWAIT_ACCEPT (e.g. manual-accept mode is
+     * off, in which case the handshake already auto-accepts — nothing to do).
+     */
+    bool accept_call();
+
+    /**
+     * Enable/disable the manual-accept gate (AWAIT_ACCEPT) for incoming calls.
+     *
+     * Default (off): handshakes auto-accept exactly as before — WAIT_CYCLE_END
+     * goes straight to SLOT_WAIT, no operator action needed.
+     *
+     * When on: after the calling station's conclusion is received, the SM pauses
+     * in AWAIT_ACCEPT and waits for accept_call() or reject_call(). If neither is
+     * called within decision_timeout_ms, it falls back to auto-accept so an
+     * unattended station never hangs waiting for an operator.
+     */
+    void set_require_explicit_accept(bool on, uint32_t decision_timeout_ms = 10000);
+    bool     requires_explicit_accept() const  { return require_explicit_accept_; }
+    uint32_t accept_decision_timeout_ms() const { return accept_decision_timeout_ms_; }
 
     bool send_sounding();
 
@@ -221,6 +260,19 @@ public:
      * Set to 0 to skip scanning call entirely (target known on fixed channel).
      */
     void set_target_scan_channels(uint32_t n) { target_scan_channels = n; }
+
+    /** Current assumed scan-channel count "C" (see set_target_scan_channels()). */
+    uint32_t get_target_scan_channels() const { return target_scan_channels; }
+
+    /**
+     * Override this instance's Level-5 "Programmable defaults" (Twa, Tt — see
+     * TimingParameters in ale_timing.h). Defaults come from ALETimingConstants;
+     * an override here is scoped to THIS state machine only — other instances
+     * in the same process (e.g. a second station in the same test binary)
+     * keep their own defaults/overrides untouched.
+     */
+    void                     set_timing_parameters(const TimingParameters& p) { timing_ = p; }
+    const TimingParameters&  get_timing_parameters() const                   { return timing_; }
 
     /**
      * Setze Slot-Nummer und Wartezeit für One-to-Many-Protokolle (A.5.5.4.1.3).
@@ -425,6 +477,12 @@ private:
     uint32_t       hs_message_start_ms;  ///< When first message word (DATA/REP before TIS) arrived; 0 = none
     bool           pending_reject_;      ///< true = send TWAS rejection frame (set via reject_call())
 
+    // ── Manual-accept gate (AWAIT_ACCEPT) ────────────────────────────────
+    bool           require_explicit_accept_;   ///< set via set_require_explicit_accept(); default off
+    bool           accept_decided_;            ///< true once accept_call()/reject_call() resolved the gate
+    uint32_t       await_accept_start_ms_;     ///< timestamp AWAIT_ACCEPT was entered
+    uint32_t       accept_decision_timeout_ms_;///< auto-accept fallback after this much silence from the operator
+
     // ── Emergency control (REQ-LINK-007) ─────────────────────────────────
     bool emergency_active;
 
@@ -441,6 +499,9 @@ private:
 
     // ── Target scan channels ──────────────────────────────────────────────
     uint32_t target_scan_channels;       ///< Assumed scan channels of target (for Tsc)
+
+    // ── Level-5 "Programmable defaults" (per-instance, see TimingParameters) ──
+    TimingParameters timing_;
 
     // ── Timing ────────────────────────────────────────────────────────────
     uint32_t state_entry_time_ms;

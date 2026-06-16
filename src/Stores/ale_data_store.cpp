@@ -41,29 +41,134 @@ std::vector<Channel> ChannelStore::enabled_channels() const {
 
 void ChannelStore::clear() { channels_.clear(); }
 
+// ── NetStore ─────────────────────────────────────────────────────────────────
+
+bool NetStore::add_net(const std::string& name) {
+    if (find(name)) return false;
+    nets_.push_back(Net{name, {}});
+    return true;
+}
+
+bool NetStore::remove_net(const std::string& name) {
+    const size_t before = nets_.size();
+    nets_.erase(std::remove_if(nets_.begin(), nets_.end(),
+        [&](const Net& n) { return n.name == name; }), nets_.end());
+    return nets_.size() != before;
+}
+
+Net* NetStore::find_mutable(const std::string& name) {
+    for (auto& n : nets_)
+        if (n.name == name) return &n;
+    return nullptr;
+}
+
+bool NetStore::assign_channel(const std::string& net_name, const std::string& channel_id) {
+    Net* n = find_mutable(net_name);
+    if (!n) return false;
+    if (std::find(n->channel_ids.begin(), n->channel_ids.end(), channel_id) == n->channel_ids.end())
+        n->channel_ids.push_back(channel_id);
+    return true;
+}
+
+bool NetStore::unassign_channel(const std::string& net_name, const std::string& channel_id) {
+    Net* n = find_mutable(net_name);
+    if (!n) return false;
+    n->channel_ids.erase(
+        std::remove(n->channel_ids.begin(), n->channel_ids.end(), channel_id),
+        n->channel_ids.end());
+    return true;
+}
+
+void NetStore::unassign_channel_everywhere(const std::string& channel_id) {
+    for (auto& n : nets_)
+        n.channel_ids.erase(
+            std::remove(n.channel_ids.begin(), n.channel_ids.end(), channel_id),
+            n.channel_ids.end());
+}
+
+const Net* NetStore::find(const std::string& name) const {
+    for (const auto& n : nets_)
+        if (n.name == name) return &n;
+    return nullptr;
+}
+
+void NetStore::clear() { nets_.clear(); }
+
+uint32_t net_scan_channel_count(const Net& net, const std::vector<Channel>& channels) {
+    uint32_t count = 0;
+    for (const auto& id : net.channel_ids)
+        for (const auto& ch : channels)
+            if (ch.id == id && ch.enabled) { ++count; break; }
+    return count;
+}
+
+// ── ContactStore ─────────────────────────────────────────────────────────────
+
+bool ContactStore::add_or_update(const Contact& c) {
+    if (c.callsign.empty()) return false;
+    for (auto& existing : contacts_) {
+        if (existing.callsign == c.callsign) { existing = c; return true; }
+    }
+    contacts_.push_back(c);
+    return true;
+}
+
+bool ContactStore::remove(const std::string& callsign) {
+    const size_t before = contacts_.size();
+    contacts_.erase(std::remove_if(contacts_.begin(), contacts_.end(),
+        [&](const Contact& c) { return c.callsign == callsign; }), contacts_.end());
+    return contacts_.size() != before;
+}
+
+const Contact* ContactStore::find(const std::string& callsign) const {
+    for (const auto& c : contacts_)
+        if (c.callsign == callsign) return &c;
+    return nullptr;
+}
+
+void ContactStore::clear() { contacts_.clear(); }
+
 // ── SelfAddressStore ──────────────────────────────────────────────────────────
 
-void SelfAddressStore::set_primary(const std::string& address) {
+bool SelfAddressStore::add(const SelfAddressEntry& entry) {
+    if (entry.address.empty()) return false;
+    for (auto& existing : entries_) {
+        if (existing.address == entry.address) { existing = entry; return true; }
+    }
+    entries_.push_back(entry);
+    if (primary_.empty()) primary_ = entry.address;
+    return true;
+}
+
+bool SelfAddressStore::remove(const std::string& address) {
+    const size_t before = entries_.size();
+    entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
+        [&](const SelfAddressEntry& e) { return e.address == address; }), entries_.end());
+    if (entries_.size() == before) return false;
+    if (primary_ == address)
+        primary_ = entries_.empty() ? std::string() : entries_.front().address;
+    return true;
+}
+
+bool SelfAddressStore::set_primary(const std::string& address) {
+    if (!find(address)) return false;
     primary_ = address;
+    return true;
 }
 
-void SelfAddressStore::add_secondary(const std::string& address) {
-    if (std::find(secondary_.begin(), secondary_.end(), address) == secondary_.end())
-        secondary_.push_back(address);
+const SelfAddressEntry* SelfAddressStore::find(const std::string& address) const {
+    for (const auto& e : entries_)
+        if (e.address == address) return &e;
+    return nullptr;
 }
 
-void SelfAddressStore::add_net(const std::string& net_address) {
-    if (std::find(nets_.begin(), nets_.end(), net_address) == nets_.end())
-        nets_.push_back(net_address);
+void SelfAddressStore::clear() {
+    entries_.clear();
+    primary_.clear();
 }
 
 bool SelfAddressStore::matches_self(const std::string& address) const {
-    if (address == primary_) return true;
-    if (std::find(secondary_.begin(), secondary_.end(), address) != secondary_.end())
-        return true;
-    if (std::find(nets_.begin(), nets_.end(), address) != nets_.end())
-        return true;
-    return false;
+    return find(address) != nullptr;
 }
 
 // ── OtherStationStore ────────────────────────────────────────────────────────

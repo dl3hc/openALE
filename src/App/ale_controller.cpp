@@ -4,7 +4,9 @@
 
 #include "App/ale_controller.h"
 #include "PAL/radio.h"
+#include "Word/ale_word.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -49,6 +51,15 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
     }
     if (toks.empty()) return std::nullopt;
 
+    // optional leading "ID:<id>" token (written by format_channel_line(); old
+    // files/specs without it just get an id auto-assigned by the caller).
+    std::string id;
+    if (toks[0].rfind("ID:", 0) == 0) {
+        id = toks[0].substr(3);
+        toks.erase(toks.begin());
+        if (toks.empty()) return std::nullopt;
+    }
+
     // first token: rx_hz or rx_hz:tx_hz
     uint32_t rx_hz = 0, tx_hz = 0;
     auto colon = toks[0].find(':');
@@ -78,10 +89,11 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
 
     ale::Channel ch(rx_hz, tx_hz, mode, mode);
     ch.label = label;
+    ch.id    = id;
     return ch;
 }
 
-// Serialize one Channel to a file line (rx_hz tx_hz mode [label])
+// Serialize one Channel to a file line ([ID:id] rx_hz tx_hz mode [label])
 static std::string format_channel_line(const ale::Channel& ch)
 {
     char buf[64];
@@ -89,9 +101,52 @@ static std::string format_channel_line(const ale::Channel& ch)
                   ch.rx_frequency_hz,
                   ch.tx_frequency_hz,
                   ch.rx_mode.c_str());
-    std::string line = buf;
+    std::string line;
+    if (!ch.id.empty()) { line += "ID:"; line += ch.id; line += ' '; }
+    line += buf;
     if (!ch.label.empty()) { line += ' '; line += ch.label; }
     return line;
+}
+
+// Smallest unused "C-<n>" id (n >= 1) given the current channel list.
+static std::string next_free_channel_id(const std::vector<ale::Channel>& channels)
+{
+    for (uint32_t n = 1; ; ++n) {
+        const std::string candidate = "C-" + std::to_string(n);
+        bool used = false;
+        for (const auto& c : channels)
+            if (c.id == candidate) { used = true; break; }
+        if (!used) return candidate;
+    }
+}
+
+// Split a comma-separated string into trimmed, non-empty tokens.
+static std::vector<std::string> split_csv(const std::string& s)
+{
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= s.size()) {
+        const size_t comma = s.find(',', start);
+        const size_t end   = (comma == std::string::npos) ? s.size() : comma;
+        size_t a = start, b = end;
+        while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+        while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
+        if (b > a) out.push_back(s.substr(a, b - a));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return out;
+}
+
+// Join channel IDs back into the same comma-separated form split_csv() expects.
+static std::string join_csv(const std::vector<std::string>& items)
+{
+    std::string out;
+    for (const auto& it : items) {
+        if (!out.empty()) out += ',';
+        out += it;
+    }
+    return out;
 }
 
 static pal::RadioMode mode_from_string(const std::string& s) {
@@ -106,6 +161,24 @@ static pal::RadioMode mode_from_string(const std::string& s) {
     if (s == "DATA_LSB") return pal::RadioMode::DATA_LSB;
     if (s == "DATA_USB") return pal::RadioMode::DATA_USB;
     return pal::RadioMode::USB;
+}
+
+// Inverse of mode_from_string() — used by the radio-facing getters so the
+// controller never has to keep a second copy of "current mode" itself.
+static std::string mode_to_string(pal::RadioMode m) {
+    switch (m) {
+        case pal::RadioMode::LSB:      return "LSB";
+        case pal::RadioMode::CW:       return "CW";
+        case pal::RadioMode::CW_R:     return "CW_R";
+        case pal::RadioMode::FM:       return "FM";
+        case pal::RadioMode::FMW:      return "FMW";
+        case pal::RadioMode::AM:       return "AM";
+        case pal::RadioMode::FSK:      return "FSK";
+        case pal::RadioMode::RTTY:     return "RTTY";
+        case pal::RadioMode::DATA_LSB: return "DATA_LSB";
+        case pal::RadioMode::DATA_USB: return "DATA_USB";
+        default:                       return "USB";
+    }
 }
 
 } // namespace
@@ -187,6 +260,91 @@ void ALEController::set_radio(pal::IRadio* r)
     radio_ = r;
 }
 
+// ── Radio / VFO control (manual tuning) ────────────────────────────────────────
+// All queries/commands go straight through radio_ (pal::IRadio) — no shadow
+// frequency/mode state is kept here (see header doc on this section).
+
+Channel ALEController::get_current_channel() const
+{
+    if (radio_) {
+        const pal::Channel pc = radio_->get_channel();
+        return Channel(pc.rx_frequency, pc.tx_frequency,
+                        mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode));
+    }
+    if (const Channel* ch = sm_.get_current_channel()) return *ch;
+    return Channel{};
+}
+
+uint32_t ALEController::get_current_frequency() const
+{
+    return get_current_channel().rx_frequency_hz;
+}
+
+std::string ALEController::get_current_mode() const
+{
+    return get_current_channel().rx_mode;
+}
+
+bool ALEController::set_frequency(uint32_t hz)
+{
+    if (!radio_ || hz == 0) return false;
+    pal::Channel pc = radio_->get_channel();
+    pc.rx_frequency = hz;
+    pc.tx_frequency = hz;  // simplex
+    radio_->set_channel(pc);
+    manual_channel_idx_ = -1;
+    return true;
+}
+
+bool ALEController::set_mode(const std::string& mode)
+{
+    if (!radio_ || !is_ale_mode(mode)) return false;
+    pal::Channel pc = radio_->get_channel();
+    pc.rx_mode = pc.tx_mode = mode_from_string(mode);
+    radio_->set_channel(pc);
+    return true;
+}
+
+bool ALEController::step_channel(int direction)
+{
+    if (!radio_ || calling_channels_.empty()) return false;
+    const int n = static_cast<int>(calling_channels_.size());
+    manual_channel_idx_ = ((manual_channel_idx_ < 0 ? 0 : manual_channel_idx_) + direction % n + n) % n;
+
+    const Channel& target = calling_channels_[manual_channel_idx_];
+    pal::Channel pc = radio_->get_channel();
+    pc.rx_frequency = target.rx_frequency_hz;
+    pc.tx_frequency = target.effective_tx_hz();
+    pc.rx_mode = pc.tx_mode = mode_from_string(target.rx_mode);
+    radio_->set_channel(pc);
+    return true;
+}
+
+void ALEController::set_tune_step(uint32_t hz)
+{
+    tune_step_hz_ = hz;
+}
+
+uint32_t ALEController::get_tune_step() const
+{
+    return tune_step_hz_;
+}
+
+void ALEController::nudge_frequency(int direction)
+{
+    if (!radio_) return;
+    pal::Channel pc = radio_->get_channel();
+    const int64_t new_freq = static_cast<int64_t>(pc.rx_frequency) + direction * static_cast<int64_t>(tune_step_hz_);
+    pc.rx_frequency = pc.tx_frequency = static_cast<uint32_t>(std::max<int64_t>(0, new_freq));
+    radio_->set_channel(pc);
+    manual_channel_idx_ = -1;
+}
+
+bool ALEController::get_ptt_state() const
+{
+    return radio_ ? radio_->is_transmitting() : false;
+}
+
 // ── Audio device ──────────────────────────────────────────────────────────────
 
 void ALEController::set_audio_device(AudioDevice* dev)
@@ -233,6 +391,21 @@ void ALEController::start_scanning()
     sm_.process_event(ALEEvent::START_SCAN);
 }
 
+void ALEController::apply_target_scan_channels_for(const std::string& target_addr)
+{
+    const Contact* c = contact_store_.find(target_addr);
+    if (!c) return;
+    for (const auto& net_name : c->net_members) {
+        if (const Net* net = net_store_.find(net_name)) {
+            const uint32_t count = net_scan_channel_count(*net, calling_channels_);
+            sm_.set_target_scan_channels(count);
+            emit_status("Net '" + net_name + "': scanning call sized for " + std::to_string(count)
+                        + " channel(s)");
+            return;  // first resolvable net wins (a contact may list several)
+        }
+    }
+}
+
 bool ALEController::initiate_call(const std::string& target_addr)
 {
     // Reorder calling channels by LQA history for this station (best first).
@@ -256,14 +429,38 @@ bool ALEController::initiate_call(const std::string& target_addr)
         }
     }
 
+    apply_target_scan_channels_for(target_addr);
+
     emit_status("Initiating call to " + target_addr);
     return sm_.initiate_call(target_addr);
+}
+
+bool ALEController::initiate_group_call(const std::vector<std::string>& members)
+{
+    if (members.empty()) return false;
+
+    // First-member-only simplification — see header doc.
+    apply_target_scan_channels_for(members.front());
+
+    emit_status("Initiating group call (" + std::to_string(members.size()) + " members)");
+    return sm_.initiate_group_call(members);
 }
 
 void ALEController::reject_call()
 {
     emit_status("Rejecting incoming call (TWAS)");
     sm_.reject_call();
+}
+
+void ALEController::accept_call()
+{
+    if (sm_.accept_call())
+        emit_status("Accepting incoming call");
+}
+
+void ALEController::set_manual_accept_mode(bool on, uint32_t decision_timeout_ms)
+{
+    sm_.set_require_explicit_accept(on, decision_timeout_ms);
 }
 
 void ALEController::terminate_link()
@@ -282,6 +479,7 @@ void ALEController::emergency_stop()
 
 void ALEController::update(uint32_t now_ms)
 {
+    now_ms_ = now_ms;
     sm_.update(now_ms);
 
     // Offline mode: no audio device, so drive word-completion directly by
@@ -303,6 +501,14 @@ void ALEController::update(uint32_t now_ms)
 
 void ALEController::feed_audio(const int16_t* samples, uint32_t count)
 {
+    if (count) {
+        int peak = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            int v = samples[i] < 0 ? -static_cast<int>(samples[i]) : samples[i];
+            if (v > peak) peak = v;
+        }
+        audio_input_level_ = static_cast<float>(peak) / 32768.0f;
+    }
     if (debug_rx_ && count) {
         for (uint32_t i = 0; i < count; ++i) {
             int v = samples[i] < 0 ? -static_cast<int>(samples[i]) : samples[i];
@@ -363,6 +569,7 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
 
     // Link exited (except via HANDSHAKE_COMPLETE → LINKED)
     if (from == ALEState::LINKED && to != ALEState::LINKED) {
+        link_start_ms_ = 0;
         if (on_link_terminated)
             on_link_terminated("Link state exited");
         emit_event(pal::EventType::ALE_LINK_TERMINATED, "Link state exited");
@@ -380,6 +587,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
                 ? sm_.get_to_address()
                 : sm_.get_caller_address();
             emit_status("LINK ESTABLISHED with " + peer);
+            link_start_ms_ = now_ms_;
             if (on_link_established) on_link_established(peer);
             emit_event(pal::EventType::ALE_LINK_ESTABLISHED, peer);
             break;
@@ -413,6 +621,17 @@ void ALEController::on_received_word(const ALEWord& word)
                       word.valid ? 1 : 0,
                       ALEStateMachine::state_name(sm_.get_state()));
         emit_status(buf);
+    }
+
+    // Track latest signal-quality stats (get_current_signal_quality) — same
+    // unanimous-votes/fec_errors → snr/ber approximation used by the LQA
+    // sounding path below, but kept for any valid word, not just TIS.
+    if (word.valid) {
+        constexpr float kMaxVotes = 48.0f;
+        last_votes_      = word.unanimous_votes;
+        last_fec_errors_ = word.fec_errors;
+        last_snr_db_     = (word.unanimous_votes / kMaxVotes) * 31.0f;
+        last_ber_        = (word.fec_errors > 0) ? static_cast<float>(word.fec_errors) / 50.0f : 0.0f;
     }
 
     // Capture caller identity as it arrives word-by-word in HANDSHAKE/WAIT_CYCLE_END.
@@ -538,14 +757,183 @@ void ALEController::enable_automatic_sounding(bool on)
     lqa_analyzer_.set_config(cfg);
 }
 
+void ALEController::set_sounding_interval_sec(uint32_t sec)
+{
+    AnalyzerConfig cfg = lqa_analyzer_.get_config();
+    cfg.sounding_interval_ms = sec * 1000u;
+    lqa_analyzer_.set_config(cfg);
+}
+
+void ALEController::set_scan_dwell_ms(uint32_t ms)
+{
+    ScanConfig cfg = sm_.get_scan_config();
+    cfg.dwell_time_ms = ms;
+    sm_.configure_scan(cfg);
+}
+
+void ALEController::set_link_idle_timeout_sec(uint32_t sec)
+{
+    TimingParameters tp = sm_.get_timing_parameters();
+    tp.Twa_ms = sec * 1000u;
+    sm_.set_timing_parameters(tp);
+}
+
+void ALEController::set_max_tune_time_ms(uint32_t ms)
+{
+    TimingParameters tp = sm_.get_timing_parameters();
+    tp.Tt_ms = ms;
+    sm_.set_timing_parameters(tp);
+}
+
+std::vector<std::string> ALEController::get_all_lqa_entries() const
+{
+    std::vector<std::string> out;
+    const uint32_t now = lqa_database_.get_current_time_ms();  // same clock as LQADatabase itself
+    for (const auto& e : lqa_database_.get_all_entries()) {
+        const uint32_t age_ms = (now > e.last_activity_ms()) ? (now - e.last_activity_ms()) : 0u;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "%u|%s|%.1f|%.4f|%.1f|%.1f|%u",
+                      e.frequency_hz, e.remote_station.c_str(),
+                      e.snr_db, e.ber, e.sinad_db, e.score, age_ms);
+        out.push_back(buf);
+    }
+    return out;
+}
+
+bool ALEController::is_link_active() const
+{
+    return state() == ALEState::LINKED;
+}
+
+uint32_t ALEController::get_call_duration_seconds() const
+{
+    if (link_start_ms_ == 0 || now_ms_ < link_start_ms_) return 0;
+    return (now_ms_ - link_start_ms_) / 1000u;
+}
+
+ALEController::SignalQuality ALEController::get_current_signal_quality() const
+{
+    SignalQuality q;
+    q.snr_db     = last_snr_db_;
+    q.ber        = last_ber_;
+    q.votes      = static_cast<int8_t>(last_votes_);
+    q.fec_errors = last_fec_errors_;
+
+    const Channel* ch = sm_.get_current_channel();
+    if (ch) {
+        const std::string peer = !sm_.get_to_address().empty()
+            ? sm_.get_to_address() : sm_.get_caller_address();
+        if (auto e = lqa_database_.get_entry(ch->rx_frequency_hz, peer)) {
+            q.sinad_db     = e->sinad_db;
+            q.multipath_ms = e->multipath_score;  // severity 0-1, not a measured delay
+        }
+    }
+    return q;
+}
+
+std::vector<std::string> ALEController::enumerate_audio_inputs() const
+{
+    std::vector<std::string> out;
+    if (!audio_device_) return out;
+    for (const auto& d : audio_device_->list_devices())
+        if (d.rfind("IN:", 0) == 0) out.push_back(d);
+    return out;
+}
+
+std::vector<std::string> ALEController::enumerate_audio_outputs() const
+{
+    std::vector<std::string> out;
+    if (!audio_device_) return out;
+    for (const auto& d : audio_device_->list_devices())
+        if (d.rfind("OUT:", 0) == 0) out.push_back(d);
+    return out;
+}
+
+float ALEController::get_audio_input_level() const
+{
+    return audio_input_level_;
+}
+
+bool ALEController::test_rig_connection() const
+{
+    return radio_ ? radio_->is_ready() : false;
+}
+
+std::string ALEController::get_rig_connection_status() const
+{
+    if (!radio_) return "not attached";
+    return radio_->is_ready() ? "ready" : "not ready";
+}
+
+bool ALEController::export_settings(const std::string& path)
+{
+    std::ofstream f(path);
+    if (!f.is_open()) return false;
+    f << "# PC-ALE settings export\n";
+    f << "self_address=" << get_primary_self_address() << "\n";
+    f << "channel_file=" << channel_file_ << "\n";
+    f << "target_scan_channels=" << get_target_scan_channels() << "\n";
+    f << "golay_mode=" << static_cast<int>(golay_mode()) << "\n";
+    f << "min_unanimous_votes=" << static_cast<int>(min_unanimous_votes()) << "\n";
+    f << "adaptive_fec=" << (adaptive_fec() ? 1 : 0) << "\n";
+    f << "debug_rx=" << (debug_rx_ ? 1 : 0) << "\n";
+    f << "manual_accept_mode=" << (sm_.requires_explicit_accept() ? 1 : 0) << "\n";
+    f << "manual_accept_timeout_ms=" << sm_.accept_decision_timeout_ms() << "\n";
+    return f.good();
+}
+
+bool ALEController::import_settings(const std::string& path)
+{
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+
+    bool     manual_accept_mode    = sm_.requires_explicit_accept();
+    uint32_t manual_accept_timeout = sm_.accept_decision_timeout_ms();
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = line.substr(0, eq);
+        const std::string val = line.substr(eq + 1);
+
+        if (key == "self_address" && !val.empty()) {
+            add_self_address(val);
+            set_primary_self_address(val);
+        } else if (key == "channel_file") {
+            channel_file_ = val;
+        } else if (key == "target_scan_channels") {
+            set_target_scan_channels(static_cast<uint32_t>(std::stoul(val)));
+        } else if (key == "golay_mode") {
+            set_golay_mode(static_cast<GolayMode>(std::stoi(val)));
+        } else if (key == "min_unanimous_votes") {
+            set_min_unanimous_votes(static_cast<uint8_t>(std::stoi(val)));
+        } else if (key == "adaptive_fec") {
+            set_adaptive_fec(val == "1");
+        } else if (key == "debug_rx") {
+            set_debug_rx(val == "1");
+        } else if (key == "manual_accept_mode") {
+            manual_accept_mode = (val == "1");
+        } else if (key == "manual_accept_timeout_ms") {
+            manual_accept_timeout = static_cast<uint32_t>(std::stoul(val));
+        }
+    }
+    set_manual_accept_mode(manual_accept_mode, manual_accept_timeout);
+    return true;
+}
+
 // ── Channel management ────────────────────────────────────────────────────────
 
 bool ALEController::add_channel(const Channel& ch)
 {
+    Channel ch2 = ch;
+    if (ch2.id.empty()) ch2.id = next_free_channel_id(calling_channels_);
+
     // Replace existing entry with same RX frequency, or append.
     for (auto& c : calling_channels_)
-        if (c.rx_frequency_hz == ch.rx_frequency_hz) { c = ch; goto apply; }
-    calling_channels_.push_back(ch);
+        if (c.rx_frequency_hz == ch2.rx_frequency_hz) { c = ch2; goto apply; }
+    calling_channels_.push_back(ch2);
 apply:
     sm_.set_calling_channels(calling_channels_);
     if (!channel_file_.empty()) save_channels(channel_file_);
@@ -554,12 +942,18 @@ apply:
 
 bool ALEController::del_channel(uint32_t rx_hz)
 {
+    std::string removed_id;
+    for (const auto& c : calling_channels_)
+        if (c.rx_frequency_hz == rx_hz) { removed_id = c.id; break; }
+
     const size_t before = calling_channels_.size();
     calling_channels_.erase(
         std::remove_if(calling_channels_.begin(), calling_channels_.end(),
             [rx_hz](const Channel& c){ return c.rx_frequency_hz == rx_hz; }),
         calling_channels_.end());
     if (calling_channels_.size() == before) return false;
+
+    if (!removed_id.empty()) net_store_.unassign_channel_everywhere(removed_id);
     sm_.set_calling_channels(calling_channels_);
     if (!channel_file_.empty()) save_channels(channel_file_);
     return true;
@@ -571,11 +965,24 @@ bool ALEController::load_channels(const std::string& path)
     if (!f.is_open()) return false;
 
     std::vector<Channel> loaded;
+    net_store_.clear();
     std::string line;
     while (std::getline(f, line)) {
+        if (line.rfind("NET:", 0) == 0) {
+            std::istringstream iss(line.substr(4));
+            std::string name, ids;
+            iss >> name;
+            std::getline(iss, ids);  // remainder of the line (leading space trimmed by split_csv)
+            net_store_.add_net(name);
+            for (const auto& id : split_csv(ids))
+                net_store_.assign_channel(name, id);
+            continue;
+        }
         auto ch = parse_channel_spec(line);
         if (ch) loaded.push_back(*ch);
     }
+    for (auto& ch : loaded)
+        if (ch.id.empty()) ch.id = next_free_channel_id(loaded);
     calling_channels_ = std::move(loaded);
     sm_.set_calling_channels(calling_channels_);
     return true;
@@ -586,10 +993,141 @@ bool ALEController::save_channels(const std::string& path) const
     std::ofstream f(path);
     if (!f.is_open()) return false;
     f << "# PC-ALE channel list — MIL-STD-188-141B\n";
-    f << "# rx_hz tx_hz mode [label]\n";
+    f << "# ID:id rx_hz tx_hz mode [label]\n";
     for (const auto& ch : calling_channels_)
         f << format_channel_line(ch) << '\n';
+    if (!net_store_.empty()) {
+        f << "# NET:name id,id,...\n";
+        for (const auto& net : net_store_.all())
+            f << "NET:" << net.name << ' ' << join_csv(net.channel_ids) << '\n';
+    }
     return f.good();
+}
+
+// ── Nets ─────────────────────────────────────────────────────────────────────
+
+bool ALEController::add_net(const std::string& name)
+{
+    const bool added = net_store_.add_net(name);
+    if (added && !channel_file_.empty()) save_channels(channel_file_);
+    return added;
+}
+
+bool ALEController::del_net(const std::string& name)
+{
+    const bool removed = net_store_.remove_net(name);
+    if (removed && !channel_file_.empty()) save_channels(channel_file_);
+    return removed;
+}
+
+bool ALEController::assign_channel_to_net(const std::string& net_name, const std::string& channel_id)
+{
+    const bool ok = net_store_.assign_channel(net_name, channel_id);
+    if (ok && !channel_file_.empty()) save_channels(channel_file_);
+    return ok;
+}
+
+bool ALEController::unassign_channel_from_net(const std::string& net_name, const std::string& channel_id)
+{
+    const bool ok = net_store_.unassign_channel(net_name, channel_id);
+    if (ok && !channel_file_.empty()) save_channels(channel_file_);
+    return ok;
+}
+
+// ── Contact / address book ────────────────────────────────────────────────────
+
+bool ALEController::add_contact(const std::string& callsign,
+                                const std::string& name,
+                                const std::string& status,
+                                const std::string& net_members,
+                                const std::string& valid_channels)
+{
+    if (callsign.empty()) return false;
+    Contact c;
+    c.callsign     = callsign;
+    c.name         = name;
+    c.enabled      = (status != "disabled");
+    c.net_members  = split_csv(net_members);
+    c.all_channels = (valid_channels.empty() || valid_channels == "ALL");
+    if (!c.all_channels) c.valid_channels = split_csv(valid_channels);
+    return contact_store_.add_or_update(c);
+}
+
+bool ALEController::remove_contact(const std::string& callsign)
+{
+    const bool removed = contact_store_.remove(callsign);
+    if (removed && selected_contact_ == callsign) selected_contact_.clear();
+    return removed;
+}
+
+std::vector<std::string> ALEController::get_all_contacts() const
+{
+    std::vector<std::string> out;
+    out.reserve(contact_store_.size());
+    for (const auto& c : contact_store_.all()) {
+        out.push_back(c.callsign + "|" + c.name + "|" + (c.enabled ? "enabled" : "disabled")
+                     + "|" + join_csv(c.net_members)
+                     + "|" + (c.all_channels ? "ALL" : join_csv(c.valid_channels)));
+    }
+    return out;
+}
+
+bool ALEController::select_contact(const std::string& callsign)
+{
+    if (!contact_store_.find(callsign)) return false;
+    selected_contact_ = callsign;
+    return true;
+}
+
+std::string ALEController::get_selected_contact() const
+{
+    return selected_contact_;
+}
+
+// ── Self address table ────────────────────────────────────────────────────────
+
+bool ALEController::add_self_address(const std::string& addr,
+                                     const std::string& status,
+                                     const std::string& valid_channels)
+{
+    if (addr.empty()) return false;
+    SelfAddressEntry e;
+    e.address      = addr;
+    e.enabled      = (status != "disabled");
+    e.all_channels = (valid_channels.empty() || valid_channels == "ALL");
+    if (!e.all_channels) e.valid_channels = split_csv(valid_channels);
+    const bool added = self_address_store_.add(e);
+    // First entry ever added becomes primary (SelfAddressStore::add()) — apply it.
+    if (added && self_address_store_.primary() == addr) set_primary_self_address(addr);
+    return added;
+}
+
+bool ALEController::remove_self_address(const std::string& addr)
+{
+    return self_address_store_.remove(addr);
+}
+
+std::vector<std::string> ALEController::get_all_self_addresses() const
+{
+    std::vector<std::string> out;
+    out.reserve(self_address_store_.all().size());
+    for (const auto& e : self_address_store_.all()) {
+        out.push_back(e.address + "|" + (e.enabled ? "enabled" : "disabled")
+                     + "|" + (e.all_channels ? "ALL" : join_csv(e.valid_channels)));
+    }
+    return out;
+}
+
+bool ALEController::set_primary_self_address(const std::string& addr)
+{
+    if (!self_address_store_.set_primary(addr)) return false;
+    set_self_address(addr);  // drives sm_.set_self_address() + self_addr_
+    return true;
+}
+
+std::string ALEController::get_primary_self_address() const
+{
+    return self_address_store_.primary();
 }
 
 // ── Command interface ─────────────────────────────────────────────────────────
@@ -660,12 +1198,13 @@ std::string ALEController::process_command(const std::string& raw)
             return "CHANNELS: (none)";
         std::string out = "CHANNELS:\n";
         for (const auto& c : calling_channels_) {
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "  %u Hz  tx=%u  %s%s%s",
-                          c.rx_frequency_hz, c.effective_tx_hz(),
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "  %-5s %u Hz  tx=%u  %s%s%s%s",
+                          c.id.c_str(), c.rx_frequency_hz, c.effective_tx_hz(),
                           c.rx_mode.c_str(),
                           c.label.empty() ? "" : "  ",
-                          c.label.c_str());
+                          c.label.c_str(),
+                          c.enabled ? "" : "  [SCAN=N]");
             out += buf; out += '\n';
         }
         return out;
@@ -694,6 +1233,53 @@ std::string ALEController::process_command(const std::string& raw)
                       calling_channels_.size(), path.c_str());
         return buf;
     }
+    if (cmd.rfind("CMD:ADD_NET ", 0) == 0) {
+        const std::string name = cmd_trim(cmd.substr(12));
+        if (name.empty())
+            return "ERROR: CMD:ADD_NET requires a name";
+        if (!add_net(name))
+            return "ERROR: net '" + name + "' already exists";
+        return "OK: net " + name + " added";
+    }
+    if (cmd.rfind("CMD:DEL_NET ", 0) == 0) {
+        const std::string name = cmd_trim(cmd.substr(12));
+        if (name.empty())
+            return "ERROR: CMD:DEL_NET requires a name";
+        if (!del_net(name))
+            return "ERROR: net '" + name + "' not found";
+        return "OK: net " + name + " removed";
+    }
+    if (cmd.rfind("CMD:ASSIGN_CHANNEL ", 0) == 0) {
+        std::istringstream iss(cmd.substr(19));
+        std::string net_name, channel_id;
+        iss >> net_name >> channel_id;
+        if (net_name.empty() || channel_id.empty())
+            return "ERROR: CMD:ASSIGN_CHANNEL requires <net> <channel_id>";
+        if (!assign_channel_to_net(net_name, channel_id))
+            return "ERROR: net '" + net_name + "' not found";
+        return "OK: " + channel_id + " assigned to " + net_name;
+    }
+    if (cmd.rfind("CMD:UNASSIGN_CHANNEL ", 0) == 0) {
+        std::istringstream iss(cmd.substr(21));
+        std::string net_name, channel_id;
+        iss >> net_name >> channel_id;
+        if (net_name.empty() || channel_id.empty())
+            return "ERROR: CMD:UNASSIGN_CHANNEL requires <net> <channel_id>";
+        if (!unassign_channel_from_net(net_name, channel_id))
+            return "ERROR: net '" + net_name + "' not found";
+        return "OK: " + channel_id + " unassigned from " + net_name;
+    }
+    if (cmd == "CMD:LIST_NETS") {
+        if (net_store_.empty())
+            return "NETS: (none)";
+        std::string out = "NETS:\n";
+        for (const auto& net : net_store_.all()) {
+            out += "  " + net.name + ": "
+                 + (net.channel_ids.empty() ? "(no channels)" : join_csv(net.channel_ids))
+                 + "  [scan=" + std::to_string(net_scan_channel_count(net, calling_channels_)) + "]\n";
+        }
+        return out;
+    }
     if (cmd.rfind("CMD:AMD ", 0) == 0) {
         std::string text = cmd_trim(cmd.substr(8));
         if (text.empty())
@@ -719,7 +1305,12 @@ std::string ALEController::process_command(const std::string& raw)
             "  CMD:LIST_CHANNELS                   list all channels\n"
             "  CMD:CLEAR_CHANNELS                  remove all channels\n"
             "  CMD:SAVE_CHANNELS [path]            save channel list to file\n"
-            "  CMD:LOAD_CHANNELS <path>            load channel list from file";
+            "  CMD:LOAD_CHANNELS <path>            load channel list from file\n"
+            "  CMD:ADD_NET <name>                   add a net\n"
+            "  CMD:DEL_NET <name>                   remove a net\n"
+            "  CMD:ASSIGN_CHANNEL <net> <id>        assign a channel ID to a net\n"
+            "  CMD:UNASSIGN_CHANNEL <net> <id>      remove a channel ID from a net\n"
+            "  CMD:LIST_NETS                        list all nets and their channels";
     }
     return "ERROR: unknown command — try CMD:HELP";
 }

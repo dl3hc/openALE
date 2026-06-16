@@ -7,6 +7,7 @@
 
 #include "Word/ale_sequence.h"
 #include "Word/address_encoder.h"
+#include <algorithm>
 
 namespace ale {
 
@@ -62,22 +63,40 @@ ALESequence ALESequenceBuilder::scanning_call(const std::string& dest,
     return ALESequence(std::move(words));
 }
 
-ALESequence ALESequenceBuilder::scanning_call_group(const std::string& relay,
-                                                    const std::string& dest,
+ALESequence ALESequenceBuilder::scanning_call_group(const std::vector<std::string>& members,
                                                     uint32_t scan_channels) {
-    // §A.5.2.5.1 / §A.5.5.4.3: alternating THRU:relay / REP:dest pairs,
-    // repeated scan_channels × 2 times (pair = 2 words → total = scan_channels × 4).
-    if (scan_channels == 0)
+    // §A.5.5.4.3.1: collect first words of all members, drop duplicates
+    // ("sent only once during Tsc"), cap at 5 unique words.
+    if (scan_channels == 0 || members.empty())
         return ALESequence{};
 
-    const ALEWord thru = AddressEncoder::encode_first(relay, PreambleType::THRU);
-    const ALEWord rep  = AddressEncoder::encode_first(dest,  PreambleType::REP);
-    const uint32_t pairs = scan_channels * 2u;
+    std::vector<std::string> unique_first;
+    for (const auto& m : members) {
+        const std::string fw = AddressEncoder::encode_first(m, PreambleType::TO).address;
+        if (std::find(unique_first.begin(), unique_first.end(), fw) == unique_first.end())
+            unique_first.push_back(fw);
+        if (unique_first.size() == 5)
+            break;
+    }
+
+    // Flowchart fallback (A.5.2.5.1, "IS THERE A SINGLE WORD REMAINING?"): once
+    // de-duplicated, a single surviving first word is an individual/net scanning
+    // call (TO), not a THRU/REP rotation — THRU only has meaning when ≥2 distinct
+    // targets are being rotated.
+    if (unique_first.size() == 1)
+        return scanning_call(unique_first.front(), scan_channels);
+
+    // Same total airtime as an individual scanning call (Tsc = scan_channels × 2 × Trw),
+    // rotating through the unique first words. THRU/REP strictly alternate by word
+    // position (AC-WORD-006-2) — scan_channels × 2 is always even, so the sequence
+    // always ends on a complete THRU-REP pair.
+    const uint32_t total = scan_channels * 2u;
+    const size_t   u     = unique_first.size();
     std::vector<ALEWord> words;
-    words.reserve(pairs * 2u);
-    for (uint32_t i = 0; i < pairs; ++i) {
-        words.push_back(thru);
-        words.push_back(rep);
+    words.reserve(total);
+    for (uint32_t i = 0; i < total; ++i) {
+        const PreambleType p = (i % 2 == 0) ? PreambleType::THRU : PreambleType::REP;
+        words.push_back(AddressEncoder::encode_first(unique_first[i % u], p));
     }
     return ALESequence(std::move(words));
 }
@@ -87,14 +106,11 @@ ALESequence ALESequenceBuilder::leading_call(const std::string& dest) {
     return ALESequence(sent_twice(AddressEncoder::encode(dest, PreambleType::TO)));
 }
 
-ALESequence ALESequenceBuilder::leading_call_group(const std::string& relay,
-                                                   const std::string& dest) {
-    // Short addresses (both ≤ 3 chars) use the compact THRU anchor (Figure e).
-    // If either needs extension words, fall back to TO (Figure f).
-    bool multi_word = (AddressEncoder::encode(relay, PreambleType::TO).size() > 1 ||
-                       AddressEncoder::encode(dest,  PreambleType::TO).size() > 1);
-    PreambleType anchor = multi_word ? PreambleType::TO : PreambleType::THRU;
-    return ALESequence(sent_twice(AddressEncoder::encode_group({relay, dest}, anchor)));
+ALESequence ALESequenceBuilder::leading_call_group(const std::vector<std::string>& members) {
+    // §A.5.5.4.3.2: complete addresses of all prospective group members, sent
+    // twice, using TO preambles "as usual" — THRU is exclusively a scanning-
+    // section preamble (AC-WORD-006-1/7) and must never appear in the leading call.
+    return ALESequence(sent_twice(AddressEncoder::encode_group(members, PreambleType::TO)));
 }
 
 ALESequence ALESequenceBuilder::conclusion(const std::string& self, bool is_reject) {

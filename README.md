@@ -150,6 +150,16 @@ Während `ale_cli` läuft, können Kommandos über stdin eingegeben werden:
 | `CMD:SAVE_CHANNELS [path]` | Channel-Liste in Datei schreiben |
 | `CMD:LOAD_CHANNELS path` | Channel-Liste aus Datei laden |
 
+**Net-Verwaltung:**
+
+| Kommando | Beschreibung |
+|----------|-------------|
+| `CMD:ADD_NET name` | Net hinzufügen |
+| `CMD:DEL_NET name` | Net entfernen |
+| `CMD:ASSIGN_CHANNEL net id` | Channel-ID einem Net zuweisen |
+| `CMD:UNASSIGN_CHANNEL net id` | Channel-ID aus einem Net entfernen |
+| `CMD:LIST_NETS` | Alle Nets mit zugewiesenen Channels ausgeben |
+
 ---
 
 ## 🔁 Testszenarien
@@ -308,18 +318,27 @@ CMD:ADD_CHANNEL 3500000:3600000 LSB 80m-DX        # Duplex RX/TX getrennt
 CMD:ADD_CHANNEL 14074000 DATA_USB FT8             # Datenmodus
 ```
 
+Jeder Channel erhält automatisch eine **Channel-ID** (`C-1`, `C-2`, …, analog zur
+Annex-B-Tabelle A-XVI), sobald er per `CMD:ADD_CHANNEL` oder per Datei geladen wird.
+Diese ID wird verwendet, um Channels einem **Net** zuzuweisen (siehe unten) —
+sie ändert sich nicht, wenn die Frequenz nachträglich geändert wird.
+
 ### Non-Volatile-Speicherung (`.ale`-Dateiformat)
 
 Channels werden in einer einfachen Textdatei mit der Endung `.ale` gespeichert —
-eine Zeile pro Channel, Kommentare beginnen mit `#`:
+eine Zeile pro Channel, Kommentare beginnen mit `#`. Die `ID:`-Markierung ist
+optional beim Laden (alte Dateien ohne ID bekommen beim Laden automatisch
+fortlaufende IDs zugewiesen) und wird beim Speichern immer geschrieben:
 
 ```
 # PC-ALE channel list — MIL-STD-188-141B
-# rx_hz tx_hz mode [label]
-14250000 0 USB 40m-Calling
-7100000 0 USB
-3500000 3600000 LSB 80m-DX
-14074000 0 DATA_USB FT8
+# ID:id rx_hz tx_hz mode [label]
+ID:C-1 14250000 0 USB 40m-Calling
+ID:C-2 7100000 0 USB
+ID:C-3 3500000 3600000 LSB 80m-DX
+ID:C-4 14074000 0 DATA_USB FT8
+# NET:name id,id,...
+NET:XYZ C-1,C-3
 ```
 
 ### Verwendung mit `--channels`
@@ -343,6 +362,32 @@ Wenn `--channels` gesetzt ist:
 - `CMD:ADD_CHANNEL`, `CMD:DEL_CHANNEL` und `CMD:CLEAR_CHANNELS` schreiben die Datei automatisch.
 - `CMD:SAVE_CHANNELS` speichert explizit (auch ohne `--channels`).
 - Beim nächsten Start werden alle Channels sofort wiederhergestellt.
+
+---
+
+## 📡 Net-Verwaltung
+
+Ein **Net** ist eine benannte Teilmenge von Channel-IDs (z.B. Net `XYZ` →
+`{C-1, C-3, C-7}`). Nets dienen dazu, beim Anruf einer Gegenstation automatisch
+die richtige Scanning-Call-Länge zu bestimmen: `Tsc = C × 2 × Trw`, wobei `C`
+die Anzahl der **scan-fähigen** (`SCAN=Y`, intern `Channel::enabled`) Channels
+des Nets ist, dem die Gegenstation laut Adressbuch (`CMD:ADD_CONTACT`-Äquivalent
+`ALEController::add_contact()`) angehört.
+
+```
+CMD:ADD_NET XYZ
+CMD:ASSIGN_CHANNEL XYZ C-1
+CMD:ASSIGN_CHANNEL XYZ C-3
+CMD:LIST_NETS
+  XYZ: C-1,C-3  [scan=2]
+```
+
+Nets werden zusammen mit den Channels in dieselbe `.ale`-Datei gespeichert
+(`NET:`-Zeilen, siehe oben) und beim nächsten Start wiederhergestellt.
+
+Ist die Gegenstation nicht im Adressbuch oder keinem Net zugeordnet, bleibt die
+zuvor konfigurierte Scanning-Call-Länge (Standard: 1 Channel) unverändert —
+das bestehende Verhalten von `ale_cli` (`--no-scan`) ändert sich dadurch nicht.
 
 ---
 

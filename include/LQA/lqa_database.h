@@ -219,7 +219,15 @@ public:
      * @return Vector of all entries
      */
     std::vector<LQAEntry> get_all_entries() const;
-    
+
+    /**
+     * @brief Get current timestamp in milliseconds (same clock used internally
+     * for update_entry()'s default timestamp_ms=0 and LQAEntry's last_*_ms
+     * fields) — use this to compute entry age consistently.
+     * @return Milliseconds since epoch
+     */
+    uint32_t get_current_time_ms() const;
+
     /**
      * @brief Remove stale entries older than max_age_ms
      * 
@@ -294,14 +302,8 @@ private:
     };
     
     /**
-     * @brief Get current timestamp in milliseconds
-     * @return Milliseconds since epoch
-     */
-    uint32_t get_current_time_ms() const;
-    
-    /**
      * @brief Perform time-weighted averaging between old and new values
-     * 
+     *
      * @param old_value Previous measurement
      * @param new_value New measurement
      * @param old_samples Number of samples in old value

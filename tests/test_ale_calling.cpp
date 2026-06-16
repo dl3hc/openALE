@@ -210,6 +210,122 @@ bool test_rx_multiword_full_accept_15char()
     return caller_ok && count_ok && to_addr_ok && tis_addr_ok;
 }
 
+// ============================================================================
+// MANUAL ACCEPT GATE — set_require_explicit_accept() / accept_call()
+// ============================================================================
+
+// Drive a 3-char "JOE" through WAIT_CYCLE_END's conclusion settle with
+// manual-accept mode on, landing in AWAIT_ACCEPT. Returns the timestamp of
+// the settle-triggering update() call so callers can keep advancing time
+// from there (mirrors the timing technique in test_rx_multiword_full_accept_15char).
+static uint32_t drive_to_await_accept(ALEStateMachine& sm, const std::string& self,
+                                       const std::string& caller, uint32_t timeout_ms)
+{
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
+
+    sm.set_require_explicit_accept(true, timeout_ms);
+    feed_incoming_call(sm, self, caller);   // 1-word addresses: 5 words, slots 0..4
+
+    const uint32_t t_last   = 1000u + 4u * Trw;   // time of the conclusion's only word
+    const uint32_t t_settle = t_last + Tdrw + 1;
+    sm.update(t_settle);                           // WAIT_CYCLE_END settle → AWAIT_ACCEPT
+    return t_settle;
+}
+
+bool test_await_accept_holds_until_accept_call()
+{
+    std::cout << "\n[ACCEPT-GATE] AWAIT_ACCEPT holds until accept_call()\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
+    sm.process_event(ALEEvent::START_SCAN);
+
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    uint32_t t = drive_to_await_accept(sm, "JOE", "SAM", /*timeout_ms=*/10000);
+
+    bool gated = sm.get_handshake_phase() == HandshakePhase::AWAIT_ACCEPT;
+    std::cout << "  entered AWAIT_ACCEPT: " << (gated ? "PASS" : "FAIL") << "\n";
+
+    // Advance well past where an auto-accept SM would already be linked; without
+    // a decision, this SM must still be gated and must not have sent anything.
+    sm.update(t + 5 * Trw);
+    bool still_gated = sm.get_handshake_phase() == HandshakePhase::AWAIT_ACCEPT && cap.empty();
+    std::cout << "  still gated without a decision: " << (still_gated ? "PASS" : "FAIL") << "\n";
+
+    bool accepted = sm.accept_call();
+    std::cout << "  accept_call() returns true: " << (accepted ? "PASS" : "FAIL") << "\n";
+
+    // AWAIT_ACCEPT → SLOT_WAIT (Tswt=0) → CHANNEL_CHECK → (1×Trw LBT) → SENDING_RESPONSE.
+    sm.update(t + 1);
+    sm.update(t + 2);
+    sm.update(t + 2 + Trw + 1);
+
+    bool count_ok = cap.size() == 3;   // TO caller ×2 + TIS self, 1 word each
+    bool addr_ok  = count_ok && cap.words[0].type == PreambleType::TO
+                              && trim_ale_address(cap.words[0].address) == "SAM"
+                              && cap.words[2].type == PreambleType::TIS
+                              && trim_ale_address(cap.words[2].address) == "JOE";
+    std::cout << "  normal accept response sent (3 words): " << (count_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  response addresses caller/self correctly: " << (addr_ok ? "PASS" : "FAIL") << "\n";
+
+    return gated && still_gated && accepted && count_ok && addr_ok;
+}
+
+bool test_await_accept_reject_sends_twas()
+{
+    std::cout << "\n[ACCEPT-GATE] reject_call() during AWAIT_ACCEPT sends TWAS\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
+    sm.process_event(ALEEvent::START_SCAN);
+
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    uint32_t t = drive_to_await_accept(sm, "JOE", "SAM", /*timeout_ms=*/10000);
+
+    bool rejected = sm.reject_call();
+    std::cout << "  reject_call() returns true: " << (rejected ? "PASS" : "FAIL") << "\n";
+
+    // reject_call() resolves the gate immediately → SLOT_WAIT → CHANNEL_CHECK → SENDING_RESPONSE.
+    sm.update(t + 1);
+    sm.update(t + 2);
+    sm.update(t + 2 + Trw + 1);
+
+    bool twas_ok = cap.size() == 1 && cap.words[0].type == PreambleType::TWAS
+                                    && trim_ale_address(cap.words[0].address) == "JOE";
+    std::cout << "  TWAS rejection sent (1 word, self address): " << (twas_ok ? "PASS" : "FAIL") << "\n";
+
+    return rejected && twas_ok;
+}
+
+bool test_await_accept_timeout_falls_back_to_auto_accept()
+{
+    std::cout << "\n[ACCEPT-GATE] AWAIT_ACCEPT timeout falls back to auto-accept\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
+    sm.process_event(ALEEvent::START_SCAN);
+
+    const uint32_t Trw      = ALETimingConstants::Trw_ms;
+    const uint32_t kTimeout = 500;
+    uint32_t t = drive_to_await_accept(sm, "JOE", "SAM", kTimeout);
+
+    // Just before timeout: still gated, nothing sent yet.
+    sm.update(t + kTimeout - 1);
+    bool gated_before = sm.get_handshake_phase() == HandshakePhase::AWAIT_ACCEPT && cap.empty();
+    std::cout << "  still gated just before timeout: " << (gated_before ? "PASS" : "FAIL") << "\n";
+
+    // Timeout elapses → auto-accept fallback → SLOT_WAIT → CHANNEL_CHECK → SENDING_RESPONSE.
+    sm.update(t + kTimeout + 1);
+    sm.update(t + kTimeout + 2);
+    sm.update(t + kTimeout + 2 + Trw + 1);
+
+    bool count_ok = cap.size() == 3;
+    std::cout << "  auto-accept response sent after timeout (3 words): " << (count_ok ? "PASS" : "FAIL") << "\n";
+
+    return gated_before && count_ok;
+}
+
 // 3-char JOE accepts a call from a >3-char SAM.  The caller address must be
 // reassembled from TIS + DATA across the conclusion.
 bool test_rx_multiword_caller_address()
@@ -940,6 +1056,209 @@ bool test_group_call_max_5_targets()
 }
 
 // ============================================================================
+// Star group calling (A.5.5.4.3) — N-member ad-hoc group call construction.
+//
+// scanning_call_group()/leading_call_group() build the TX side of a star
+// group call (an ad-hoc list of >=1 individually-addressed members, not a
+// fixed two-station pair). Verified against the spec's own worked example
+// (BOB, EDGAR, SAM/SAMUEL — A.5.5.4.3.1/.2, Figures A-35/A-34) plus the
+// de-dup and 5-unique-first-word cap rules.
+// ============================================================================
+
+bool test_scanning_call_group_three_members()
+{
+    std::cout << "\n[A.5.5.4.3.1] Scanning call group: 3 members rotate THRU/REP\n";
+
+    auto seq = ALESequenceBuilder::scanning_call_group({"BOB", "EDGAR", "SAM"}, /*scan_channels=*/3);
+    const auto& w = seq.words();
+
+    struct Expect { PreambleType type; const char* addr; };
+    const Expect expect[] = {
+        {PreambleType::THRU, "BOB"}, {PreambleType::REP,  "EDG"}, {PreambleType::THRU, "SAM"},
+        {PreambleType::REP,  "BOB"}, {PreambleType::THRU, "EDG"}, {PreambleType::REP,  "SAM"},
+    };
+
+    bool size_ok = (w.size() == 6);
+    std::cout << "  6 words total: " << (size_ok ? "PASS" : "FAIL") << " (size=" << w.size() << ")\n";
+
+    bool seq_ok = size_ok;
+    for (size_t i = 0; size_ok && i < 6; ++i)
+        seq_ok = seq_ok && (w[i].type == expect[i].type)
+                         && (std::strncmp(w[i].address, expect[i].addr, 3) == 0);
+    std::cout << "  matches spec rotation (Figure A-35): " << (seq_ok ? "PASS" : "FAIL") << "\n";
+
+    return size_ok && seq_ok;
+}
+
+bool test_scanning_call_group_dedup()
+{
+    std::cout << "\n[A.5.5.4.3.1] Scanning call group: duplicate first words collapsed\n";
+
+    // BOB and BOBCAT share the first word "BOB" -> only 2 unique first words (BOB, SAM).
+    auto seq = ALESequenceBuilder::scanning_call_group({"BOB", "BOBCAT", "SAM"}, /*scan_channels=*/2);
+    const auto& w = seq.words();
+
+    bool size_ok = (w.size() == 4);  // scan_channels * 2, unaffected by dedup
+    std::cout << "  4 words total (scan_channels*2): " << (size_ok ? "PASS" : "FAIL")
+              << " (size=" << w.size() << ")\n";
+
+    bool only_two_distinct = true;
+    for (const auto& word : w) {
+        std::string a(word.address);
+        if (a != "BOB" && a != "SAM") only_two_distinct = false;
+    }
+    std::cout << "  only BOB/SAM rotate (BOBCAT's first word de-duplicated): "
+              << (only_two_distinct ? "PASS" : "FAIL") << "\n";
+
+    bool alternates = size_ok
+        && w[0].type == PreambleType::THRU && w[1].type == PreambleType::REP
+        && w[2].type == PreambleType::THRU && w[3].type == PreambleType::REP;
+    std::cout << "  THRU/REP alternate starting with THRU: " << (alternates ? "PASS" : "FAIL") << "\n";
+
+    return size_ok && only_two_distinct && alternates;
+}
+
+bool test_scanning_call_group_caps_at_5_unique()
+{
+    std::cout << "\n[AC-WORD-006-4] Scanning call group: caps at 5 unique first words\n";
+
+    auto seq = ALESequenceBuilder::scanning_call_group(
+        {"AA1", "BB2", "CC3", "DD4", "EE5", "FF6"}, /*scan_channels=*/5);
+    const auto& w = seq.words();
+
+    bool size_ok = (w.size() == 10);  // scan_channels * 2
+    std::cout << "  10 words total: " << (size_ok ? "PASS" : "FAIL") << " (size=" << w.size() << ")\n";
+
+    bool ff6_excluded = true;
+    for (const auto& word : w)
+        if (std::strncmp(word.address, "FF6", 3) == 0) ff6_excluded = false;
+    std::cout << "  6th distinct member (FF6) excluded: " << (ff6_excluded ? "PASS" : "FAIL") << "\n";
+
+    return size_ok && ff6_excluded;
+}
+
+bool test_scanning_call_group_single_word_fallback()
+{
+    std::cout << "\n[A.5.2.5.1] Scanning call group: single surviving word falls back to TO\n";
+
+    // SAM and SAMUEL share the first word "SAM" -> de-dup collapses to 1 unique word,
+    // which the flowchart's "IS THERE A SINGLE WORD REMAINING?" branch resolves to a
+    // plain individual/net scanning call (TO), not a THRU/REP rotation.
+    auto seq = ALESequenceBuilder::scanning_call_group({"SAM", "SAMUEL"}, /*scan_channels=*/2);
+    const auto& w = seq.words();
+
+    bool size_ok = (w.size() == 4);
+    bool all_to  = size_ok;
+    for (const auto& word : w)
+        all_to = all_to && (word.type == PreambleType::TO)
+                         && (std::strncmp(word.address, "SAM", 3) == 0);
+    std::cout << "  falls back to plain TO scanning call (no THRU/REP): "
+              << (all_to ? "PASS" : "FAIL") << "\n";
+
+    return size_ok && all_to;
+}
+
+bool test_leading_call_group_three_members()
+{
+    std::cout << "\n[A.5.5.4.3.2] Leading call group: 3-member full addresses, TO anchor\n";
+
+    auto seq = ALESequenceBuilder::leading_call_group({"BOB", "EDGAR", "SAMUEL"});
+    const auto& w = seq.words();
+
+    struct Expect { PreambleType type; const char* addr; };
+    const Expect one_cycle[] = {
+        {PreambleType::TO,   "BOB"}, {PreambleType::REP,  "EDG"}, {PreambleType::DATA, "AR@"},
+        {PreambleType::TO,   "SAM"}, {PreambleType::DATA, "UEL"},
+    };
+
+    bool size_ok = (w.size() == 10);  // 5-word address sequence, sent twice
+    std::cout << "  10 words (5-word address sequence sent twice): " << (size_ok ? "PASS" : "FAIL")
+              << " (size=" << w.size() << ")\n";
+
+    bool matches = size_ok;
+    for (size_t cycle = 0; matches && cycle < 2; ++cycle)
+        for (size_t i = 0; matches && i < 5; ++i) {
+            const auto& got = w[cycle * 5 + i];
+            matches = (got.type == one_cycle[i].type)
+                    && (std::strncmp(got.address, one_cycle[i].addr, 3) == 0);
+        }
+    std::cout << "  matches spec example (Figure A-34): " << (matches ? "PASS" : "FAIL") << "\n";
+
+    return size_ok && matches;
+}
+
+bool test_leading_call_group_no_thru_for_short_addresses()
+{
+    std::cout << "\n[AC-WORD-006-1/7 regression] Leading call group never uses THRU\n";
+
+    // Both addresses <=3 chars: the old implementation anchored on THRU here,
+    // which AC-WORD-006-1/7 forbids outside the scanning section, and which a
+    // conformant receiver would discard the leading call for.
+    auto seq = ALESequenceBuilder::leading_call_group({"BOB", "SAM"});
+    const auto& w = seq.words();
+
+    bool no_thru = true;
+    for (const auto& word : w)
+        if (word.type == PreambleType::THRU) no_thru = false;
+    std::cout << "  no THRU words in leading call: " << (no_thru ? "PASS" : "FAIL") << "\n";
+
+    bool expected = (w.size() == 4)
+        && w[0].type == PreambleType::TO  && std::strncmp(w[0].address, "BOB", 3) == 0
+        && w[1].type == PreambleType::REP && std::strncmp(w[1].address, "SAM", 3) == 0
+        && w[2].type == PreambleType::TO  && std::strncmp(w[2].address, "BOB", 3) == 0
+        && w[3].type == PreambleType::REP && std::strncmp(w[3].address, "SAM", 3) == 0;
+    std::cout << "  [TO:BOB, REP:SAM] sent twice: " << (expected ? "PASS" : "FAIL") << "\n";
+
+    return no_thru && expected;
+}
+
+bool test_initiate_group_call_rejects_empty()
+{
+    std::cout << "\n[Group call] initiate_group_call rejects an empty member list\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, "SAM", /*scan_ch=*/1);
+    bool rejected = !sm.initiate_group_call({});
+    std::cout << "  empty member list rejected: " << (rejected ? "PASS" : "FAIL") << "\n";
+    return rejected;
+}
+
+bool test_initiate_group_call_three_members_tx_sequence()
+{
+    std::cout << "\n[Group call] initiate_group_call with 3 members — full TX sequence\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, "SAM", /*scan_ch=*/2);
+    bool started = sm.initiate_group_call({"BOB", "EDGAR", "SAM2"});
+    std::cout << "  call started: " << (started ? "PASS" : "FAIL") << "\n";
+
+    advance_to_tx_start(sm);
+
+    bool got_words = !cap.words.empty();
+    std::cout << "  words enqueued: " << (got_words ? "PASS" : "FAIL")
+              << " (count=" << cap.size() << ")\n";
+
+    // Structural invariants rather than exact totals: the scanning section
+    // (first scan_channels*2 words) must carry only THRU/REP, and THRU must
+    // never appear again afterwards (AC-WORD-006-1/7).
+    const size_t scan_words = 4;  // scan_channels(2) * 2
+    bool scanning_thru_rep_only = true;
+    for (size_t i = 0; i < scan_words && i < cap.size(); ++i)
+        if (cap.words[i].type != PreambleType::THRU && cap.words[i].type != PreambleType::REP)
+            scanning_thru_rep_only = false;
+    std::cout << "  scanning section uses only THRU/REP: "
+              << (scanning_thru_rep_only ? "PASS" : "FAIL") << "\n";
+
+    bool no_thru_after_scanning = true;
+    for (size_t i = scan_words; i < cap.size(); ++i)
+        if (cap.words[i].type == PreambleType::THRU) no_thru_after_scanning = false;
+    std::cout << "  no THRU after scanning section ends (AC-WORD-006-1/7): "
+              << (no_thru_after_scanning ? "PASS" : "FAIL") << "\n";
+
+    return started && got_words && scanning_thru_rep_only && no_thru_after_scanning;
+}
+
+// ============================================================================
 // T-07 — Caller-side link termination returns to the pre-link state.
 //
 // Regression: terminate_link() (CMD:TERMINATE) sends TO peer ×2 + TWAS self
@@ -1115,11 +1434,37 @@ int run_all_tests()
     run("AC-WORD-006-4 group call max 5 THRU targets",
         test_group_call_max_5_targets());
 
+    // A.5.5.4.3 — Star group calling (N-member ad-hoc group calls)
+    run("A.5.5.4.3.1 scanning_call_group: 3 members rotate THRU/REP",
+        test_scanning_call_group_three_members());
+    run("A.5.5.4.3.1 scanning_call_group: duplicate first words collapsed",
+        test_scanning_call_group_dedup());
+    run("AC-WORD-006-4 scanning_call_group: caps at 5 unique first words",
+        test_scanning_call_group_caps_at_5_unique());
+    run("A.5.2.5.1 scanning_call_group: single surviving word falls back to TO",
+        test_scanning_call_group_single_word_fallback());
+    run("A.5.5.4.3.2 leading_call_group: 3-member full addresses, TO anchor",
+        test_leading_call_group_three_members());
+    run("AC-WORD-006-1/7 regression: leading_call_group never uses THRU",
+        test_leading_call_group_no_thru_for_short_addresses());
+    run("Group call: initiate_group_call rejects empty member list",
+        test_initiate_group_call_rejects_empty());
+    run("Group call: initiate_group_call 3-member full TX sequence",
+        test_initiate_group_call_three_members_tx_sequence());
+
     // RX multi-word address regression (accepting calls > 3 chars)
     run("RX-MULTIWORD accept call to >3-char own address",
         test_rx_multiword_self_address());
     run("RX-MULTIWORD reassemble >3-char caller address",
         test_rx_multiword_caller_address());
+
+    // Manual accept gate (AWAIT_ACCEPT) — set_require_explicit_accept()
+    run("ACCEPT-GATE AWAIT_ACCEPT holds until accept_call()",
+        test_await_accept_holds_until_accept_call());
+    run("ACCEPT-GATE reject_call() during AWAIT_ACCEPT sends TWAS",
+        test_await_accept_reject_sends_twas());
+    run("ACCEPT-GATE timeout falls back to auto-accept",
+        test_await_accept_timeout_falls_back_to_auto_accept());
     run("RX-MULTIWORD full accept path at 15-char addresses",
         test_rx_multiword_full_accept_15char());
 

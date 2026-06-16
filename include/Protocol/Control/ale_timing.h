@@ -311,3 +311,21 @@ namespace ALETimingConstants {
     constexpr uint32_t MAX_TX_SEQUENCE_WORDS    = 64u;
 
 } // namespace ALETimingConstants
+
+namespace ale {
+
+// ────────────────────────────────────────────────────────────────────────────
+// Per-instance override of Level 5 "Programmable defaults" (§"Programmable
+// timing parameters" — "network manager can override all values in this
+// section"). ALETimingConstants::Twa_ms / Tt_ms above remain the immutable
+// spec-derived defaults; each ALEStateMachine holds its own TimingParameters
+// (default-initialised from those constants) so overriding one instance
+// (e.g. via ALEController::set_link_idle_timeout_sec()) never affects any
+// other instance in the same process — no global/shared mutable state.
+// ────────────────────────────────────────────────────────────────────────────
+struct TimingParameters {
+    uint32_t Twa_ms = ALETimingConstants::Twa_ms;  ///< wait-for-activity / link-idle timeout
+    uint32_t Tt_ms  = ALETimingConstants::Tt_ms;   ///< blind-tune delay (TUNING phase)
+};
+
+} // namespace ale

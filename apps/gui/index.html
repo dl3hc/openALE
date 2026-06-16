@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PC-ALE · Automatic Link Establishment</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ══════ HEADER ══════ -->
+  <header class="header">
+    <div class="logo">
+      <div class="logo-mark">PC<em>-</em>ALE</div>
+      <div class="logo-divider"></div>
+      <div class="logo-meta">
+        <div class="logo-std">MIL-STD-188-141B · 2G ALE</div>
+        <div class="logo-self" id="selfCs">SELF: —</div>
+      </div>
+    </div>
+
+    <!-- Demo state switcher (DEV — inline, collapsed by default) -->
+    <div class="demo collapsed" id="demoPanel">
+      <button class="demo-toggle" id="demoToggle" onclick="toggleDemo()" title="Demo states (DEV)">DEV ▸</button>
+      <div class="demo-btns">
+        <button class="demo-btn" onclick="goIdle()">Idle</button>
+        <button class="demo-btn" onclick="goScanning()">Scan</button>
+        <button class="demo-btn" onclick="goIncoming()">Incoming</button>
+        <button class="demo-btn" onclick="goLinked()">Linked</button>
+      </div>
+    </div>
+
+    <div class="hdr-right">
+      <!-- Channel steppers flanking the Scan toggle -->
+      <div class="hdr-group">
+        <button class="hdr-icon" onclick="stepChannel(-1)" title="Step back a channel">◀</button>
+        <button class="hdr-btn" id="scanBtn" onclick="toggleScan()">▶ Scan</button>
+        <button class="hdr-icon" onclick="stepChannel(1)" title="Step forward a channel">▶</button>
+      </div>
+
+      <!-- Current channel frequency + signal quality, beside the Scan controls -->
+      <div class="hdr-stats">
+        <div class="hdr-stat freq">
+          <span class="hdr-stat-val"><span id="freqVal">14.109</span><span class="hdr-stat-suf">MHz</span></span>
+          <span class="hdr-stat-sub" id="freqSub">CH 1 · USB</span>
+        </div>
+        <div class="hdr-stat snr">
+          <span class="hdr-stat-val"><span id="snrVal">+18</span><span class="hdr-stat-suf">dB</span></span>
+          <span class="hdr-stat-sub">SNR</span>
+        </div>
+      </div>
+
+      <button class="hdr-btn" id="pttBtn" onclick="togglePtt()" title="Push to talk (PTT)">🎙 PTT</button>
+
+      <!-- Manual radio control — VFO dropdown (opens downward like DEV) -->
+      <div class="radio-wrap" id="radioWrap">
+        <button class="hdr-btn" id="radioToggle" onclick="toggleRadioPanel()" title="Manually control radio assets">📻 Radio ▸</button>
+        <div class="radio-panel" id="radioPanel">
+          <div class="radio-head">Radio Control <span>VFO · MANUAL TUNE</span></div>
+
+          <div class="radio-display">
+            <span class="radio-freq" id="radioFreq">14.109.000</span>
+            <span class="radio-unit" id="radioUnit">MHz</span>
+            <span class="radio-modechip" id="radioModeChip">USB</span>
+          </div>
+
+          <div class="radio-body">
+            <div class="radio-keypad">
+              <button class="rk" onclick="radioKey('1')">1</button>
+              <button class="rk" onclick="radioKey('2')">2</button>
+              <button class="rk" onclick="radioKey('3')">3</button>
+              <button class="rk" onclick="radioKey('4')">4</button>
+              <button class="rk" onclick="radioKey('5')">5</button>
+              <button class="rk" onclick="radioKey('6')">6</button>
+              <button class="rk" onclick="radioKey('7')">7</button>
+              <button class="rk" onclick="radioKey('8')">8</button>
+              <button class="rk" onclick="radioKey('9')">9</button>
+              <button class="rk rk-fn" onclick="radioDel()">DEL</button>
+              <button class="rk" onclick="radioKey('0')">0</button>
+              <button class="rk rk-fn" onclick="radioClear()">CLR</button>
+              <button class="rk rk-unit" onclick="radioCommit(1000000)">MHz</button>
+              <button class="rk rk-unit" onclick="radioCommit(1000)">kHz</button>
+              <button class="rk rk-enter" onclick="radioEnter()">ENT</button>
+            </div>
+
+            <div class="radio-side">
+              <div class="radio-sub">Mode</div>
+              <div class="radio-modes">
+                <button class="rk rk-mode" data-mode="USB" onclick="radioSetMode('USB')">USB</button>
+                <button class="rk rk-mode" data-mode="LSB" onclick="radioSetMode('LSB')">LSB</button>
+                <button class="rk rk-mode" data-mode="FM"  onclick="radioSetMode('FM')">FM</button>
+                <button class="rk rk-mode" data-mode="AM"  onclick="radioSetMode('AM')">AM</button>
+              </div>
+              <div class="radio-sub">Tune</div>
+              <div class="radio-tune">
+                <button class="rk rk-tune" onclick="radioNudge(1)"  title="Step up by tune step">▲</button>
+                <button class="rk rk-tune" onclick="radioNudge(-1)" title="Step down by tune step">▼</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="radio-steps">
+            <span class="radio-sub">Step</span>
+            <button class="rk rk-step" data-step="1"       onclick="radioSetStep(1)">1 Hz</button>
+            <button class="rk rk-step" data-step="10"      onclick="radioSetStep(10)">10</button>
+            <button class="rk rk-step" data-step="100"     onclick="radioSetStep(100)">100</button>
+            <button class="rk rk-step" data-step="1000"    onclick="radioSetStep(1000)">1 k</button>
+            <button class="rk rk-step" data-step="10000"   onclick="radioSetStep(10000)">10 k</button>
+            <button class="rk rk-step" data-step="100000"  onclick="radioSetStep(100000)">100 k</button>
+            <button class="rk rk-step" data-step="1000000" onclick="radioSetStep(1000000)">1 M</button>
+          </div>
+        </div>
+      </div>
+
+      <button class="hdr-btn" onclick="openSettings()">⚙ Settings</button>
+      <button class="hdr-btn">? Help</button>
+      <div class="status-chip">
+        <div class="dot scanning" id="statusDot"></div>
+        <span class="status-text" id="statusText">Scanning</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══════ MAIN GRID ══════ -->
+  <main class="main">
+
+    <!-- Left column -->
+    <div class="left-col">
+
+      <!-- Incoming -->
+      <div class="panel panel-incoming">
+        <div class="plabel">Incoming <span>INDIVIDUAL / SELECTIVE CALL</span></div>
+        <div class="pbody" style="padding:8px">
+          <div class="inc-empty" id="incEmpty">
+            <div class="inc-empty-icon">📡</div>
+            <span>Monitoring — no incoming call</span>
+          </div>
+          <div class="inc-alert hidden" id="incAlert">
+            <div class="inc-row">
+              <div class="ring-icon">📞</div>
+              <div>
+                <div class="inc-callsign" id="incCs">W1ABC</div>
+                <div class="inc-sub" id="incName">Net Control Station</div>
+              </div>
+            </div>
+            <div class="inc-btns">
+              <button class="btn btn-answer" onclick="answerCall()">Answer</button>
+              <button class="btn btn-decline" onclick="declineCall()">Decline</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div class="panel panel-messages">
+        <div class="plabel">
+          <span style="opacity:1;font-weight:700">Messages <em style="font-style:normal;font-weight:400;opacity:.7">AMD / ORDERWIRE</em></span>
+          <button class="plabel-btn" onclick="clearMessages()">Clear All</button>
+        </div>
+        <div class="pbody" id="msgList"></div>
+        <div class="msg-compose">
+          <input class="msg-input" id="msgInput" type="text" placeholder="AMD message — max 90 chars, caps…" maxlength="90"
+            onkeydown="if(event.key==='Enter')sendAmd()">
+          <button class="btn-send" onclick="sendAmd()">Send</button>
+        </div>
+      </div>
+
+    </div><!-- /left-col -->
+
+    <!-- Right column -->
+    <div class="right-col">
+
+      <!-- Contacts -->
+      <div class="panel panel-contacts">
+        <div class="plabel">
+          <span style="opacity:1;font-weight:700">Contacts <em style="font-style:normal;font-weight:400;opacity:.7">ADDRESS BOOK</em></span>
+          <button class="plabel-btn" onclick="openContactEditor()">+ Add</button>
+        </div>
+        <div class="search-wrap">
+          <input class="search-input" id="contactSearch" type="text" placeholder="Search…" oninput="renderContacts()">
+        </div>
+        <div class="pbody" style="padding:0 8px 8px">
+          <div class="contact-list" id="contactList"></div>
+        </div>
+        <div class="call-zone" id="callZone">
+          <button class="btn-call" onclick="startCall()">
+            <span>📞</span> Call
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Call (hidden until linked) -->
+      <div class="panel panel-call hidden" id="callPanel">
+        <div class="plabel" style="color:var(--s-linked)">
+          ● Active Link
+          <span id="callFreqLbl" style="color:var(--tx-dim)">14.109 MHz · USB</span>
+        </div>
+        <div class="call-body">
+          <div class="call-to-lbl">Connected to</div>
+          <div class="call-cs" id="callCs">W1ABC</div>
+          <div class="call-timer" id="callTimer">00:00</div>
+          <div class="quality">
+            <div class="qbars">
+              <div class="qbar"></div><div class="qbar"></div>
+              <div class="qbar"></div><div class="qbar"></div>
+              <div class="qbar"></div>
+            </div>
+            <span class="qlabel" id="qualityLbl">Good · +18 dB</span>
+          </div>
+        </div>
+        <button class="btn-end" onclick="endCall()">⬤ End Link</button>
+      </div>
+
+    </div><!-- /right-col -->
+
+  </main>
+
+  <!-- ══════ SIGNAL STRIP ══════ -->
+  <div class="strip">
+
+    <!-- Clock + sync lock, beside the waterfall -->
+    <div class="strip-stats">
+      <div class="hdr-clock" id="clock" onclick="toggleClockZone()" title="Click to switch UTC / Local time">
+        <span class="hdr-clock-time" id="clockTime">--:--:--</span>
+        <span class="hdr-clock-zone" id="clockZone">UTC</span>
+      </div>
+      <div class="sync-chip">
+        <div class="sync-dot" id="syncDot" style="background:var(--s-linked)"></div>
+        <span class="sync-lbl" id="syncLbl" style="color:var(--s-linked)">LOCK</span>
+      </div>
+    </div>
+
+    <!-- Waterfall -->
+    <div class="strip-wf">
+      <div class="wf-band-region" id="wfBandRegion"></div>
+      <div class="wf-band-cap" id="wfBandCap">ALE 8-FSK</div>
+      <div class="wf-label">
+        <div class="wf-band" id="wfBandLabel"></div>
+      </div>
+      <canvas id="waterfallCanvas"></canvas>
+      <div class="wf-ticks" id="wfTicks"></div>
+    </div>
+
+    <!-- Protocol log -->
+    <div class="strip-proto">
+      <div class="proto-hdr">Protocol Log</div>
+      <div class="proto-log" id="protoLog"></div>
+    </div>
+
+  </div>
+
+</div><!-- /app -->
+
+<!-- ══════ SETTINGS MODAL ══════ -->
+<div class="modal-overlay hidden" id="settingsModal" onclick="overlayClose(event)">
+  <div class="modal">
+
+    <div class="modal-hdr">
+      <span class="modal-title">⚙ <em>PC-ALE</em> Settings</span>
+      <button class="modal-close" onclick="closeSettings()">✕</button>
+    </div>
+
+    <div class="modal-body">
+
+      <!-- Left nav -->
+      <nav class="snav">
+        <div class="snav-section-hdr">Station</div>
+        <div class="snav-item active" data-sec="identity" onclick="showSec('identity')">
+          <span class="snav-icon">🪪</span><span class="snav-label">Identity</span>
+        </div>
+        <div class="snav-item" data-sec="audio" onclick="showSec('audio')">
+          <span class="snav-icon">🎙</span><span class="snav-label">Audio</span>
+        </div>
+        <div class="snav-item" data-sec="radio" onclick="showSec('radio')">
+          <span class="snav-icon">📻</span><span class="snav-label">Radio / CAT</span>
+        </div>
+
+        <div class="snav-section-hdr">ALE</div>
+        <div class="snav-item" data-sec="channels" onclick="showSec('channels')">
+          <span class="snav-icon">📡</span><span class="snav-label">Channels</span>
+        </div>
+        <div class="snav-item" data-sec="nets" onclick="showSec('nets')">
+          <span class="snav-icon">🔗</span><span class="snav-label">Nets</span>
+        </div>
+        <div class="snav-item" data-sec="timing" onclick="showSec('timing')">
+          <span class="snav-icon">⏱</span><span class="snav-label">Timing</span>
+        </div>
+        <div class="snav-item" data-sec="policy" onclick="showSec('policy')">
+          <span class="snav-icon">🛡</span><span class="snav-label">Policy</span>
+        </div>
+        <div class="snav-item" data-sec="lqa" onclick="showSec('lqa')">
+          <span class="snav-icon">📊</span><span class="snav-label">LQA</span>
+        </div>
+
+        <div class="snav-section-hdr">RX / Modem</div>
+        <div class="snav-item" data-sec="fec" onclick="showSec('fec')">
+          <span class="snav-icon">⚡</span><span class="snav-label">FEC / Sync</span>
+        </div>
+        <div class="snav-item" data-sec="advanced" onclick="showSec('advanced')">
+          <span class="snav-icon">🔧</span><span class="snav-label">Advanced</span>
+        </div>
+      </nav>
+
+      <!-- Content -->
+      <div class="scontent">
+
+        <!-- ── Identity ── -->
+        <div class="ssec active" data-sec="identity">
+          <div class="ssec-title">Identity</div>
+
+          <div class="fg">
+            <label class="flabel">Self Address Table <span class="fbadge">SelfAddrTable</span></label>
+            <table class="ch-table">
+              <thead>
+                <tr><th>Address</th><th>Status</th><th>Valid Channels</th><th></th></tr>
+              </thead>
+              <tbody id="selfAddrBody"></tbody>
+            </table>
+            <div class="ch-add-row"><button class="btn-sm accent" onclick="addSelfAddr()">+ Add Self Address</button></div>
+            <div class="fhint" style="margin-top:8px">First <em style="font-style:normal;color:var(--accent)">enabled</em> entry is the primary callsign shown in the header. SelfAddr 1–15 uppercase chars; SelfAddrValidChannels = ALL or list (e.g. 1,2).</div>
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Station Name</label>
+            <input class="finput" id="cfgName" type="text" placeholder="Optional description" value="">
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Default Channel File (.ale)</label>
+            <div style="display:flex;gap:8px">
+              <input class="finput" id="cfgChFile" type="text" placeholder="/path/to/channels.ale" style="flex:1">
+              <button class="btn-sm">Browse…</button>
+            </div>
+            <div class="fhint">Loaded at startup; add_channel / del_channel auto-save here.</div>
+          </div>
+
+          <div class="fg">
+            <label class="flabel">LQA Database File</label>
+            <div style="display:flex;gap:8px">
+              <input class="finput" id="cfgLqaFile" type="text" placeholder="/path/to/lqa.json" style="flex:1">
+              <button class="btn-sm">Browse…</button>
+            </div>
+            <div class="fhint">Channel quality history — restored on startup, saved on exit.</div>
+          </div>
+        </div><!-- /identity -->
+
+        <!-- ── Audio ── -->
+        <div class="ssec" data-sec="audio">
+          <div class="ssec-title">Audio Devices</div>
+
+          <div class="fg">
+            <label class="flabel">RX Input Device</label>
+            <select class="fselect" id="audioIn">
+              <option>Loading…</option>
+            </select>
+            <div class="fhint">8 kHz mono source — receiver audio (CABLE Output, WASAPI loopback, etc.).</div>
+            <div class="level-meter" style="margin-top:10px">
+              <div class="level-bar" id="levelBarIn" style="width:0%"></div>
+            </div>
+            <div class="fhint" style="margin-top:4px">Input level — click <strong>Test</strong> to start metering.</div>
+          </div>
+
+          <div class="fg">
+            <label class="flabel">TX Output Device</label>
+            <select class="fselect" id="audioOut">
+              <option>Loading…</option>
+            </select>
+            <div class="fhint">Audio routed to radio TX line (CABLE Input, line-out, virtual device).</div>
+          </div>
+
+          <div class="fg-row col2">
+            <div>
+              <label class="flabel">TX Volume</label>
+              <input class="finput" type="range" id="cfgTxVol" min="0" max="100" value="80"
+                style="padding:4px 0;cursor:pointer">
+              <div class="fhint" id="txVolLbl">80 %</div>
+            </div>
+            <div>
+              <label class="flabel">Sample Rate</label>
+              <select class="fselect" id="cfgSr">
+                <option value="8000" selected>8 000 Hz (required)</option>
+              </select>
+              <div class="fhint">ALE 2G is fixed at 8 kHz.</div>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn-sm accent" onclick="testAudio()">▶ Test Devices</button>
+            <button class="btn-sm" onclick="enumDevices()">↺ Refresh List</button>
+          </div>
+        </div><!-- /audio -->
+
+        <!-- ── Radio / CAT ── -->
+        <div class="ssec" data-sec="radio">
+          <div class="ssec-title">Radio / CAT Control</div>
+
+          <div class="fg">
+            <label class="flabel">Backend</label>
+            <div class="fradio-group" id="rigBackend">
+              <label class="fradio-opt">
+                <input type="radio" name="rigbe" value="netrigctl" checked onchange="updateRigFields()">
+                <span class="fradio-dot"></span> TCP netrigctl
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="rigbe" value="serial" onchange="updateRigFields()">
+                <span class="fradio-dot"></span> Serial (Hamlib)
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="rigbe" value="none" onchange="updateRigFields()">
+                <span class="fradio-dot"></span> None / Offline
+              </label>
+            </div>
+          </div>
+
+          <div id="rigFieldsTcp">
+            <div class="fg-row col2">
+              <div>
+                <label class="flabel">Host</label>
+                <input class="finput" id="rigHost" type="text" value="127.0.0.1" placeholder="127.0.0.1">
+              </div>
+              <div>
+                <label class="flabel">Port</label>
+                <input class="finput" id="rigPort" type="number" value="4532" placeholder="4532">
+              </div>
+            </div>
+            <div class="fhint" style="margin-top:-10px;margin-bottom:14px">
+              rigctld must be running: <code style="font-family:var(--mono);color:var(--accent)">rigctld -m 1 -r /dev/ttyUSB0</code>
+            </div>
+          </div>
+
+          <div id="rigFieldsSerial" style="display:none">
+            <div class="fg-row col3">
+              <div>
+                <label class="flabel">Serial Port</label>
+                <input class="finput" id="rigSerial" type="text" placeholder="COM3 or /dev/ttyUSB0">
+              </div>
+              <div>
+                <label class="flabel">Baud Rate</label>
+                <select class="fselect" id="rigBaud">
+                  <option>4800</option><option>9600</option><option selected>19200</option>
+                  <option>38400</option><option>57600</option>
+                </select>
+              </div>
+              <div>
+                <label class="flabel">Hamlib Model</label>
+                <input class="finput" id="rigModel" type="number" value="3021" placeholder="Model ID">
+              </div>
+            </div>
+          </div>
+
+          <hr class="fsep">
+
+          <div class="fg-row col2">
+            <div>
+              <label class="flabel">PTT Method</label>
+              <select class="fselect" id="rigPtt">
+                <option value="cat">CAT (radio command)</option>
+                <option value="rts">RTS (serial pin)</option>
+                <option value="dtr">DTR (serial pin)</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+            <div>
+              <label class="flabel">PTT Port</label>
+              <input class="finput" id="rigPttPort" type="text" placeholder="Same as rig port">
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+            <button class="btn-sm accent" onclick="testRig()">↺ Test Connection</button>
+            <div class="conn-status hidden" id="rigConnStatus"></div>
+          </div>
+        </div><!-- /radio -->
+
+        <!-- ── Channels ── -->
+        <div class="ssec" data-sec="channels">
+          <div class="ssec-title">Scanning Channels</div>
+
+          <div id="chBody"></div>
+
+          <div class="ch-add-row">
+            <button class="btn-sm accent" onclick="addCh()">+ Add Channel</button>
+            <button class="btn-sm" onclick="loadAleFile()">↑ Load .ale File</button>
+            <button class="btn-sm" onclick="saveAleFile()">↓ Save .ale File</button>
+          </div>
+          <div class="fhint" style="margin-top:10px">
+            Per channel: <code style="font-family:var(--mono);color:var(--accent)">id · rx_hz [tx_hz] · mode · usage · direction · self_addr · label</code>, plus inhibit-calling / inhibit-sounding flags. CMD:ADD_CHANNEL / CMD:DEL_CHANNEL also update this list at runtime.
+          </div>
+        </div><!-- /channels -->
+
+        <!-- ── Nets ── -->
+        <div class="ssec" data-sec="nets">
+          <div class="ssec-title">Net Membership</div>
+
+          <div class="fg">
+            <label class="flabel">Nets <span class="fbadge">Channel Group</span></label>
+            <div id="netList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+            <button class="btn-sm accent" onclick="addNet()">+ Add Net</button>
+            <div class="fhint" style="margin-top:8px">
+              A net is a named group of scanning channels (NetStore: name + assigned channel IDs).
+              Calls to a contact whose Net Members include this net size the scanning-call
+              section from the net's channel count.
+            </div>
+          </div>
+
+          <hr class="fsep">
+
+          <div class="fg">
+            <label class="flabel">Target Scan Channels</label>
+            <input class="finput" id="cfgTargetScan" type="number" value="0" min="0"
+              style="width:120px" placeholder="0">
+            <div class="fhint">Expected number of scan channels of the called station (0 = fixed channel). Sizes the calling section.</div>
+          </div>
+        </div><!-- /nets -->
+
+        <!-- ── Timing ── -->
+        <div class="ssec" data-sec="timing">
+          <div class="ssec-title">ALE Timing Parameters</div>
+
+          <div class="fg-row col3">
+            <div>
+              <label class="flabel">Scan Dwell (ms)</label>
+              <input class="finput" id="cfgDwell" type="number" value="392" min="100">
+              <div class="fhint">Time per channel while scanning.</div>
+            </div>
+            <div>
+              <label class="flabel">Call Timeout (ms)</label>
+              <input class="finput" id="cfgCallTo" type="number" value="15000" min="1000">
+              <div class="fhint">Abort calling if no reply.</div>
+            </div>
+            <div>
+              <label class="flabel">Handshake Timeout (ms)</label>
+              <input class="finput" id="cfgHsTo" type="number" value="8000" min="1000">
+              <div class="fhint">Max time for 3-way handshake.</div>
+            </div>
+          </div>
+
+          <div class="fg-row col3">
+            <div>
+              <label class="flabel">AMD Wait (ms)</label>
+              <input class="finput" id="cfgAmdWait" type="number" value="500" min="0">
+              <div class="fhint">Pause before AMD message TX.</div>
+            </div>
+            <div>
+              <label class="flabel">Sounding Interval (s)</label>
+              <input class="finput" id="cfgSounding" type="number" value="300" min="60">
+              <div class="fhint">Auto-sounding period (LQA).</div>
+            </div>
+            <div>
+              <label class="flabel">Link Idle Timeout (s)</label>
+              <input class="finput" id="cfgLinkIdle" type="number" value="60" min="10">
+              <div class="fhint">Terminate link after inactivity.</div>
+            </div>
+          </div>
+
+          <div class="fg-row col3">
+            <div>
+              <label class="flabel">Turn-Around (ms)</label>
+              <input class="finput" id="cfgTurnAround" type="number" value="200" min="0">
+              <div class="fhint">TurnAroundTime — radio TX↔RX switch (Tta).</div>
+            </div>
+            <div>
+              <label class="flabel">Max Tune Time (ms)</label>
+              <input class="finput" id="cfgMaxTune" type="number" value="1045" min="0">
+              <div class="fhint">MaxTuneTime — blind tune delay before first TX (Tt).</div>
+            </div>
+            <div>
+              <label class="flabel">Listen Time (ms)</label>
+              <input class="finput" id="cfgListen" type="number" value="784" min="0">
+              <div class="fhint">ListenTime — LBT / response listen window (Twt).</div>
+            </div>
+          </div>
+
+          <div class="fhint" style="margin-top:6px">
+            MIL-STD-188-141B Table III defaults are pre-filled. Only change for non-standard nets.
+          </div>
+        </div><!-- /timing -->
+
+        <!-- ── Policy ── -->
+        <div class="ssec" data-sec="policy">
+          <div class="ssec-title">Acceptance Policy (A.4.3.4)</div>
+          <div class="fg">
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">Accept Any Call</div>
+                <div class="ftoggle-desc">AcceptAnyCall — respond to individual calls from stations not in the address book</div>
+              </div>
+              <label class="ftoggle"><input type="checkbox" id="cfgAcceptAny" checked><span class="ftrack"></span></label>
+            </div>
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">Accept AllCall</div>
+                <div class="ftoggle-desc">AcceptAllcall — react to broadcast ALLCALL / ANYCALL frames</div>
+              </div>
+              <label class="ftoggle"><input type="checkbox" id="cfgAcceptAll" checked><span class="ftrack"></span></label>
+            </div>
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">Accept AMD</div>
+                <div class="ftoggle-desc">AcceptAMD — receive and display Automatic Message Display orderwire</div>
+              </div>
+              <label class="ftoggle"><input type="checkbox" id="cfgAcceptAmd" checked><span class="ftrack"></span></label>
+            </div>
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">Accept DTM / DBM <span class="fbadge">data layer</span></div>
+                <div class="ftoggle-desc">AcceptDTM / AcceptDBM — requires the FS-1052 data layer (not yet wired)</div>
+              </div>
+              <label class="ftoggle"><input type="checkbox" id="cfgAcceptData" disabled><span class="ftrack"></span></label>
+            </div>
+          </div>
+          <div class="fhint" style="margin-top:6px">
+            Governs which inbound frames the controller answers or displays. Calls from disabled or unlisted addresses are dropped unless <em style="font-style:normal;color:var(--accent)">Accept Any Call</em> is on.
+          </div>
+        </div><!-- /policy -->
+
+        <!-- ── LQA ── -->
+        <div class="ssec" data-sec="lqa">
+          <div class="ssec-title">Link Quality Analysis · LqaMatrix</div>
+
+          <div class="fg-row col3">
+            <div style="display:flex;flex-direction:column;justify-content:flex-end">
+              <div class="ftoggle-row" style="border:none;padding:0">
+                <div class="ftoggle-info">
+                  <div class="ftoggle-name">Request LQA</div>
+                  <div class="ftoggle-desc">RequestLQA in handshake</div>
+                </div>
+                <label class="ftoggle" style="margin-left:12px"><input type="checkbox" id="cfgReqLqa" checked><span class="ftrack"></span></label>
+              </div>
+            </div>
+            <div>
+              <label class="flabel">LQA Age Limit (min)</label>
+              <input class="finput" id="cfgLqaAge" type="number" value="60" min="1">
+              <div class="fhint">LqaAge — discard entries older than this.</div>
+            </div>
+            <div>
+              <label class="flabel">Sort By</label>
+              <select class="fselect" id="cfgLqaSort" onchange="renderLqa()">
+                <option value="score">Score (best first)</option>
+                <option value="age">Age (newest first)</option>
+                <option value="addr">Address</option>
+              </select>
+            </div>
+          </div>
+
+          <table class="ch-table" style="margin-top:6px">
+            <thead>
+              <tr>
+                <th>LqaAddr</th><th>LqaChannel</th><th>Score</th>
+                <th>SINAD</th><th>BER</th><th>Multipath</th><th>Age</th>
+              </tr>
+            </thead>
+            <tbody id="lqaBody"></tbody>
+          </table>
+
+          <div class="fhint" style="margin-top:8px">
+            LqaMatrix is indexed by LqaAddr × LqaChannel. Populated from passive listening and active sounding; restored from the LQA database file (Identity tab) on startup. Score 0–31; SINAD/BER/Multipath are the LqaSINAD / LqaBER / LqaMultipath metrics.
+          </div>
+          <button class="btn-sm" style="margin-top:10px" onclick="renderLqa()">↺ Refresh</button>
+        </div><!-- /lqa -->
+
+        <!-- ── FEC / Sync ── -->
+        <div class="ssec" data-sec="fec">
+          <div class="ssec-title">FEC &amp; Sync (MIL-STD-188-141B A.5.2.6.3)</div>
+
+          <div class="fg">
+            <label class="flabel">Golay Correction Mode</label>
+            <div class="fradio-group">
+              <label class="fradio-opt">
+                <input type="radio" name="golay" value="3_4" checked>
+                <span class="fradio-dot"></span> Mode 3/4 — max correction (default)
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="golay" value="2_5">
+                <span class="fradio-dot"></span> Mode 2/5
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="golay" value="1_6">
+                <span class="fradio-dot"></span> Mode 1/6
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="golay" value="0_7">
+                <span class="fradio-dot"></span> Mode 0/7 — no correction
+              </label>
+            </div>
+            <div class="fhint" style="margin-top:8px">Golay(24,12) error correction power applied during word decode.</div>
+          </div>
+
+          <div class="fg-row col2">
+            <div>
+              <label class="flabel">Min Unanimous Votes</label>
+              <input class="finput" id="cfgVotes" type="number" value="33" min="0" max="49">
+              <div class="fhint">Out of 49 — primary BER discriminator. Default 33 (~67 %).</div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:flex-end">
+              <div class="ftoggle-row" style="border:none;padding:0">
+                <div class="ftoggle-info">
+                  <div class="ftoggle-name">Adaptive FEC</div>
+                  <div class="ftoggle-desc">Auto-adjusts mode + threshold from signal quality</div>
+                </div>
+                <label class="ftoggle" style="margin-left:16px">
+                  <input type="checkbox" id="cfgAdaptive">
+                  <span class="ftrack"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <hr class="fsep">
+
+          <div class="fg">
+            <label class="flabel">Debug / Diagnostics</label>
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">RX Debug Output</div>
+                <div class="ftoggle-desc">Logs peak level + every decoded word (type / addr / votes / FEC) to the status stream</div>
+              </div>
+              <label class="ftoggle">
+                <input type="checkbox" id="cfgDebugRx">
+                <span class="ftrack"></span>
+              </label>
+            </div>
+          </div>
+        </div><!-- /fec -->
+
+        <!-- ── Advanced ── -->
+        <div class="ssec" data-sec="advanced">
+          <div class="ssec-title">Advanced</div>
+
+          <div class="fg-row col2">
+            <div>
+              <label class="flabel">Log Level</label>
+              <select class="fselect" id="cfgLogLevel">
+                <option value="0">Off</option>
+                <option value="1">Error</option>
+                <option value="2" selected>Info</option>
+                <option value="3">Debug</option>
+                <option value="4">Trace</option>
+              </select>
+            </div>
+            <div>
+              <label class="flabel">Log File</label>
+              <div style="display:flex;gap:8px">
+                <input class="finput" id="cfgLogFile" type="text" placeholder="ale.log (optional)" style="flex:1">
+                <button class="btn-sm">Browse…</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="fg">
+            <label class="flabel">WebSocket Port</label>
+            <input class="finput" id="cfgWsPort" type="number" value="8765" min="1024" max="65535" style="width:120px">
+            <div class="fhint">Browser GUI connects here for events and spectrum data. Restart required.</div>
+          </div>
+
+          <hr class="fsep">
+
+          <div class="fg">
+            <label class="flabel">Miscellaneous</label>
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">Auto-save LQA on Exit</div>
+                <div class="ftoggle-desc">Write LQA database to disk when ale_cli shuts down</div>
+              </div>
+              <label class="ftoggle">
+                <input type="checkbox" id="cfgAutoLqa" checked>
+                <span class="ftrack"></span>
+              </label>
+            </div>
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">Automatic Sounding</div>
+                <div class="ftoggle-desc">Periodically sound channels in the LQA DB (interval above)</div>
+              </div>
+              <label class="ftoggle">
+                <input type="checkbox" id="cfgAutoSound">
+                <span class="ftrack"></span>
+              </label>
+            </div>
+          </div>
+
+          <hr class="fsep">
+
+          <div class="fg">
+            <label class="flabel">Configuration File</label>
+            <div style="display:flex;gap:8px">
+              <input class="finput" id="cfgFile" type="text" placeholder="ale.conf" style="flex:1">
+              <button class="btn-sm accent" onclick="exportConf()">↓ Export</button>
+              <button class="btn-sm" onclick="importConf()">↑ Import</button>
+            </div>
+            <div class="fhint">Exports all settings above as a flat key=value file readable by ale_cli --config.</div>
+          </div>
+        </div><!-- /advanced -->
+
+      </div><!-- /scontent -->
+    </div><!-- /modal-body -->
+
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeSettings()">Cancel</button>
+      <button class="btn-save" onclick="saveSettings()">Save &amp; Apply</button>
+    </div>
+
+  </div><!-- /modal -->
+</div><!-- /settings modal -->
+
+<!-- ══════ CONTACT EDITOR MODAL ══════ -->
+<div class="modal-overlay hidden" id="contactModal" onclick="if(event.target===this)closeContactEditor()">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-hdr">
+      <span class="modal-title" id="ceTitle">Add Contact</span>
+      <button class="modal-close" onclick="closeContactEditor()">✕</button>
+    </div>
+    <div class="scontent" style="padding:22px 24px">
+      <div class="fg-row col2">
+        <div>
+          <label class="flabel">Callsign / Address <span class="fbadge">OtherAddr</span></label>
+          <input class="finput" id="ceCs" maxlength="15" style="text-transform:uppercase" placeholder="W1ABC"
+            onkeydown="if(event.key==='Enter')saveContact()">
+        </div>
+        <div>
+          <label class="flabel">Status</label>
+          <select class="fselect" id="ceStatus">
+            <option value="enabled">enabled</option>
+            <option value="disabled">disabled</option>
+          </select>
+          <div class="fhint">OtherAddrStatus</div>
+        </div>
+      </div>
+
+      <div class="fg">
+        <label class="flabel">Name / Description</label>
+        <input class="finput" id="ceName" placeholder="Optional">
+      </div>
+
+      <div class="fg-row col2">
+        <div>
+          <label class="flabel">Net Members</label>
+          <input class="finput" id="ceNet" placeholder="e.g. NET1">
+          <div class="fhint">OtherAddrNetMembers — net this station belongs to.</div>
+        </div>
+        <div>
+          <label class="flabel">Valid Channels</label>
+          <input class="finput" id="ceChans" placeholder="ALL or C-1,C-2">
+          <div class="fhint">OtherAddrValidChannels — channels to call it on.</div>
+        </div>
+      </div>
+
+      <div class="ftoggle-row">
+        <div class="ftoggle-info">
+          <div class="ftoggle-name">Favorite</div>
+          <div class="ftoggle-desc">Pin to the top of the address book</div>
+        </div>
+        <label class="ftoggle"><input type="checkbox" id="ceFav"><span class="ftrack"></span></label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" id="ceDelete" style="margin-right:auto;border-color:rgba(255,82,82,.3);color:var(--s-error)" onclick="deleteContact()">Delete</button>
+      <button class="btn-cancel" onclick="closeContactEditor()">Cancel</button>
+      <button class="btn-save" onclick="saveContact()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

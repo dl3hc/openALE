@@ -24,6 +24,7 @@ namespace ale {
  * Implements MIL-STD-188-141B A.4.3.1 / Table A-III channel memory.
  *
  * Persistent fields (stored in ChannelStore, 100-channel nonvolatile memory):
+ *   id               — channel ID (e.g. "C-1"); how NetStore assigns channels to nets
  *   rx_frequency_hz  — receive frequency; used as the channel key
  *   tx_frequency_hz  — transmit frequency; 0 = simplex (= rx_frequency_hz)
  *   rx_mode          — modulation mode for RX (e.g. "USB")
@@ -45,6 +46,9 @@ namespace ale {
  *   call_count       — calls attempted on this channel
  */
 struct Channel {
+    // ── Identity ─────────────────────────────────────────────────────────
+    std::string id;                    ///< Channel ID (e.g. "C-1", Annex B Table A-XVI); empty = unassigned
+
     // ── Frequency (A.4.3.1 / Table A-III) ────────────────────────────────
     uint32_t    rx_frequency_hz = 0;   ///< RX frequency in Hz (channel key)
     uint32_t    tx_frequency_hz = 0;   ///< TX frequency in Hz; 0 = simplex
