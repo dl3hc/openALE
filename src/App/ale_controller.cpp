@@ -380,6 +380,11 @@ void ALEController::set_calling_channels(const std::vector<Channel>& channels)
 void ALEController::start_available()
 {
     emit_status("Available — fixed channel, listening for incoming calls");
+    // If we were scanning, drop back to IDLE so callers (e.g. the GUI Scan
+    // toggle) get a real state transition + state event. STOP_SCAN is a no-op
+    // from any non-SCANNING state (incl. IDLE — see ale_state_machine.cpp), so
+    // this is safe for ale_cli.cpp's start-from-IDLE use too.
+    sm_.process_event(ALEEvent::STOP_SCAN);
     // SM stays in IDLE; enable RX pipeline directly since enter_state(IDLE)
     // is not called at construction (only on re-entry via transition_to).
     demodulator_.set_enabled(true);

@@ -99,6 +99,31 @@ static std::string friendly_name(IMMDevice* dev)
     return name;
 }
 
+// ── Disambiguated display names for a device collection ───────────────────────
+// Duplicate friendly-names (e.g. two identical USB codecs) are made unique by
+// appending " (n)" to each duplicate occurrence in enumeration order; unique
+// names are left bare for backward compatibility. The SAME logic feeds both
+// list_flow() (what the GUI shows and sends back) and resolve_device() (what
+// open() matches), so a selected name always maps to exactly one device.
+static std::vector<std::string> annotated_device_names(IMMDeviceCollection* coll)
+{
+    UINT count = 0;
+    coll->GetCount(&count);
+    std::vector<std::string> base(count);
+    for (UINT i = 0; i < count; ++i) {
+        IMMDevice* d = nullptr;
+        if (SUCCEEDED(coll->Item(i, &d))) { base[i] = friendly_name(d); d->Release(); }
+    }
+    std::vector<std::string> out(count);
+    for (UINT i = 0; i < count; ++i) {
+        int total = 0, occ = 0;
+        for (UINT j = 0; j < count; ++j)
+            if (base[j] == base[i]) { ++total; if (j <= i) ++occ; }
+        out[i] = (total > 1) ? base[i] + " (" + std::to_string(occ) + ")" : base[i];
+    }
+    return out;
+}
+
 // ── True if the device mix format delivers 32-bit IEEE float samples ──────────
 static bool format_is_float(const WAVEFORMATEX* f)
 {
@@ -544,18 +569,24 @@ IMMDevice* WasapiDevice::resolve_device(EDataFlow flow, const std::string& sub) 
     IMMDeviceCollection* coll = nullptr;
     if (FAILED(enum_->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &coll))) return nullptr;
 
+    // Match against the same disambiguated names list_flow() exposes. Prefer an
+    // exact match on the annotated name the GUI sent; fall back to the first
+    // device whose name *contains* the substring (keeps bare-name selections
+    // and CLI --in-device/--out-device matching working).
+    const std::vector<std::string> names = annotated_device_names(coll);
     UINT count = 0;
     coll->GetCount(&count);
-    IMMDevice* found = nullptr;
-    for (UINT i = 0; i < count && !found; ++i) {
-        IMMDevice* cand = nullptr;
-        if (FAILED(coll->Item(i, &cand))) continue;
-        if (friendly_name(cand).find(sub) != std::string::npos) {
-            found = cand;
-            found->AddRef();
-        }
-        cand->Release();
+
+    int exact_idx = -1, substr_idx = -1;
+    for (UINT i = 0; i < count; ++i) {
+        if (names[i] == sub) { exact_idx = static_cast<int>(i); break; }
+        if (substr_idx < 0 && names[i].find(sub) != std::string::npos)
+            substr_idx = static_cast<int>(i);
     }
+    const int pick = exact_idx >= 0 ? exact_idx : substr_idx;
+
+    IMMDevice* found = nullptr;
+    if (pick >= 0) coll->Item(static_cast<UINT>(pick), &found);  // Item() AddRefs
     coll->Release();
     return found;
 }
@@ -581,17 +612,15 @@ std::vector<std::string> WasapiDevice::list_devices() const
 void WasapiDevice::list_flow(IMMDeviceEnumerator* en, EDataFlow flow,
                               const char* prefix, std::vector<std::string>& out)
 {
+    // ACTIVE only by design: resolve_device()/open() can only open active
+    // endpoints, so listing DISABLED/UNPLUGGED ones would just offer entries
+    // the user cannot connect. Duplicate friendly-names are disambiguated with
+    // a " (n)" suffix (annotated_device_names) so identically-named devices
+    // stay distinguishable and selectable.
     IMMDeviceCollection* coll = nullptr;
     if (FAILED(en->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &coll))) return;
-    UINT count = 0;
-    coll->GetCount(&count);
-    for (UINT i = 0; i < count; ++i) {
-        IMMDevice* dev = nullptr;
-        if (SUCCEEDED(coll->Item(i, &dev))) {
-            out.push_back(std::string(prefix) + friendly_name(dev));
-            dev->Release();
-        }
-    }
+    for (const auto& name : annotated_device_names(coll))
+        out.push_back(std::string(prefix) + name);
     coll->Release();
 }
 

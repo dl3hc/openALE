@@ -7,12 +7,14 @@
  * one operator GUI per running bridge).
  *
  * Threading:
- *   - A dedicated I/O thread owns accept()+recv() and the HTTP/WS handshake.
- *     It never calls send() — only the public send_text()/send_binary() do,
- *     from whichever thread the caller is on (the main loop for events/
- *     responses, the audio thread for spectrum binary frames — see
- *     ALEController::set_spectrum_callback()). Both are protected by the same
- *     mutex so they never interleave on the wire.
+ *   - A dedicated I/O thread owns accept()+recv(), static-file serving for
+ *     plain HTTP GETs, and the WS handshake. It never calls send_text()/
+ *     send_binary() — those are called by the caller's thread. Today every
+ *     send originates on the main loop (command replies, async events, AND the
+ *     spectrum binary frames: ALEController's spectrum callback fires inline
+ *     from feed_audio() on the main loop, not from the WASAPI audio thread).
+ *     send_text()/send_binary() are still mutex-serialised so a future
+ *     off-main-thread sender stays wire-safe. See docs/THREADING.md.
  *   - Received text-frame payloads are pushed into a mutex-protected queue;
  *     the main loop drains it non-blockingly via pop_message(), mirroring
  *     ale_cli.cpp's stdin_reader -> g_cmd_queue pattern.
@@ -39,6 +41,14 @@ public:
     /** Start listening on \p port and spawn the I/O thread. */
     bool start(uint16_t port);
 
+    /**
+     * Directory the I/O thread serves static files from for plain HTTP GETs
+     * (the apps/gui/ web root — index.html / app.js / styles.css). Must be set
+     * before start(), or left empty to disable static serving (404 everything).
+     * Read-only after start(): only the I/O thread reads it, no locking needed.
+     */
+    void set_web_root(std::string root) { web_root_ = std::move(root); }
+
     /** Stop the I/O thread and close all sockets. Safe to call if not started. */
     void stop();
 
@@ -61,6 +71,7 @@ private:
     bool handle_client(SocketHandle client);
     bool send_frame(uint8_t opcode, const uint8_t* data, size_t len);
 
+    std::string  web_root_;   // static-file root for plain HTTP GETs (set before start())
     SocketHandle listen_sock_ = kInvalid;
     std::atomic<SocketHandle> client_{kInvalid};
     std::thread io_thread_;

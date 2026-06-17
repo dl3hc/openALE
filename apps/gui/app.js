@@ -34,6 +34,10 @@ function connectBridge() {
   try { ws = new WebSocket(bridgeWsUrl()); }
   catch { return; }
   bridgeWs = ws;
+  // Spectrum frames arrive as binary; without this they'd be Blobs and the
+  // `ev.data instanceof ArrayBuffer` check below would never match → waterfall
+  // would never see real FFT data.
+  ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
     bridgeConnected = true;
@@ -371,6 +375,7 @@ function setStatus(label, cls) {
     b.textContent = on ? '■ Stop' : '▶ Scan';
     b.classList.toggle('scan-on', on);
   }
+  if (typeof updateScanBtn === 'function') updateScanBtn();  // keep disabled state in sync with wfState
 }
 
 function showInc(show) {
@@ -628,6 +633,24 @@ function updateRigFields() {
 // bridge's AUDIO_DEVICES (the option value is the bare name the bridge's
 // AudioDevice::open() substring-matches — "IN: "/"OUT: " prefix stripped).
 // Not connected: WebAudio enumeration as a demo placeholder.
+// Remember the operator's device choice so reopening Settings (which rebuilds
+// the <option> lists from scratch) doesn't reset it to the first entry.
+let audioInSelected  = '';
+let audioOutSelected = '';
+
+// Re-select a remembered device if it's still present in the rebuilt list.
+function restoreAudioSelection() {
+  const sel = (id, want) => {
+    const el = document.getElementById(id);
+    if (want && [...el.options].some(o => o.value === want)) el.value = want;
+  };
+  sel('audioIn',  audioInSelected);
+  sel('audioOut', audioOutSelected);
+}
+
+function onAudioInChange()  { audioInSelected  = document.getElementById('audioIn').value; }
+function onAudioOutChange() { audioOutSelected = document.getElementById('audioOut').value; }
+
 function enumDevices() {
   if (bridgeConnected) {
     bridgeSend('AUDIO_DEVICES', {}, (r) => {
@@ -636,6 +659,7 @@ function enumDevices() {
       const mkOpt = s => { const n = strip(s); return `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`; };
       document.getElementById('audioIn').innerHTML  = (r.inputs  || []).map(mkOpt).join('')  || '<option value="">— none —</option>';
       document.getElementById('audioOut').innerHTML = (r.outputs || []).map(mkOpt).join('') || '<option value="">— none —</option>';
+      restoreAudioSelection();
     });
     return;
   }
@@ -674,6 +698,7 @@ function openAudioDevice() {
   if (btn) btn.textContent = '⟳ Opening…';
   bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (r) => {
     audioOpen = !!r.ok;
+    if (r.ok) { audioInSelected = inName; audioOutSelected = outName; }  // remember the working choice
     if (btn) {
       btn.textContent = r.ok ? '■ Close Audio' : '🔌 Connect Audio';
       btn.classList.toggle('scan-on', !!r.ok);
@@ -863,6 +888,7 @@ function syncChannelsFromBridge() {
     }));
     renderChannels();
     renderNets();
+    updateScanBtn();   // channel count changed → refresh Scan button gating
   });
 }
 
@@ -870,6 +896,7 @@ function addCh() {
   channels.push({ id:nextFreeChannelId(channels), rx:'', tx:'', mode:'USB', usage:'BOTH', dir:'RX/TX', self:'', label:'', inhCall:false, inhSnd:false });
   renderChannels();
   renderNets();   // new channel id becomes selectable in net membership
+  updateScanBtn();
   const cards = document.querySelectorAll('#chBody .ch-card');
   const inps  = cards[cards.length - 1]?.querySelectorAll('.ch-inp');
   if (inps && inps[0]) inps[0].focus();   // focus the new card's RX Hz field (ID is no longer an input)
@@ -882,6 +909,7 @@ function delCh(i) {
   nets.forEach(n => { n.channelIds = n.channelIds.filter(id => id !== removedId); });  // mirrors unassign_channel_everywhere()
   renderChannels();
   renderNets();
+  updateScanBtn();
   if (bridgeConnected && rxHz) bridgeSend('CHANNEL_DEL', { rx_hz: rxHz }, () => { syncChannelsFromBridge(); syncNetsFromBridge(); });
 }
 
@@ -979,7 +1007,25 @@ function updateClock() {
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    SCAN TOGGLE  (header)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+// Channel-hopping needs a list to hop over: scanning is only meaningful with
+// >=2 channels. Below that the Scan button is disabled (see updateScanBtn).
+function scanEnabled() { return channels.length >= 2; }
+
+function updateScanBtn() {
+  const b = document.getElementById('scanBtn');
+  if (!b) return;
+  // Keep "Stop" clickable while actually scanning; otherwise gate on >=2 channels.
+  const ok = scanEnabled() || wfState === 'scanning';
+  b.disabled = !ok;
+  b.title = ok ? '' : 'Mindestens 2 Kanäle in den Einstellungen anlegen';
+}
+
 function toggleScan() {
+  // Stopping (currently scanning) is always allowed; only *starting* needs >=2.
+  if (wfState !== 'scanning' && !scanEnabled()) {
+    pushLog([['data', 'Scanning braucht ≥2 Kanäle']], 'miss');
+    return;
+  }
   if (bridgeConnected) { bridgeSend(wfState === 'scanning' ? 'AVAILABLE' : 'SCAN', {}); return; }
   // setStatus() reflects the button label/state; just flip scanning ⇄ idle.
   if (wfState === 'scanning') goIdle(); else goScanning();
@@ -1300,6 +1346,7 @@ renderLqa();
 updateClock();
 setInterval(updateClock, 1000);
 updateRadioDisplay();  // VFO display + mode/step highlight
-goScanning();          // boot in scanning state (demo default; overridden by syncAllFromBridge() on connect)
+goIdle();              // boot idle (Scan off); real state arrives via syncAllFromBridge()/STATUS on connect
+updateScanBtn();       // reflect channel count on the Scan button (>=2 channels required)
 updateSelfHeader();
 connectBridge();        // apps/ale_bridge.cpp — falls back to demo mode if not running

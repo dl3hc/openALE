@@ -351,7 +351,7 @@
 
           <div class="fg">
             <label class="flabel">RX Input Device</label>
-            <select class="fselect" id="audioIn">
+            <select class="fselect" id="audioIn" onchange="onAudioInChange()">
               <option>Loading…</option>
             </select>
             <div class="fhint">8 kHz mono source — receiver audio (CABLE Output, WASAPI loopback, etc.).</div>
@@ -363,7 +363,7 @@
 
           <div class="fg">
             <label class="flabel">TX Output Device</label>
-            <select class="fselect" id="audioOut">
+            <select class="fselect" id="audioOut" onchange="onAudioOutChange()">
               <option>Loading…</option>
             </select>
             <div class="fhint">Audio routed to radio TX line (CABLE Input, line-out, virtual device).</div>

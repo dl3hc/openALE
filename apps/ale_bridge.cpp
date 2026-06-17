@@ -38,6 +38,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -49,6 +50,52 @@ namespace mj = bridge::minijson;
 
 static std::atomic<bool> g_running{true};
 static void sig_handler(int) { g_running = false; }
+
+// ── Web-root resolution ─────────────────────────────────────────────────────
+//
+// The GUI's static files live in the repo at apps/gui/, but the exe runs from
+// build/Debug/ (or possibly the repo root). Resolve apps/gui/ robustly by
+// walking up from the exe directory looking for apps/gui/index.html, with a few
+// CWD fallbacks. Returns "" if not found (static serving then 404s — the GUI
+// can still be opened via file:// as before).
+
+static bool file_exists(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    return static_cast<bool>(f);
+}
+
+#ifdef _WIN32
+static std::string exe_dir() {
+    wchar_t buf[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (n == 0 || n == MAX_PATH) return "";
+    int len = WideCharToMultiByte(CP_UTF8, 0, buf, static_cast<int>(n), nullptr, 0, nullptr, nullptr);
+    std::string s(static_cast<size_t>(len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, buf, static_cast<int>(n), s.data(), len, nullptr, nullptr);
+    for (char& c : s) if (c == '\\') c = '/';
+    const size_t slash = s.find_last_of('/');
+    return slash == std::string::npos ? "" : s.substr(0, slash);
+}
+#else
+static std::string exe_dir() { return ""; }
+#endif
+
+static std::string resolve_web_root() {
+    std::vector<std::string> roots;
+    const std::string ed = exe_dir();
+    if (!ed.empty()) {
+        std::string up = ed;
+        for (int i = 0; i < 6; ++i) {       // exe dir + up to 5 parents
+            roots.push_back(up + "/apps/gui");
+            up += "/..";
+        }
+    }
+    roots.push_back("apps/gui");
+    roots.push_back("./apps/gui");
+    for (const auto& r : roots)
+        if (file_exists(r + "/index.html")) return r;
+    return "";
+}
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
@@ -154,6 +201,18 @@ static mj::Value make_event(const std::string& name) {
     return e;
 }
 
+// Assemble the pal::create_radio() spec from structured GUI fields (so the GUI
+// never needs to know the hamlib spec syntax). "" for the "none" backend.
+static std::string build_radio_spec(const mj::Value& msg) {
+    const std::string backend = msg.get_string("backend", "netrigctl");
+    if (backend == "none") return "";
+    if (backend == "serial")
+        return "hamlib:" + msg.get_string("model", "1") + ":" + msg.get_string("serial");
+    // netrigctl (TCP rigctld) — hamlib model 2 = NET_RIGCTL
+    return "hamlib:2:tcp://" + msg.get_string("host", "127.0.0.1")
+         + ":" + msg.get_string("port", "4532");
+}
+
 // The bridge owns the audio device and radio (both runtime-settable from the
 // GUI now that there are no startup flags). dispatch_command() needs to reach
 // them — not just the controller — to open/close/connect on command. Pointers,
@@ -186,7 +245,17 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("call_duration_s", mj::Value::number(ctrl.get_call_duration_seconds()));
         return mj::dump(r);
     }
-    if (cmd == "SCAN")      { ctrl.start_scanning();  return mj::dump(make_reply(msg, true)); }
+    if (cmd == "SCAN") {
+        // Scanning hops over a channel list — needs >=2. Bounce non-GUI clients
+        // cleanly too (the GUI already greys the Scan button out below 2).
+        if (ctrl.channels().size() < 2) {
+            mj::Value r = make_reply(msg, false);
+            r.set("error", mj::Value::string("need >=2 channels to scan"));
+            return mj::dump(r);
+        }
+        ctrl.start_scanning();
+        return mj::dump(make_reply(msg, true));
+    }
     if (cmd == "AVAILABLE") { ctrl.start_available();  return mj::dump(make_reply(msg, true)); }
 
     if (cmd == "CALL") {
@@ -393,20 +462,42 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("level", mj::Value::number(ctrl.get_audio_input_level()));
         return mj::dump(r);
     }
+    if (cmd == "RIG_TEST") {
+        // Non-committal reachability probe — does NOT attach the radio to the
+        // controller or change the live connection. If a radio is already
+        // attached, test that one (a 2nd connection to the same port/host would
+        // just fail); otherwise bring up a throwaway radio, probe, tear it down.
+        if (*ctx.radio) {
+            mj::Value r = make_reply(msg, true);
+            r.set("reachable", mj::Value::boolean(ctrl.test_rig_connection()));
+            r.set("status", mj::Value::string(ctrl.get_rig_connection_status()));
+            return mj::dump(r);
+        }
+        const std::string spec = build_radio_spec(msg);
+        if (spec.empty()) {
+            mj::Value r = make_reply(msg, true);
+            r.set("reachable", mj::Value::boolean(false));
+            r.set("status", mj::Value::string("no backend selected"));
+            return mj::dump(r);
+        }
+        auto probe = pal::create_radio(spec);
+        const bool reachable = probe && probe->initialize() && probe->start() && probe->is_ready();
+        if (probe) probe->stop();
+        mj::Value r = make_reply(msg, true);
+        r.set("reachable", mj::Value::boolean(reachable));
+        r.set("status", mj::Value::string(reachable ? "reachable" : "unreachable"));
+        if (!reachable) r.set("error", mj::Value::string("radio not reachable (" + spec + ")"));
+        return mj::dump(r);
+    }
     if (cmd == "RIG_CONNECT") {
-        // Assemble the create_radio() spec from structured GUI fields so the
-        // GUI never has to know the hamlib spec syntax (src/PAL/radio.cpp).
-        const std::string backend = msg.get_string("backend", "netrigctl");
         // Tear down any existing radio first.
         if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
-        if (backend == "none") return mj::dump(make_reply(msg, true));
-
-        std::string spec;
-        if (backend == "serial") {
-            spec = "hamlib:" + msg.get_string("model", "1") + ":" + msg.get_string("serial");
-        } else {  // netrigctl (TCP rigctld) — hamlib model 2 = NET_RIGCTL
-            spec = "hamlib:2:tcp://" + msg.get_string("host", "127.0.0.1")
-                 + ":" + msg.get_string("port", "4532");
+        const std::string spec = build_radio_spec(msg);
+        if (spec.empty()) {  // "none" backend → stay disconnected, succeed
+            mj::Value r = make_reply(msg, true);
+            r.set("connected", mj::Value::boolean(false));
+            r.set("status", mj::Value::string("not attached"));
+            return mj::dump(r);
         }
         *ctx.radio = pal::create_radio(spec);
         bool ok = *ctx.radio && (*ctx.radio)->initialize() && (*ctx.radio)->start();
@@ -414,13 +505,17 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         else    ctx.radio->reset();
 
         mj::Value r = make_reply(msg, ok);
+        r.set("connected", mj::Value::boolean(ok && ctrl.test_rig_connection()));
         r.set("status", mj::Value::string(ctrl.get_rig_connection_status()));
         if (!ok) r.set("error", mj::Value::string("could not connect radio (" + spec + ")"));
         return mj::dump(r);
     }
     if (cmd == "RIG_DISCONNECT") {
         if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
-        return mj::dump(make_reply(msg, true));
+        mj::Value r = make_reply(msg, true);
+        r.set("connected", mj::Value::boolean(false));
+        r.set("status", mj::Value::string("not attached"));
+        return mj::dump(r);
     }
     if (cmd == "RIG_STATUS") {
         mj::Value r = make_reply(msg, true);
@@ -465,15 +560,20 @@ int main(int argc, char* argv[]) {
 #endif
 
     uint16_t port = 8765;
+    std::string web_root;   // empty → auto-resolve below
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<uint16_t>(std::atoi(argv[++i]));
+        } else if (std::strcmp(argv[i], "--webroot") == 0 && i + 1 < argc) {
+            web_root = argv[++i];
         } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
         }
     }
+
+    if (web_root.empty()) web_root = resolve_web_root();
 
     std::signal(SIGINT, sig_handler);
     std::signal(SIGTERM, sig_handler);
@@ -487,6 +587,7 @@ int main(int argc, char* argv[]) {
 
     // ── WebSocket server ─────────────────────────────────────────────────
     bridge::WsServer ws;
+    ws.set_web_root(web_root);   // serve apps/gui/ over HTTP on the same port
     if (!ws.start(port)) {
         std::fprintf(stderr, "ERROR: Failed to start WebSocket server on port %u.\n", port);
         return 1;
@@ -528,16 +629,25 @@ int main(int argc, char* argv[]) {
         e.set("text", mj::Value::string(text));
         ws.send_text(mj::dump(e));
     };
-    // Fires from the audio capture thread — send_binary() is mutex-protected
-    // in WsServer so this safely interleaves with main-thread sends.
+    // Fires inline from ctrl.feed_audio() below — i.e. on THIS main-loop thread,
+    // not the WASAPI audio thread (the modem's spectrum FFT runs in
+    // push_samples()). send_binary() is mutex-protected in WsServer regardless.
+    // See docs/THREADING.md.
     ctrl.set_spectrum_callback([&](const float* bins, size_t n, float /*hz_per_bin*/) {
         ws.send_binary(bins, n * sizeof(float));
     });
 
     std::printf("[ale_bridge] listening on port %u — waiting for GUI to configure\n", port);
+    if (web_root.empty())
+        std::printf("[ale_bridge] (no apps/gui/ found — open the GUI via file:// or pass --webroot)\n");
+    else
+        std::printf("[ale_bridge] open GUI:  http://localhost:%u/index.html\n", port);
     std::fflush(stdout);
 
-    ctrl.start_scanning();
+    // Start in "available" (IDLE, RX enabled) rather than scanning: scanning
+    // only makes sense once >=2 channels are configured from the GUI, and the
+    // GUI's Scan button drives SCANNING/IDLE explicitly (see Aufgabe 4/5).
+    ctrl.start_available();
 
     // ── Main loop — mirrors ale_cli.cpp exactly, plus WS command drain ─────
     std::vector<int16_t> rx_buf;
