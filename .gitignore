@@ -24,10 +24,10 @@ prompts/
 python/
 graphify-out/
 ALELite/
+docs/standards
 progress.md
 issues_preview/
 issues_preview.zip
-FEATURES_DESIGN.md
 REQUIREMENTS.md
 pc_ale_overview.md
-ALE_standard_188_141B_extracted.json
+feat_checklist.json
