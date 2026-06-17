@@ -62,6 +62,7 @@ function connectBridge() {
     bridgeConnected = false;
     bridgeWs = null;
     bridgePending.clear();
+    applyRigState(false);  // no bridge → demo mode: radio controls live again (mock)
     setTimeout(connectBridge, 3000);  // keep retrying quietly — bridge may start later
   };
 }
@@ -74,13 +75,14 @@ function syncAllFromBridge() {
   syncSelfAddrsFromBridge();
   syncLqaFromBridge();
   syncVfoFromBridge();
+  pollRigStatus();   // establish initial radio-control lock state
 }
 
 // No dedicated push event exists for VFO/PTT/audio-level changes (they're
 // either operator-driven from this same GUI, or — for PTT during a call —
 // fast-changing enough that polling beats adding a new event type for now).
 // Light poll only while connected.
-setInterval(() => { if (bridgeConnected) syncVfoFromBridge(); }, 2000);
+setInterval(() => { if (bridgeConnected) { syncVfoFromBridge(); pollRigStatus(); } }, 2000);
 
 function applyStatusReply(r) {
   if (!r.ok) return;
@@ -733,30 +735,115 @@ document.getElementById('cfgTxVol')?.addEventListener('input', function() {
   document.getElementById('txVolLbl').textContent = this.value + ' %';
 });
 
-// Connect the radio (own button). Assembles structured fields from the rig
-// section and sends RIG_CONNECT; the bridge builds the create_radio() spec
-// and reports back via RIG_STATUS. "None/Offline" backend → RIG_DISCONNECT.
+// Live CAT-link state (bridge attached a real pal::IRadio). Drives the Connect
+// button label and the radio-control lock (see setRadioCtrlEnabled).
+let rigConnected = false;
+
+// Read the structured rig fields the bridge needs for create_radio().
+function rigArgs() {
+  return {
+    backend: document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl',
+    host:    document.getElementById('rigHost').value,
+    port:    document.getElementById('rigPort').value,
+    serial:  document.getElementById('rigSerial').value,
+    model:   document.getElementById('rigModel').value,
+  };
+}
+
+// Test Connection — reachability probe ONLY. Does not establish or change the
+// live link (RIG_TEST builds a throwaway radio on the bridge, probes, tears it
+// down). Reports reachable/unreachable in the status pill.
 function testRig() {
   const el = document.getElementById('rigConnStatus');
   el.classList.remove('hidden', 'ok', 'err');
-
-  const backend = document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl';
-
   if (!bridgeConnected) {
     el.classList.add('err');
     el.textContent = '✗ Not connected to ale_bridge — start it first';
     return;
   }
+  el.textContent = '⟳ Testing…';
+  bridgeSend('RIG_TEST', rigArgs(), (r) => {
+    const ok = r.ok && r.reachable;
+    el.classList.add(ok ? 'ok' : 'err');
+    el.textContent = (ok ? '✓ reachable' : '✗ ') + (ok ? '' : (r.error || r.status || 'unreachable'));
+  });
+}
+
+// Connect / Disconnect — actually establishes (or tears down) the live CAT
+// link. RIG_CONNECT attaches a real radio to the controller; RIG_DISCONNECT
+// detaches it. Updates rigConnected + the radio-control lock from the reply.
+function connectRig() {
+  const el = document.getElementById('rigConnStatus');
+  el.classList.remove('hidden', 'ok', 'err');
+  if (!bridgeConnected) {
+    el.classList.add('err');
+    el.textContent = '✗ Not connected to ale_bridge — start it first';
+    return;
+  }
+  const backend = document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl';
+  if (rigConnected || backend === 'none') {
+    el.textContent = rigConnected ? '⟳ Disconnecting…' : '⟳ …';
+    bridgeSend('RIG_DISCONNECT', {}, (r) => {
+      applyRigState(false);
+      el.classList.add('ok');
+      el.textContent = backend === 'none' ? '○ offline (no radio)' : '○ disconnected';
+    });
+    return;
+  }
   el.textContent = '⟳ Connecting…';
-  bridgeSend('RIG_CONNECT', {
-    backend,
-    host:   document.getElementById('rigHost').value,
-    port:   document.getElementById('rigPort').value,
-    serial: document.getElementById('rigSerial').value,
-    model:  document.getElementById('rigModel').value,
-  }, (r) => {
-    el.classList.add(r.ok ? 'ok' : 'err');
-    el.textContent = (r.ok ? '✓ ' : '✗ ') + (r.status || r.error || (r.ok ? 'connected' : 'failed'));
+  bridgeSend('RIG_CONNECT', rigArgs(), (r) => {
+    const ok = !!(r.ok && r.connected);
+    applyRigState(ok);
+    el.classList.add(ok ? 'ok' : 'err');
+    el.textContent = (ok ? '✓ ' : '✗ ') + (r.status || r.error || (ok ? 'connected' : 'failed'));
+  });
+}
+
+// Central rig-state apply: reflects on the Connect button and (de)activates all
+// radio-control UI. Controls stay live in pure demo mode (no bridge) so the
+// standalone mock keeps working; once bridged, they require a real link.
+function applyRigState(connected) {
+  rigConnected = connected;
+  const btn = document.getElementById('rigConnectBtn');
+  if (btn) {
+    btn.textContent = connected ? '■ Disconnect' : '🔌 Connect';
+    btn.classList.toggle('scan-on', connected);
+  }
+  setRadioCtrlEnabled(!bridgeConnected || connected);
+}
+
+// Lock/unlock every control that drives the radio: channel steppers, PTT, the
+// VFO panel toggle and its whole keypad. When locking, also close the panel.
+function setRadioCtrlEnabled(on) {
+  ['pttBtn', 'radioToggle'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.disabled = !on;
+  });
+  document.querySelectorAll('.hdr-icon').forEach(b => b.disabled = !on);          // channel steppers
+  document.querySelectorAll('#radioPanel button').forEach(b => b.disabled = !on);  // VFO keypad
+  if (!on) {
+    const p = document.getElementById('radioPanel');
+    if (p && p.classList.contains('open')) {
+      p.classList.remove('open');
+      const t = document.getElementById('radioToggle'); if (t) t.textContent = '📻 Radio ▸';
+    }
+  }
+}
+
+// Poll the live rig state so a radio that drops out (cable pulled, rigctld died)
+// is noticed and the controls re-lock — and a recovered one re-enables them.
+function pollRigStatus() {
+  bridgeSend('RIG_STATUS', {}, (r) => {
+    if (!r.ok) return;
+    const connected = !!r.connected;
+    if (connected !== rigConnected) {  // log only on real transitions
+      if (rigConnected && !connected)
+        pushLog([['data', 'Radio connection lost — controls locked']], 'miss');
+      else if (connected)
+        pushLog([['data', 'Radio connected']], '');
+    }
+    // Re-assert every poll so the lock is correct even on the first sync (when
+    // both are already false) and tracks the bridge-connected state too.
+    applyRigState(connected);
   });
 }
 
@@ -1116,7 +1203,12 @@ function syncVfoFromBridge() {
   });
 }
 
+// Radio-control commands are locked while bridged without a live CAT link
+// (the buttons are also disabled; this guards programmatic/stray calls).
+function radioCtrlLocked() { return bridgeConnected && !rigConnected; }
+
 function stepChannel(dir) {
+  if (radioCtrlLocked()) return;
   if (bridgeConnected) { bridgeSend('VFO_STEP', { direction: dir }, () => syncVfoFromBridge()); return; }
   if (!radioChannels.length) return;
   radioChannel = (radioChannel + dir + radioChannels.length) % radioChannels.length;
@@ -1131,6 +1223,7 @@ function stepChannel(dir) {
 // get_ptt_state()'s doc). Left cosmetic-only even when connected; the
 // indicator still reflects the REAL state via syncVfoFromBridge().
 function togglePtt() {
+  if (radioCtrlLocked()) return;
   pttOn = !pttOn;
   const b = document.getElementById('pttBtn');
   b.classList.toggle('ptt-on', pttOn);
@@ -1142,6 +1235,7 @@ function radioKey(d)  { if (radioEntry.length < 9) { radioEntry += d; updateRadi
 function radioDel()   { radioEntry = radioEntry.slice(0, -1); updateRadioDisplay(); }
 function radioClear() { radioEntry = ''; updateRadioDisplay(); }
 function radioCommit(unitHz) {
+  if (radioCtrlLocked()) return;
   if (!radioEntry) return;
   const v = parseInt(radioEntry, 10);
   radioEntry = '';
@@ -1153,14 +1247,17 @@ function radioCommit(unitHz) {
 }
 function radioEnter()    { radioCommit(1000); }          // bare ENT commits as kHz
 function radioSetMode(m) {
+  if (radioCtrlLocked()) return;
   if (bridgeConnected) { bridgeSend('VFO_SET_MODE', { mode: m }, () => syncVfoFromBridge()); return; }
   radioMode = m; updateRadioDisplay();
 }
 function radioSetStep(hz){
+  if (radioCtrlLocked()) return;
   if (bridgeConnected) bridgeSend('VFO_SET_TUNE_STEP', { hz });
   radioStep = hz; updateRadioDisplay();
 }
 function radioNudge(dir) {
+  if (radioCtrlLocked()) return;
   radioEntry = '';
   if (bridgeConnected) { bridgeSend('VFO_NUDGE', { direction: dir }, () => syncVfoFromBridge()); return; }
   radioFreqHz = Math.max(0, Math.min(radioFreqHz + dir * radioStep, 999999999));

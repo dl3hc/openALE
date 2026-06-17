@@ -1280,6 +1280,12 @@
     }
     .hdr-icon:hover { background: var(--bg3); border-color: var(--border-md); color: var(--tx); }
 
+    /* Locked radio controls (no live CAT link — see setRadioCtrlEnabled) */
+    .hdr-btn:disabled, .hdr-icon:disabled, .radio-panel button:disabled {
+      opacity: 0.4; cursor: not-allowed; box-shadow: none;
+    }
+    .hdr-btn:disabled:hover, .hdr-icon:disabled:hover { background: transparent; border-color: var(--border); }
+
     /* PTT armed (transmitting) */
     #pttBtn.ptt-on {
       background: rgba(255,82,82,0.14); border-color: rgba(255,82,82,0.45);

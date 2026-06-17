@@ -468,9 +468,15 @@
             </div>
           </div>
 
-          <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-            <button class="btn-sm accent" onclick="testRig()">↺ Test Connection</button>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+            <button class="btn-sm" onclick="testRig()">↺ Test Connection</button>
+            <button class="btn-sm accent" id="rigConnectBtn" onclick="connectRig()">🔌 Connect</button>
             <div class="conn-status hidden" id="rigConnStatus"></div>
+          </div>
+          <div class="fhint" style="margin-top:8px">
+            <strong>Test Connection</strong> probes reachability only. <strong>Connect</strong>
+            establishes the live CAT link; while disconnected, all radio-control functions
+            (VFO, channel step, PTT) are locked.
           </div>
         </div><!-- /radio -->
 
