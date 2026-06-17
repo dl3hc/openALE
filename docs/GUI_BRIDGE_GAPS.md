@@ -42,33 +42,30 @@ that window and call `reject_call()` automatically when a call doesn't match
 policy, instead of waiting on the operator. The matching/filtering logic
 itself (contact list lookup, allcall/individual distinction) is unbuilt.
 
-## Audio device selection (set_audio_input_device / set_audio_output_device)
+## Audio device selection — RESOLVED (runtime, from the GUI)
 
-**Wrong layer, now resolved architecturally — but only at startup.**
-`ALEController` doesn't own the `AudioDevice` instance — the caller
-constructs it and passes it in via `set_audio_device()`. `apps/ale_bridge.cpp`
-is that caller: it opens the device named by `--in-device`/`--out-device` at
-startup and calls `ctrl.set_audio_device(audio.get())` before the main loop.
-`ALEController::enumerate_audio_inputs/outputs()` (real) backs the bridge's
-`AUDIO_DEVICES` command so the GUI can show device names.
+`apps/ale_bridge.cpp` owns the `AudioDevice` and opens/closes it at runtime on
+the GUI's `AUDIO_OPEN {in,out}` / `AUDIO_CLOSE` commands (the bridge starts
+bare — no startup audio flags). `AUDIO_DEVICES` enumerates via a throwaway
+`make_audio_device()->list_devices()` so the list works before any device is
+attached. Re-opening is safe because dispatch runs on the main-loop thread,
+sequential with `audio->tick()`. The GUI's Audio settings section drives this
+via a dedicated "Connect Audio" button + device dropdowns.
 
-**Still missing:** a runtime "switch device while running" WS command. The
-bridge has no `AUDIO_SET_DEVICE` handler — re-opening a device while the
-audio thread is mid-callback needs the same careful stop/reopen/restart
-sequencing called out above, just not built yet. Today, changing devices
-means restarting `ale_bridge` with different `--in-device`/`--out-device`.
+**Rest gap:** TX volume / sample-rate fields in the GUI have no Core backing
+(8 kHz is fixed); they're display-only.
 
-## Rig backend / port configuration (set_rig_backend / set_rig_tcp_config / set_rig_serial_config)
+## Rig backend / port configuration — RESOLVED (runtime, from the GUI)
 
-**Wrong layer, now resolved architecturally — but only at startup.**
-`pal::IRadio` is constructed once via the `create_radio("hamlib:<model>:<port>")`
-factory string; `apps/ale_bridge.cpp` does this from `--radio SPEC` at startup
-and calls `ctrl.set_radio(radio.get())`. `test_rig_connection()`/
-`get_rig_connection_status()` back the bridge's `RIG_STATUS` command.
+`apps/ale_bridge.cpp` owns the `pal::IRadio` and (re)constructs it at runtime
+on `RIG_CONNECT {backend,host,port,serial,model}` (assembling the
+`create_radio("hamlib:<model>:<port>")` spec — model 2 for TCP netrigctl) /
+`RIG_DISCONNECT`. `RIG_STATUS` reports `test_rig_connection()`/
+`get_rig_connection_status()`. The GUI's Radio section "Test Connection"
+button drives this.
 
-**Still missing:** a runtime "change backend/port while running" WS command,
-same reasoning as audio devices above — today this means restarting
-`ale_bridge` with a different `--radio` value.
+**Rest gap:** the GUI baud-rate field is not applied — `HamlibRadio::configure_port`
+hardcodes 19200 (would need a Core change to make baud configurable).
 
 ## Sync/frequency-lock status (get_sync_lock_status)
 

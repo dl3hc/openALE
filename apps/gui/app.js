@@ -624,28 +624,77 @@ function updateRigFields() {
   document.getElementById('rigFieldsSerial').style.display = val === 'serial'    ? '' : 'none';
 }
 
-// Enumerate WebAudio devices for dropdowns
-async function enumDevices() {
-  try {
-    // Request mic permission so labels are populated
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    stream.getTracks().forEach(t => t.stop());
-    const devs = await navigator.mediaDevices.enumerateDevices();
-    const ins   = devs.filter(d => d.kind === 'audioinput');
-    const outs  = devs.filter(d => d.kind === 'audiooutput');
-    const mkOpt = d => `<option value="${d.deviceId}">${d.label || d.deviceId.slice(0,20)}</option>`;
-    document.getElementById('audioIn').innerHTML  = ins.map(mkOpt).join('');
-    document.getElementById('audioOut').innerHTML = outs.map(mkOpt).join('');
-  } catch {
-    document.getElementById('audioIn').innerHTML  = '<option>— permission denied —</option>';
-    document.getElementById('audioOut').innerHTML = '<option>— permission denied —</option>';
+// Populate the RX/TX device dropdowns. Connected: real WASAPI devices from the
+// bridge's AUDIO_DEVICES (the option value is the bare name the bridge's
+// AudioDevice::open() substring-matches — "IN: "/"OUT: " prefix stripped).
+// Not connected: WebAudio enumeration as a demo placeholder.
+function enumDevices() {
+  if (bridgeConnected) {
+    bridgeSend('AUDIO_DEVICES', {}, (r) => {
+      if (!r.ok) return;
+      const strip = s => s.replace(/^(IN:|OUT:)\s*/, '');
+      const mkOpt = s => { const n = strip(s); return `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`; };
+      document.getElementById('audioIn').innerHTML  = (r.inputs  || []).map(mkOpt).join('')  || '<option value="">— none —</option>';
+      document.getElementById('audioOut').innerHTML = (r.outputs || []).map(mkOpt).join('') || '<option value="">— none —</option>';
+    });
+    return;
   }
+  // Demo fallback (no bridge): show whatever the browser exposes.
+  (async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(t => t.stop());
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      const mkOpt = d => `<option value="${d.deviceId}">${d.label || d.deviceId.slice(0,20)}</option>`;
+      document.getElementById('audioIn').innerHTML  = devs.filter(d => d.kind === 'audioinput').map(mkOpt).join('');
+      document.getElementById('audioOut').innerHTML = devs.filter(d => d.kind === 'audiooutput').map(mkOpt).join('');
+    } catch {
+      document.getElementById('audioIn').innerHTML  = '<option>— start ale_bridge to list devices —</option>';
+      document.getElementById('audioOut').innerHTML = '<option>— start ale_bridge to list devices —</option>';
+    }
+  })();
 }
 
-// Animate level meter with a demo sine wave (real backend sends real RMS)
+// Dedicated audio Connect/Close (own button, not the settings Save). Sends
+// AUDIO_OPEN with the selected device names; the bridge opens the real WASAPI
+// device and attaches it to the controller (ale_bridge.cpp AUDIO_OPEN).
+let audioOpen = false;
+function openAudioDevice() {
+  if (!bridgeConnected) { return; }
+  const btn = document.getElementById('audioConnectBtn');
+  if (audioOpen) {
+    bridgeSend('AUDIO_CLOSE', {}, () => {
+      audioOpen = false;
+      if (btn) { btn.textContent = '🔌 Connect Audio'; btn.classList.remove('scan-on'); }
+    });
+    return;
+  }
+  const inName  = document.getElementById('audioIn').value;
+  const outName = document.getElementById('audioOut').value;
+  if (btn) btn.textContent = '⟳ Opening…';
+  bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (r) => {
+    audioOpen = !!r.ok;
+    if (btn) {
+      btn.textContent = r.ok ? '■ Close Audio' : '🔌 Connect Audio';
+      btn.classList.toggle('scan-on', !!r.ok);
+    }
+    if (!r.ok) pushLog([['data', 'Audio open failed: ' + (r.error || '?')]], 'miss');
+  });
+}
+
+// Level meter: real RMS from the bridge (AUDIO_LEVEL) when connected, else a
+// demo sine. Toggle on/off.
 let levelTimer = null;
 function testAudio() {
   if (levelTimer) { clearInterval(levelTimer); levelTimer = null; return; }
+  if (bridgeConnected) {
+    levelTimer = setInterval(() => {
+      bridgeSend('AUDIO_LEVEL', {}, (r) => {
+        if (r.ok) document.getElementById('levelBarIn').style.width = Math.round(Math.min(1, r.level) * 100) + '%';
+      });
+    }, 120);
+    return;
+  }
   let phase = 0;
   levelTimer = setInterval(() => {
     phase += 0.18;
@@ -659,16 +708,31 @@ document.getElementById('cfgTxVol')?.addEventListener('input', function() {
   document.getElementById('txVolLbl').textContent = this.value + ' %';
 });
 
-// Test rig connection (stub — real impl sends CMD:STATUS to WebSocket)
+// Connect the radio (own button). Assembles structured fields from the rig
+// section and sends RIG_CONNECT; the bridge builds the create_radio() spec
+// and reports back via RIG_STATUS. "None/Offline" backend → RIG_DISCONNECT.
 function testRig() {
   const el = document.getElementById('rigConnStatus');
   el.classList.remove('hidden', 'ok', 'err');
+
+  const backend = document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl';
+
+  if (!bridgeConnected) {
+    el.classList.add('err');
+    el.textContent = '✗ Not connected to ale_bridge — start it first';
+    return;
+  }
   el.textContent = '⟳ Connecting…';
-  setTimeout(() => {
-    const ok = Math.random() > 0.35;
-    el.classList.add(ok ? 'ok' : 'err');
-    el.textContent = ok ? '✓ rigctld reachable — IC-7300 (Hamlib 5.x)' : '✗ Connection refused — is rigctld running?';
-  }, 900);
+  bridgeSend('RIG_CONNECT', {
+    backend,
+    host:   document.getElementById('rigHost').value,
+    port:   document.getElementById('rigPort').value,
+    serial: document.getElementById('rigSerial').value,
+    model:  document.getElementById('rigModel').value,
+  }, (r) => {
+    el.classList.add(r.ok ? 'ok' : 'err');
+    el.textContent = (r.ok ? '✓ ' : '✗ ') + (r.status || r.error || (r.ok ? 'connected' : 'failed'));
+  });
 }
 
 // Channel table management — data-driven cards.

@@ -154,6 +154,16 @@ static mj::Value make_event(const std::string& name) {
     return e;
 }
 
+// The bridge owns the audio device and radio (both runtime-settable from the
+// GUI now that there are no startup flags). dispatch_command() needs to reach
+// them — not just the controller — to open/close/connect on command. Pointers,
+// because both can be null (offline) and get reset() at runtime.
+struct BridgeCtx {
+    ALEController*                 ctrl;
+    std::unique_ptr<AudioDevice>*  audio;
+    std::unique_ptr<pal::IRadio>*  radio;
+};
+
 // ── Command dispatch ────────────────────────────────────────────────────────
 //
 // Every command's reply is {"id":<echo>,"ok":bool,...}. "id" is whatever the
@@ -161,7 +171,11 @@ static mj::Value make_event(const std::string& name) {
 // AMD is the one command that goes through process_command() instead of a
 // typed method, because AMD-queueing has no dedicated typed entry point on
 // ALEController (see process_command()'s CMD:AMD handling).
-static std::string dispatch_command(ALEController& ctrl, const mj::Value& msg) {
+//
+// Runs on the main-loop thread (commands drained in the loop), so AUDIO_OPEN's
+// close+reopen is sequential with audio->tick() — no race.
+static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
+    ALEController& ctrl = *ctx.ctrl;   // keeps every existing `ctrl.` call below unchanged
     const std::string cmd = msg.get_string("cmd");
 
     if (cmd == "STATUS") {
@@ -346,15 +360,67 @@ static std::string dispatch_command(ALEController& ctrl, const mj::Value& msg) {
 
     // ── Audio / rig ──────────────────────────────────────────────────────
     if (cmd == "AUDIO_DEVICES") {
+        // Enumerate via a throwaway device — must work BEFORE any device is
+        // attached (ctrl.enumerate_audio_*() returns empty when none attached).
+        std::vector<std::string> inputs, outputs;
+        for (const auto& d : make_audio_device()->list_devices()) {
+            if (d.rfind("IN:", 0) == 0)       inputs.push_back(d);
+            else if (d.rfind("OUT:", 0) == 0) outputs.push_back(d);
+        }
         mj::Value r = make_reply(msg, true);
-        r.set("inputs", string_array(ctrl.enumerate_audio_inputs()));
-        r.set("outputs", string_array(ctrl.enumerate_audio_outputs()));
+        r.set("inputs", string_array(inputs));
+        r.set("outputs", string_array(outputs));
         return mj::dump(r);
+    }
+    if (cmd == "AUDIO_OPEN") {
+        // Close any currently-open device first (detach from controller so the
+        // symbol source / completion arming are torn down before close()).
+        if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); }
+        *ctx.audio = make_audio_device();
+        const bool ok = (*ctx.audio)->open(msg.get_string("in"), msg.get_string("out"));
+        if (ok) ctrl.set_audio_device(ctx.audio->get());
+        else    ctx.audio->reset();
+        mj::Value r = make_reply(msg, ok);
+        if (!ok) r.set("error", mj::Value::string("could not open audio device(s)"));
+        return mj::dump(r);
+    }
+    if (cmd == "AUDIO_CLOSE") {
+        if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); ctx.audio->reset(); }
+        return mj::dump(make_reply(msg, true));
     }
     if (cmd == "AUDIO_LEVEL") {
         mj::Value r = make_reply(msg, true);
         r.set("level", mj::Value::number(ctrl.get_audio_input_level()));
         return mj::dump(r);
+    }
+    if (cmd == "RIG_CONNECT") {
+        // Assemble the create_radio() spec from structured GUI fields so the
+        // GUI never has to know the hamlib spec syntax (src/PAL/radio.cpp).
+        const std::string backend = msg.get_string("backend", "netrigctl");
+        // Tear down any existing radio first.
+        if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
+        if (backend == "none") return mj::dump(make_reply(msg, true));
+
+        std::string spec;
+        if (backend == "serial") {
+            spec = "hamlib:" + msg.get_string("model", "1") + ":" + msg.get_string("serial");
+        } else {  // netrigctl (TCP rigctld) — hamlib model 2 = NET_RIGCTL
+            spec = "hamlib:2:tcp://" + msg.get_string("host", "127.0.0.1")
+                 + ":" + msg.get_string("port", "4532");
+        }
+        *ctx.radio = pal::create_radio(spec);
+        bool ok = *ctx.radio && (*ctx.radio)->initialize() && (*ctx.radio)->start();
+        if (ok) ctrl.set_radio(ctx.radio->get());
+        else    ctx.radio->reset();
+
+        mj::Value r = make_reply(msg, ok);
+        r.set("status", mj::Value::string(ctrl.get_rig_connection_status()));
+        if (!ok) r.set("error", mj::Value::string("could not connect radio (" + spec + ")"));
+        return mj::dump(r);
+    }
+    if (cmd == "RIG_DISCONNECT") {
+        if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
+        return mj::dump(make_reply(msg, true));
     }
     if (cmd == "RIG_STATUS") {
         mj::Value r = make_reply(msg, true);
@@ -379,18 +445,15 @@ static void print_usage(const char* prog) {
     std::fprintf(stderr,
         "ALE 2G WebSocket bridge — connects apps/gui/ to a live ALEController\n"
         "\n"
+        "Starts bare and waits for a GUI to connect; everything (self address,\n"
+        "channels, audio device, radio, …) is configured from apps/gui/ over the\n"
+        "WebSocket. The only option is the listen port.\n"
+        "\n"
         "Usage:\n"
-        "  %s --self ADDR [--port 8765] [audio/radio options]\n"
+        "  %s [--port N]\n"
         "\n"
         "Options:\n"
-        "  --self       ADDR   Own ALE address (3-15 uppercase alphanumeric)  [required]\n"
-        "  --port       N      WebSocket listen port (default 8765)\n"
-        "  --in-device  NAME   Audio input  device substring (omit for offline mode)\n"
-        "  --out-device NAME   Audio output device substring (omit for offline mode)\n"
-        "  --list-devices      Print available audio devices and exit\n"
-        "  --channels   FILE   Load channel list from .ale file on startup;\n"
-        "                      auto-saves after CHANNEL_ADD/CHANNEL_DEL commands\n"
-        "  --radio      SPEC   Radio CAT/PTT, e.g. hamlib:229:COM3 (see ale_cli --help)\n",
+        "  --port N   WebSocket listen port (default 8765)\n",
         prog);
 }
 
@@ -401,39 +464,15 @@ int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
-    std::string self_addr, in_device, out_device, radio_spec, channels_file;
     uint16_t port = 8765;
-    bool list_devs = false;
 
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--self") == 0 && i + 1 < argc) {
-            self_addr = argv[++i];
-        } else if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+        if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<uint16_t>(std::atoi(argv[++i]));
-        } else if (std::strcmp(argv[i], "--in-device") == 0 && i + 1 < argc) {
-            in_device = argv[++i];
-        } else if (std::strcmp(argv[i], "--out-device") == 0 && i + 1 < argc) {
-            out_device = argv[++i];
-        } else if (std::strcmp(argv[i], "--list-devices") == 0) {
-            list_devs = true;
-        } else if (std::strcmp(argv[i], "--radio") == 0 && i + 1 < argc) {
-            radio_spec = argv[++i];
-        } else if (std::strcmp(argv[i], "--channels") == 0 && i + 1 < argc) {
-            channels_file = argv[++i];
+        } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
         }
-    }
-
-    if (list_devs) {
-        auto dev = make_audio_device();
-        std::printf("Available audio devices:\n");
-        for (const auto& n : dev->list_devices()) std::printf("  %s\n", n.c_str());
-        return 0;
-    }
-
-    if (self_addr.empty()) {
-        std::fprintf(stderr, "ERROR: --self ADDR is required.\n\n");
-        print_usage(argv[0]);
-        return 1;
     }
 
     std::signal(SIGINT, sig_handler);
@@ -441,15 +480,10 @@ int main(int argc, char* argv[]) {
 
     auto timer = pal::create_timer();
 
-    // ── Audio device (optional — offline mode if omitted) ──────────────────
+    // Audio device and radio start detached (offline). The GUI attaches them at
+    // runtime via AUDIO_OPEN / RIG_CONNECT — there are no startup flags for them.
     std::unique_ptr<AudioDevice> audio;
-    if (!in_device.empty() || !out_device.empty()) {
-        audio = make_audio_device();
-        if (!audio->open(in_device, out_device)) {
-            std::fprintf(stderr, "ERROR: Failed to open audio device(s). Run with --list-devices.\n");
-            return 1;
-        }
-    }
+    std::unique_ptr<pal::IRadio> radio;
 
     // ── WebSocket server ─────────────────────────────────────────────────
     bridge::WsServer ws;
@@ -459,27 +493,13 @@ int main(int argc, char* argv[]) {
     }
 
     // ── ALE controller ───────────────────────────────────────────────────
+    // Bare start: no self address yet (the GUI sets it via SELF_ADDR_ADD, which
+    // makes the first entry primary → set_self_address). The SM won't recognise
+    // calls until then, which is correct for an unconfigured station.
     ALEController ctrl;
-    ctrl.set_self_address(self_addr);
     ctrl.set_target_scan_channels(0);
 
-    if (!channels_file.empty()) {
-        ctrl.set_channel_file(channels_file);
-        ctrl.load_channels(channels_file);
-    }
-    if (audio) ctrl.set_audio_device(audio.get());
-
-    std::unique_ptr<pal::IRadio> radio;
-    if (!radio_spec.empty()) {
-        radio = pal::create_radio(radio_spec);
-        if (radio && radio->initialize() && radio->start()) {
-            ctrl.set_radio(radio.get());
-        } else {
-            std::fprintf(stderr, "WARNING: Could not connect to radio '%s' — continuing without it.\n",
-                         radio_spec.c_str());
-            radio.reset();
-        }
-    }
+    BridgeCtx ctx{ &ctrl, &audio, &radio };
 
     // ── Event push ───────────────────────────────────────────────────────
     ctrl.on_status_changed = [&](const std::string& m) {
@@ -514,8 +534,7 @@ int main(int argc, char* argv[]) {
         ws.send_binary(bins, n * sizeof(float));
     });
 
-    std::printf("[ale_bridge] self=%s port=%u %s\n", self_addr.c_str(), port,
-                audio ? "(audio attached)" : "(offline mode)");
+    std::printf("[ale_bridge] listening on port %u — waiting for GUI to configure\n", port);
     std::fflush(stdout);
 
     ctrl.start_scanning();
@@ -537,7 +556,7 @@ int main(int argc, char* argv[]) {
         std::string raw;
         while (ws.pop_message(raw)) {
             const mj::Value parsed = mj::parse(raw);
-            ws.send_text(dispatch_command(ctrl, parsed));
+            ws.send_text(dispatch_command(ctx, parsed));
         }
 
         const ALEState s = ctrl.state();
