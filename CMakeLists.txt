@@ -45,7 +45,6 @@ target_include_directories(ale_fsk_core PUBLIC
 # FEC layer
 add_library(ale_fec
     src/FEC/golay.cpp
-    src/FEC/interleaver.cpp
     src/FEC/word_interleaver.cpp
     src/FEC/ale_fec_codec.cpp
 )

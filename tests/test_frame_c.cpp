@@ -14,7 +14,7 @@
  *
  * Build:
  *   g++ -std=c++17 -I include \
- *       src/FEC/golay.cpp src/FEC/interleaver.cpp src/FEC/word_interleaver.cpp \
+ *       src/FEC/word_interleaver.cpp \
  *       src/FEC/ale_fec_codec.cpp src/Word/ale_word.cpp src/Word/address_encoder.cpp \
  *       src/Word/ale_sequence.cpp src/FSK/tone_generator.cpp src/Modem/ale2g_modem.cpp \
  *       src/Protocol/Control/ale_state_machine.cpp \

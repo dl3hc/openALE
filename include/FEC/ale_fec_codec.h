@@ -18,7 +18,6 @@
 #pragma once
 
 #include "FEC/golay.h"
-#include "FEC/interleaver.h"
 #include "FEC/word_interleaver.h"
 #include <cstdint>
 
@@ -72,22 +71,6 @@ public:
     static Golay::DecodeResult decode_word(uint32_t codeword, uint16_t& output,
                                            GolayMode mode = GolayMode::Mode3_4);
 
-    /**
-     * Interleave symbol bursts for data channel protection.
-     * Operates in-place on successive Interleaver::BLOCK_SIZE-symbol blocks.
-     *
-     * \param symbols  Symbol buffer
-     * \param count    Total number of symbols
-     */
-    static void interleave_symbols(uint8_t* symbols, uint32_t count);
-
-    /**
-     * Deinterleave received symbol bursts (inverse of interleave_symbols).
-     *
-     * \param symbols  Symbol buffer
-     * \param count    Total number of symbols
-     */
-    static void deinterleave_symbols(uint8_t* symbols, uint32_t count);
 
     /**
      * Interleave a GolayCoded word into a 49-bit transmitted word — step 2 of TX pipeline.

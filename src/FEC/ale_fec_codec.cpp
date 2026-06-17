@@ -42,21 +42,6 @@ Golay::DecodeResult ALEFECCodec::decode_word(uint32_t codeword, uint16_t& output
     return Golay::decode(codeword, output, mode);
 }
 
-void ALEFECCodec::interleave_symbols(uint8_t* symbols, uint32_t count)
-{
-    for (uint32_t offset = 0; offset + Interleaver::BLOCK_SIZE <= count;
-         offset += Interleaver::BLOCK_SIZE) {
-        Interleaver::interleave(symbols + offset, Interleaver::BLOCK_SIZE);
-    }
-}
-
-void ALEFECCodec::deinterleave_symbols(uint8_t* symbols, uint32_t count)
-{
-    for (uint32_t offset = 0; offset + Interleaver::BLOCK_SIZE <= count;
-         offset += Interleaver::BLOCK_SIZE) {
-        Interleaver::deinterleave(symbols + offset, Interleaver::BLOCK_SIZE);
-    }
-}
 
 uint64_t ALEFECCodec::interleave_word(const GolayCoded& coded)
 {
