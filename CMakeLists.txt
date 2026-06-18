@@ -398,52 +398,52 @@ target_link_libraries(test_protocol ale_stores ale_protocol ale_fsk_core ale_fec
 target_include_directories(test_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME Protocol COMMAND test_protocol)
 
-add_executable(test_state_machine tests/features/state_machine/unit/test_state_machine.cpp)
+add_executable(test_state_machine tests/link/unit/test_state_machine.cpp)
 target_link_libraries(test_state_machine ale_link ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_state_machine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME StateMachine COMMAND test_state_machine)
 
-add_executable(test_aqc_parser tests/features/aqc/unit/test_aqc_parser.cpp)
+add_executable(test_aqc_parser tests/aqc/unit/test_aqc_parser.cpp)
 target_link_libraries(test_aqc_parser ale_aqc ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_aqc_parser PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AQCParser COMMAND test_aqc_parser)
 
-add_executable(test_aqc_crc tests/features/aqc/unit/test_aqc_crc.cpp)
+add_executable(test_aqc_crc tests/aqc/unit/test_aqc_crc.cpp)
 target_link_libraries(test_aqc_crc ale_aqc ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_aqc_crc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AQCCRC COMMAND test_aqc_crc)
 
-add_executable(test_aqc_backward_compat tests/features/aqc/integration/test_aqc_backward_compat.cpp)
+add_executable(test_aqc_backward_compat tests/aqc/integration/test_aqc_backward_compat.cpp)
 target_link_libraries(test_aqc_backward_compat ale_aqc ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_aqc_backward_compat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AQCBackwardCompat COMMAND test_aqc_backward_compat)
 
-add_executable(test_fs1052_frames tests/features/fs1052/unit/test_fs1052_frames.cpp)
+add_executable(test_fs1052_frames tests/gen/unit/test_fs1052_frames.cpp)
 target_link_libraries(test_fs1052_frames ale_fs1052 ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_fs1052_frames PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FS1052Frames COMMAND test_fs1052_frames)
 
-add_executable(test_fs1052_arq tests/features/fs1052/unit/test_fs1052_arq.cpp)
+add_executable(test_fs1052_arq tests/gen/unit/test_fs1052_arq.cpp)
 target_link_libraries(test_fs1052_arq ale_fs1052 ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_fs1052_arq PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FS1052ARQ COMMAND test_fs1052_arq)
 
-add_executable(test_lqa_database tests/features/lqa/unit/test_lqa_database.cpp)
+add_executable(test_lqa_database tests/gen/unit/test_lqa_database.cpp)
 target_link_libraries(test_lqa_database ale_lqa ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_database PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME LQADatabase COMMAND test_lqa_database)
 
-add_executable(test_lqa_metrics tests/features/lqa/unit/test_lqa_metrics.cpp)
+add_executable(test_lqa_metrics tests/chan/unit/test_lqa_metrics.cpp)
 target_link_libraries(test_lqa_metrics ale_lqa ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_metrics PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME LQAMetrics COMMAND test_lqa_metrics)
 
-add_executable(test_lqa_analyzer tests/features/lqa/unit/test_lqa_analyzer.cpp)
+add_executable(test_lqa_analyzer tests/chan/unit/test_lqa_analyzer.cpp)
 target_link_libraries(test_lqa_analyzer ale_lqa ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_analyzer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME LQAAnalyzer COMMAND test_lqa_analyzer)
 
-add_executable(test_address_encoder tests/word/unit/test_address_encoder.cpp)
+add_executable(test_address_encoder tests/addr/unit/test_address_encoder.cpp)
 target_link_libraries(test_address_encoder ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_address_encoder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AddressEncoder COMMAND test_address_encoder)
@@ -453,12 +453,12 @@ target_link_libraries(test_ale_calling ale_link ale_protocol ale_fsk_core ale_fe
 target_include_directories(test_ale_calling PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ALECalling COMMAND test_ale_calling)
 
-add_executable(test_frame tests/waveform/unit/test_frame.cpp)
+add_executable(test_frame tests/frame/unit/test_frame.cpp)
 target_link_libraries(test_frame ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_frame PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME Frame COMMAND test_frame)
 
-add_executable(test_frame_c tests/waveform/integration/test_frame_c.cpp)
+add_executable(test_frame_c tests/frame/integration/test_frame_c.cpp)
 target_link_libraries(test_frame_c ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_frame_c PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FrameC COMMAND test_frame_c)
@@ -468,12 +468,12 @@ target_link_libraries(test_resampler_path ale_app_core ale_link ale_modem ale_pr
 target_include_directories(test_resampler_path PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ResamplerPath COMMAND test_resampler_path)
 
-add_executable(test_channel_net_store tests/features/channel_net/unit/test_channel_net_store.cpp)
+add_executable(test_channel_net_store tests/chan/unit/test_channel_net_store.cpp)
 target_link_libraries(test_channel_net_store ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_channel_net_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ChannelNetStore COMMAND test_channel_net_store)
 
-add_executable(test_ws_bridge_utils tests/features/ws_bridge/unit/test_ws_bridge_utils.cpp)
+add_executable(test_ws_bridge_utils tests/gen/unit/test_ws_bridge_utils.cpp)
 target_include_directories(test_ws_bridge_utils PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
 add_test(NAME WsBridgeUtils COMMAND test_ws_bridge_utils)
 
@@ -482,22 +482,22 @@ target_link_libraries(test_roundtrip ale_link ale_modem ale_protocol ale_fsk_cor
 target_include_directories(test_roundtrip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME Roundtrip COMMAND test_roundtrip)
 
-add_executable(test_codec tests/general/integration/test_codec.cpp)
+add_executable(test_codec tests/gen/integration/test_codec.cpp)
 target_link_libraries(test_codec ale_codec ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_codec PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME Codec COMMAND test_codec)
 
-add_executable(test_pcale_interop tests/general/integration/test_pcale_interop.cpp)
+add_executable(test_pcale_interop tests/gen/integration/test_pcale_interop.cpp)
 target_link_libraries(test_pcale_interop ale_codec ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_pcale_interop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME PCALEInterop COMMAND test_pcale_interop)
 
-add_executable(test_decoder_robustness tests/waveform/integration/test_decoder_robustness.cpp)
+add_executable(test_decoder_robustness tests/sync/integration/test_decoder_robustness.cpp)
 target_link_libraries(test_decoder_robustness ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_decoder_robustness PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME DecoderRobustness COMMAND test_decoder_robustness)
 
-add_executable(test_architecture tests/architecture/integration/test_layering.cpp)
+add_executable(test_architecture tests/gen/integration/test_layering.cpp)
 target_compile_definitions(test_architecture PRIVATE PROJECT_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME Architecture COMMAND test_architecture)
 
