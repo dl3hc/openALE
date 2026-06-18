@@ -2,6 +2,7 @@
  * \file test_version_caps.cpp
  * \brief Unit tests for VERSION CMD encoding (AC-GEN-011-001)
  *        and CAPABILITIES QUERY encoding (AC-GEN-012-001)
+ *        and CAPABILITIES REPORT encoding (AC-GEN-012-002)
  *
  * Verifies:
  *   TEST 1  encode_version_cmd (summary) — CMD preamble is set
@@ -14,6 +15,9 @@
  *   TEST 8  encode_capabilities_query    — payload chars are 'c', '/', 'q'
  *   TEST 9  is_capabilities_query detects CAPABILITIES QUERY words
  *   TEST 10 non-capabilities-query words rejected by is_capabilities_query
+ *   TEST 11 encode_capabilities_report   — first word is CMD c/r
+ *   TEST 12 encode_capabilities_report   — 5 DATA/REP words follow (DATA,REP,DATA,REP,DATA)
+ *   TEST 13 is_capabilities_report detects c/r CMD word; rejects others
  */
 
 #include "Protocol/ale_version_caps.h"
@@ -238,9 +242,103 @@ void test_non_capabilities_query_rejected() {
     std::cout << "  CMD c/r (REPORT)  rejected           PASSED\n\n";
 }
 
+// ── TEST 11 ───────────────────────────────────────────────────────────────────
+void test_capabilities_report_cmd_word()
+{
+    std::cout << "[TEST 11] encode_capabilities_report — first word is CMD c/r\n";
+
+    CapabilitiesReport rpt{};
+    auto frame = encode_capabilities_report(rpt);
+
+    assert(frame[0].type  == PreambleType::CMD);
+    assert(frame[0].valid == true);
+
+    const char c0 = static_cast<char>((frame[0].raw_payload >> 14u) & 0x7Fu);
+    const char c1 = static_cast<char>((frame[0].raw_payload >>  7u) & 0x7Fu);
+    const char c2 = static_cast<char>((frame[0].raw_payload >>  0u) & 0x7Fu);
+
+    assert(c0 == 'c');
+    assert(c1 == '/');
+    assert(c2 == 'r');
+
+    assert(frame[0].address[0] == 'c');
+    assert(frame[0].address[1] == '/');
+    assert(frame[0].address[2] == 'r');
+    assert(frame[0].address[3] == '\0');
+
+    std::cout << "  CMD preamble          PASSED\n";
+    std::cout << "  payload 'c'/'/'/'r'   PASSED\n\n";
+}
+
+// ── TEST 12 ───────────────────────────────────────────────────────────────────
+void test_capabilities_report_five_data_words()
+{
+    std::cout << "[TEST 12] encode_capabilities_report — 5 DATA/REP words, preamble sequence\n";
+
+    CapabilitiesReport rpt{};
+    auto frame = encode_capabilities_report(rpt);
+
+    // Exactly 6 words: 1 CMD + 5 DATA/REP
+    assert(frame.size() == 6u);
+
+    // Spec A.5.6.6.2.2: CMD, DATA, REP, DATA, REP, DATA
+    assert(frame[0].type == PreambleType::CMD);
+    assert(frame[1].type == PreambleType::DATA);
+    assert(frame[2].type == PreambleType::REP);
+    assert(frame[3].type == PreambleType::DATA);
+    assert(frame[4].type == PreambleType::REP);
+    assert(frame[5].type == PreambleType::DATA);
+
+    for (std::size_t i = 0; i < frame.size(); ++i)
+        assert(frame[i].valid == true);
+
+    std::cout << "  frame size = 6        PASSED\n";
+    std::cout << "  frame[0] = CMD        PASSED\n";
+    std::cout << "  frame[1] = DATA       PASSED\n";
+    std::cout << "  frame[2] = REP        PASSED\n";
+    std::cout << "  frame[3] = DATA       PASSED\n";
+    std::cout << "  frame[4] = REP        PASSED\n";
+    std::cout << "  frame[5] = DATA       PASSED\n\n";
+}
+
+// ── TEST 13 ───────────────────────────────────────────────────────────────────
+void test_is_capabilities_report_detects()
+{
+    std::cout << "[TEST 13] is_capabilities_report — detects c/r CMD; rejects others\n";
+
+    // Encoded report CMD word must be detected
+    CapabilitiesReport rpt{};
+    auto frame = encode_capabilities_report(rpt);
+    assert(is_capabilities_report(frame[0]) == true);
+
+    // c/q (query) is NOT a report
+    CapabilitiesQuery qry{true};
+    ALEWord qword = encode_capabilities_query(qry);
+    assert(is_capabilities_report(qword) == false);
+
+    // Non-CMD preamble with c/r payload is rejected
+    ALEWord data_cr;
+    data_cr.type        = PreambleType::DATA;
+    data_cr.raw_payload = (static_cast<uint32_t>('c') << 14u)
+                        | (static_cast<uint32_t>('/') <<  7u)
+                        |  static_cast<uint32_t>('r');
+    data_cr.valid = true;
+    assert(is_capabilities_report(data_cr) == false);
+
+    // VERSION CMD v/s is NOT a report
+    VersionCmd vcmd{KVC_ALL, KVF_SUMMARY};
+    ALEWord vword = encode_version_cmd(vcmd);
+    assert(is_capabilities_report(vword) == false);
+
+    std::cout << "  is_capabilities_report(c/r CMD)  = true   PASSED\n";
+    std::cout << "  is_capabilities_report(c/q CMD)  = false  PASSED\n";
+    std::cout << "  is_capabilities_report(c/r DATA) = false  PASSED\n";
+    std::cout << "  is_capabilities_report(v/s CMD)  = false  PASSED\n\n";
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 int main() {
-    std::cout << "=== test_version_caps (AC-GEN-011-001, AC-GEN-012-001) ===\n\n";
+    std::cout << "=== test_version_caps (AC-GEN-011-001, AC-GEN-012-001, AC-GEN-012-002) ===\n\n";
 
     test_summary_cmd_preamble();
     test_summary_payload_chars();
@@ -252,6 +350,9 @@ int main() {
     test_capabilities_query_payload_chars();
     test_is_capabilities_query_detects();
     test_non_capabilities_query_rejected();
+    test_capabilities_report_cmd_word();
+    test_capabilities_report_five_data_words();
+    test_is_capabilities_report_detects();
 
     std::cout << "=== ALL TESTS PASSED ===\n";
     return 0;

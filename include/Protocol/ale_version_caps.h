@@ -14,6 +14,7 @@
 #pragma once
 
 #include "Word/ale_word.h"
+#include <array>
 #include <cstdint>
 
 namespace ale {
@@ -77,6 +78,7 @@ VersionCmd decode_version_cmd(const ALEWord& word);
 static constexpr char CAPS_FAMILY_CHAR = 'c'; ///< 0x63 — capabilities family
 static constexpr char CAPS_SEP_CHAR    = '/'; ///< 0x2F — command separator
 static constexpr char CAPS_QUERY_CHAR  = 'q'; ///< 0x71 — query sub-type
+static constexpr char CAPS_REPORT_CHAR = 'r'; ///< 0x72 — report sub-type
 
 /**
  * \struct CapabilitiesQuery
@@ -102,6 +104,56 @@ ALEWord encode_capabilities_query(const CapabilitiesQuery& query);
  * Return true when \p word is a CMD word whose payload is 'c', '/', 'q'.
  */
 bool is_capabilities_query(const ALEWord& word);
+
+// ── CAPABILITIES REPORT (A.5.6.6.2.2) ────────────────────────────────────────
+
+/**
+ * \struct CapabilitiesReport
+ * Parameters for a CAPABILITIES Report frame (A.5.6.6.2.2).
+ *
+ * Timing fields use unsigned integers; flag fields are bool.
+ * All timing fields are stored without sign.
+ */
+struct CapabilitiesReport {
+    uint8_t  scan_rate_chps;     ///< Scan rate in channels per second (2, 5 or 10)
+    uint8_t  channels_scanned;   ///< Number of channels in the scan list
+    uint16_t max_tune_time_ms;   ///< Maximum tune time in milliseconds
+    uint16_t turnaround_time_ms; ///< Link turnaround time in milliseconds
+    uint16_t activity_timeout_s; ///< Activity timeout in seconds
+    uint16_t listen_time_ms;     ///< Listen time before transmitting in milliseconds
+
+    bool accept_all_calls;       ///< Accepts ALLCALL
+    bool accept_any_calls;       ///< Accepts ANYCALL
+    bool amd_enabled;            ///< AMD orderwire supported
+    bool dtm_enabled;            ///< DTM orderwire supported
+    bool dbm_enabled;            ///< DBM orderwire supported
+
+    uint8_t lp_levels_mask;      ///< Linking Protection levels supported (bitmask)
+    bool time_service_enabled;   ///< Time exchange service available
+    bool alqa_enabled;           ///< ALE Link Quality Analysis active
+    bool orderwire_enabled;      ///< Orderwire capability present
+    bool scheduling_enabled;     ///< Scheduling / time-slot service available
+};
+
+/**
+ * Encode a CAPABILITIES REPORT frame per MIL-STD-188-141B A.5.6.6.2.2.
+ *
+ * Returns exactly 6 ALEWords:
+ *   [0] CMD  — payload 'c'/'/'/'r'
+ *   [1] DATA — scan_rate_chps [20:13], channels_scanned [12:5]
+ *   [2] REP  — max_tune_time_ms/10 [20:13], turnaround_time_ms/10 [12:5]
+ *   [3] DATA — activity_timeout_s [20:10], listen_time_ms [9:0]
+ *   [4] REP  — feature-capability flags [20:6]
+ *   [5] DATA — reserved (zero)
+ *
+ * \return 6-element array: CMD word + 5 DATA/REP words (A.5.6.6.2.2).
+ */
+std::array<ALEWord, 6> encode_capabilities_report(const CapabilitiesReport& rpt);
+
+/**
+ * Return true when \p word is a CMD word whose payload is 'c', '/', 'r'.
+ */
+bool is_capabilities_report(const ALEWord& word);
 
 } // namespace version_caps
 } // namespace ale
