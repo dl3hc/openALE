@@ -208,11 +208,12 @@
       "id": "AC-GEN-009-003",
       "feature": "FEAT-GEN-009",
       "requirement": ["REQ-GEN-021"],
-      "title": "Always-Scan-Regel",
-      "description": "Nach Beendigung eines Links oder Anrufs kehrt das System automatisch in den SCANNING-Zustand zurück.",
+      "title": "Automatische Rückkehr in den Ausgangszustand",
+      "description": "Nach Beendigung eines Links oder Anrufs kehrt das System automatisch in den Zustand zurück, aus dem es gekommen ist.",
       "module": "Protocol/ale_state_machine",
-      "verification_hint": "Prüfe alle Terminal-Zustände (LINKED, ERROR) in ale_state_machine.cpp: Alle müssen nach Timeout oder Abschluss nach SCANNING transitieren.",
-      "status": "open"
+      "verification_hint": "Prüfe alle Terminal-Zustände (LINKED, ERROR, SCANNING etc.) in ale_state_machine.cpp: Alle müssen nach Timeout oder Abschluss in den Zustand transitieren, aus dem sie gekommen sind.",
+      "status": "closed",
+      "verification": "Implementierung vollständig in ale_state_machine.cpp: pre_link_state_ wird beim Eintritt in CALLING (L217) und HANDSHAKE (L244) auf den vorherigen Zustand gesetzt. LINK_TIMEOUT/LINK_TERMINATED in CALLING, HANDSHAKE und LINKED transitieren alle zu pre_link_state_ (L132, L137, L142). ERROR transitiert auf START_SCAN→SCANNING, sonst→IDLE. SOUNDING kehrt nach Ablauf zu SCANNING zurück. Tests in tests/link/unit/test_state_machine.cpp TEST 13 (test_return_to_origin_ac_gen_009_003): (a) SCANNING→CALLING→LINK_TIMEOUT→SCANNING PASS, (b) SCANNING→HANDSHAKE→LINK_TIMEOUT→SCANNING PASS, (c) SCANNING→HANDSHAKE→LINKED→LINK_TERMINATED→SCANNING PASS, (d) IDLE→CALLING→LINK_TIMEOUT→IDLE PASS. 13/13 Tests grün."
     },
 
     {

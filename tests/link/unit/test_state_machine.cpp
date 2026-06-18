@@ -736,6 +736,84 @@ bool test_always_listen_ac_gen_009_001() {
 }
 
 // ============================================================================
+// TEST 13: Automatische Rückkehr in den Ausgangszustand — AC-GEN-009-003
+//
+// After a call/link ends the SM must return to the state it came from
+// (IDLE or SCANNING), not always to IDLE.
+//
+// Sub-cases:
+//  a) SCANNING → CALLING       → LINK_TIMEOUT     → SCANNING
+//  b) SCANNING → HANDSHAKE     → LINK_TIMEOUT     → SCANNING
+//  c) SCANNING → HANDSHAKE     → LINKED
+//                              → LINK_TERMINATED  → SCANNING
+//  d) IDLE     → CALLING       → LINK_TIMEOUT     → IDLE (regression guard)
+// ============================================================================
+bool test_return_to_origin_ac_gen_009_003() {
+    std::cout << "\n[TEST 13] Automatische Rückkehr in den Ausgangszustand — AC-GEN-009-003\n";
+    std::cout << "=========================================================================\n";
+
+    bool all_pass = true;
+
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    // a) SCANNING → CALLING → LINK_TIMEOUT → SCANNING
+    {
+        ALEStateMachine sm;
+        ScanConfig cfg;
+        cfg.scan_list.push_back(Channel(7100000, "USB"));
+        sm.configure_scan(cfg);
+        sm.process_event(ALEEvent::START_SCAN);    // → SCANNING
+        sm.initiate_call("JOE");                   // → CALLING; pre_link_state_ = SCANNING
+        sm.process_event(ALEEvent::LINK_TIMEOUT);  // → pre_link_state_
+        check(sm.get_state() == ALEState::SCANNING,
+              "SCANNING → CALLING → LINK_TIMEOUT → SCANNING");
+    }
+
+    // b) SCANNING → HANDSHAKE → LINK_TIMEOUT → SCANNING
+    {
+        ALEStateMachine sm;
+        ScanConfig cfg;
+        cfg.scan_list.push_back(Channel(7100000, "USB"));
+        sm.configure_scan(cfg);
+        sm.process_event(ALEEvent::START_SCAN);      // → SCANNING
+        sm.process_event(ALEEvent::CALL_DETECTED);   // → HANDSHAKE; pre_link_state_ = SCANNING
+        sm.process_event(ALEEvent::LINK_TIMEOUT);    // → pre_link_state_
+        check(sm.get_state() == ALEState::SCANNING,
+              "SCANNING → HANDSHAKE → LINK_TIMEOUT → SCANNING");
+    }
+
+    // c) SCANNING → HANDSHAKE → LINKED → LINK_TERMINATED → SCANNING
+    {
+        ALEStateMachine sm;
+        ScanConfig cfg;
+        cfg.scan_list.push_back(Channel(7100000, "USB"));
+        sm.configure_scan(cfg);
+        sm.process_event(ALEEvent::START_SCAN);         // → SCANNING
+        sm.process_event(ALEEvent::CALL_DETECTED);      // → HANDSHAKE; pre_link_state_ = SCANNING
+        sm.process_event(ALEEvent::HANDSHAKE_COMPLETE); // → LINKED
+        sm.process_event(ALEEvent::LINK_TERMINATED);    // → pre_link_state_
+        check(sm.get_state() == ALEState::SCANNING,
+              "SCANNING → HANDSHAKE → LINKED → LINK_TERMINATED → SCANNING");
+    }
+
+    // d) IDLE → CALLING → LINK_TIMEOUT → IDLE (regression guard)
+    {
+        ALEStateMachine sm;
+        sm.process_event(ALEEvent::CALL_REQUEST);  // → CALLING; pre_link_state_ = IDLE
+        sm.process_event(ALEEvent::LINK_TIMEOUT);  // → IDLE
+        check(sm.get_state() == ALEState::IDLE,
+              "IDLE → CALLING → LINK_TIMEOUT → IDLE (regression)");
+    }
+
+    if (all_pass)
+        std::cout << "PASS: Automatische Rückkehr in den Ausgangszustand — AC-GEN-009-003\n";
+    return all_pass;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -761,11 +839,12 @@ int run_all_tests() {
     if (test_standard_scan_rate_td2()) { pass_count++; } else { fail_count++; }
     if (test_fast_scan_rate_td5()) { pass_count++; } else { fail_count++; }
     if (test_always_listen_ac_gen_009_001()) { pass_count++; } else { fail_count++; }
+    if (test_return_to_origin_ac_gen_009_003()) { pass_count++; } else { fail_count++; }
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
     std::cout << "║  Test Results                                              ║\n";
-    std::cout << "║  Passed: " << std::setw(2) << pass_count << "  Failed: " << std::setw(2) << fail_count 
+    std::cout << "║  Passed: " << std::setw(2) << pass_count << "  Failed: " << std::setw(2) << fail_count
               << "                                    ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n\n";
     
