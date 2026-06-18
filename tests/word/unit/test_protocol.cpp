@@ -587,6 +587,99 @@ bool test_phase3_validators() {
 }
 
 // ============================================================================
+// AC-WORD-001-001 — Bit-Layout: W1=bit23 (MSB), W24=bit0 (LSB)
+// Verifies exact bit positions: Preamble bits[23:21], Char1 bits[20:14],
+// Char2 bits[13:7], Char3 bits[6:0]. Encode formula: (preamble<<21)|(c1<<14)|(c2<<7)|c3.
+// ============================================================================
+
+bool test_ac_word_001_001_bit_layout()
+{
+    std::cout << "\n[AC-WORD-001-001] Bit-Layout: W1=bit23 (MSB), W24=bit0 (LSB)\n";
+    std::cout << "==================================================================\n";
+    bool all_pass = true;
+
+    // TO preamble = 2 (0b010); use distinct chars A=0x41, B=0x42, C=0x43
+    // Expected word24 = (2<<21) | (0x41<<14) | (0x42<<7) | 0x43
+    const uint32_t preamble_val = static_cast<uint8_t>(PreambleType::TO);
+    const char c1 = 'A', c2 = 'B', c3 = 'C';
+    const uint32_t expected_word = (preamble_val << 21)
+                                 | (static_cast<uint32_t>(c1) << 14)
+                                 | (static_cast<uint32_t>(c2) <<  7)
+                                 | (static_cast<uint32_t>(c3) <<  0);
+
+    // 1. encode_ascii produces the correct bit pattern
+    {
+        const char chars[3] = { c1, c2, c3 };
+        uint32_t payload = WordParser::encode_ascii(chars, PreambleType::TO);
+        uint32_t word24  = (preamble_val << 21) | payload;
+        bool pass = (word24 == expected_word);
+        std::cout << "  encode: (preamble<<21)|(c1<<14)|(c2<<7)|c3 = 0x"
+                  << std::hex << expected_word << std::dec
+                  << ": " << (pass ? "PASS" : "FAIL");
+        if (!pass) std::cout << " (got=0x" << std::hex << word24 << std::dec << ")";
+        std::cout << "\n";
+        all_pass &= pass;
+    }
+
+    // 2. Preamble extracted from bits[23:21] via >> 21
+    {
+        PreambleType extracted = WordParser::extract_preamble(expected_word);
+        bool pass = (static_cast<uint8_t>(extracted) == preamble_val);
+        std::cout << "  preamble bits[23:21] >>21 -> " << static_cast<int>(extracted)
+                  << ": " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // 3. Char1 sits at bits[20:14]: (payload >> 14) & 0x7F
+    {
+        uint32_t payload = WordParser::extract_payload(expected_word);
+        char got = static_cast<char>((payload >> 14) & 0x7F);
+        bool pass = (got == c1);
+        std::cout << "  Char1 bits[20:14] (payload>>14 & 0x7F) = '" << got
+                  << "': " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // 4. Char2 sits at bits[13:7]: (payload >> 7) & 0x7F
+    {
+        uint32_t payload = WordParser::extract_payload(expected_word);
+        char got = static_cast<char>((payload >> 7) & 0x7F);
+        bool pass = (got == c2);
+        std::cout << "  Char2 bits[13:7]  (payload>>7  & 0x7F) = '" << got
+                  << "': " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // 5. Char3 sits at bits[6:0]: payload & 0x7F
+    {
+        uint32_t payload = WordParser::extract_payload(expected_word);
+        char got = static_cast<char>(payload & 0x7F);
+        bool pass = (got == c3);
+        std::cout << "  Char3 bits[6:0]   (payload     & 0x7F) = '" << got
+                  << "': " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // 6. parse_from_bits full round-trip restores all fields correctly
+    {
+        WordParser wp;
+        ALEWord w;
+        bool ok = wp.parse_from_bits(expected_word, w);
+        bool pass = ok && (w.type == PreambleType::TO)
+                       && (w.address[0] == c1)
+                       && (w.address[1] == c2)
+                       && (w.address[2] == c3);
+        std::cout << "  parse_from_bits round-trip (TO/\"ABC\"): "
+                  << (pass ? "PASS" : "FAIL");
+        if (ok && !pass) std::cout << " (addr=\"" << w.address << "\")";
+        std::cout << "\n";
+        all_pass &= pass;
+    }
+
+    return all_pass;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -600,6 +693,7 @@ int run_all_tests() {
     int pass_count = 0;
     int fail_count = 0;
     
+    if (test_ac_word_001_001_bit_layout()) { pass_count++; } else { fail_count++; }
     if (test_word_parsing()) { pass_count++; } else { fail_count++; }
     if (test_ascii_codec()) { pass_count++; } else { fail_count++; }
     if (test_address_book()) { pass_count++; } else { fail_count++; }

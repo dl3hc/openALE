@@ -510,7 +510,8 @@
       "description": "Im 24-Bit-Word ist W1 das höchstwertige Bit (bit23) und W24 das niederwertigste Bit (bit0). Preamble sitzt in bits[23:21], Char1 in bits[20:14], Char2 in bits[13:7], Char3 in bits[6:0].",
       "module": "Word/ale_word",
       "verification_hint": "Prüfe ale_word.h: encode() muss (preamble << 21) | (c1 << 14) | (c2 << 7) | c3 berechnen. Preamble-Extraktion: word >> 21.",
-      "status": "open"
+      "status": "closed",
+      "verification": "Implementierung in ale_word.cpp korrekt: extract_preamble() via (word>>21)&0x07, decode_ascii() extrahiert c0=(payload>>14)&0x7F, c1=(payload>>7)&0x7F, c2=payload&0x7F, encode_ascii() setzt (c0<<14)|(c1<<7)|c2, make_word() bildet (type<<21)|payload. Dedizierter Test test_ac_word_001_001_bit_layout() in tests/word/unit/test_protocol.cpp ergänzt: prüft exaktes Bit-Layout für TO-Preamble (2<<21) mit 'A'=0x41,'B'=0x42,'C'=0x43 an bits[20:14]/[13:7]/[6:0]. Alle 6 Checks + 8/8 Suite-Tests PASS (2026-06-18)."
     },
     {
       "id": "AC-WORD-001-002",
