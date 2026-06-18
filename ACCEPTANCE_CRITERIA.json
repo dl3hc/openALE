@@ -247,7 +247,8 @@
       "description": "Das CMD VERSION-Wort verwendet die `v/s` Zeichensequenz im Payload. KVC-Komponenten-Bits sind gemäß Standard gesetzt.",
       "module": "Protocol/ale_version_caps",
       "verification_hint": "Suche in ale_version_caps.h/cpp nach VERSION-CMD-Konstruktion. Prüfe ob Payload 'v', '/', 's' (Basic-38-kodiert) enthält.",
-      "status": "open"
+      "status": "closed",
+      "verification": "encode_version_cmd() in src/Protocol/ale_version_caps.cpp erzeugt CMD-Wort mit 21-bit-Payload 'v'(0x76)/'/'(0x2F)/'s'(0x73). Tests in tests/gen/unit/test_version_caps.cpp (TEST 1-6) alle grün. Build: ale_version_caps.lib + test_version_caps.exe. CTest-Target: VersionCaps."
     },
 
     {

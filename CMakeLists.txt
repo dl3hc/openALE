@@ -78,6 +78,17 @@ target_include_directories(ale_aqc PUBLIC
 
 target_link_libraries(ale_aqc ale_protocol ale_fsk_core ale_fec)
 
+# Version/Capabilities protocol (FEAT-GEN-011, FEAT-GEN-012)
+add_library(ale_version_caps
+    src/Protocol/ale_version_caps.cpp
+)
+
+target_include_directories(ale_version_caps PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(ale_version_caps ale_protocol ale_fsk_core ale_fec)
+
 # ALE 2G Codec — word ↔ symbol-frame pipeline (encoder + decoder)
 add_library(ale_codec
     src/Codec/ale_encoder.cpp
@@ -427,6 +438,11 @@ add_executable(test_aqc_fixed_bit tests/aqc/unit/test_aqc_fixed_bit.cpp)
 target_link_libraries(test_aqc_fixed_bit ale_aqc ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_aqc_fixed_bit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AQCFixedBit COMMAND test_aqc_fixed_bit)
+
+add_executable(test_version_caps tests/gen/unit/test_version_caps.cpp)
+target_link_libraries(test_version_caps ale_version_caps ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_version_caps PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME VersionCaps COMMAND test_version_caps)
 
 add_executable(test_fs1052_frames tests/gen/unit/test_fs1052_frames.cpp)
 target_link_libraries(test_fs1052_frames ale_fs1052 ale_protocol ale_fsk_core ale_fec)
