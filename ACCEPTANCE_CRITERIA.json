@@ -634,7 +634,8 @@
       "description": "Die Decoder-Funktion gibt einen Status zurück: DECODE_OK (fehlerfreier Empfang), CORRECTED (1-3 Fehler korrigiert), DETECTED (4+ Fehler erkannt, nicht korrigiert).",
       "module": "FEC/golay",
       "verification_hint": "Prüfe golay.h auf DecodeResult-Enum oder äquivalente Status-Rückgabe. Alle drei Zustände müssen vorhanden sein.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_fec_002_002_decode_flags() in tests/fec/unit/test_fec_golay.cpp: (1) valid codeword → DECODE_OK, errors_corrected=0; (2) weight-1/2/3 errors → DECODE_CORRECTED with matching errors_corrected count and corrected output; (3) weight-4 error → DECODE_DETECTED. All three flag constants (DECODE_OK=0x00, DECODE_CORRECTED=0x01, DECODE_DETECTED=0xFE) present in golay.h. 13/13 Tests gruen."
     },
     {
       "id": "AC-FEC-003-001",

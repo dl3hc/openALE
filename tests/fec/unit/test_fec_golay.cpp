@@ -3,7 +3,7 @@
  * \brief Unit tests for Extended Golay (24,12) FEC codec and word interleaver
  *
  * Covers: AC-FEC-001-001, AC-FEC-001-002,
- *         AC-FEC-002-001,
+ *         AC-FEC-002-001, AC-FEC-002-002,
  *         AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
@@ -693,6 +693,69 @@ bool test_golay_correction_modes() {
     return true;
 }
 
+// AC-FEC-002-002: Decoder returns DECODE_OK, DECODE_CORRECTED, DECODE_DETECTED.
+// REQ-FEC-011 (FEAT-FEC-002, MIL-STD-188-141B A.5.2.2.2.2 / A.5.2.6)
+//
+// Verifies that all three flag constants are defined in golay.h and that the
+// decoder assigns each flag to the correct situation:
+//   DECODE_OK        — codeword has no errors (syndrome == 0)
+//   DECODE_CORRECTED — 1, 2, or 3 bit errors detected and corrected
+//   DECODE_DETECTED  — 4+ bit errors detected but not correctable
+bool test_ac_fec_002_002_decode_flags() {
+    std::cout << "\n[TEST FEC-12] AC-FEC-002-002: DECODE_OK / DECODE_CORRECTED / DECODE_DETECTED\n";
+    std::cout << "-------------------------------------------------------------------------------\n";
+
+    static constexpr uint16_t REF = 0x6C3;
+    const uint32_t cw = Golay::encode(REF);
+
+    // DECODE_OK: error-free codeword
+    {
+        uint16_t out = 0;
+        Golay::DecodeResult r = Golay::decode(cw, out);
+        if (r.flag != Golay::DECODE_OK || r.errors_corrected != 0 || out != REF) {
+            std::cout << "FAIL: clean codeword must return DECODE_OK, errors_corrected=0\n";
+            return false;
+        }
+        std::cout << "  DECODE_OK: syndrome=0 for valid codeword OK\n";
+    }
+
+    // DECODE_CORRECTED: weight 1, 2, 3
+    {
+        struct { uint32_t mask; uint8_t wt; } cases[] = {
+            { 0x000001u, 1 },
+            { 0x000003u, 2 },
+            { 0x000007u, 3 },
+        };
+        for (auto& c : cases) {
+            uint16_t out = 0;
+            Golay::DecodeResult r = Golay::decode(cw ^ c.mask, out);
+            if (r.flag != Golay::DECODE_CORRECTED || r.errors_corrected != c.wt || out != REF) {
+                std::cout << "FAIL: weight-" << (int)c.wt
+                          << " error must return DECODE_CORRECTED, errors_corrected="
+                          << (int)c.wt << "; got flag=0x" << std::hex << (int)r.flag
+                          << " ec=" << std::dec << (int)r.errors_corrected << "\n";
+                return false;
+            }
+        }
+        std::cout << "  DECODE_CORRECTED: weight 1/2/3 errors corrected, flag and count correct OK\n";
+    }
+
+    // DECODE_DETECTED: weight 4 (exceeds correction capacity)
+    {
+        uint16_t out = 0;
+        Golay::DecodeResult r = Golay::decode(cw ^ 0x0000000Fu, out);
+        if (r.flag != Golay::DECODE_DETECTED) {
+            std::cout << "FAIL: weight-4 error must return DECODE_DETECTED; got flag=0x"
+                      << std::hex << (int)r.flag << std::dec << "\n";
+            return false;
+        }
+        std::cout << "  DECODE_DETECTED: weight-4 error not corrected, flag correct OK\n";
+    }
+
+    std::cout << "PASS\n";
+    return true;
+}
+
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "===========================================\n";
@@ -706,6 +769,7 @@ int run_all_tests() {
     if (test_ac_fec_001_001_generator_polynomial()) { pass_count++; } else { fail_count++; }
     if (test_ac_fec_001_002_encode_table())         { pass_count++; } else { fail_count++; }
     if (test_ac_fec_002_001_three_bit_correction()) { pass_count++; } else { fail_count++; }
+    if (test_ac_fec_002_002_decode_flags())         { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }
