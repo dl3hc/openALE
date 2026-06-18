@@ -667,6 +667,7 @@ private:
     pal::IRadio*             radio_          = nullptr;
     std::string              self_addr_;
     std::string              last_caller_;   // caller address as it arrives (TIS + DATA)
+    bool                     call_alert_fired_ = false;  // on_call_received emitted once per handshake
 
     // AMD orderwire tracking — active while in HANDSHAKE/WAIT_CYCLE_END
     int          amd_skip_count_ = 0;  // leading-call DATA/REP words to skip (2×(n-1))
@@ -723,6 +724,13 @@ private:
      */
     void apply_target_scan_channels_for(const std::string& target_addr);
     void on_received_word(const ALEWord& word);
+    /**
+     * Emit the incoming-call alert (on_call_received / ALE_CALL_RECEIVED) and any
+     * collected AMD exactly once per handshake, once the caller's conclusion has
+     * fully settled (SM left WAIT_CYCLE_END) so the reported address is complete.
+     * Called from update() after driving the state machine.
+     */
+    void maybe_emit_call_alert();
     void emit_status(const std::string& msg);
     void emit_event(pal::EventType type, const std::string& msg = "", int32_t code = 0);
 };

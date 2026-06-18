@@ -497,6 +497,8 @@ void ALEController::update(uint32_t now_ms)
     now_ms_ = now_ms;
     sm_.update(now_ms);
 
+    maybe_emit_call_alert();
+
     // Offline mode: no audio device, so drive word-completion directly by
     // pulling all pending symbol frames and firing on_word_complete per frame.
     if (!audio_device_) {
@@ -512,6 +514,36 @@ void ALEController::update(uint32_t now_ms)
         lqa_analyzer_.update();
         lqa_update_ms_ = now_ms;
     }
+}
+
+void ALEController::maybe_emit_call_alert()
+{
+    // Fire the incoming-call alert (and any collected AMD) exactly once per
+    // handshake, the moment the caller's conclusion has fully settled. That is
+    // when the SM leaves WAIT_CYCLE_END (→ AWAIT_ACCEPT in manual-accept mode,
+    // → SLOT_WAIT otherwise), at which point sm_.get_caller_address() holds the
+    // complete, reassembled address (TIS + DATA/REP). Emitting earlier (at the
+    // TIS word) would report a truncated caller for >3-char addresses.
+    //
+    // In manual-accept mode AWAIT_ACCEPT holds until accept_call()/reject_call(),
+    // so the alert still precedes the operator decision. handle_handshake()
+    // advances one phase per update() tick, so this reliably catches the
+    // post-WAIT_CYCLE_END phase before LINKED.
+    if (call_alert_fired_) return;
+    if (sm_.get_state() != ALEState::HANDSHAKE) return;
+    if (!sm_.is_hs_conclusion_rcvd()) return;
+    if (sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END) return;
+
+    call_alert_fired_ = true;
+    const std::string caller = sm_.get_caller_address();
+
+    if (!amd_text_acc_.empty() && on_amd_received) {
+        const auto p = amd_text_acc_.find_last_not_of(" @");
+        if (p != std::string::npos)
+            on_amd_received(caller, amd_text_acc_.substr(0, p + 1));
+    }
+    if (on_call_received) on_call_received(caller);
+    emit_event(pal::EventType::ALE_CALL_RECEIVED, caller);
 }
 
 void ALEController::feed_audio(const int16_t* samples, uint32_t count)
@@ -555,8 +587,10 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     emit_status(buf);
 
     // Reset caller tracking when leaving HANDSHAKE
-    if (from == ALEState::HANDSHAKE)
+    if (from == ALEState::HANDSHAKE) {
         last_caller_.clear();
+        call_alert_fired_ = false;
+    }
 
     // Initialise AMD orderwire tracking when entering HANDSHAKE.
     // amd_skip_count_ = 2×(n-1) where n = words in own encoded address.
@@ -656,11 +690,12 @@ void ALEController::on_received_word(const ALEWord& word)
     //   - DATA/REP alternates for chars 4-6, 7-9, 10-12, 13-15
     //   - Trailing '@' stuffing is stripped by trim_ale_address()
     //
-    // on_call_received fires exactly once — when TIS arrives with the first 3 chars.
-    // Subsequent DATA/REP words extend last_caller_ without a second callback.
-    //
-    // This mirrors what ALEWordDecoder + ALEStateMachine do internally, ensuring
-    // our display string matches sm_.get_caller_address() at end of frame.
+    // Caller identity is accumulated here word-by-word but NOT emitted yet: the
+    // conclusion may carry a >3-char address (TIS + DATA/REP), so emitting at the
+    // TIS word would report a truncated caller (e.g. "DL3" for "DL3HC"). The
+    // single on_call_received / on_amd_received emission happens in update() once
+    // the conclusion has fully settled (WAIT_CYCLE_END → AWAIT_ACCEPT/SLOT_WAIT),
+    // using the authoritative sm_.get_caller_address(). See maybe_emit_call_alert().
     if (sm_.get_state() == ALEState::HANDSHAKE
         && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END)
     {
@@ -669,15 +704,7 @@ void ALEController::on_received_word(const ALEWord& word)
             const std::string chunk = trim_ale_address(word.address);
 
             if (word.type == PreambleType::TIS && last_caller_.empty()) {
-                // Caller's conclusion word — fire AMD callback if text was collected.
-                last_caller_ = chunk;
-                if (!amd_text_acc_.empty() && on_amd_received) {
-                    const auto p = amd_text_acc_.find_last_not_of(" @");
-                    if (p != std::string::npos)
-                        on_amd_received(last_caller_, amd_text_acc_.substr(0, p + 1));
-                }
-                if (on_call_received) on_call_received(last_caller_);
-                emit_event(pal::EventType::ALE_CALL_RECEIVED, last_caller_);
+                last_caller_ = chunk;   // conclusion anchor (first 3 chars)
             } else if ((word.type == PreambleType::DATA || word.type == PreambleType::REP)
                        && !last_caller_.empty()) {
                 last_caller_ += chunk;  // caller-address extension after TIS
