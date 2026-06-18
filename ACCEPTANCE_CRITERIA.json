@@ -327,7 +327,8 @@
       "description": "Eine empfangene AMD-Nachricht wird sofort dem Operator/Anwendungs-Layer gemeldet (Callback, Event oder Queue-Eintrag). Kein Pufferung ohne Benachrichtigung.",
       "module": "Protocol/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.cpp oder ale_message.cpp auf AMD-Empfangsverarbeitung und zugehörigen Callback/Event.",
-      "status": "open"
+      "status": "closed",
+      "verification": "Unit tests in tests/gen/unit/test_amd_callback.cpp (7 tests, all PASS). Verifies: CallTypeDetector::is_amd() detects TO+FROM+DATA as AMD; MessageAssembler assembles AMD messages with correct call_type and data_content; ALEController::on_amd_received callback fires synchronously in on_received_word() when TIS (conclusion) word arrives (code: ale_controller.cpp:664-667); no buffering without notification — callback fires inline, no deferred queue. Registered as CMake test: AMDCallback."
     },
     {
       "id": "AC-GEN-014-002",

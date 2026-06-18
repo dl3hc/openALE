@@ -1648,7 +1648,7 @@ Keine neuen Datenstrukturen — dieses Feature verifiziert, dass die 11 Betriebs
 | 1. Unabhängige RX-Fähigkeit | ALEFECCodec stateless, RX-Pfad unabhängig | Unit-Test: paralleler Encode/Decode |
 | 2. Immer hören | `outer_state_ == AVAILABLE` → RX immer aktiv | Integration-Test: RX während TX |
 | 3. Immer antworten | `accept_calls_` Flag, Standard=true | Test: Flag-Logik |
-| 4. Immer scannen | `outer_state_` AVAILABLE → Scan-Loop aktiv | Test: Zustandsautomat |
+| 4. Automatische Rückkehr in Ausgangszustand | `outer_state_` wechselt nach Abschluss/Timeout aus Terminalzuständen zurück in vorherigen Zustand | Test: Zustandsautomat |
 | 5. Kanal nicht stören | `ChannelSelector::listen_before_transmit()` | Test: LBT-Logik |
 | 6. LQA austauschen | `ChannelSelector::update_lqa()` nach jedem RX | Test: LQA-Update |
 | 7. Slot-Antwort | `ALEStateMachine::calculate_slot_response()` | Test: Tswt-Formel |

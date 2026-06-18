@@ -454,6 +454,11 @@ target_link_libraries(test_fs1052_arq ale_fs1052 ale_protocol ale_fsk_core ale_f
 target_include_directories(test_fs1052_arq PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FS1052ARQ COMMAND test_fs1052_arq)
 
+add_executable(test_amd_callback tests/gen/unit/test_amd_callback.cpp)
+target_link_libraries(test_amd_callback ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_amd_callback PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AMDCallback COMMAND test_amd_callback)
+
 add_executable(test_lqa_database tests/gen/unit/test_lqa_database.cpp)
 target_link_libraries(test_lqa_database ale_lqa ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_database PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
