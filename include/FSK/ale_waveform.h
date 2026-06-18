@@ -24,6 +24,7 @@ namespace ale {
 // Physical layer constants per MIL-STD-188-141B
 constexpr uint32_t SAMPLE_RATE_HZ      = 8000;
 constexpr uint32_t SYMBOL_RATE_BAUD    = 125;
+constexpr uint32_t SAMPLES_PER_SYMBOL  = SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD;  // 64
 constexpr uint32_t TONE_SPACING_HZ     = 250;
 constexpr uint32_t NUM_TONES           = 8;
 constexpr uint32_t BITS_PER_SYMBOL     = 3;

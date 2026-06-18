@@ -27,7 +27,6 @@
 
 namespace ale {
 
-static constexpr uint32_t SAMPLES_PER_SYMBOL = SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD;
 static constexpr float TEST_AMPLITUDE = 0.7f;
 
 // ============================================================================
@@ -732,6 +731,56 @@ bool test_sample_rate_ac_waveform_003_001() {
 }
 
 // ============================================================================
+// Test AC-WAVEFORM-003-002: Symbol-Rate = 125 Symbole/s
+// ============================================================================
+
+bool test_symbol_rate_ac_waveform_003_002() {
+    std::cout << "\n[TEST AC-WAVEFORM-003-002] Symbol-Rate = 125 Symbole/s\n";
+    std::cout << "========================================================\n";
+
+    // Compile-time: SYMBOL_RATE_BAUD must be a constexpr uint32_t with value 125
+    static_assert(SYMBOL_RATE_BAUD == 125u,
+                  "SYMBOL_RATE_BAUD must equal 125 (MIL-STD-188-141B A.5.1.3)");
+
+    // Runtime check
+    if (SYMBOL_RATE_BAUD != 125u) {
+        std::cout << "FAIL: SYMBOL_RATE_BAUD = " << SYMBOL_RATE_BAUD << " (expected 125)\n";
+        return false;
+    }
+    std::cout << "PASS: SYMBOL_RATE_BAUD = " << SYMBOL_RATE_BAUD << " symbols/s\n";
+
+    // SAMPLES_PER_SYMBOL must equal 64 (defined in ale_waveform.h)
+    static_assert(SAMPLES_PER_SYMBOL == 64u,
+                  "SAMPLES_PER_SYMBOL must equal 64 (= 8000 / 125)");
+
+    if (SAMPLES_PER_SYMBOL != 64u) {
+        std::cout << "FAIL: SAMPLES_PER_SYMBOL = " << SAMPLES_PER_SYMBOL << " (expected 64)\n";
+        return false;
+    }
+    std::cout << "PASS: SAMPLES_PER_SYMBOL = " << SAMPLES_PER_SYMBOL << " (= SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD)\n";
+
+    // Consistency: SAMPLES_PER_SYMBOL == SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD
+    if (SAMPLES_PER_SYMBOL != SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD) {
+        std::cout << "FAIL: SAMPLES_PER_SYMBOL (" << SAMPLES_PER_SYMBOL
+                  << ") != SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD ("
+                  << SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD << ")\n";
+        return false;
+    }
+    std::cout << "PASS: SAMPLES_PER_SYMBOL is consistent with SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD\n";
+
+    // 8 ms per symbol: 1000 ms / 125 symbols/s = 8 ms
+    const uint32_t ms_per_symbol = 1000u / SYMBOL_RATE_BAUD;
+    if (ms_per_symbol != 8u) {
+        std::cout << "FAIL: ms/symbol = " << ms_per_symbol << " (expected 8)\n";
+        return false;
+    }
+    std::cout << "PASS: 1000 / SYMBOL_RATE_BAUD = " << ms_per_symbol << " ms/symbol\n";
+
+    std::cout << "PASS: AC-WAVEFORM-003-002\n";
+    return true;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -750,6 +799,7 @@ int run_all_tests() {
     if (test_nco_32bit_accumulator_ac_waveform_002_001()) { pass_count++; } else { fail_count++; }
     if (test_phase_continuity_ac_waveform_002_002()) { pass_count++; } else { fail_count++; }
     if (test_sample_rate_ac_waveform_003_001()) { pass_count++; } else { fail_count++; }
+    if (test_symbol_rate_ac_waveform_003_002()) { pass_count++; } else { fail_count++; }
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }

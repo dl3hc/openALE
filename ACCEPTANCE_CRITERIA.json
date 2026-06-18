@@ -445,7 +445,8 @@
       "description": "Die Symbol-Rate beträgt 125 Symbole/s, entsprechend 8 ms/Symbol (64 Samples/Symbol bei 8 kHz).",
       "module": "FSK/ale_waveform",
       "verification_hint": "Prüfe SYMBOL_RATE oder SAMPLES_PER_SYMBOL in ale_waveform.h. Wert muss SAMPLES_PER_SYMBOL=64 sein.",
-      "status": "open"
+      "status": "closed",
+      "verification": "ale_waveform.h: SYMBOL_RATE_BAUD=125 und SAMPLES_PER_SYMBOL=SAMPLE_RATE_HZ/SYMBOL_RATE_BAUD=64 als constexpr definiert. Lokale Redefinition in test_fsk_core.cpp entfernt. Dedizierter Test test_symbol_rate_ac_waveform_003_002 in tests/waveform/unit/test_fsk_core.cpp prüft: (1) static_assert SYMBOL_RATE_BAUD==125 (compile-time), (2) Runtime-Check SYMBOL_RATE_BAUD==125, (3) static_assert SAMPLES_PER_SYMBOL==64 (compile-time), (4) Konsistenz SAMPLES_PER_SYMBOL==SAMPLE_RATE_HZ/SYMBOL_RATE_BAUD, (5) 1000/SYMBOL_RATE_BAUD==8 ms/Symbol. Alle 12 Tests grün (2026-06-18)."
     },
     {
       "id": "AC-WAVEFORM-003-003",
