@@ -313,13 +313,18 @@ private:
 
 /**
  * \class MessageStore
- * Bounded ring buffer of received ALE messages
+ * Bounded ring buffer of received ALE messages (REQ-GEN-020)
  *
  * When the buffer is full the oldest message is evicted to make room.
- * Default capacity: 64 messages.
+ * Default capacity: 64 messages. Minimum guaranteed: kMinMessages.
  */
 class MessageStore {
 public:
+    /** Minimum number of messages the store must hold (REQ-GEN-020). */
+    static constexpr size_t kMinMessages = 12;
+    /** Minimum total character capacity across all stored messages (REQ-GEN-020). */
+    static constexpr size_t kMinChars    = 1000;
+
     explicit MessageStore(size_t capacity = 64);
 
     void push(const ALEMessage& msg);

@@ -737,6 +737,78 @@ bool test_operating_parameters_setters_ac_gen_007_001()
 }
 
 // ============================================================================
+// MessageStore — minimum capacity (AC-GEN-008-001)
+// ============================================================================
+
+bool test_message_store_min_capacity_ac_gen_008_001()
+{
+    std::cout << "\n[MessageStore] minimum 12 messages / 1000 chars capacity (AC-GEN-008-001)\n";
+
+    // ── compile-time constants ─────────────────────────────────────────────
+    static_assert(MessageStore::kMinMessages >= 12,
+                  "kMinMessages must be >= 12 (REQ-GEN-020)");
+    static_assert(MessageStore::kMinChars >= 1000,
+                  "kMinChars must be >= 1000 (REQ-GEN-020)");
+
+    bool const_msgs_ok = (MessageStore::kMinMessages == 12);
+    bool const_chars_ok = (MessageStore::kMinChars == 1000);
+    std::cout << "  kMinMessages == 12: " << (const_msgs_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  kMinChars == 1000: "  << (const_chars_ok ? "PASS" : "FAIL") << "\n";
+
+    // ── default store holds >= kMinMessages entries ────────────────────────
+    MessageStore store;
+    for (size_t i = 0; i < MessageStore::kMinMessages; ++i) {
+        ALEMessage msg;
+        msg.from_address = "S" + std::to_string(i);
+        msg.complete = true;
+        store.push(msg);
+    }
+    bool min_msgs_accepted = (store.size() == MessageStore::kMinMessages);
+    std::cout << "  " << MessageStore::kMinMessages
+              << " messages accepted by default store: "
+              << (min_msgs_accepted ? "PASS" : "FAIL") << "\n";
+
+    // ── constructor with capacity < kMinMessages clamps up ─────────────────
+    MessageStore tiny(1);   // request 1, must silently clamp to kMinMessages
+    for (size_t i = 0; i < MessageStore::kMinMessages; ++i) {
+        ALEMessage msg;
+        msg.from_address = "T" + std::to_string(i);
+        msg.complete = true;
+        tiny.push(msg);
+    }
+    bool clamp_ok = (tiny.size() == MessageStore::kMinMessages);
+    std::cout << "  capacity clamped to kMinMessages when requested < kMinMessages: "
+              << (clamp_ok ? "PASS" : "FAIL") << "\n";
+
+    // ── total character capacity >= kMinChars for default store ───────────
+    // Each AMD message can hold up to 90 chars; default capacity 64 messages
+    // gives 64 * 90 = 5760 >> 1000.  Verify design invariant at kMinMessages:
+    // kMinMessages * 90-char AMD = 12 * 90 = 1080 >= kMinChars.
+    const size_t chars_per_msg = 90; // AMD max length per spec
+    bool total_chars_ok = (MessageStore::kMinMessages * chars_per_msg >= MessageStore::kMinChars);
+    std::cout << "  kMinMessages * 90 chars >= kMinChars (" << MessageStore::kMinChars << "): "
+              << (total_chars_ok ? "PASS" : "FAIL") << "\n";
+
+    // ── ring-buffer eviction still works after filling beyond kMinMessages ─
+    MessageStore ring(MessageStore::kMinMessages);
+    for (size_t i = 0; i < MessageStore::kMinMessages + 3; ++i) {
+        ALEMessage msg;
+        msg.from_address = "R" + std::to_string(i);
+        msg.complete = true;
+        ring.push(msg);
+    }
+    bool evict_size_ok = (ring.size() == MessageStore::kMinMessages);
+    bool evict_oldest_ok = (ring.all().front().from_address == "R3"); // first 3 evicted
+    std::cout << "  ring eviction keeps size at kMinMessages: "
+              << (evict_size_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  oldest entry evicted (R3 is new front): "
+              << (evict_oldest_ok ? "PASS" : "FAIL") << "\n";
+
+    return const_msgs_ok && const_chars_ok && min_msgs_accepted
+        && clamp_ok && total_chars_ok && evict_size_ok && evict_oldest_ok;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 
@@ -777,6 +849,9 @@ int run_all_tests()
 
     run("OperatingParameters operator-programmable setters (AC-GEN-007-001)",
         test_operating_parameters_setters_ac_gen_007_001());
+
+    run("MessageStore min 12 messages / 1000 chars (AC-GEN-008-001)",
+        test_message_store_min_capacity_ac_gen_008_001());
 
     run("ALEController channel-ID auto-assignment", test_controller_channel_id_auto_assignment());
     run("ALEController del_channel unassigns from nets", test_controller_del_channel_unassigns_from_nets());

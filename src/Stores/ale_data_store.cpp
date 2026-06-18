@@ -315,7 +315,8 @@ uint32_t LQAStore::best_channel(const std::vector<uint32_t>& candidates) const {
 
 // ── MessageStore ──────────────────────────────────────────────────────────────
 
-MessageStore::MessageStore(size_t capacity) : capacity_(capacity) {}
+MessageStore::MessageStore(size_t capacity)
+    : capacity_(capacity < kMinMessages ? kMinMessages : capacity) {}
 
 void MessageStore::push(const ALEMessage& msg) {
     if (messages_.size() >= capacity_)
