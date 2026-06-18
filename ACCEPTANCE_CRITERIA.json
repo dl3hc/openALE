@@ -647,7 +647,8 @@
       "description": "Das Bit-Interleave-Muster verschränkt Coder-A-Bits (Positionen 0,2,4,…,46) mit Coder-B-Bits (Positionen 1,3,5,…,47). Bit 48 ist der Stuff-Bit S49 = 0.",
       "module": "FEC/interleaver",
       "verification_hint": "Prüfe interleaver.cpp: out[2k] = Coder-A-Bit k, out[2k+1] = Coder-B-Bit k (k=0..23), out[48] = 0.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_fec_003_001_interleave_pattern() in tests/fec/unit/test_fec_golay.cpp: (1) alle 24 Einzelbit-A-Muster: Coder-A-Bit k (= bit 23-k von sequence_a) erscheint genau an Ausgangsposition 2k; (2) alle 24 Einzelbit-B-Muster: Coder-B-Bit k (= bit 23-k von sequence_b) erscheint genau an Ausgangsposition 2k+1; (3) All-ones: Bits 0..47 gesetzt, S49=0; (4) A-only: gerade Positionen 0,2,...,46 gesetzt, ungerade = 0, S49=0; (5) B-only: ungerade Positionen 1,3,...,47 gesetzt, gerade = 0, S49=0. 14/14 Tests gruen."
     },
     {
       "id": "AC-FEC-003-002",

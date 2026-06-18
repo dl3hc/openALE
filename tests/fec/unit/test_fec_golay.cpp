@@ -4,6 +4,7 @@
  *
  * Covers: AC-FEC-001-001, AC-FEC-001-002,
  *         AC-FEC-002-001, AC-FEC-002-002,
+ *         AC-FEC-003-001,
  *         AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
@@ -756,6 +757,101 @@ bool test_ac_fec_002_002_decode_flags() {
     return true;
 }
 
+// AC-FEC-003-001: Interleave pattern A₁B₁A₂B₂…A₂₄B₂₄S₄₉
+// REQ-FEC-012 (FEAT-FEC-003, MIL-STD-188-141B A.5.2.2.3)
+//
+// Verifies the exact bit-position mapping:
+//   out[2k]   = Coder-A-Bit k  (bit 23-k of sequence_a)  for k = 0..23
+//   out[2k+1] = Coder-B-Bit k  (bit 23-k of sequence_b)  for k = 0..23
+//   out[48]   = 0  (Stuff-Bit S49)
+bool test_ac_fec_003_001_interleave_pattern() {
+    std::cout << "\n[TEST FEC-13] AC-FEC-003-001: Interleave-Muster A1B1A2B2...A24B24S49\n";
+    std::cout << "-----------------------------------------------------------------------\n";
+
+    // (1) Single A-bit: Coder-A-Bit k → output position 2k, everything else 0
+    for (int k = 0; k < 24; ++k) {
+        const uint32_t seq_a    = 1u << (23 - k);
+        const uint64_t out      = WordInterleaver::interleave(seq_a, 0u);
+        const uint64_t expected = 1ULL << (2 * k);
+        if (out != expected) {
+            std::cout << "FAIL: A-bit k=" << k
+                      << " seq_a=0x" << std::hex << seq_a
+                      << " got=0x"      << out
+                      << " expected=0x" << expected << std::dec << "\n";
+            return false;
+        }
+    }
+    std::cout << "  A-bits: each Coder-A-Bit k at output position 2k (k=0..23) OK\n";
+
+    // (2) Single B-bit: Coder-B-Bit k → output position 2k+1, everything else 0
+    for (int k = 0; k < 24; ++k) {
+        const uint32_t seq_b    = 1u << (23 - k);
+        const uint64_t out      = WordInterleaver::interleave(0u, seq_b);
+        const uint64_t expected = 1ULL << (2 * k + 1);
+        if (out != expected) {
+            std::cout << "FAIL: B-bit k=" << k
+                      << " seq_b=0x" << std::hex << seq_b
+                      << " got=0x"      << out
+                      << " expected=0x" << expected << std::dec << "\n";
+            return false;
+        }
+    }
+    std::cout << "  B-bits: each Coder-B-Bit k at output position 2k+1 (k=0..23) OK\n";
+
+    // (3) All-ones: bits 0..47 all set, S49 = 0
+    {
+        const uint64_t out          = WordInterleaver::interleave(0x00FFFFFFu, 0x00FFFFFFu);
+        const uint64_t expected_low = (1ULL << 48) - 1ULL;
+        if ((out & expected_low) != expected_low) {
+            std::cout << "FAIL: all-ones: not all 48 bits 0..47 set: got=0x"
+                      << std::hex << out << std::dec << "\n";
+            return false;
+        }
+        if ((out >> 48) & 1ULL) {
+            std::cout << "FAIL: all-ones: S49 (bit 48) != 0\n";
+            return false;
+        }
+    }
+    std::cout << "  All-ones: bits 0..47 set, S49=0 OK\n";
+
+    // (4) A-only: even positions 0,2,...,46 set; odd positions 1,3,...,47 = 0; S49 = 0
+    {
+        const uint64_t out = WordInterleaver::interleave(0x00FFFFFFu, 0u);
+        for (int k = 0; k < 24; ++k) {
+            if (!((out >> (2 * k)) & 1ULL)) {
+                std::cout << "FAIL: A-only: position " << (2 * k) << " not set\n";
+                return false;
+            }
+            if ((out >> (2 * k + 1)) & 1ULL) {
+                std::cout << "FAIL: A-only: position " << (2 * k + 1) << " unexpectedly set\n";
+                return false;
+            }
+        }
+        if ((out >> 48) & 1ULL) { std::cout << "FAIL: A-only: S49 != 0\n"; return false; }
+    }
+    std::cout << "  A-only: even positions set, odd positions 0, S49=0 OK\n";
+
+    // (5) B-only: odd positions 1,3,...,47 set; even positions 0,2,...,46 = 0; S49 = 0
+    {
+        const uint64_t out = WordInterleaver::interleave(0u, 0x00FFFFFFu);
+        for (int k = 0; k < 24; ++k) {
+            if ((out >> (2 * k)) & 1ULL) {
+                std::cout << "FAIL: B-only: position " << (2 * k) << " unexpectedly set\n";
+                return false;
+            }
+            if (!((out >> (2 * k + 1)) & 1ULL)) {
+                std::cout << "FAIL: B-only: position " << (2 * k + 1) << " not set\n";
+                return false;
+            }
+        }
+        if ((out >> 48) & 1ULL) { std::cout << "FAIL: B-only: S49 != 0\n"; return false; }
+    }
+    std::cout << "  B-only: odd positions set, even positions 0, S49=0 OK\n";
+
+    std::cout << "PASS\n";
+    return true;
+}
+
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "===========================================\n";
@@ -770,6 +866,7 @@ int run_all_tests() {
     if (test_ac_fec_001_002_encode_table())         { pass_count++; } else { fail_count++; }
     if (test_ac_fec_002_001_three_bit_correction()) { pass_count++; } else { fail_count++; }
     if (test_ac_fec_002_002_decode_flags())         { pass_count++; } else { fail_count++; }
+    if (test_ac_fec_003_001_interleave_pattern())   { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }
