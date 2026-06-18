@@ -497,7 +497,8 @@
       "description": "Die zeitliche Genauigkeit der Symbolgrenzen beträgt maximal 10 ppm (0,001%). Testreihe in test_tone_accuracy.cpp oder äquivalent.",
       "module": "tests/test_tone_accuracy.cpp",
       "verification_hint": "Suche nach Timing-Genauigkeitstest in tests/. Wert muss ≤ 10 ppm validiert werden.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_timing_accuracy_ac_waveform_004_002() in tests/waveform/unit/test_tone_accuracy.cpp prüft 5 Sub-Kriterien: (1) SAMPLE_RATE_HZ(8000) % SYMBOL_RATE_BAUD(125) = 0 → 0.000 ppm Symbolfehler; (2) NCO-Phase-Increment für alle 8 Töne exakt (Q32_rem=0, 0.000 ppm); (3) 490 Symbole erzeugen exakt 31360 Samples → 0.000 ppm; (4) 1 Wort (49 Symbole) = exakt 3136 Samples → 0.000 ppm; (5) 125 baud × 3 bits/sym = exakt 375 bps → 0.000 ppm. Alle 5 Checks PASS, alle innerhalb 10 ppm-Limit. Testlauf: build/Debug/test_tone_accuracy.exe, 2026-06-18, Results: Passed=2 Failed=0."
     },
     {
       "id": "AC-WORD-001-001",
