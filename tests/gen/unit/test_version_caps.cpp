@@ -1,6 +1,7 @@
 /**
  * \file test_version_caps.cpp
  * \brief Unit tests for VERSION CMD encoding (AC-GEN-011-001)
+ *        and CAPABILITIES QUERY encoding (AC-GEN-012-001)
  *
  * Verifies:
  *   TEST 1  encode_version_cmd (summary) — CMD preamble is set
@@ -9,6 +10,10 @@
  *   TEST 4  is_version_cmd detects VERSION CMD words
  *   TEST 5  decode_version_cmd round-trips format selection
  *   TEST 6  non-VERSION CMD words rejected by is_version_cmd
+ *   TEST 7  encode_capabilities_query    — CMD preamble is set
+ *   TEST 8  encode_capabilities_query    — payload chars are 'c', '/', 'q'
+ *   TEST 9  is_capabilities_query detects CAPABILITIES QUERY words
+ *   TEST 10 non-capabilities-query words rejected by is_capabilities_query
  */
 
 #include "Protocol/ale_version_caps.h"
@@ -151,9 +156,91 @@ void test_non_version_rejected() {
     std::cout << "  CMD word with c/q payload rejected  PASSED\n\n";
 }
 
+// ── TEST 7 ────────────────────────────────────────────────────────────────────
+void test_capabilities_query_preamble() {
+    std::cout << "[TEST 7] encode_capabilities_query — CMD preamble\n";
+
+    CapabilitiesQuery qry{true};
+    ALEWord word = encode_capabilities_query(qry);
+
+    assert(word.type == PreambleType::CMD);
+    assert(word.valid == true);
+
+    std::cout << "  preamble = CMD  PASSED\n\n";
+}
+
+// ── TEST 8 ────────────────────────────────────────────────────────────────────
+void test_capabilities_query_payload_chars() {
+    std::cout << "[TEST 8] encode_capabilities_query — payload 'c', '/', 'q'\n";
+
+    CapabilitiesQuery qry{true};
+    ALEWord word = encode_capabilities_query(qry);
+
+    const char c0 = static_cast<char>((word.raw_payload >> 14u) & 0x7Fu);
+    const char c1 = static_cast<char>((word.raw_payload >>  7u) & 0x7Fu);
+    const char c2 = static_cast<char>((word.raw_payload >>  0u) & 0x7Fu);
+
+    assert(c0 == 'c');
+    assert(c1 == '/');
+    assert(c2 == 'q');
+
+    assert(word.address[0] == 'c');
+    assert(word.address[1] == '/');
+    assert(word.address[2] == 'q');
+    assert(word.address[3] == '\0');
+
+    std::cout << "  payload = 'c'(0x"
+              << std::hex << static_cast<int>(c0) << ") '/'(0x"
+              << static_cast<int>(c1) << ") 'q'(0x"
+              << static_cast<int>(c2) << std::dec << ")  PASSED\n\n";
+}
+
+// ── TEST 9 ────────────────────────────────────────────────────────────────────
+void test_is_capabilities_query_detects() {
+    std::cout << "[TEST 9] is_capabilities_query detects CAPABILITIES QUERY words\n";
+
+    CapabilitiesQuery qry{true};
+    ALEWord word = encode_capabilities_query(qry);
+    assert(is_capabilities_query(word) == true);
+
+    std::cout << "  is_capabilities_query(c/q) = true  PASSED\n\n";
+}
+
+// ── TEST 10 ───────────────────────────────────────────────────────────────────
+void test_non_capabilities_query_rejected() {
+    std::cout << "[TEST 10] non-capabilities-query words rejected by is_capabilities_query\n";
+
+    // Non-CMD preamble
+    ALEWord to_word;
+    to_word.type        = PreambleType::TO;
+    to_word.raw_payload = (static_cast<uint32_t>('c') << 14u)
+                        | (static_cast<uint32_t>('/') <<  7u)
+                        |  static_cast<uint32_t>('q');
+    to_word.valid = true;
+    assert(is_capabilities_query(to_word) == false);
+
+    // CMD but VERSION family (v/s)
+    VersionCmd req{KVC_ALL, KVF_SUMMARY};
+    ALEWord version_word = encode_version_cmd(req);
+    assert(is_capabilities_query(version_word) == false);
+
+    // CMD c/r (report, not query)
+    ALEWord cr_word;
+    cr_word.type        = PreambleType::CMD;
+    cr_word.raw_payload = (static_cast<uint32_t>('c') << 14u)
+                        | (static_cast<uint32_t>('/') <<  7u)
+                        |  static_cast<uint32_t>('r');
+    cr_word.valid = true;
+    assert(is_capabilities_query(cr_word) == false);
+
+    std::cout << "  TO word with c/q payload rejected   PASSED\n";
+    std::cout << "  CMD v/s (VERSION) rejected           PASSED\n";
+    std::cout << "  CMD c/r (REPORT)  rejected           PASSED\n\n";
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 int main() {
-    std::cout << "=== test_version_caps (AC-GEN-011-001) ===\n\n";
+    std::cout << "=== test_version_caps (AC-GEN-011-001, AC-GEN-012-001) ===\n\n";
 
     test_summary_cmd_preamble();
     test_summary_payload_chars();
@@ -161,6 +248,10 @@ int main() {
     test_is_version_cmd_detects();
     test_decode_roundtrip();
     test_non_version_rejected();
+    test_capabilities_query_preamble();
+    test_capabilities_query_payload_chars();
+    test_is_capabilities_query_detects();
+    test_non_capabilities_query_rejected();
 
     std::cout << "=== ALL TESTS PASSED ===\n";
     return 0;

@@ -259,7 +259,8 @@
       "description": "Die Capabilities-Anfrage (Query) verwendet die Zeichensequenz `c/q` im CMD-Wort.",
       "module": "Protocol/ale_version_caps",
       "verification_hint": "Prüfe ale_version_caps.cpp auf Query-Frame-Konstruktion mit 'c', '/', 'q' Payload.",
-      "status": "open"
+      "status": "closed",
+      "verification": "encode_capabilities_query() in src/Protocol/ale_version_caps.cpp erzeugt CMD-Wort mit 21-bit-Payload 'c'(0x63)/'/'(0x2F)/'q'(0x71). is_capabilities_query() erkennt das Wort und lehnt Non-CMD, VERSION-CMD und c/r-Wörter korrekt ab. Tests 7-10 in tests/gen/unit/test_version_caps.cpp alle grün. Build: ale_version_caps.lib + test_version_caps.exe. CTest-Target: VersionCaps."
     },
     {
       "id": "AC-GEN-012-002",
