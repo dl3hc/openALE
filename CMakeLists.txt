@@ -59,6 +59,7 @@ add_library(ale_protocol
     src/Word/ale_sequence.cpp
     src/Word/address_encoder.cpp
     src/Protocol/Message/ale_message.cpp
+    src/Protocol/ale_orderwire_protocols.cpp
 )
 
 target_include_directories(ale_protocol PUBLIC
@@ -458,6 +459,11 @@ add_executable(test_amd_callback tests/gen/unit/test_amd_callback.cpp)
 target_link_libraries(test_amd_callback ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_amd_callback PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AMDCallback COMMAND test_amd_callback)
+
+add_executable(test_amd_orderwire_tx tests/gen/unit/test_amd_orderwire_tx.cpp)
+target_link_libraries(test_amd_orderwire_tx ale_link ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_amd_orderwire_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AMDOrderwireTx COMMAND test_amd_orderwire_tx)
 
 add_executable(test_lqa_database tests/gen/unit/test_lqa_database.cpp)
 target_link_libraries(test_lqa_database ale_lqa ale_protocol ale_fsk_core ale_fec)

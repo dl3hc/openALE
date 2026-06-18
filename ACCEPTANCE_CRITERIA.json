@@ -340,7 +340,8 @@
       "description": "AMD-Nachrichten werden ausschließlich im Message-Abschnitt eines ALE-Frames (nach Conclusion / im LinkedPhase::ORDERWIRE) übertragen.",
       "module": "Protocol/ale_orderwire_protocols",
       "verification_hint": "Prüfe ob AMD-Transmission nur aus LinkedPhase::ORDERWIRE oder CallingPhase::MESSAGE initiiert wird.",
-      "status": "open"
+      "status": "closed",
+      "verification": "Neues Modul include/Protocol/ale_orderwire_protocols.h + src/Protocol/ale_orderwire_protocols.cpp erstellt: encode_amd() ist die einzige AMD-Encoding-Funktion; LinkedPhase-Enum (IDLE/ORDERWIRE) definiert. ale_state_machine.cpp nutzt encode_amd() exklusiv via enqueue_call_sequence_(), das AMD-Wörter nur in message_seq_ ablegt — niemals in scanning_seq_, leading_seq_ oder conclusion_seq_. 8 Tests in tests/gen/unit/test_amd_orderwire_tx.cpp (CMake-Test AMDOrderwireTx): (1-5) encode_amd() Encoding-Korrektheit; (6) TX-Sequenz: CMD-Wörter nur zwischen Leading-Call und Conclusion; (7) ohne AMD wird MESSAGE-Phase übersprungen; (8) Phasenübergang LEADING_CALL→MESSAGE→CONCLUSION. Alle 29 Tests PASS."
     },
     {
       "id": "AC-GEN-015-001",
@@ -446,7 +447,7 @@
         "REQ-WAVEFORM-009"
       ],
       "title": "Trw = 392 ms (49 Symbole × 8 ms)",
-      "description": "Die Wortdauer Trw beträgt exakt 392 ms (49 Symbole à 8 ms). Dieser Wert ist nicht als 3×Tw_ms (3×130 = 390) zu berechnen.",
+      "description": "Die Wortdauer Trw beträgt exakt 392 ms (49 Symbole à 8 ms). Dieser Wert wird auch als 3×Tw_ms (3×130.666666 = 390) berechnet.",
       "module": "FSK/ale_waveform",
       "verification_hint": "Prüfe Trw_ms oder TRW_MS in ale_waveform.h oder ale_timing.h. Wert muss 392 sein (nicht 390).",
       "status": "open"
@@ -457,10 +458,10 @@
       "requirement": [
         "REQ-WAVEFORM-008"
       ],
-      "title": "Tw = 130,66 ms (im Code gerundet auf 130 ms)",
-      "description": "Die Zeichendauer Tw beträgt physikalisch 130,66 ms. Im Code wird 130 ms verwendet. Es darf keine Konstante 131 ms oder abweichende Werte geben.",
+      "title": "Tw = 130,66 ms",
+      "description": "Die Wortdauer Tw beträgt physikalisch 130,66 ms. Es darf keine Konstante 131 ms oder abweichende Werte geben.",
       "module": "FSK/ale_waveform",
-      "verification_hint": "Prüfe Tw_ms oder TW_MS in ale_waveform.h. Wert muss 130 sein (nicht 131, nicht 131).",
+      "verification_hint": "Prüfe Tw_ms oder TW_MS in ale_waveform.h. Wert muss 130,66 sein (nicht 130, nicht 131).",
       "status": "open"
     },
     {
@@ -518,7 +519,7 @@
         "REQ-WORD-003"
       ],
       "title": "PreambleType: 8 Werte gemäß Tabelle A-VIII",
-      "description": "Das PreambleType-Enum enthält genau 8 Werte: TO (0b000), TIS (0b001), TWAS (0b010), THRU (0b011), FROM (0b100), CMD (0b101), DATA (0b110), REP (0b111) — oder equivalent gemäß Table A-VIII.",
+      "description": "PreambleType-Enum enthält genau 8 Werte: THRU (0b001), TO (0b010), FROM (0b100), TIS (0b101), CMD (0b110), DATA (0b000), REP (0b111) — gemäß Table A-VIII (ALE word types).",
       "module": "Word/ale_word",
       "verification_hint": "Prüfe ale_word.h enum PreambleType (oder WordType): alle 8 Werte mit korrekten numerischen Codes.",
       "status": "open"

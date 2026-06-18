@@ -4,6 +4,7 @@
  */
 
 #include "Protocol/Control/ale_state_machine.h"
+#include "Protocol/ale_orderwire_protocols.h"
 #include "Word/ale_sequence.h"
 #include "Word/address_encoder.h"
 #include "LQA/lqa_metrics.h"
@@ -1160,53 +1161,9 @@ void ALEStateMachine::try_next_calling_channel() {
 // For the receive path (ACK, response) the remote address is not known at
 // initiate_call() time, so ALESequenceBuilder is called at send time.
 
-// Build a CMD AMD word: CMD preamble (110) with Expanded-64 payload (A.5.7.2.2).
-// encode_ascii(DATA) uses is_valid_expanded64_char — same 21-bit encoding as DATA/REP
-// but transmitted with the CMD preamble so the receiver recognises it as AMD.
-static ALEWord make_cmd_amd_word(const char chars[3])
-{
-    const uint32_t payload = WordParser::encode_ascii(chars, PreambleType::DATA);
-    if (payload == 0xFFFFFFFF) return ALEWord{};  // should not happen after sanitising
-    ALEWord w{};
-    w.type        = PreambleType::CMD;
-    w.raw_payload = payload;
-    w.address[0]  = chars[0];
-    w.address[1]  = chars[1];
-    w.address[2]  = chars[2];
-    w.address[3]  = '\0';
-    w.valid       = true;
-    return w;
-}
-
-// Build the AMD orderwire word sequence for the MESSAGE section (A.5.7.2.2).
-//
-// Frame layout: CMD(chars 1-3)  DATA(4-6)  REP(7-9)  DATA(10-12) … max 30 words / 90 chars.
-// All words carry only Expanded-64 characters (0x20-0x5F); out-of-range chars become '?'.
-// Last triplet is padded with SP (0x20) as required by A.5.7.2.2.
-static std::vector<ALEWord> build_amd_words(const std::string& text)
-{
-    const size_t n = std::min(text.size(), size_t{90});   // 30 words × 3 chars (A.5.7.2.3)
-    std::vector<ALEWord> words;
-    words.reserve((n + 2) / 3);
-    for (size_t i = 0; i < n; i += 3) {
-        char c[3] = {' ', ' ', ' '};
-        for (size_t j = 0; j < 3 && i + j < n; ++j) {
-            const char ch = text[i + j];
-            c[j] = (static_cast<unsigned char>(ch) >= 0x20
-                    && static_cast<unsigned char>(ch) <= 0x5F) ? ch : '?';
-        }
-        if (words.empty()) {
-            // First word: CMD AMD preamble + Expanded-64 payload (A.5.7.2.2)
-            words.push_back(make_cmd_amd_word(c));
-        } else {
-            // Subsequent: alternating DATA / REP (words[1]=DATA, [2]=REP, [3]=DATA, …)
-            const PreambleType pt = (words.size() % 2 == 1) ? PreambleType::DATA
-                                  :                            PreambleType::REP;
-            words.push_back(WordParser::make_word(pt, c));
-        }
-    }
-    return words;
-}
+// AMD word building is delegated to encode_amd() in ale_orderwire_protocols.cpp
+// (AC-GEN-014-002). The Message section guard in enqueue_call_sequence_() ensures
+// AMD words are placed exclusively in message_seq_, never in scanning/leading/conclusion.
 
 void ALEStateMachine::enqueue_call_sequence_() {
     // scanning_seq_ and leading_seq_ are pre-built by initiate_call*():
@@ -1219,7 +1176,7 @@ void ALEStateMachine::enqueue_call_sequence_() {
     // against exactly these word counts.
     if (active_message_.type == PendingMessage::Type::AMD
             && !active_message_.content.empty()) {
-        message_seq_ = ALESequence(build_amd_words(active_message_.content));
+        message_seq_ = ALESequence(encode_amd(active_message_.content));
     } else {
         message_seq_ = ALESequence{};
     }
