@@ -353,7 +353,8 @@
       "description": "Data Text Message verwendet CMD DTM gefolgt von DATA/REP-Wortpaaren. Optional wird ein CRC-Wort angehängt.",
       "module": "Protocol/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.h auf DTM-Frame-Typ und zugehörige Konstruktionsmethode.",
-      "status": "open"
+      "status": "closed",
+      "verification": "encode_dtm() + DtmBlock in ale_orderwire_protocols.h/.cpp implementiert. Frame-Layout: Word 0 = CMD 'DTM' (Basic-38 Identifier), ab Word 1 alternierend DATA/REP mit Expanded-64-Payload, optionales CRC-Word (CRC-16/CCITT, 3 Expanded-64-Zeichen). Kein aufeinanderfolgender gleicher Preamble-Typ. Tests: tests/gen/unit/test_dtm_orderwire_tx.cpp (10 Tests: CMD-Identifier, Struktur, Padding, Max-Länge, Sanitisierung, DTM≠AMD-CMD-Payload, CRC-Anhang, CRC-Preamble-Alternierung). ctest DTMOrderwireTx PASSED. Gesamtsuite 30/30 PASSED."
     },
     {
       "id": "AC-GEN-016-001",

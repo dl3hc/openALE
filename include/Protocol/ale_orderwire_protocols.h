@@ -7,6 +7,7 @@
  * or in the ORDERWIRE sub-phase of an established link (LinkedPhase::ORDERWIRE).
  *
  *   AMD — Automatic Message Display (A.5.7.2)
+ *   DTM — Data Text Message        (A.5.7.3)
  */
 
 #pragma once
@@ -56,5 +57,39 @@ enum class LinkedPhase {
  * \return      Ordered list of ALEWords for the Message section.
  */
 std::vector<ALEWord> encode_amd(const std::string& text);
+
+// ── DTM — Data Text Message (A.5.7.3) ────────────────────────────────────────
+
+/**
+ * DTM block: structured input for DTM encoding (A.5.7.3).
+ */
+struct DtmBlock {
+    std::string text;               ///< ASCII text payload (up to 90 characters)
+    bool        crc_enabled   = false; ///< Append CRC-16 word (A.5.7.3)
+    bool        arq_requested = false; ///< ARQ exchange requested (reserved)
+};
+
+/**
+ * Encode a DTM message into ALE words (A.5.7.3).
+ *
+ * Frame layout:
+ *   Word 0   : CMD DTM  — CMD preamble, Basic-38 identifier "DTM"
+ *   Word 1   : DATA     — first 3 chars of data (Expanded-64)
+ *   Word 2   : REP      — next 3 chars (Expanded-64)
+ *   …        — alternating DATA/REP
+ *   [Last]   : DATA/REP — CRC-16/CCITT encoded in 3 Expanded-64 chars (if crc_enabled)
+ *
+ * Rules:
+ * - Characters outside Expanded-64 (0x20–0x5F) are replaced with '?'.
+ * - Partial last data triplet is padded with SP (0x20).
+ * - Maximum 30 data words (90 data chars); excess is silently truncated.
+ * - Always produces at least one word (CMD DTM) even for empty text.
+ * - CRC word uses DATA or REP preamble (whichever avoids a consecutive duplicate).
+ *
+ * \param text         ASCII text to encode (up to 90 characters).
+ * \param crc_enabled  Append CRC-16 word if true.
+ * \return             Ordered list of ALEWords.
+ */
+std::vector<ALEWord> encode_dtm(const std::string& text, bool crc_enabled = false);
 
 } // namespace ale

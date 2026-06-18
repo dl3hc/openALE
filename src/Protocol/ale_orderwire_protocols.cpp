@@ -54,4 +54,60 @@ std::vector<ALEWord> encode_amd(const std::string& text)
     return words;
 }
 
+// ── DTM — Data Text Message (A.5.7.3) ────────────────────────────────────────
+
+// CRC-16/CCITT (poly 0x1021, init 0xFFFF) over the data bytes (A.5.7.3).
+static uint16_t compute_dtm_crc(const char* data, size_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= static_cast<uint16_t>(static_cast<unsigned char>(data[i])) << 8;
+        for (int b = 0; b < 8; ++b)
+            crc = (crc & 0x8000u) ? static_cast<uint16_t>((crc << 1) ^ 0x1021u)
+                                  : static_cast<uint16_t>(crc << 1);
+    }
+    return crc;
+}
+
+std::vector<ALEWord> encode_dtm(const std::string& text, bool crc_enabled)
+{
+    const size_t n = std::min(text.size(), size_t{90});  // 30 data words × 3 chars
+
+    std::vector<ALEWord> words;
+    words.reserve(1 + (n + 2) / 3 + (crc_enabled ? 1 : 0));
+
+    // Word 0: CMD DTM — Basic-38 identifier "DTM" (A.5.7.3)
+    const char dtm_id[3] = {'D', 'T', 'M'};
+    words.push_back(WordParser::make_word(PreambleType::CMD, dtm_id));
+
+    // Data words: Expanded-64, alternating DATA/REP
+    for (size_t i = 0; i < n; i += 3) {
+        char c[3] = {' ', ' ', ' '};
+        for (size_t j = 0; j < 3 && i + j < n; ++j) {
+            const char ch = text[i + j];
+            c[j] = (static_cast<unsigned char>(ch) >= 0x20
+                    && static_cast<unsigned char>(ch) <= 0x5F) ? ch : '?';
+        }
+        // Odd total words so far → next is DATA; even → REP (maintains alternation after CMD)
+        const PreambleType pt = (words.size() % 2 == 1) ? PreambleType::DATA
+                              :                            PreambleType::REP;
+        words.push_back(WordParser::make_word(pt, c));
+    }
+
+    // Optional CRC word: DATA or REP preamble (avoids consecutive same preamble)
+    if (crc_enabled) {
+        const uint16_t crc = compute_dtm_crc(text.c_str(), n);
+        // Encode 16-bit CRC into 3 Expanded-64 chars (6 bits each, low-to-high)
+        char crc_chars[3];
+        crc_chars[0] = static_cast<char>(0x20 + (crc         & 0x3Fu));
+        crc_chars[1] = static_cast<char>(0x20 + ((crc >>  6) & 0x3Fu));
+        crc_chars[2] = static_cast<char>(0x20 + ((crc >> 12) & 0x0Fu));
+        const PreambleType pt = (words.size() % 2 == 1) ? PreambleType::DATA
+                              :                            PreambleType::REP;
+        words.push_back(WordParser::make_word(pt, crc_chars));
+    }
+
+    return words;
+}
+
 } // namespace ale
