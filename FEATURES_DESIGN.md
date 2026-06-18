@@ -35,7 +35,7 @@ Features sind **logisch** gruppiert — nicht 1:1 pro Requirement. Ein Feature i
 - **Design-Entscheidungen:** `DD-<nnn>`
 
 Bereichs-Präfixe identisch zu REQUIREMENTS.md:
-`GEN` · `WAVEFORM` · `WORD` · `FEC` · `FRAME` · `SYNC` · `SOUND` · `CHAN` · `LINK` · `ADDR`
+`GEN` · `WAVEFORM` · `WORD` · `FEC` · `FRAME` · `SYNC` · `SOUND` · `CHAN` · `LINK` · `ADDR` · `CMD` · `AQC`
 
 ### Status
 
@@ -236,6 +236,20 @@ PLATFORM ADAPTERS (separate Projekte)
 | FEAT-ADDR-003 | Net-, Group-, AllCall- und AnyCall-Adressen | REQ-ADDR-008–011 | `Stores/address_book.cpp`, `Protocol/ale_state_machine.cpp` | MUST | geplant |
 | FEAT-ADDR-004 | Wildcard-Matching | REQ-ADDR-012 | `Stores/address_book.cpp` | MUST | implementiert |
 | FEAT-ADDR-005 | Self-, Null- und In-Link-Adressen | REQ-ADDR-013–015 | `Stores/address_book.cpp`, `Protocol/ale_state_machine.cpp` | MUST | geplant |
+| FEAT-CMD-001 | CRC-FCS (16-Bit Rahmenprüfsumme) | MIL-STD-188-141B A.5.6.1 | `Protocol/ale_orderwire_protocols.h/cpp` | MUST | geplant |
+| FEAT-CMD-002 | Power Control CMD | MIL-STD-188-141B A.5.6.2 | `Protocol/ale_orderwire_protocols.h/cpp` | COULD | geplant |
+| FEAT-CMD-003 | Channel Related CMD Functions | MIL-STD-188-141B A.5.6.3 | `Protocol/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
+| FEAT-CMD-004 | Time-Related CMDs (Tune&Wait, Schedule, Time Exchange) | MIL-STD-188-141B A.5.6.4 | `Protocol/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
+| FEAT-CMD-005 | Modem Negotiation & Handoff CMD | MIL-STD-188-141B A.5.6.5 | `Protocol/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
+| FEAT-CMD-006 | Do-Not-Respond CMD | MIL-STD-188-141B A.5.6.7 | `Protocol/ale_orderwire_protocols.h/cpp` | MUST | geplant |
+| FEAT-CMD-007 | User Unique Functions (UUF) | MIL-STD-188-141B A.5.6.9 | `Protocol/ale_orderwire_protocols.h/cpp` | COULD | geplant |
+| FEAT-AQC-001 | AQC Word-Struktur & Packed-Address (Base-40) | MIL-STD-188-141B A.5.8.1.1 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
+| FEAT-AQC-002 | AQC Preamble-Typen (8 AQC-spezifische Preambles) | MIL-STD-188-141B A.5.8.1.2 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
+| FEAT-AQC-003 | AQC Adresscharakteristiken & Call-Typen | MIL-STD-188-141B A.5.8.1.3–A.5.8.1.4 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
+| FEAT-AQC-004 | AQC Calling Cycle & Unit Call Protokoll | MIL-STD-188-141B A.5.8.2.1–A.5.8.2.2 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
+| FEAT-AQC-005 | AQC Star Net Call | MIL-STD-188-141B A.5.8.2.3 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
+| FEAT-AQC-006 | AQC Orderwire Functions (ACK/NAK, Control Messages) | MIL-STD-188-141B A.5.8.3 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
+| FEAT-AQC-007 | AQC Linking Protection (LP) | MIL-STD-188-141B A.5.8.4 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
 
 ---
 
@@ -553,21 +567,29 @@ Outer State gesetzt. Standard-Startwert ist `IDLE`.
 
 ```cpp
 namespace ALETimingConstants {
-  constexpr uint32_t Tw_ms        = 130;   // 130,66... ms, gerundet
-  constexpr uint32_t Trw_ms       = 392;   // 3 × Tw_ms (3 x redundant word length) 
+  constexpr uint32_t Tw_ms        = 130;   // 130,66... ms, ACHTUNG: abgeschnitten (nicht gerundet)
+  constexpr uint32_t Trw_ms       = 392;   // 3 × Tw exakt = 49 symbols × 8 ms; NICHT 3×Tw_ms!
   constexpr uint32_t Tlrw_ms      = 784;   // 2 × Trw
   constexpr uint32_t Ts_max_ms    = 50000; // 50 s
   constexpr uint32_t Tm_max_ms    = 11760; // 11,76 s
   constexpr uint32_t Tx_max_ms    = 1960;  // 5 Wörter
-  constexpr uint32_t Twr_ms       = 915;   // konservativ
+  constexpr uint32_t Twr_ms       = 915;   // 7·Tw = 914,66...ms (slower equipment, maximum)
   constexpr uint32_t Twrt_ms      = 1960;  // Twr + Tt (default Tt=8Tw)
   constexpr uint32_t Twa_ms       = 30000; // 30 s Activity-Timeout
   constexpr uint32_t Tlww_ms      = 392;   // = Trw
-  constexpr uint32_t Twce_ms      = 1960;  // 2 × eigene Ts (Standard)
+  constexpr uint32_t Twce_ms      = 1960;  // FEHLER: Fixwert; Standard: 2 × eigene Ts (dynamisch)
   constexpr uint32_t Twt_ms       = 2000;  // Listen-Before-Transmit Standard
   constexpr uint32_t Twt_ale_ms   = 784;   // Listen-Before-Transmit ALE-only
   constexpr uint32_t Tc_max_ms	  = 4704;  // Maximum Call time 12 * Trw_ms
 }
+// <!-- FEHLER: Tw_ms = 130 ist abgeschnitten, nicht gerundet (Rundung → 131). Exakter Wert:
+//      130,66...ms = 392/3 ms. ACHTUNG: 3 × Tw_ms = 390 ≠ Trw_ms = 392. Trw nie aus Tw_ms
+//      berechnen — immer Trw_ms direkt verwenden. Quelle: Table A-XV / Annex B MIL-STD-188-141B -->
+// <!-- FEHLER: Twr_ms = 915 entspricht 7·Tw = 914,66...ms (slower equipment, maximum lt. Annex B).
+//      Für schnelle Geräte gilt 5·Tw = 653ms. Quelle: Table A-XV / Annex B -->
+// <!-- FEHLER: Twce_ms = 1960 ist ein willkürlicher Fixwert ohne Basis im Standard. Standard:
+//      Twce = 2 × eigene Ts (dynamisch). Beispiel 10 Kanäle × 200ms = Ts=2000ms → Twce=4000ms.
+//      Laufzeit-Berechnung aus eigener Scan-Periode erforderlich. Quelle: Table A-XV / Annex B -->
 ```
 
 ---
@@ -1307,7 +1329,18 @@ public:
 };
 ```
 
-**Slot-Wartezeit** (A.4.3.2): `Tswt(SN) = Tsw × SN`. Im Uniform-Fall gilt `Tsw = 14·Tw = 5488 ms` (1-Wort-Adressen). Gespeichert als Vielfaches von Tw, berechnet in ms on demand.
+**Slot-Wartezeit** (A.4.3.2): `Tswt(SN) = Tsw × SN`. Im Uniform-Fall gilt `Tsw = 14·Tw ≈ 1829 ms` (1-Wort-Adressen). Gespeichert als Vielfaches von Tw, berechnet in ms on demand.
+
+<!-- FEHLER: Tsw = 14·Tw war als 5488 ms angegeben. Das ist 14·Trw = 14×392 ms (Faktor-3-Fehler).
+     Korrekt: Tsw = 14·Tw = 14 × 130,66...ms ≈ 1829 ms. Quelle: Table A-XV / Annex B MIL-STD-188-141B -->
+
+<!-- LÜCKE geschlossen (Quelle: Annex B MIL-STD-188-141B):
+     Tsw hat drei normierte Varianten:
+     - Standard-Antworten:  Tsw = 14·Tw ≈ 1829 ms
+     - LQA-Antworten:       Tsw = 17·Tw ≈ 2221 ms
+     - Tight-Slot-Antworten: Tsw = 9·Tw = 1176 ms
+     Weitere Werte können per CMD definiert werden. Bei Implementierung von LQA-Replies
+     (REQ-CHAN-016) muss Tsw = 17·Tw verwendet werden. -->
 
 ---
 
@@ -1416,6 +1449,13 @@ public:
 **Akzeptanzkriterien:**
 - `AC-GEN-015-1` — Das System muss mindestens 100 Fremdstations-Einträge speichern können.
 - `AC-GEN-015-2` — Jeder Eintrag muss Adresse, Kanalqualitätsdaten und gerätespezifische Link-Einstellungen enthalten können.
+- `AC-GEN-015-3` — DO (A.4.3.3): Freie Kapazität der Tabelle wird automatisch mit auf gescannten oder überwachten Kanälen gehörten Adressen befüllt.
+- `AC-GEN-015-4` — DO (A.4.3.3): Bei voller Kapazität werden die ältesten Einträge durch die neuesten ersetzt (LRU-Verdrängung).
+- `AC-GEN-015-5` — DO (A.4.3.3): Automatisch befüllte Einträge werden für Rufinitiierung und Aktivitätsbewertung verwendet.
+
+<!-- LÜCKE geschlossen: AC-GEN-015-3 bis -5 aus Standard A.4.3.3 DO ergänzt.
+     Text: "excess capacity...should be automatically filled with any addresses heard on any of
+     the scanned or monitored channels...replacing the oldest heard addresses with the latest ones." -->
 
 ---
 
@@ -2478,6 +2518,103 @@ char3    =  payload         & 0x7F;
 
 ---
 
+<!-- LÜCKE geschlossen: REQ-WORD-004–007 aus Standard A.5.2.3.2.2–A.5.2.3.2.5 ergänzt -->
+
+##### REQ-WORD-004 — TIS als Abschluss-Designator der sendenden Station
+
+**Spec-Referenz:** A.5.2.3.2.2
+**Priorität:** MUST · **Status:** implementiert
+
+**Anforderung:** Das TIS-Wort (101) muss als Routing-Designator die Adresse der aktuell sendenden (rufenden oder soundenden) Station angeben, die den Ruf oder Sound direkt überträgt. Außer bei Verwendung von TWAS muss TIS in allen ALE-Protokollen verwendet werden, um den ALE-Frame und die Übertragung zu beenden. TIS zeigt die Fortsetzung des Protokolls oder Handshakes an und leitet, fordert oder lädt (je nach Protokoll) Antworten oder Bestätigungen von anderen gerufenen oder empfangenden Stationen ein. TIS muss zur Kennzeichnung des Call-Acceptance-Sounds (TIS) verwendet werden. TIS und TWAS sind in demselben Frame gegenseitig ausgeschlossen.
+
+**Akzeptanzkriterien:**
+- `AC-WORD-004-1` — TIS enthält die Adresse der aktuell sendenden Station (erste drei Zeichen).
+- `AC-WORD-004-2` — TIS beendet den ALE-Frame und die Übertragung (außer bei TWAS).
+- `AC-WORD-004-3` — TIS zeigt Protokoll-/Handshake-Fortsetzung an und lädt Antworten ein.
+- `AC-WORD-004-4` — Erweiterte Adressen werden identisch zur TO-Struktur in DATA/REP-Wörtern fortgesetzt (max. 5 Adresswörter, 15 Zeichen).
+- `AC-WORD-004-5` — TIS und TWAS dürfen im selben Frame nicht gemeinsam vorkommen.
+- `AC-WORD-004-6` — TIS wird ausschließlich im Conclusion-Abschnitt des ALE-Frames (oder als ganzer Sound) verwendet.
+
+**Vom-Standard-vorgegebene Werte:**
+
+| Parameter | Wert | Einheit | Spec-Referenz |
+|---|---|---|---|
+| Preamble-Code TIS | 5 (101) | — | Table A-VIII |
+| Maximale Adresslänge | 15 | Zeichen | A.5.2.3.2.2 |
+| Maximale Anzahl Adresswörter | 5 | Wörter | A.5.2.3.2.2 |
+
+---
+
+##### REQ-WORD-005 — TWAS als Abschluss-Designator zur Ablehnung
+
+**Spec-Referenz:** A.5.2.3.2.3
+**Priorität:** MUST · **Status:** implementiert
+
+**Anforderung:** Das TWAS-Wort (011) muss als Routing-Designator exakt wie TIS verwendet werden, mit folgenden Abweichungen: Es zeigt die Beendigung des ALE-Protokolls oder Handshakes an und lehnt, entmutigt oder lädt nicht ein (je nach Protokoll) Antworten oder Bestätigungen von anderen gerufenen oder empfangenden Stationen. TWAS muss zur Kennzeichnung des Call-Rejection-Sounds (TWAS) verwendet werden. TIS darf im selben Frame nicht gemeinsam mit TWAS verwendet werden.
+
+**Akzeptanzkriterien:**
+- `AC-WORD-005-1` — TWAS enthält die Adresse der aktuell sendenden Station (erste drei Zeichen).
+- `AC-WORD-005-2` — TWAS beendet den ALE-Frame und zeigt Protokoll-/Handshake-Abbruch an.
+- `AC-WORD-005-3` — TWAS lehnt Antworten ab bzw. entmutigt diese.
+- `AC-WORD-005-4` — Erweiterte Adressen werden identisch zur TO-Struktur in DATA/REP-Wörtern fortgesetzt.
+- `AC-WORD-005-5` — TIS und TWAS dürfen im selben Frame nicht gemeinsam vorkommen.
+
+**Vom-Standard-vorgegebene Werte:**
+
+| Parameter | Wert | Einheit | Spec-Referenz |
+|---|---|---|---|
+| Preamble-Code TWAS | 3 (011) | — | Table A-VIII |
+
+---
+
+##### REQ-WORD-006 — THRU für Gruppenrufe im Scanning-Call-Abschnitt
+
+**Spec-Referenz:** A.5.2.3.2.4
+**Priorität:** MUST · **Status:** implementiert
+
+**Anforderung:** Das THRU-Wort (001) muss ausschließlich im Scanning-Call-Abschnitt des Calling-Cycle für Gruppenruf-Protokolle verwendet werden. THRU muss alternierend mit REP als Routing-Designator verwendet werden, um den ersten Adress-Wort der direkt anzurufenden Stationen anzugeben. Jedes Adress-Erste-Wort ist auf ein grundlegendes Adresswort (drei Zeichen) begrenzt — keine erweiterten Adressen sind zulässig. Maximal fünf verschiedene Adress-Erste-Wörter sind in einem Gruppenruf erlaubt. THRU darf außerhalb des Scanning-Call-Abschnitts nicht für erweiterte Adressen verwendet werden.
+
+**Akzeptanzkriterien:**
+- `AC-WORD-006-1` — THRU wird nur im Scanning-Call-Abschnitt von Gruppenrufen verwendet.
+- `AC-WORD-006-2` — THRU wird alternierend mit REP eingesetzt: Sequenz ist ausschließlich THRU/REP-Alternierungen.
+- `AC-WORD-006-3` — Jedes THRU-Wort enthält nur ein Adress-Erstes-Wort (drei Zeichen, keine Erweiterung).
+- `AC-WORD-006-4` — Maximal fünf verschiedene Adress-Erste-Wörter pro Gruppenruf.
+- `AC-WORD-006-5` — THRU wird nicht im Leading-Call-Abschnitt verwendet; dort wird die vollständige Gruppenadresse per TO gesendet.
+
+**Vom-Standard-vorgegebene Werte:**
+
+| Parameter | Wert | Einheit | Spec-Referenz |
+|---|---|---|---|
+| Preamble-Code THRU | 1 (001) | — | Table A-VIII |
+| Max. Adress-Erste-Wörter pro Gruppenruf | 5 | Wörter | A.5.2.3.2.4 |
+| Adresslänge im Scanning-Call (THRU) | 3 | Zeichen | A.5.2.3.2.4 |
+
+---
+
+##### REQ-WORD-007 — FROM als optionale Kennung der sendenden Station (Quick ID)
+
+**Spec-Referenz:** A.5.2.3.2.5
+**Priorität:** SHOULD · **Status:** implementiert
+
+**Anforderung:** Das FROM-Wort (100) ist ein optionaler Designator, der die sendende Station identifiziert, ohne den ALE-Frame zu beenden. FROM muss die vollständige Adresse der sendenden Station enthalten (unter Verwendung von FROM sowie DATA- und REP-Wörtern identisch zur TO-Adressstruktur). Es darf maximal einmal pro Frame und ausschließlich unmittelbar vor einem CMD-Wort im Message-Abschnitt verwendet werden. FROM sollte eingesetzt werden, um eine „Quick ID" der sendenden Station bereitzustellen, wenn die normale Conclusion verzögert ist (z.B. bei langen Message-Abschnitten).
+
+**Akzeptanzkriterien:**
+- `AC-WORD-007-1` — FROM enthält die vollständige Adresse der sendenden Station.
+- `AC-WORD-007-2` — FROM tritt maximal einmal pro Frame auf.
+- `AC-WORD-007-3` — FROM steht ausschließlich unmittelbar vor einem CMD-Wort im Message-Abschnitt.
+- `AC-WORD-007-4` — Erweiterte Adressen werden identisch zur TO-Struktur in DATA/REP-Wörtern fortgesetzt (max. 5 Adresswörter, 15 Zeichen).
+- `AC-WORD-007-5` — FROM-Wörter in anderen Sequenzen als unmittelbar vor CMD werden ignoriert.
+
+**Vom-Standard-vorgegebene Werte:**
+
+| Parameter | Wert | Einheit | Spec-Referenz |
+|---|---|---|---|
+| Preamble-Code FROM | 4 (100) | — | Table A-VIII |
+| Maximalanzahl FROM pro Frame | 1 | — | A.5.2.3.2.5 |
+| Position im Frame | Nur unmittelbar vor CMD | — | A.5.2.3.2.5 |
+
+---
+
 ### FEAT-WORD-003 — Message & Extension Words (CMD / DATA / REP)
 
 **Setzt um:** REQ-WORD-008, REQ-WORD-009, REQ-WORD-010
@@ -3166,10 +3303,19 @@ festgelegt.
 
 **Anforderung:** Der Sender muss innerhalb von 2,5 ms nach der ersten Tonübertragung nach Rufinitiierung mindestens 90 Prozent der gewählten HF-Sendeleistung erreicht haben. Die zulässige Verzögerung von 2,5 ms gilt zusätzlich zu der in 5.3.5.1 festgelegten Attackzeit. Nichterfüllung der 90-%-Bedingung beeinträchtigt die Verlinkungswahrscheinlichkeit; die Bedingung gilt als erfüllt, wenn das Verlinkungswahrscheinlichkeitskriterium gemäß Table A-I erfüllt ist.
 
+<!-- FEHLER: "Table A-I" in diesem Absatz ist falsch. Table A-I enthält die Occupancy Detection
+     Probability (Belegtheitserkennung, REQ-GEN-009) — nicht das Verlinkungswahrscheinlichkeitskriterium.
+     Die Linking Probability ist laut REQ-GEN-010 in Table A-II definiert. Außerdem: Standard A.5.2.5.1
+     NOTE 2 enthält keine Compliance-Äquivalenzklausel via Tabellenverweis; dieser Passus konnte im
+     Standard-JSON nicht verifiziert werden.
+     NICHT PRÜFBAR: A.5.2.5.1 vollständiger Wortlaut (inkl. aller Notes) nicht im JSON-Extrakt. -->
+
 **Akzeptanzkriterien:**
 - `AC-FRAME-006-1` — Die Sendeleistung beträgt spätestens 2,5 ms nach dem ersten ALE-Ton mindestens 90 % der gewählten HF-Leistung.
 - `AC-FRAME-006-2` — Die zulässige 2,5-ms-Verzögerung ist additiv zur Attackzeit aus 5.3.5.1.
 - `AC-FRAME-006-3` — Die Einhaltung gilt auch dann als erfüllt, wenn das Verlinkungswahrscheinlichkeitskriterium gemäß Table A-I erfüllt ist (Compliance-Äquivalenz).
+  <!-- NICHT PRÜFBAR: Table-Referenz vermutlich falsch (A-I vs. A-II), Compliance-Äquivalenzklausel
+       im Standard-JSON nicht auffindbar. Quelle-Abschnitt A.5.2.5.1 unvollständig im Extrakt. -->
 
 **Vom-Standard-vorgegebene Werte:**
 
@@ -3180,7 +3326,8 @@ festgelegt.
 
 **OFFENE PUNKTE / ANNAHMEN:**
 - OPEN-20 — Der referenzierte Abschnitt 5.3.5.1 (allowable attack time) wurde nicht geliefert; die zusätzlich erlaubte Attackzeit ist dort zu verifizieren.
-- OPEN-21 — Table A-I (Verlinkungswahrscheinlichkeitskriterium) wurde nicht geliefert; die Compliance-Äquivalenz kann nicht vollständig geprüft werden.
+  <!-- NICHT PRÜFBAR: Abschnitt 5.3.5.1 nicht im Standard-JSON enthalten. -->
+- OPEN-21 — ~~Table A-I (Verlinkungswahrscheinlichkeitskriterium) wurde nicht geliefert~~ → **AUFGELÖST:** Table A-I ist im Standard-JSON vorhanden und enthält die **Occupancy Detection Probability** (Belegtheitserkennung, REQ-GEN-009), **nicht** das Verlinkungskriterium. Der Verweis in REQ-FRAME-006 auf "Table A-I als Verlinkungskriterium" ist daher falsch (→ FEHLER-Marker in REQ-FRAME-006). Das eigentliche Verlinkungskriterium befindet sich in Table A-II (REQ-GEN-010).
 
 ---
 
@@ -4024,6 +4171,9 @@ Nach `TIS` verbleibt die Station zusätzlich für `Twrt` auf dem Kanal und akzep
 
 * `AC-SOUND-007-1` — Die Anzahl der übertragenen Adresswörter wird dynamisch aus `Ts_max` bestimmt.
 * `AC-SOUND-007-2` — Es gilt `Tss ≥ Ts_max`.
+  <!-- Hinweis: Standard A.5.3.3 fordert Tss > Ts (tatsächliche Scan-Periode der Empfänger).
+       Ts_max = 50 s ist der konservative Worst-Case (da Ts ≤ Ts_max für alle Stationen).
+       Diese Formulierung ist standardkonform und ausreichend sicher. -->
 * `AC-SOUND-007-3` — Jede gemeinsam scannende Station kann mindestens eine vollständige Adresse empfangen.
 * `AC-SOUND-007-4` — Die Implementierung darf keine verkürzten Adressformen verwenden.
 
@@ -6119,6 +6269,615 @@ Die Datenblöcke werden vollständig gepuffert und sollen für die DTEs transpar
 ---
 
 
+---
+
+## CMD-Bereich (A.5.6 ALE Control Functions)
+
+---
+
+### FEAT-CMD-001 — CRC-FCS (16-Bit Rahmenprüfsumme)
+
+**Setzt um:** MIL-STD-188-141B A.5.6.1
+**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Status:** geplant
+
+#### Beschreibung
+
+Die CRC-Funktion (Cyclic Redundancy Check) sichert die Datenintegrität von ALE-Message-Abschnitten. Sie verwendet ein 16-Bit FCS (Frame Check Sequence) nach FED-STD-1003 mit dem Generatorpolynom X¹⁶ + X¹² + X⁵ + 1. Die Fehlererkennungswahrscheinlichkeit beträgt 2⁻¹⁶, unabhängig von der Bit-Anzahl.
+
+#### Technischer Entwurf
+
+```cpp
+// CMD CRC Word: Preamble CMD (110), erstes Zeichen = 'x'/'y'/'z'/'{' (CRC-Typ)
+// CRC-Analyse über alle ALE-Wörter des Message-Abschnitts
+// (begrenzt durch Ende des Calling Cycle oder vorheriges CMD CRC-Wort)
+struct CrcWord {
+    PreambleType preamble = PreambleType::CMD;
+    char type_char;  // 'x'=1111000, 'y'=1111001, 'z'=1111010, '{'=1111011
+    uint16_t fcs;    // 16-Bit Frame Check Sequence
+};
+
+uint16_t compute_crc16(std::span<const ALEWord> words);
+```
+
+#### Requirement-Details
+
+##### REQ-CMD-001 — CRC-FCS Generatorpolynom
+
+**Spec-Referenz:** A.5.6.1
+**Priorität:** MUST · **Status:** offen
+
+**Anforderung:** CMD CRC verwendet 16-Bit FCS nach FED-STD-1003, Polynom X¹⁶ + X¹² + X⁵ + 1.
+
+**Akzeptanzkriterien:**
+- `AC-CMD-001-1` — CRC-Berechnung nutzt Polynom 0x1021 (CRC-CCITT)
+- `AC-CMD-001-2` — CMD CRC-Wort hat Preamble CMD und erstes Zeichen 'x', 'y', 'z' oder '{'
+- `AC-CMD-001-3` — CRC deckt alle Wörter zwischen vorherigem CMD CRC (oder Calling-Cycle-Ende) und aktuellem CMD CRC ab
+
+---
+
+### FEAT-CMD-002 — Power Control CMD (optional)
+
+**Setzt um:** MIL-STD-188-141B A.5.6.2
+**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Status:** geplant
+
+#### Beschreibung
+
+Optionale Funktion zur Leistungsregelung. Ein Sender kann eine Gegenstation auffordern, die HF-Sendeleistung zu erhöhen oder zu senken. Drei Verfahren: Anforderung zur Anpassung, Meldung des aktuellen Pegels, relative/absolute Leistungsangabe in dB/dBW.
+
+#### Technischer Entwurf
+
+```cpp
+// KP1-KP3 Kontrollbits für Leistungsanpassung
+enum class PowerControlMode {
+    REQUEST_ADJUST,    // Anforderung zur Anpassung
+    REPORT_CURRENT,    // Meldung aktueller Pegel
+    SPECIFY_RELATIVE,  // Relative Angabe (dB)
+    SPECIFY_ABSOLUTE,  // Absolute Angabe (dBW)
+};
+
+struct PowerControlCmd {
+    PowerControlMode mode;
+    int8_t power_delta_db;   // für relative/absolute Angabe
+};
+```
+
+#### Requirement-Details
+
+##### REQ-CMD-002 — Power Control Steuerung
+
+**Spec-Referenz:** A.5.6.2
+**Priorität:** COULD · **Status:** offen
+
+**Anforderung:** CMD Power Control mit KP1–KP3 Bits für Leistungsanpassung (optional).
+
+**Akzeptanzkriterien:**
+- `AC-CMD-002-1` — Power-Control-CMD enthält KP1–KP3 Kontrollbits
+- `AC-CMD-002-2` — Alle drei Modi (REQUEST/REPORT/SPECIFY) sind implementierbar
+
+---
+
+### FEAT-CMD-003 — Channel Related CMD Functions
+
+**Setzt um:** MIL-STD-188-141B A.5.6.3
+**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Status:** geplant
+
+#### Beschreibung
+
+Kanalzugehörige Kontrollfunktionen: Kanalbezeichnung (5-stellige BCD-Frequenz), Frequenzbezeichnung (7-Bit Integer), Full-Duplex-Kanalaushandlung, sowie optionale LQA-Polling/Reporting-Funktionen (Referenz MIL-STD-187-721).
+
+#### Technischer Entwurf
+
+```cpp
+// A.5.6.3.1: Kanalbezeichnung — 5-stelliger BCD-String (20 Bit) für Frequenz
+// A.5.6.3.2: Frequenzbezeichnung — 7-Bit-Binärzahl (0-127), absolut oder relativ
+// A.5.6.3.3: Full-Duplex Independent Link (optional)
+struct ChannelDesignationCmd {
+    uint32_t bcd_frequency;   // 20-Bit BCD, A.5.6.3.1
+    uint8_t freq_index;       // 7-Bit, 0-127, A.5.6.3.2
+    bool full_duplex;         // A.5.6.3.3
+};
+```
+
+#### Requirement-Details
+
+##### REQ-CMD-003 — Kanalbezeichnung BCD
+
+**Spec-Referenz:** A.5.6.3.1, A.5.6.3.2
+**Priorität:** SHOULD · **Status:** offen
+
+**Anforderung:** Kanalbezeichnung als 5-stellige BCD (20 Bit) und Frequenzbezeichnung als 7-Bit-Index.
+
+**Akzeptanzkriterien:**
+- `AC-CMD-003-1` — BCD-Frequenzfeld hat 20 Bit (5 Stellen × 4 Bit)
+- `AC-CMD-003-2` — Frequenz-Index 7 Bit, Wertebereich 0–127
+- `AC-CMD-003-3` — Full-Duplex-Kanalaushandlung per CMD-Wort möglich (A.5.6.3.3)
+
+---
+
+### FEAT-CMD-004 — Time-Related CMDs (Tune & Wait, Schedule, Time Exchange)
+
+**Setzt um:** MIL-STD-188-141B A.5.6.4
+**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Status:** geplant
+
+#### Beschreibung
+
+Zeitbezogene CMD-Funktionen: Tune-and-Wait-Kommando (Gegenstation wartet auf Kanal), Scheduling-Kommandos (Zeitmanipulation in 4 Auflösungsstufen), Time-Exchange-Protokoll (Time-Is / Time-Request mit Authentifizierung), sowie Zeitqualitätsangabe.
+
+#### Technischer Entwurf
+
+```cpp
+// A.5.6.4.1: Tune and Wait
+// A.5.6.4.2: Scheduling – 4 Zeitauflösungsstufen:
+//   0–4s  in 1/8s (Tw)-Schritten
+//   0–36s in 1s   (3×Trw)-Schritten
+//   0–31min in 1min (153×Trw)-Schritten
+//   0–29h  in 1h  (9184×Trw)-Schritten
+// A.5.6.4.3: Time Exchange (Time-Is / Time-Request)
+// A.5.6.4.4: Coarse Time Word (Datum + Zeit + Qualität)
+// A.5.6.4.5: Authentication Word (XOR aller 24-Bit-Wörter)
+// A.5.6.4.6: Time Quality (0=keine bis 7=unbegrenzt, 6 Fenster: 20ms..60s)
+
+struct SchedulingCmd {
+    enum class Resolution { TW_EIGHTH, SECOND, MINUTE, HOUR } resolution;
+    uint8_t value;
+};
+
+struct TimeExchangeCmd {
+    bool is_request;           // Time-Request vs. Time-Is
+    uint64_t coarse_time_ms;   // Datum+Zeit
+    uint8_t quality;           // 0–7
+    uint32_t authenticator;    // XOR der Nachrichtenwörter
+};
+```
+
+#### Requirement-Details
+
+##### REQ-CMD-004 — Scheduling-Zeitauflösungen
+
+**Spec-Referenz:** A.5.6.4.2
+**Priorität:** SHOULD · **Status:** offen
+
+**Vom-Standard-vorgegebene Werte:**
+
+| Auflösung | Einheit | Wertebereich | Schrittgröße |
+|---|---|---|---|
+| Fein | 1/8 s (Tw) | 0–4 s | 125 ms |
+| Mittel | 1 s (3×Trw) | 0–36 s | 1 s |
+| Grob | 1 min (153×Trw) | 0–31 min | 60 s |
+| Sehr grob | 1 h (9184×Trw) | 0–29 h | 3600 s |
+
+**Akzeptanzkriterien:**
+- `AC-CMD-004-1` — Scheduling-CMD unterstützt alle 4 Zeitauflösungsstufen
+- `AC-CMD-004-2` — Time-Is-CMD enthält Grobzeit (Datum+Zeit+Qualität) im Coarse-Time-Word
+- `AC-CMD-004-3` — Authentication-Word = XOR aller 24-Bit-Wörter der Nachricht
+- `AC-CMD-004-4` — Zeitqualität-Feld: 0 (keine Uhrzeit) bis 7 (unbegrenzt), 6 definierte Fenster (20ms, 100ms, 500ms, 2s, 10s, 60s)
+- `AC-CMD-004-5` — Tune-and-Wait unterdrückt normale/voreingestellte Antworten der Gegenstation
+
+---
+
+### FEAT-CMD-005 — Modem Negotiation & Handoff CMD
+
+**Setzt um:** MIL-STD-188-141B A.5.6.5
+**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Status:** geplant
+
+#### Beschreibung
+
+Modem-Aushandlung im Orderwire-Abschnitt: Die initierende Station sendet einen Modem-Select-CMD mit dem gewünschten Modem-Code. Die antwortende Station kann akzeptieren oder eine Alternative vorschlagen. Modus-Kontrolle via Zeichen 'm' (1101101), Modem-Select via Zeichen 'n' (1101110).
+
+#### Technischer Entwurf
+
+```cpp
+// A.5.6.5.1: Modem Selection CMD
+// Modus-Kontrolle:  CMD-Zeichen1 = 'm' (1101101)
+// Modem-Select:     CMD-Zeichen2 = 'n' (1101110)
+struct ModemNegotiationCmd {
+    uint8_t modem_code;    // Ziel-Modem-Typ
+    bool accept;           // true = Akzeptanz, false = Gegenvorschlag
+};
+```
+
+#### Requirement-Details
+
+##### REQ-CMD-005 — Modem-Aushandlungsprotokoll
+
+**Spec-Referenz:** A.5.6.5.1, A.5.6.5.1.2
+**Priorität:** SHOULD · **Status:** offen
+
+**Akzeptanzkriterien:**
+- `AC-CMD-005-1` — Modem-CMD verwendet Zeichen 'm' (0x6D) für Modus-Kontrolle
+- `AC-CMD-005-2` — Modem-CMD verwendet Zeichen 'n' (0x6E) für Modem-Select
+- `AC-CMD-005-3` — Protokoll ermöglicht Akzeptanz oder Gegenvorschlag durch Gegenstation
+
+---
+
+### FEAT-CMD-006 — Do-Not-Respond CMD
+
+**Setzt um:** MIL-STD-188-141B A.5.6.7
+**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Status:** geplant
+
+#### Beschreibung
+
+Wenn eine Station dieses CMD empfängt, antwortet sie nicht, es sei denn, ein anderes CMD erfordert explizit eine Antwort (z.B. LQA-Anfrage oder DTM/DBM mit ARQ). Kein Three-Way-Handshake erforderlich.
+
+#### Technischer Entwurf
+
+```cpp
+// Empfang von CMD DO-NOT-RESPOND → respond_flag = false
+// Ausnahmen: LQA-Request, DTM/DBM mit ARQ
+bool is_do_not_respond_cmd(const ALEWord& word);
+```
+
+#### Requirement-Details
+
+##### REQ-CMD-006 — Do-Not-Respond Semantik
+
+**Spec-Referenz:** A.5.6.7
+**Priorität:** MUST · **Status:** offen
+
+**Anforderung:** Nach Empfang von CMD Do-Not-Respond darf die Station keine unaufgeforderte Antwort senden.
+
+**Akzeptanzkriterien:**
+- `AC-CMD-006-1` — Nach Empfang von Do-Not-Respond: respond_allowed = false
+- `AC-CMD-006-2` — Ausnahme: LQA-Request-CMD darf trotzdem beantwortet werden
+- `AC-CMD-006-3` — Ausnahme: DTM/DBM mit ARQ-Flag darf trotzdem beantwortet werden
+- `AC-CMD-006-4` — Kein Three-Way-Handshake bei Do-Not-Respond
+
+---
+
+### FEAT-CMD-007 — User Unique Functions (UUF)
+
+**Setzt um:** MIL-STD-188-141B A.5.6.9
+**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Status:** geplant
+
+#### Beschreibung
+
+Spezielle Funktionen für besondere Anwendungsfälle, koordiniert zwischen spezifischen Nutzern/Herstellern. 16.384 eindeutige UUF-Codes (14-Bit oder zwei Zeichen als Unique Index UI). UUF wird nur bei explizit adressierten und fähigen Stationen verwendet. CMD STAY gibt eine Wartezeit an, bevor UUF-Instruktionen ausgeführt werden.
+
+#### Technischer Entwurf
+
+```cpp
+// 16384 UUF-Codes = 14-Bit UI (Unique Index)
+// CMD STAY vor UUF: gibt Wartezeit an
+// UUF nur im Message-Abschnitt, außerhalb Frame wenn möglich
+struct UufCmd {
+    uint16_t unique_index;  // 14-Bit UI, 0–16383
+    std::vector<uint8_t> payload;
+};
+```
+
+#### Requirement-Details
+
+##### REQ-CMD-007 — UUF Unique Index
+
+**Spec-Referenz:** A.5.6.9
+**Priorität:** COULD · **Status:** offen
+
+**Akzeptanzkriterien:**
+- `AC-CMD-007-1` — UUF Unique Index ist 14 Bit (0–16383), entspricht 16.384 Codes
+- `AC-CMD-007-2` — CMD STAY wird vor UUF gesendet um Wartezeit anzugeben
+- `AC-CMD-007-3` — UUF nur im Message-Abschnitt des Frames
+
+---
+
+## AQC-Bereich (A.5.8 Alternative Quick Call ALE)
+
+---
+
+### FEAT-AQC-001 — AQC Word-Struktur & Packed-Address (Base-40)
+
+**Setzt um:** MIL-STD-188-141B A.5.8.1.1, A.5.8.1.1.1, A.5.8.1.1.2
+**Modul:** `include/Protocol/aqc_protocol.h`, `src/Protocol/aqc_protocol.cpp`
+**Status:** geplant
+**Hinweis:** (NT) Not Tested — optionales Feature
+
+#### Beschreibung
+
+AQC-ALE-Wörter haben 3-Bit-Preamble, ein Address-Differentiation-Flag (Bit 4), ein 16-Bit Packed-Address-Feld und ein 4-Bit Data-Exchange-Feld. Die Packed-Address verwendet Base-40-Arithmetik: 3 Zeichen × 38-Zeichen-ASCII-Subset → 16 Bit. Legalbereich: "000" (1.641) bis "ZZZ" (62.358). Das Address-Differentiation-Flag (= MSB der 16-Bit-Adresse) stellt sicher, dass kein AQC-ALE-Wort je mit einem legalen Baseline-2G-ALE-Wort verwechselt werden kann.
+
+#### Technischer Entwurf
+
+```cpp
+// AQC Word: 3-Bit Preamble | 1-Bit ADF | 16-Bit Packed Address | 4-Bit Data Exchange
+// Packed Address: char1 × 1600 + char2 × 40 + char3 × 1  (Base-40)
+// Ordinalwerte: 0='0'..9='9', 10='A'..35='Z', 36='@', 37='?'
+
+struct AqcWord {
+    uint8_t  preamble;          // 3 Bit
+    bool     address_diff_flag; // Bit 4, Kopie MSB(packed_address)
+    uint16_t packed_address;    // 16 Bit, Base-40
+    uint8_t  data_exchange;     // 4 Bit
+};
+
+uint16_t aqc_pack_address(std::string_view addr3);   // 3-Zeichen → 16 Bit
+std::string aqc_unpack_address(uint16_t packed);     // 16 Bit → 3 Zeichen
+```
+
+**Vom-Standard-vorgegebene Werte:**
+
+| Parameter | Wert | Beschreibung |
+|---|---|---|
+| Basis | 40 | Zeichenanzahl für Multiplikation |
+| Multiplier Char1 | 1600 (= 40²) | Höchstwertiges Zeichen |
+| Multiplier Char2 | 40 | Mittleres Zeichen |
+| Multiplier Char3 | 1 | Niedrigstwertiges Zeichen |
+| Minimalwert | 1.641 | Adresse "000" |
+| Maximalwert | 62.358 | Adresse "ZZZ" |
+
+#### Requirement-Details
+
+##### REQ-AQC-001 — Base-40 Packed Address
+
+**Spec-Referenz:** A.5.8.1.1.1
+**Priorität:** COULD · **Status:** offen
+
+**Akzeptanzkriterien:**
+- `AC-AQC-001-1` — aqc_pack_address("ABC") liefert korrekten Base-40-Wert
+- `AC-AQC-001-2` — Address-Differentiation-Flag = MSB der 16-Bit Packed Address
+- `AC-AQC-001-3` — Kein legales AQC-ALE-Wort fällt mit einem legalen Baseline-2G-ALE-Wort zusammen
+- `AC-AQC-001-4` — Round-Trip: aqc_unpack_address(aqc_pack_address(addr)) == addr
+
+---
+
+### FEAT-AQC-002 — AQC Preamble-Typen
+
+**Setzt um:** MIL-STD-188-141B A.5.8.1.2
+**Modul:** `include/Protocol/aqc_protocol.h`, `src/Protocol/aqc_protocol.cpp`
+**Status:** geplant
+**Hinweis:** (NT) Not Tested
+
+#### Beschreibung
+
+AQC-ALE definiert 8 eigene Preamble-Typen, die sich von den Baseline-2G-Preambles unterscheiden:
+
+| Code | Typ | Bedeutung |
+|---|---|---|
+| 001 | INLINK | In-Link-Zustand (entspricht kein direktes 2G-Äquivalent) |
+| 010 | TO | Calling-Wort (entspricht 2G TO) |
+| 110 | CMD | Kommando (entspricht 2G CMD) |
+| 100 | PART2 | Zweites Adresswort (AQC-spezifisch) |
+| 101 | TIS | This-Is/Sounding-Conclusion (entspricht 2G TIS) |
+| 011 | TWAS | That-Was/Termination (entspricht 2G TWAS) |
+| 000 | DATA | Datenwort (entspricht 2G DATA) |
+| 111 | REP | Repeat-Wort (entspricht 2G REP) |
+
+#### Technischer Entwurf
+
+```cpp
+enum class AqcPreambleType : uint8_t {
+    DATA    = 0b000,
+    INLINK  = 0b001,
+    TO      = 0b010,
+    TWAS    = 0b011,
+    PART2   = 0b100,
+    TIS     = 0b101,
+    CMD     = 0b110,
+    REP     = 0b111,
+};
+```
+
+#### Requirement-Details
+
+##### REQ-AQC-002 — AQC Preamble-Kodierung
+
+**Spec-Referenz:** A.5.8.1.2
+**Priorität:** COULD · **Status:** offen
+
+**Akzeptanzkriterien:**
+- `AC-AQC-002-1` — AqcPreambleType enthält alle 8 Typen mit korrekten 3-Bit-Codes
+- `AC-AQC-002-2` — INLINK (001) nicht in Baseline-2G-Preamble-Enum vorhanden
+- `AC-AQC-002-3` — PART2 (100) nicht in Baseline-2G-Preamble-Enum vorhanden
+
+---
+
+### FEAT-AQC-003 — AQC Adresscharakteristiken & Call-Typen
+
+**Setzt um:** MIL-STD-188-141B A.5.8.1.3, A.5.8.1.4
+**Modul:** `include/Protocol/aqc_protocol.h`, `src/Protocol/aqc_protocol.cpp`
+**Status:** geplant
+**Hinweis:** (NT) Not Tested
+
+#### Beschreibung
+
+AQC-ALE-Adressen haben 1–6 Zeichen (vs. 1–15 bei Baseline-2G). Das Over-the-Air-Format verwendet immer genau 2 AQC-Wörter mit '@' als Stuffzeichen für Adressen unter 6 Zeichen. Unterstützte Call-Typen: Unit (1–6 Zeichen), StarNet (1–6 Zeichen), AllCall (6 Zeichen, zweite Drei = erste Drei). Group-Calls nicht unterstützt.
+
+#### Technischer Entwurf
+
+```cpp
+// AQC-Adresse: 1–6 Zeichen, ASCII-38-Zeichensatz
+// Over-the-Air: immer genau 2 AQC-Wörter (Wort 1: Zeichen 1–3, Wort 2: Zeichen 4–6)
+// Padding: '@' für unvollständige Zeichen
+// AllCall: Zeichen 4–6 = Zeichen 1–3
+
+struct AqcAddress {
+    std::string value;  // 1–6 Zeichen, ASCII-38
+    bool is_allcall() const;
+    std::array<AqcWord, 2> to_words(AqcPreambleType pt) const;
+};
+```
+
+#### Requirement-Details
+
+##### REQ-AQC-003 — AQC Adresslänge und Formate
+
+**Spec-Referenz:** A.5.8.1.3, A.5.8.1.4
+**Priorität:** COULD · **Status:** offen
+
+**Akzeptanzkriterien:**
+- `AC-AQC-003-1` — AQC-Adresse: 1–6 Zeichen (nicht 1–15 wie Baseline-2G)
+- `AC-AQC-003-2` — Over-the-Air: genau 2 AQC-Wörter, '@'-Padding wenn < 6 Zeichen
+- `AC-AQC-003-3` — AllCall: Zeichen 4–6 identisch mit Zeichen 1–3
+- `AC-AQC-003-4` — Group-Calls nicht unterstützt in AQC-ALE
+
+---
+
+### FEAT-AQC-004 — AQC Calling Cycle & Unit Call Protokoll
+
+**Setzt um:** MIL-STD-188-141B A.5.8.2.1, A.5.8.2.2
+**Modul:** `include/Protocol/aqc_protocol.h`, `src/Protocol/aqc_protocol.cpp`
+**Status:** geplant
+**Hinweis:** (NT) Not Tested
+
+#### Beschreibung
+
+Der AQC-Calling-Cycle ist kürzer als der Baseline-2G-Zyklus. Ruf-Dauer: Anzahl-Kanäle × 0,196 s. Der Leading-Call-Abschnitt sendet die Zieladresse nur einmal (nicht zweifach wie Baseline-2G). Der Acknowledgement-Frame sendet nur die Conclusion. Optional PSK-Tonsequenz während Handshake-Legs.
+
+#### Technischer Entwurf
+
+```cpp
+// AQC Call Duration: N_channels × 0.196s  (vs. Baseline: N × 2 × Trw)
+// Leading Call: Zieladresse 1× (nicht 2× wie Baseline-2G)
+// ACK Frame: nur Conclusion (kein TO+TIS wie Baseline-2G)
+
+// Max Call Duration per channel count (A.5.8.2.1 Table):
+// 1 ch:  4.8s  |  5 ch: 5.8s  | 10 ch: 6.8s  | 20 ch: 8.8s
+constexpr float AQC_CALL_DURATION_PER_CHANNEL_SEC = 0.196f;
+```
+
+**Vom-Standard-vorgegebene Werte:**
+
+| Kanäle | Max. Ruf-Dauer |
+|---|---|
+| 1 | 4,8 s |
+| 5 | 5,8 s |
+| 10 | 6,8 s |
+| 20 | 8,8 s |
+
+#### Requirement-Details
+
+##### REQ-AQC-004 — AQC Calling-Dauer
+
+**Spec-Referenz:** A.5.8.2.1
+**Priorität:** COULD · **Status:** offen
+
+**Akzeptanzkriterien:**
+- `AC-AQC-004-1` — Ruf-Dauer = N_channels × 0,196 s
+- `AC-AQC-004-2` — Leading-Call sendet Zieladresse genau 1× (nicht 2×)
+- `AC-AQC-004-3` — ACK-Frame enthält nur Conclusion (kein TO+TIS-Sequenz)
+
+---
+
+### FEAT-AQC-005 — AQC Star Net Call
+
+**Setzt um:** MIL-STD-188-141B A.5.8.2.3
+**Modul:** `include/Protocol/aqc_protocol.h`, `src/Protocol/aqc_protocol.cpp`
+**Status:** geplant
+**Hinweis:** (NT) Not Tested
+
+#### Beschreibung
+
+AQC-Star-Net-Call verwendet eine Netzadresse als Ruf-Probe. Slotted Response: 2-Wort-Adresse für TO und TIS. Slot 0 (17 Tw) für Nicht-Net-Mitglieder; Slots 1+ (11 Tw) für Net-Mitglieder. Kein LQA im ACK außer via Data-Exchange-Bits. Optionale PSK-Tonsequenz möglich.
+
+#### Technischer Entwurf
+
+```cpp
+// AQC Star Net Slots:
+// Slot 0 (non-member): 17 Tw
+// Slots 1+ (member):   11 Tw  (kürzer als Baseline-2G: 14 Tw)
+constexpr uint8_t AQC_SLOT_NON_MEMBER_TW = 17;
+constexpr uint8_t AQC_SLOT_MEMBER_TW     = 11;
+```
+
+#### Requirement-Details
+
+##### REQ-AQC-005 — AQC Star Net Slotbreiten
+
+**Spec-Referenz:** A.5.8.2.3
+**Priorität:** COULD · **Status:** offen
+
+**Akzeptanzkriterien:**
+- `AC-AQC-005-1` — Slot 0 (Nicht-Mitglied) = 17 Tw
+- `AC-AQC-005-2` — Slots 1+ (Net-Mitglied) = 11 Tw
+- `AC-AQC-005-3` — Slotbreite bleibt unverändert mit optionaler PSK-Tonsequenz
+
+---
+
+### FEAT-AQC-006 — AQC Orderwire Functions
+
+**Setzt um:** MIL-STD-188-141B A.5.8.3
+**Modul:** `include/Protocol/aqc_protocol.h`, `src/Protocol/aqc_protocol.cpp`
+**Status:** geplant
+**Hinweis:** (NT) Not Tested, optional
+
+#### Beschreibung
+
+AQC-spezifische Orderwire-Funktionen: Operator-ACK/NAK-Transaktion (15 s Operator-Antwortfenster) und AQC Control Messages im Message-Abschnitt. MsgID-Feld (5 Bit) in CMD-Wörtern. Werte > 7 nicht erlaubt (Überschneidung mit ALE-Orderwire). Pflicht-Messages: AMD-Dictionary, Channel-Definition, Slot-Assignment. Optional: List/Define/Set Database Content.
+
+#### Technischer Entwurf
+
+```cpp
+// AQC Control Message IDs (5-Bit MsgID, 0–7 erlaubt):
+enum class AqcMsgId : uint8_t {
+    AMD_DICTIONARY       = 0,
+    CHANNEL_DEFINITION   = 1,
+    SLOT_ASSIGNMENT      = 2,
+    LIST_DB_CONTENT      = 3,  // optional
+    LIST_DB_ACTIV_TIME   = 4,  // optional
+    SET_DB_ACTIV_TIME    = 5,  // optional
+    DEFINE_DB_CONTENT    = 6,  // optional
+    DB_CONTENT_LISTING   = 7,  // optional
+};
+// MsgID > 7: verboten (Konflikt mit ALE-Orderwire)
+```
+
+#### Requirement-Details
+
+##### REQ-AQC-006 — AQC MsgID-Bereich
+
+**Spec-Referenz:** A.5.8.3.2
+**Priorität:** COULD · **Status:** offen
+
+**Akzeptanzkriterien:**
+- `AC-AQC-006-1` — MsgID-Feld ist 5 Bit breit, Werte 0–7 erlaubt
+- `AC-AQC-006-2` — MsgID > 7 wird als ungültig abgelehnt
+- `AC-AQC-006-3` — AMD_DICTIONARY (ID=0), CHANNEL_DEFINITION (ID=1), SLOT_ASSIGNMENT (ID=2) sind Pflicht-Messages
+- `AC-AQC-006-4` — Operator-ACK/NAK-Fenster = 15 s
+
+---
+
+### FEAT-AQC-007 — AQC Linking Protection (LP)
+
+**Setzt um:** MIL-STD-188-141B A.5.8.4
+**Modul:** `include/Protocol/aqc_protocol.h`, `src/Protocol/aqc_protocol.cpp`
+**Status:** geplant
+**Hinweis:** (NT) Not Tested
+
+#### Beschreibung
+
+Im LP-Modus (Linking Protection) wird jedes 24-Bit-AQC-Wort nach Appendix B verschlüsselt. Die AQC-Wortnummern für LP unterscheiden sich von Baseline-2G: Scanning-TO = Word 0, PART2 = Word 1, TIS/TWAS-Conclusion = Word 2, folgendes PART2 = Word 3. Response-Frame und ACK-Frame verwenden ebenfalls definierte Wortnummern.
+
+#### Technischer Entwurf
+
+```cpp
+// AQC LP Wortnummern (A.5.8.4):
+// Scanning Call:   TO=0, PART2=1
+// Conclusion:      TIS/TWAS=2, PART2=3
+// Response Frame:  Word 0, 1, 2, 3
+// ACK (2 Wörter):  Word 0, 1
+// TOD: nach Ende des Scanning-Call-TO-Worts
+```
+
+#### Requirement-Details
+
+##### REQ-AQC-007 — AQC LP Wortnummern-Schema
+
+**Spec-Referenz:** A.5.8.4
+**Priorität:** COULD · **Status:** offen
+
+**Akzeptanzkriterien:**
+- `AC-AQC-007-1` — AQC LP nutzt Appendix-B-Verschlüsselung auf allen 24-Bit-Wörtern
+- `AC-AQC-007-2` — Scanning-Call: TO=Word 0, PART2=Word 1
+- `AC-AQC-007-3` — Conclusion: TIS/TWAS=Word 2, PART2=Word 3
+- `AC-AQC-007-4` — 2-Wort-ACK: Word 0 und Word 1
+
+---
+
 ## 6. Traceability-Matrix
 
 | Feature | Setzt um (REQ) | Modul / Code | Status |
@@ -6182,6 +6941,20 @@ Die Datenblöcke werden vollständig gepuffert und sollen für die DTEs transpar
 | FEAT-ADDR-003 | REQ-ADDR-008–011 | Protocol/ale_state_machine.cpp | geplant |
 | FEAT-ADDR-004 | REQ-ADDR-012 | Stores/address_book.cpp | implementiert |
 | FEAT-ADDR-005 | REQ-ADDR-013–015 | Stores/address_book.cpp, Protocol/ale_state_machine.cpp | geplant |
+| FEAT-CMD-001 | A.5.6.1 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-002 | A.5.6.2 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-003 | A.5.6.3 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-004 | A.5.6.4 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-005 | A.5.6.5 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-006 | A.5.6.7 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-007 | A.5.6.9 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-AQC-001 | A.5.8.1.1–A.5.8.1.1.2 | `Protocol/aqc_protocol.h/cpp` | geplant |
+| FEAT-AQC-002 | A.5.8.1.2 | `Protocol/aqc_protocol.h/cpp` | geplant |
+| FEAT-AQC-003 | A.5.8.1.3–A.5.8.1.4 | `Protocol/aqc_protocol.h/cpp` | geplant |
+| FEAT-AQC-004 | A.5.8.2.1–A.5.8.2.2 | `Protocol/aqc_protocol.h/cpp` | geplant |
+| FEAT-AQC-005 | A.5.8.2.3 | `Protocol/aqc_protocol.h/cpp` | geplant |
+| FEAT-AQC-006 | A.5.8.3 | `Protocol/aqc_protocol.h/cpp` | geplant |
+| FEAT-AQC-007 | A.5.8.4 | `Protocol/aqc_protocol.h/cpp` | geplant |
 
 _* implementiert = vorhandene Implementierung; muss gegen neue REQ-LINK-007/008/009 verifiziert werden_
 
