@@ -430,6 +430,126 @@ bool test_channel_store_duplicate_rejected()
 }
 
 // ============================================================================
+// ChannelStore — IPersistenceBackend (AC-GEN-004-002)
+// ============================================================================
+
+// Mock backend — captures save() call and replays it on load().
+struct MockPersistenceBackend : public IPersistenceBackend {
+    std::vector<Channel> stored;
+    int  save_calls = 0;
+    int  load_calls = 0;
+    bool fail_save  = false;
+    bool fail_load  = false;
+
+    bool save(const std::vector<Channel>& ch) override {
+        ++save_calls;
+        if (fail_save) return false;
+        stored = ch;
+        return true;
+    }
+    bool load(std::vector<Channel>& ch) override {
+        ++load_calls;
+        if (fail_load) return false;
+        ch = stored;
+        return true;
+    }
+};
+
+bool test_channel_store_persistence_interface()
+{
+    std::cout << "\n[ChannelStore] IPersistenceBackend interface — mock round-trip (AC-GEN-004-002)\n";
+
+    ChannelStore store;
+    Channel c1(14250000); c1.id = "C-1"; c1.rx_mode = "USB"; c1.tx_mode = "USB";
+    Channel c2(7100000);  c2.id = "C-2"; c2.rx_mode = "USB"; c2.tx_mode = "USB";
+    store.add_channel(c1);
+    store.add_channel(c2);
+
+    MockPersistenceBackend backend;
+
+    bool saved = store.save(backend);
+    bool save_called_once = (backend.save_calls == 1);
+    bool stored_2 = (backend.stored.size() == 2);
+    std::cout << "  save() returns true: " << (saved ? "PASS" : "FAIL") << "\n";
+    std::cout << "  backend.save() called once: " << (save_called_once ? "PASS" : "FAIL") << "\n";
+    std::cout << "  backend received 2 channels: " << (stored_2 ? "PASS" : "FAIL") << "\n";
+
+    ChannelStore store2;
+    bool loaded = store2.load(backend);
+    bool load_called_once = (backend.load_calls == 1);
+    bool restored_2 = (store2.size() == 2);
+    bool ids_ok = (store2.all()[0].id == "C-1" && store2.all()[1].id == "C-2");
+    std::cout << "  load() returns true: " << (loaded ? "PASS" : "FAIL") << "\n";
+    std::cout << "  backend.load() called once: " << (load_called_once ? "PASS" : "FAIL") << "\n";
+    std::cout << "  store2 has 2 channels after load: " << (restored_2 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  channel IDs preserved: " << (ids_ok ? "PASS" : "FAIL") << "\n";
+
+    // Failure paths
+    backend.fail_save = true;
+    bool save_fail = !store.save(backend);
+    backend.fail_save = false;
+    backend.fail_load = true;
+    bool load_fail = !store2.load(backend);
+    std::cout << "  save() propagates backend failure: " << (save_fail ? "PASS" : "FAIL") << "\n";
+    std::cout << "  load() propagates backend failure: " << (load_fail ? "PASS" : "FAIL") << "\n";
+
+    return saved && save_called_once && stored_2
+        && loaded && load_called_once && restored_2 && ids_ok
+        && save_fail && load_fail;
+}
+
+bool test_channel_store_file_backend_round_trip()
+{
+    std::cout << "\n[ChannelStore] FileChannelBackend round-trip (AC-GEN-004-002)\n";
+
+    const std::string path = "test_channel_store_persistence.ale";
+
+    // ── save ──
+    ChannelStore store;
+    Channel c1(14250000, 0, "USB", "USB"); c1.id = "C-1"; c1.label = "40m-ALE";
+    Channel c2(7100000,  0, "USB", "USB"); c2.id = "C-2";
+    Channel c3(3500000, 3600000, "USB", "USB"); c3.id = "C-3";
+    store.add_channel(c1);
+    store.add_channel(c2);
+    store.add_channel(c3);
+
+    FileChannelBackend out_backend(path);
+    bool saved = store.save(out_backend);
+    std::cout << "  save() succeeds: " << (saved ? "PASS" : "FAIL") << "\n";
+
+    // ── load into fresh store ──
+    ChannelStore store2;
+    FileChannelBackend in_backend(path);
+    bool loaded = store2.load(in_backend);
+    std::cout << "  load() succeeds: " << (loaded ? "PASS" : "FAIL") << "\n";
+
+    bool count_ok = (store2.size() == 3);
+    std::cout << "  3 channels restored: " << (count_ok ? "PASS" : "FAIL") << "\n";
+
+    bool freq_ok = (store2.all()[0].rx_frequency_hz == 14250000
+                 && store2.all()[1].rx_frequency_hz == 7100000
+                 && store2.all()[2].rx_frequency_hz == 3500000
+                 && store2.all()[2].tx_frequency_hz == 3600000);
+    std::cout << "  frequencies survive round-trip: " << (freq_ok ? "PASS" : "FAIL") << "\n";
+
+    bool id_ok = (store2.all()[0].id == "C-1"
+               && store2.all()[1].id == "C-2"
+               && store2.all()[2].id == "C-3");
+    std::cout << "  IDs survive round-trip: " << (id_ok ? "PASS" : "FAIL") << "\n";
+
+    bool label_ok = (store2.all()[0].label == "40m-ALE");
+    std::cout << "  label survives round-trip: " << (label_ok ? "PASS" : "FAIL") << "\n";
+
+    // ── load from non-existent file ──
+    FileChannelBackend bad_backend("__nonexistent__.ale");
+    bool bad_load = !store2.load(bad_backend);
+    std::cout << "  load() from missing file returns false: " << (bad_load ? "PASS" : "FAIL") << "\n";
+
+    std::remove(path.c_str());
+    return saved && loaded && count_ok && freq_ok && id_ok && label_ok && bad_load;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 
@@ -455,6 +575,8 @@ int run_all_tests()
 
     run("ChannelStore min capacity 100 + fields",  test_channel_store_min_capacity_100());
     run("ChannelStore duplicate rejected",         test_channel_store_duplicate_rejected());
+    run("ChannelStore IPersistenceBackend mock round-trip", test_channel_store_persistence_interface());
+    run("ChannelStore FileChannelBackend round-trip",       test_channel_store_file_backend_round_trip());
 
     run("ContactStore add/update/remove",           test_contact_store_add_update_remove());
 

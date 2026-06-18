@@ -5,6 +5,8 @@
 
 #include "Stores/ale_data_store.h"
 #include <algorithm>
+#include <fstream>
+#include <sstream>
 
 namespace ale {
 
@@ -42,6 +44,75 @@ std::vector<Channel> ChannelStore::enabled_channels() const {
 }
 
 void ChannelStore::clear() { channels_.clear(); }
+
+bool ChannelStore::save(IPersistenceBackend& backend) const {
+    return backend.save(channels_);
+}
+
+bool ChannelStore::load(IPersistenceBackend& backend) {
+    std::vector<Channel> loaded;
+    if (!backend.load(loaded)) return false;
+    channels_ = std::move(loaded);
+    return true;
+}
+
+// ── FileChannelBackend ────────────────────────────────────────────────────────
+
+bool FileChannelBackend::save(const std::vector<Channel>& channels) {
+    std::ofstream f(path_);
+    if (!f.is_open()) return false;
+    for (const auto& ch : channels) {
+        if (!ch.id.empty()) f << "ID:" << ch.id << ' ';
+        f << ch.rx_frequency_hz << ' ' << ch.tx_frequency_hz << ' ' << ch.rx_mode;
+        if (!ch.label.empty()) f << ' ' << ch.label;
+        f << '\n';
+    }
+    return f.good();
+}
+
+bool FileChannelBackend::load(std::vector<Channel>& channels) {
+    std::ifstream f(path_);
+    if (!f.is_open()) return false;
+    channels.clear();
+    std::string line;
+    while (std::getline(f, line)) {
+        auto cpos = line.find('#');
+        if (cpos != std::string::npos) line = line.substr(0, cpos);
+        auto first = line.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) continue;
+        line = line.substr(first, line.find_last_not_of(" \t\r\n") - first + 1);
+        if (line.empty()) continue;
+
+        std::istringstream iss(line);
+        std::vector<std::string> toks;
+        { std::string tok; while (iss >> tok) toks.push_back(std::move(tok)); }
+        if (toks.empty()) continue;
+
+        std::string id;
+        if (toks[0].rfind("ID:", 0) == 0) {
+            id = toks[0].substr(3);
+            toks.erase(toks.begin());
+        }
+        if (toks.empty()) continue;
+
+        uint32_t rx_hz = 0, tx_hz = 0;
+        try { rx_hz = static_cast<uint32_t>(std::stoul(toks[0])); } catch (...) { continue; }
+        if (toks.size() > 1) {
+            try { tx_hz = static_cast<uint32_t>(std::stoul(toks[1])); } catch (...) {}
+        }
+        std::string mode = (toks.size() > 2) ? toks[2] : "USB";
+        std::string label;
+        for (size_t i = 3; i < toks.size(); ++i) {
+            if (!label.empty()) label += ' ';
+            label += toks[i];
+        }
+        Channel ch(rx_hz, tx_hz, mode, mode);
+        ch.id    = id;
+        ch.label = label;
+        channels.push_back(ch);
+    }
+    return true;
+}
 
 // ── NetStore ─────────────────────────────────────────────────────────────────
 

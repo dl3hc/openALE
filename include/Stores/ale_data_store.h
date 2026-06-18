@@ -18,6 +18,40 @@
 
 namespace ale {
 
+// ── IPersistenceBackend ───────────────────────────────────────────────────────
+
+/**
+ * \class IPersistenceBackend
+ * Abstract persistence interface for nonvolatile channel storage.
+ *
+ * Concrete implementations (file, EEPROM, …) derive from this class.
+ * MIL-STD-188-141B Table A-III requires nonvolatile channel storage.
+ */
+class IPersistenceBackend {
+public:
+    virtual ~IPersistenceBackend() = default;
+    virtual bool save(const std::vector<Channel>& channels) = 0;
+    virtual bool load(std::vector<Channel>& channels) = 0;
+};
+
+/**
+ * \class FileChannelBackend
+ * File-based implementation of IPersistenceBackend.
+ *
+ * Format: one channel per line — [ID:<id>] rx_hz tx_hz mode [label]
+ * Lines starting with '#' and blank lines are ignored on load.
+ */
+class FileChannelBackend : public IPersistenceBackend {
+public:
+    explicit FileChannelBackend(std::string path) : path_(std::move(path)) {}
+
+    bool save(const std::vector<Channel>& channels) override;
+    bool load(std::vector<Channel>& channels) override;
+
+private:
+    std::string path_;
+};
+
 // ── ChannelStore ──────────────────────────────────────────────────────────────
 
 /**
@@ -45,6 +79,12 @@ public:
     size_t size()  const { return channels_.size(); }
     bool   empty() const { return channels_.empty(); }
     void   clear();
+
+    /** Persist current channels via \p backend (MIL-STD-188-141B nonvolatile storage). */
+    bool save(IPersistenceBackend& backend) const;
+
+    /** Replace current channels with those loaded from \p backend. */
+    bool load(IPersistenceBackend& backend);
 
 private:
     std::vector<Channel> channels_;

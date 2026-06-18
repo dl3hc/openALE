@@ -18,7 +18,7 @@
       "description": "Der ALE-Stack besteht aus mindestens drei logisch getrennten Schichten: FEC-Sublayer, LP-Sublayer und ALE-Sublayer. Diese müssen als getrennte Module oder klar voneinander abgegrenzte Klassen implementiert sein.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe, ob FEC (FEC/), Word (Word/), Protocol (Protocol/) als separate Verzeichnisse mit eigenem Header existieren und keine zirkulären Abhängigkeiten bestehen.",
-      "status": "passed",
+      "status": "closed",
       "verification": "FEC/, Word/, Protocol/ existieren als getrennte include-/src-Verzeichnisse mit eigenen Headern. Datei-Include-Graph (81 Dateien) ist azyklisch; Schichtung FEC(unten)<-Word<-Protocol ohne Rückwärtskanten. ale_timing.h ist ein abhängigkeitsfreier Blatt-Header, daher kein realer Build-Zyklus trotz FSK-Verzeichnis-Gruppierung. Guard-Test: tests/architecture/integration/test_layering.cpp (ctest: Architecture, PASS)."
     },
     {
@@ -29,7 +29,7 @@
       "description": "Die interne Kanalqualität wird auf einer Skala von 0 (schlechteste) bis 30 (beste) dargestellt. Kein LQA-Wert darf diesen Bereich überschreiten.",
       "module": "LQA/lqa_metrics",
       "verification_hint": "Suche nach Konstanten oder Clamp-Logik für SINAD-/BER-Qualitätswerte in lqa_metrics.h/cpp. Prüfe ob Werte auf [0,30] begrenzt werden.",
-      "status": "passed",
+      "status": "closed",
       "verification": "Skala auf [0,30] vereinheitlicht (31 reserviert als 'unbekannt'-Sentinel, A.4.1.5). Neue spec-traceable Konstanten LQA_QUALITY_MIN/MAX/UNKNOWN in lqa_database.h. compute_score (lqa_database.cpp) clamped jetzt auf [0,30] statt [0,31]. Zweiter, inkonsistenter LQA-Pfad gefunden und behoben: ALEStateMachine::update_link_quality nutzte 0–100-Heuristik -> auf 0–30 umgestellt; Channel.lqa_score-Doku angeglichen. Tests: test_lqa_database.cpp::test_score_range_bounds (Sättigungs-/Worst-Case-Grenzen, nie 31), test_score_computation auf LQA_QUALITY_MAX getightet. Volle Suite 23/23 PASS."
     },
     {
@@ -40,7 +40,7 @@
       "description": "Der Scan-Betrieb wird unterbrochen, wenn ein empfangenes ALE-Wort eine gültige, eigene Adresse enthält. Die State Machine muss von SCANNING in einen Call-Empfangszustand wechseln.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe ale_state_machine.cpp: Bei ALEState::SCANNING muss nach einer Adress-Übereinstimmung ein Zustandswechsel (z.B. nach HANDSHAKE) erfolgen.",
-      "status": "passed",
+      "status": "closed",
       "verification": "react_scanning() (ale_state_machine.cpp:870) erkennt WordEvent::TO_SELF und feuert automatisch CALL_DETECTED → SCANNING→HANDSHAKE. Präfix-Vergleich im Decoder (ale_word_decoder.cpp:35–36) erlaubt ≤3-Zeichen-Worte gegen längere Eigen-Adresse (A.5.2.5.1). Test: tests/test_state_machine.cpp TEST 4 (fix 2026-06-18): sm.set_self_address() korrekt gesetzt, kein manuelles CALL_DETECTED mehr — automatischer Übergang wird direkt verifiziert. ctest -C Debug -R StateMachine: PASS (9/9)."
     },
 
@@ -52,7 +52,7 @@
       "description": "Die Standard-Scan-Rate beträgt 2 Kanäle/s, entsprechend einer Dwell-Zeit Td = 500 ms pro Kanal. Dieser Wert muss als Konstante oder konfigurierbarer Parameter vorhanden sein.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Suche nach Td_ms, dwell_time_ms oder scan_rate in ale_state_machine.h/cpp oder ale_timing.h. Wert muss 500 ms betragen.",
-      "status": "passed",
+      "status": "closed",
       "verification": "ale_timing.h: TD2_MS = 500.0 (2 chps minimum scan). ScanConfig.dwell_time_ms ist konfigurierbar (ale_channel_types.h:104). ALEDataStore.scan_dwell_ms defaultet auf TD2_MS. ChannelManager.check_dwell_timeout() prüft >= dwell_time_ms exakt. Test: tests/test_state_machine.cpp TEST 10 (neu 2026-06-18): TD2_MS==500 + kein Hop bei t=499ms + Hop bei t=500ms. ctest -C Debug -R StateMachine: 10/10 PASS."
     },
     {
@@ -63,7 +63,7 @@
       "description": "Die schnelle Scan-Rate von 5 Kanälen/s (Td = 200 ms) wird unterstützt. Der Wert muss konfigurierbar oder als Alternative zur Standard-Rate vorhanden sein.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe ob Td = 200 ms als Alternative oder als separater Modus existiert.",
-      "status": "passed",
+      "status": "closed",
       "verification": "ale_timing.h: TD5_MS = 200.0 (5 chps fast scan). ScanConfig.dwell_time_ms konfigurierbar; Default = TD5_MS (ale_channel_types.h:104). Test: tests/test_state_machine.cpp TEST 11 (neu 2026-06-18): TD5_MS==200 + kein Hop bei t=199ms + Hop bei t=200ms. ctest -C Debug -R StateMachine: 11/11 PASS."
     },
     {
@@ -97,7 +97,8 @@
       "description": "Der ChannelStore persistiert Daten über IPersistenceBackend. Es existiert mindestens ein IPersistenceBackend-Interface, das von konkreten Implementierungen (Datei, EEPROM) abgeleitet werden kann.",
       "module": "Stores/ale_data_store",
       "verification_hint": "Suche nach IPersistenceBackend in ale_data_store.h. Prüfe ob ChannelStore eine save()/load()-Methode oder äquivalent besitzt.",
-      "status": "open"
+      "status": "closed",
+      "verification": "IPersistenceBackend (pure-virtual interface: save/load) added to include/Stores/ale_data_store.h before ChannelStore. FileChannelBackend (concrete file impl) added in same header + src/Stores/ale_data_store.cpp — format: [ID:<id>] rx_hz tx_hz mode [label], comment/blank-line tolerant. ChannelStore::save(IPersistenceBackend&) const + load(IPersistenceBackend&) delegate to the backend. Tests added in tests/test_channel_net_store.cpp: test_channel_store_persistence_interface (mock backend, 9 assertions: save/load call counts, channel preservation, failure propagation) + test_channel_store_file_backend_round_trip (FileChannelBackend save + load, 7 assertions: freq/ID/label roundtrip, missing-file returns false). ctest -C Debug -R ChannelNetStore: 17/17 PASS."
     },
 
     {
