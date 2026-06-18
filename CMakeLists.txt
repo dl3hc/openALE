@@ -400,6 +400,11 @@ target_link_libraries(test_fsk_core ale_fsk_core ale_fec)
 target_include_directories(test_fsk_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FSKCore COMMAND test_fsk_core)
 
+add_executable(test_tone_accuracy tests/waveform/unit/test_tone_accuracy.cpp)
+target_link_libraries(test_tone_accuracy ale_fsk_core ale_fec)
+target_include_directories(test_tone_accuracy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ToneAccuracy COMMAND test_tone_accuracy)
+
 add_executable(test_fec_golay tests/fec/unit/test_fec_golay.cpp)
 target_link_libraries(test_fec_golay ale_fec ale_fsk_core)
 target_include_directories(test_fec_golay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

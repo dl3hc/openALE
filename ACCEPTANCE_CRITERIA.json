@@ -484,7 +484,8 @@
       "description": "Jeder der 8 FSK-Töne weicht im Test maximal ±1 Hz vom Sollwert ab. Testdatei test_tone_accuracy.cpp deckt alle 8 Töne ab.",
       "module": "tests/test_tone_accuracy.cpp",
       "verification_hint": "Prüfe ob test_tone_accuracy.cpp existiert und alle 8 Töne auf ±1 Hz testet (z.B. via FFT-Peak-Analyse).",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_tone_accuracy.cpp erstellt in tests/waveform/unit/. Fuer jedes der 8 Symbole (sym 0-7) wird 1 Sekunde Audio (8000 Samples) generiert. DFT-Peak-Suche (grob 1 Hz, fein 0.1 Hz) ergibt fuer alle Toene exakt 0.00 Hz Abweichung vom Sollwert. CTest-Target: ToneAccuracy. Testlauf: alle 8 Toene PASS, Fehler <= +/-1 Hz. Datum: 2026-06-18."
     },
     {
       "id": "AC-WAVEFORM-004-002",
