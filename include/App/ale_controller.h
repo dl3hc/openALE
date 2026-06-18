@@ -197,6 +197,14 @@ public:
     void start_scanning();
 
     /**
+     * Transmit a single manual sounding (self-identification / LQA probe) on
+     * the current channel. Independent of automatic periodic sounding
+     * (enable_automatic_sounding()); fires immediately when the operator asks.
+     * \return false if the SM is not in IDLE or SCANNING state.
+     */
+    bool send_sounding();
+
+    /**
      * Initiate an individual call to target_addr.
      *
      * If target_addr matches a registered Contact (see add_contact()) that

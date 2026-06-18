@@ -396,6 +396,16 @@ void ALEController::start_scanning()
     sm_.process_event(ALEEvent::START_SCAN);
 }
 
+bool ALEController::send_sounding()
+{
+    if (!sm_.send_sounding()) {
+        emit_status("Manual sounding rejected — only available while IDLE or scanning");
+        return false;
+    }
+    emit_status("Manual sounding — transmitting on current channel");
+    return true;
+}
+
 void ALEController::apply_target_scan_channels_for(const std::string& target_addr)
 {
     const Contact* c = contact_store_.find(target_addr);

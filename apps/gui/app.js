@@ -378,6 +378,7 @@ function setStatus(label, cls) {
     b.classList.toggle('scan-on', on);
   }
   if (typeof updateScanBtn === 'function') updateScanBtn();  // keep disabled state in sync with wfState
+  if (typeof updateSoundBtn === 'function') updateSoundBtn();
 }
 
 function showInc(show) {
@@ -1107,6 +1108,17 @@ function updateScanBtn() {
   b.title = ok ? '' : 'Mindestens 2 Kanäle in den Einstellungen anlegen';
 }
 
+function updateSoundBtn() {
+  const b = document.getElementById('soundBtn');
+  if (!b) return;
+  // Mirror the SM: send_sounding() is only honoured in IDLE/SCANNING. Grey out
+  // while calling/handshaking (wfState 'calling'), incoming, or linked.
+  const ok = wfState === 'idle' || wfState === 'scanning';
+  b.disabled = !ok;
+  b.title = ok ? 'Transmit a manual sounding (LQA probe) on the current channel'
+               : 'Sounding nur im Idle/Scan möglich';
+}
+
 function toggleScan() {
   // Stopping (currently scanning) is always allowed; only *starting* needs >=2.
   if (wfState !== 'scanning' && !scanEnabled()) {
@@ -1116,6 +1128,20 @@ function toggleScan() {
   if (bridgeConnected) { bridgeSend(wfState === 'scanning' ? 'AVAILABLE' : 'SCAN', {}); return; }
   // setStatus() reflects the button label/state; just flip scanning ⇄ idle.
   if (wfState === 'scanning') goIdle(); else goScanning();
+}
+
+// Manual sounding — fire a one-shot LQA probe on the current channel. The SM
+// only honours SOUNDING_REQUEST while IDLE or SCANNING; the bridge reply's
+// `ok:false` surfaces a rejection (e.g. while linked/handshaking).
+function manualSound() {
+  if (bridgeConnected) {
+    bridgeSend('SOUND', {}, (r) => {
+      if (r && r.ok) pushLog([['tis', 'TIS:'+primarySelfAddr().slice(0,3)], ['data', 'SOUNDING']], '');
+      else           pushLog([['data', 'Sounding abgelehnt — nur im Idle/Scan']], 'miss');
+    });
+    return;
+  }
+  pushLog([['tis', 'TIS:'+primarySelfAddr().slice(0,3)], ['data', 'SOUNDING']], '');
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

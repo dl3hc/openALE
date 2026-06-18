@@ -257,6 +257,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "AVAILABLE") { ctrl.start_available();  return mj::dump(make_reply(msg, true)); }
+    if (cmd == "SOUND")     { return mj::dump(make_reply(msg, ctrl.send_sounding())); }
 
     if (cmd == "CALL") {
         const bool ok = ctrl.initiate_call(msg.get_string("addr"));
