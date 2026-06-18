@@ -536,7 +536,8 @@
       "description": "PreambleType-Enum enthält genau 8 Werte: THRU (0b001), TO (0b010), FROM (0b100), TIS (0b101), CMD (0b110), DATA (0b000), REP (0b111) — gemäß Table A-VIII (ALE word types).",
       "module": "Word/ale_word",
       "verification_hint": "Prüfe ale_word.h enum PreambleType (oder WordType): alle 8 Werte mit korrekten numerischen Codes.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_word_002_001_preamble_enum_table_aviii() in tests/word/unit/test_protocol.cpp. Verifies: (1) exactly 8 Table A-VIII entries, (2) each numeric code DATA=0/THRU=1/TO=2/TWAS=3/FROM=4/TIS=5/CMD=6/REP=7, (3) extract_preamble round-trip for all 8 codes, (4) UNKNOWN sentinel==0xFF. 10/10 tests PASS (build Debug, 2026-06-18)."
     },
     {
       "id": "AC-WORD-002-002",

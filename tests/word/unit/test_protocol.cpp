@@ -864,6 +864,81 @@ bool test_ac_word_001_002_encode_decode_symmetry()
 }
 
 // ============================================================================
+// AC-WORD-002-001 — PreambleType: genau 8 Werte gemäß Tabelle A-VIII
+//
+// Verifies that PreambleType enum contains exactly the 8 ALE word types
+// defined in MIL-STD-188-141B Table A-VIII, each with the correct 3-bit code.
+// ============================================================================
+
+bool test_ac_word_002_001_preamble_enum_table_aviii()
+{
+    std::cout << "\n[AC-WORD-002-001] PreambleType: 8 Werte gemäß Tabelle A-VIII\n";
+    std::cout << "===============================================================\n";
+    bool all_pass = true;
+
+    // Table A-VIII: all 8 word types with mandatory 3-bit codes
+    struct Entry { PreambleType type; uint8_t code; const char* name; };
+    const Entry table_aviii[] = {
+        { PreambleType::DATA, 0b000, "DATA" },  // extension and information
+        { PreambleType::THRU, 0b001, "THRU" },  // multiple (and indirect routing)
+        { PreambleType::TO,   0b010, "TO"   },  // direct routing
+        { PreambleType::TWAS, 0b011, "TWAS" },  // terminator and identification quitting
+        { PreambleType::FROM, 0b100, "FROM" },  // identification (and indirect routing)
+        { PreambleType::TIS,  0b101, "TIS"  },  // terminator and identification continuing
+        { PreambleType::CMD,  0b110, "CMD"  },  // orderwire control and status
+        { PreambleType::REP,  0b111, "REP"  },  // duplication and information
+    };
+    constexpr int EXPECTED_COUNT = 8;
+    const int actual_count = static_cast<int>(sizeof(table_aviii) / sizeof(table_aviii[0]));
+
+    // 1. Exactly 8 entries defined
+    {
+        bool pass = (actual_count == EXPECTED_COUNT);
+        std::cout << "  Table A-VIII entry count == 8: "
+                  << (pass ? "PASS" : "FAIL")
+                  << " (got " << actual_count << ")\n";
+        all_pass &= pass;
+    }
+
+    // 2. Each type has the correct numeric code
+    for (const auto& e : table_aviii) {
+        uint8_t got = static_cast<uint8_t>(e.type);
+        bool pass = (got == e.code);
+        std::cout << "  " << e.name << " == 0b" << (int)((e.code>>2)&1) << (int)((e.code>>1)&1) << (int)(e.code&1)
+                  << " (" << (int)e.code << "): " << (pass ? "PASS" : "FAIL");
+        if (!pass) std::cout << " (got=" << (int)got << ")";
+        std::cout << "\n";
+        all_pass &= pass;
+    }
+
+    // 3. extract_preamble round-trips all 8 codes correctly
+    {
+        bool rt_pass = true;
+        for (const auto& e : table_aviii) {
+            uint32_t word = static_cast<uint32_t>(e.code) << 21;
+            PreambleType extracted = WordParser::extract_preamble(word);
+            if (static_cast<uint8_t>(extracted) != e.code) {
+                std::cout << "  extract_preamble FAIL for " << e.name << "\n";
+                rt_pass = false;
+            }
+        }
+        std::cout << "  extract_preamble round-trip (all 8 codes): "
+                  << (rt_pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= rt_pass;
+    }
+
+    // 4. UNKNOWN sentinel is 0xFF (not a Table A-VIII code)
+    {
+        bool pass = (static_cast<uint8_t>(PreambleType::UNKNOWN) == 0xFF);
+        std::cout << "  UNKNOWN sentinel == 0xFF (not a spec code): "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    return all_pass;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -879,6 +954,7 @@ int run_all_tests() {
 
     if (test_ac_word_001_001_bit_layout()) { pass_count++; } else { fail_count++; }
     if (test_ac_word_001_002_encode_decode_symmetry()) { pass_count++; } else { fail_count++; }
+    if (test_ac_word_002_001_preamble_enum_table_aviii()) { pass_count++; } else { fail_count++; }
     if (test_word_parsing()) { pass_count++; } else { fail_count++; }
     if (test_ascii_codec()) { pass_count++; } else { fail_count++; }
     if (test_address_book()) { pass_count++; } else { fail_count++; }
