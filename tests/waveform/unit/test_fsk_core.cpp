@@ -781,6 +781,56 @@ bool test_symbol_rate_ac_waveform_003_002() {
 }
 
 // ============================================================================
+// Test AC-WAVEFORM-003-003: Trw = 392 ms (49 symbols × 8 ms)
+// ============================================================================
+
+bool test_trw_ms_ac_waveform_003_003() {
+    std::cout << "\n[TEST AC-WAVEFORM-003-003] Trw = 392 ms (49 symbols x 8 ms)\n";
+    std::cout << "==============================================================\n";
+
+    // Primary derivation: 49 symbols x 8 ms/symbol = 392 ms
+    const uint32_t trw_from_symbols = SYMBOLS_PER_WORD * SYMBOL_DURATION_MS;
+    if (trw_from_symbols != 392u) {
+        std::cout << "FAIL: SYMBOLS_PER_WORD * SYMBOL_DURATION_MS = "
+                  << trw_from_symbols << " ms (expected 392)\n";
+        return false;
+    }
+    std::cout << "PASS: SYMBOLS_PER_WORD (" << SYMBOLS_PER_WORD
+              << ") x SYMBOL_DURATION_MS (" << SYMBOL_DURATION_MS
+              << " ms) = " << trw_from_symbols << " ms\n";
+
+    // Alternative derivation: 3 x Tw_ms = 3 x 130.666... = 392.000 ms (exact)
+    const double trw_from_tw = 3.0 * TW_MS;
+    if (std::abs(trw_from_tw - 392.0) > 0.001) {
+        std::cout << "FAIL: 3 x TW_MS = " << trw_from_tw << " ms (expected 392.0)\n";
+        return false;
+    }
+    std::cout << "PASS: 3 x TW_MS = " << trw_from_tw << " ms (= 392 ms)\n";
+
+    // Constant check: ale::TRW_MS in ale_timing.h must be exactly 392
+    static_assert(ale::TRW_MS == 392u,
+                  "TRW_MS must be exactly 392 ms (49 symbols x 8 ms, MIL-STD-188-141B A.5.2.2)");
+    if (ale::TRW_MS != 392u) {
+        std::cout << "FAIL: ale::TRW_MS = " << ale::TRW_MS << " (expected 392)\n";
+        return false;
+    }
+    std::cout << "PASS: ale::TRW_MS = " << ale::TRW_MS << " ms (exactly 392 ms)\n";
+
+    // Cross-check: all three derivations must agree
+    if (trw_from_symbols != ale::TRW_MS) {
+        std::cout << "FAIL: symbol-based derivation (" << trw_from_symbols
+                  << " ms) != ale::TRW_MS (" << ale::TRW_MS << " ms)\n";
+        return false;
+    }
+    std::cout << "PASS: all derivations consistent: 49x8=" << trw_from_symbols
+              << " ms == 3xTw=" << trw_from_tw
+              << " ms == TRW_MS=" << ale::TRW_MS << " ms\n";
+
+    std::cout << "PASS: AC-WAVEFORM-003-003\n";
+    return true;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -800,6 +850,7 @@ int run_all_tests() {
     if (test_phase_continuity_ac_waveform_002_002()) { pass_count++; } else { fail_count++; }
     if (test_sample_rate_ac_waveform_003_001()) { pass_count++; } else { fail_count++; }
     if (test_symbol_rate_ac_waveform_003_002()) { pass_count++; } else { fail_count++; }
+    if (test_trw_ms_ac_waveform_003_003()) { pass_count++; } else { fail_count++; }
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }

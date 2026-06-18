@@ -458,7 +458,8 @@
       "description": "Die Wortdauer Trw beträgt exakt 392 ms (49 Symbole à 8 ms). Dieser Wert wird auch als 3×Tw_ms (3×130.666666 = 392) berechnet.",
       "module": "FSK/ale_waveform",
       "verification_hint": "Prüfe Trw_ms oder TRW_MS in ale_waveform.h oder ale_timing.h. Wert muss exakt 392 sein (nicht 390).",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_trw_ms_ac_waveform_003_003() in tests/waveform/unit/test_fsk_core.cpp prüft alle drei Ableitungen: (1) SYMBOLS_PER_WORD(49) × SYMBOL_DURATION_MS(8) = 392 ms, (2) 3 × TW_MS = 392.000 ms, (3) ale::TRW_MS == 392u per static_assert. Alle 13 Tests grün (build/Debug/test_fsk_core.exe, 2026-06-18)."
     },
     {
       "id": "AC-WAVEFORM-003-004",
