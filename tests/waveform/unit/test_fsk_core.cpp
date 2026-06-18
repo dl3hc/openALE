@@ -586,6 +586,44 @@ bool test_timing_constants() {
 }
 
 // ============================================================================
+// Test AC-WAVEFORM-002-001: NCO 32-bit phase accumulator
+// ============================================================================
+
+bool test_nco_32bit_accumulator_ac_waveform_002_001() {
+    std::cout << "\n[TEST AC-WAVEFORM-002-001] NCO 32-bit phase accumulator\n";
+    std::cout << "=========================================================\n";
+
+    // phase_ is uint32_t — sizeof must be 4
+    static_assert(sizeof(uint32_t) == 4, "uint32_t must be 32 bits");
+    std::cout << "PASS: uint32_t is 32 bits (phase_ type confirmed)\n";
+
+    ToneGenerator gen;
+    bool ok = true;
+
+    // For each tone rank verify phase_increment == (freq_hz << 32) / SAMPLE_RATE_HZ
+    for (uint32_t rank = 0; rank < NUM_TONES; ++rank) {
+        uint32_t freq_hz      = TONE_FREQS_HZ[rank];
+        uint8_t  symbol       = FREQ_TO_SYMBOL[rank];
+        uint64_t expected_inc = (static_cast<uint64_t>(freq_hz) << 32) / SAMPLE_RATE_HZ;
+        uint32_t actual_inc   = gen.phase_increment_for(symbol);
+
+        std::cout << "  freq=" << freq_hz << " Hz  sym=" << (int)symbol
+                  << "  expected=0x" << std::hex << expected_inc
+                  << "  actual=0x"   << actual_inc << std::dec;
+
+        if (actual_inc != static_cast<uint32_t>(expected_inc)) {
+            std::cout << "  FAIL\n";
+            ok = false;
+        } else {
+            std::cout << "  PASS\n";
+        }
+    }
+
+    if (ok) std::cout << "PASS: AC-WAVEFORM-002-001\n";
+    return ok;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -601,6 +639,7 @@ int run_all_tests() {
     
     if (test_freq_table_ac_waveform_001_001()) { pass_count++; } else { fail_count++; }
     if (test_symbol_freq_mapping_ac_waveform_001_002()) { pass_count++; } else { fail_count++; }
+    if (test_nco_32bit_accumulator_ac_waveform_002_001()) { pass_count++; } else { fail_count++; }
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }

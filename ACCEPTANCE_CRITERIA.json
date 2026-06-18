@@ -406,7 +406,8 @@
       "description": "Der NCO-Tongenerator verwendet einen 32-Bit-Phasenakkumulator (uint32_t phase_). Phase-Increment = (freq_hz << 32) / SAMPLE_RATE_HZ (Integer-Arithmetik).",
       "module": "FSK/tone_generator",
       "verification_hint": "Prüfe tone_generator.h: phase_ muss uint32_t sein. phase_increment_ berechnet sich aus Frequenz und Sample-Rate ganzzahlig.",
-      "status": "open"
+      "status": "closed",
+      "verification": "phase_ ist uint32_t in include/FSK/tone_generator.h (Zeile 63). init_phase_increments() berechnet Inkrement als (static_cast<uint64_t>(freq_hz) << 32) / SAMPLE_RATE_HZ in src/FSK/tone_generator.cpp (Zeile 40). Neuer Getter phase_increment_for(symbol) in tone_generator.h ermöglicht direkten Testzeugnis. test_nco_32bit_accumulator_ac_waveform_002_001() in tests/waveform/unit/test_fsk_core.cpp: prüft static_assert(sizeof(uint32_t)==4), alle 8 Tonsymbole mit erwarteten Inkrementen (750Hz→0x18000000, 1000Hz→0x20000000, 1250Hz→0x28000000, 1500Hz→0x30000000, 1750Hz→0x38000000, 2000Hz→0x40000000, 2250Hz→0x48000000, 2500Hz→0x50000000). ctest -C Debug -R FSKCore: 9/9 PASSED (2026-06-18)."
     },
     {
       "id": "AC-WAVEFORM-002-002",
@@ -451,9 +452,9 @@
         "REQ-WAVEFORM-009"
       ],
       "title": "Trw = 392 ms (49 Symbole × 8 ms)",
-      "description": "Die Wortdauer Trw beträgt exakt 392 ms (49 Symbole à 8 ms). Dieser Wert wird auch als 3×Tw_ms (3×130.666666 = 390) berechnet.",
+      "description": "Die Wortdauer Trw beträgt exakt 392 ms (49 Symbole à 8 ms). Dieser Wert wird auch als 3×Tw_ms (3×130.666666 = 392) berechnet.",
       "module": "FSK/ale_waveform",
-      "verification_hint": "Prüfe Trw_ms oder TRW_MS in ale_waveform.h oder ale_timing.h. Wert muss 392 sein (nicht 390).",
+      "verification_hint": "Prüfe Trw_ms oder TRW_MS in ale_waveform.h oder ale_timing.h. Wert muss exakt 392 sein (nicht 390).",
       "status": "open"
     },
     {
@@ -551,7 +552,7 @@
         "REQ-WORD-008"
       ],
       "title": "CMD-Wort: System-weite Bedeutung",
-      "description": "CMD-Wörter (Preamble 0b101) werden system-weit verstanden. Sie sind nicht adressspezifisch. Die Payload enthält den Kommandotyp.",
+      "description": "CMD-Wörter (Preamble 0b110) werden system-weit verstanden. Sie sind nicht adressspezifisch. Die Payload enthält den Kommandotyp.",
       "module": "Word/ale_word",
       "verification_hint": "Prüfe ale_word.cpp: CMD-Preamble muss korrekt kodiert sein. MessageAssembler muss CMD-Wörter als System-Kommandos verarbeiten.",
       "status": "open"

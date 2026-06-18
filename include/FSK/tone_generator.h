@@ -51,6 +51,14 @@ public:
      */
     void reset();
 
+    /**
+     * Return the NCO phase increment stored for a given symbol value.
+     * Exposed for unit-testing AC-WAVEFORM-002-001 only.
+     */
+    uint32_t phase_increment_for(uint8_t symbol) const {
+        return (symbol < NUM_TONES) ? phase_increment[symbol] : 0u;
+    }
+
 private:
     // Sine table for 256 samples per cycle
     static constexpr uint32_t SINE_TABLE_SIZE = 256;
