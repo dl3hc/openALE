@@ -40,7 +40,8 @@
       "description": "Der Scan-Betrieb wird unterbrochen, wenn ein empfangenes ALE-Wort eine gültige, eigene Adresse enthält. Die State Machine muss von SCANNING in einen Call-Empfangszustand wechseln.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe ale_state_machine.cpp: Bei ALEState::SCANNING muss nach einer Adress-Übereinstimmung ein Zustandswechsel (z.B. nach HANDSHAKE) erfolgen.",
-      "status": "open"
+      "status": "passed",
+      "verification": "react_scanning() (ale_state_machine.cpp:870) erkennt WordEvent::TO_SELF und feuert automatisch CALL_DETECTED → SCANNING→HANDSHAKE. Präfix-Vergleich im Decoder (ale_word_decoder.cpp:35–36) erlaubt ≤3-Zeichen-Worte gegen längere Eigen-Adresse (A.5.2.5.1). Test: tests/test_state_machine.cpp TEST 4 (fix 2026-06-18): sm.set_self_address() korrekt gesetzt, kein manuelles CALL_DETECTED mehr — automatischer Übergang wird direkt verifiziert. ctest -C Debug -R StateMachine: PASS (9/9)."
     },
 
     {

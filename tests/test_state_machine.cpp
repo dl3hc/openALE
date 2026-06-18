@@ -241,39 +241,35 @@ bool test_call_initiation() {
 // ============================================================================
 
 bool test_incoming_call() {
-    std::cout << "\n[TEST 4] Incoming Call Detection\n";
-    std::cout << "=================================\n";
-    
+    std::cout << "\n[TEST 4] Incoming Call Detection (AC-GEN-001-003)\n";
+    std::cout << "==================================================\n";
+
     ALEStateMachine sm;
-    
-    // Configure self address
-    AddressBook book;
-    book.set_self_address("W1AW");
-    
-    // Start scanning
+    sm.set_self_address("W1AW");   // address must live on sm, not a detached AddressBook
+
     sm.process_event(ALEEvent::START_SCAN);
-    
-    std::cout << "  State: " << ALEStateMachine::state_name(sm.get_state()) << "\n";
-    
-    // Simulate receiving TO word addressed to us
+    std::cout << "  State before word: " << ALEStateMachine::state_name(sm.get_state()) << "\n";
+
+    // --- Arrange ---
+    // TO word carrying first 3 chars of our address (per A.5.2.5.1 prefix-match rule).
     ALEWord to_word;
     to_word.type = PreambleType::TO;
-    strncpy(to_word.address, "W1A", 3);  // Matches W1AW
-    to_word.valid = true;
+    strncpy(to_word.address, "W1A", 3);
+    to_word.valid        = true;
     to_word.timestamp_ms = 1000;
-    
-    std::cout << "  Receiving TO word for W1A: ";
-    
-    // Process the word - this should trigger CALL_DETECTED
+
+    // --- Act ---
+    // process_received_word() must detect the address match internally and
+    // fire CALL_DETECTED on its own, transitioning SCANNING → HANDSHAKE.
     sm.process_received_word(to_word);
-    
-    // Manually trigger call detected (in real system, word processing would do this)
-    sm.process_event(ALEEvent::CALL_DETECTED);
-    
+
+    // --- Assert ---
+    // No manual CALL_DETECTED here — that would defeat the test.
     bool in_handshake = (sm.get_state() == ALEState::HANDSHAKE);
-    std::cout << (in_handshake ? "PASS" : "FAIL");
-    std::cout << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
-    
+    std::cout << "  Auto-transition SCANNING→HANDSHAKE on TO \"W1A\": "
+              << (in_handshake ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+
     return in_handshake;
 }
 
