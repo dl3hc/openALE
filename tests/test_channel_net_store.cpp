@@ -198,6 +198,52 @@ bool test_self_address_store_set_primary_and_remove()
     return switched && primary_is_sam2 && unknown_rejected && reassigned && matches;
 }
 
+bool test_self_address_store_min_capacity_20()
+{
+    std::cout << "\n[SelfAddressStore] minimum capacity 20 entries, all fields present (AC-GEN-005-001)\n";
+
+    SelfAddressStore store;
+    for (int i = 0; i < 20; ++i) {
+        std::string addr = "S" + std::to_string(i + 1);
+        SelfAddressEntry e;
+        e.address      = addr;
+        e.enabled      = true;
+        e.valid_channels = {"C-" + std::to_string(i + 1)};
+        e.all_channels = false;
+        bool ok = store.add(e);
+        if (!ok) {
+            std::cout << "  FAIL: add() rejected entry " << i << " before reaching 20\n";
+            return false;
+        }
+    }
+    bool full_at_20 = (store.size() == 20);
+    std::cout << "  20 entries accepted: " << (full_at_20 ? "PASS" : "FAIL")
+              << " (size=" << store.size() << ")\n";
+
+    SelfAddressEntry extra; extra.address = "S21";
+    bool rejected = !store.add(extra);
+    std::cout << "  21st entry rejected at kCapacity: " << (rejected ? "PASS" : "FAIL") << "\n";
+
+    bool capacity_constant_ok = (SelfAddressStore::kCapacity == 20);
+    std::cout << "  kCapacity == 20: " << (capacity_constant_ok ? "PASS" : "FAIL") << "\n";
+
+    const auto& first = store.all()[0];
+    bool has_fields = (!first.address.empty()
+                    && first.valid_channels.size() == 1
+                    && !first.all_channels);
+    std::cout << "  SelfAddressEntry has address/valid_channels/all_channels fields: "
+              << (has_fields ? "PASS" : "FAIL") << "\n";
+
+    // Updating an existing entry while full must succeed (not a new slot).
+    SelfAddressEntry update; update.address = "S1"; update.enabled = false;
+    bool update_ok = store.add(update);
+    bool still_20  = (store.size() == 20);
+    std::cout << "  update of existing entry while full succeeds: " << (update_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  size unchanged after update: " << (still_20 ? "PASS" : "FAIL") << "\n";
+
+    return full_at_20 && rejected && capacity_constant_ok && has_fields && update_ok && still_20;
+}
+
 // ============================================================================
 // ALEController — channel-ID auto-assignment + net unassign-on-delete
 // ============================================================================
@@ -582,6 +628,8 @@ int run_all_tests()
 
     run("SelfAddressStore primary defaults to first", test_self_address_store_primary_defaults_to_first());
     run("SelfAddressStore set_primary/remove",      test_self_address_store_set_primary_and_remove());
+    run("SelfAddressStore min capacity 20 + fields (AC-GEN-005-001)",
+        test_self_address_store_min_capacity_20());
 
     run("ALEController channel-ID auto-assignment", test_controller_channel_id_auto_assignment());
     run("ALEController del_channel unassigns from nets", test_controller_del_channel_unassigns_from_nets());

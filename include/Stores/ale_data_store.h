@@ -207,9 +207,13 @@ struct SelfAddressEntry {
  */
 class SelfAddressStore {
 public:
+    /** MIL-STD-188-141B REQ-GEN-014: minimum 20 own-station address slots. */
+    static constexpr size_t kCapacity = 20;
+
     SelfAddressStore() = default;
 
-    /** Adds the entry; the first entry added becomes primary automatically. */
+    /** Adds the entry; the first entry added becomes primary automatically.
+     *  Returns false if the store is full (kCapacity) and the address is new. */
     bool add(const SelfAddressEntry& entry);
     bool remove(const std::string& address);
 
@@ -219,6 +223,8 @@ public:
 
     const SelfAddressEntry* find(const std::string& address) const;
     const std::vector<SelfAddressEntry>& all() const { return entries_; }
+    size_t size()  const { return entries_.size(); }
+    bool   empty() const { return entries_.empty(); }
     void clear();
 
     /** Return true if \p address matches any known (enabled or not) entry. */

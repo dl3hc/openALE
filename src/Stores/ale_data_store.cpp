@@ -208,6 +208,7 @@ bool SelfAddressStore::add(const SelfAddressEntry& entry) {
     for (auto& existing : entries_) {
         if (existing.address == entry.address) { existing = entry; return true; }
     }
+    if (entries_.size() >= kCapacity) return false;
     entries_.push_back(entry);
     if (primary_.empty()) primary_ = entry.address;
     return true;
