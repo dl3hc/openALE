@@ -67,7 +67,7 @@ bool test_encode_4chars()
 
     bool pass = count && t0 && t1;
     std::cout << "  \"W1AW\" → [TO:W1A, DATA:W@@]: " << (pass ? "PASS" : "FAIL") << "\n";
-    if (!pass && count >= 2)
+    if (!pass && words.size() >= 2)
         std::cout << "    got [" << WordParser::word_type_name(words[0].type)
                   << ":" << std::string(words[0].address, 3)
                   << ", " << WordParser::word_type_name(words[1].type)

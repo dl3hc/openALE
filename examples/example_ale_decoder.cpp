@@ -65,8 +65,8 @@ void example_individual_call() {
     
     FFTDemodulator demodulator;
     
-    auto to_detected = demodulator.process_audio(to_audio.data(), to_audio.size());
-    auto from_detected = demodulator.process_audio(from_audio.data(), from_audio.size());
+    auto to_detected = demodulator.process_audio(to_audio.data(), static_cast<uint32_t>(to_audio.size()));
+    auto from_detected = demodulator.process_audio(from_audio.data(), static_cast<uint32_t>(from_audio.size()));
     
     std::cout << "Demodulated: " << to_detected.size() << " + " 
               << from_detected.size() << " symbols\n";

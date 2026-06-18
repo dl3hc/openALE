@@ -19,6 +19,9 @@
 #include "Word/ale_word.h"
 #include <cassert>
 #include <cstring>
+#ifdef _MSC_VER
+#pragma warning(disable: 4996)  // strncpy: safe usage with fixed-size ALE address fields
+#endif
 #include <iostream>
 
 using namespace ale;

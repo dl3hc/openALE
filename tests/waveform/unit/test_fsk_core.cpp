@@ -11,6 +11,9 @@
  */
 
 #include "FSK/ale_waveform.h"
+#ifdef _MSC_VER
+#pragma warning(disable: 4127)  // C4127: constexpr runtime checks in tests are intentional
+#endif
 #include "FSK/tone_generator.h"
 #include "FSK/fft_demodulator.h"
 #include "FSK/symbol_decoder.h"

@@ -109,7 +109,7 @@ void example_one_way_transfer() {
                          "This is a test of the FS-1052 ARQ protocol.";
     std::cout << "Transmitting: \"" << message << "\"\n\n";
     
-    sender.start_transmission((const uint8_t*)message, strlen(message));
+    sender.start_transmission((const uint8_t*)message, static_cast<uint32_t>(strlen(message)));
     
     // Simulate transfer
     uint32_t time_ms = 0;
@@ -119,13 +119,13 @@ void example_one_way_transfer() {
         // Deliver frames to receiver
         auto rx_frames = channel.receive_at_b();
         for (const auto& frame : rx_frames) {
-            receiver.handle_received_frame(frame.data(), frame.size());
+            receiver.handle_received_frame(frame.data(), static_cast<int>(frame.size()));
         }
         
         // Deliver ACKs to sender
         auto ack_frames = channel.receive_at_a();
         for (const auto& frame : ack_frames) {
-            sender.handle_received_frame(frame.data(), frame.size());
+            sender.handle_received_frame(frame.data(), static_cast<int>(frame.size()));
         }
         
         // Update timers
@@ -206,7 +206,7 @@ void example_with_errors() {
     }
     
     std::cout << "Transmitting " << large_message.size() << " bytes...\n\n";
-    sender.start_transmission(large_message.data(), large_message.size());
+    sender.start_transmission(large_message.data(), static_cast<uint32_t>(large_message.size()));
     
     uint32_t time_ms = 0;
     int iterations = 0;
@@ -214,12 +214,12 @@ void example_with_errors() {
     while (!sender.is_transfer_complete() && iterations < 100) {
         auto rx_frames = channel.receive_at_b();
         for (const auto& frame : rx_frames) {
-            receiver.handle_received_frame(frame.data(), frame.size());
+            receiver.handle_received_frame(frame.data(), static_cast<int>(frame.size()));
         }
         
         auto ack_frames = channel.receive_at_a();
         for (const auto& frame : ack_frames) {
-            sender.handle_received_frame(frame.data(), frame.size());
+            sender.handle_received_frame(frame.data(), static_cast<int>(frame.size()));
         }
         
         time_ms += 100;
@@ -293,15 +293,15 @@ void example_data_rates() {
         receiver.process_event(ARQEvent::START_RX);
         
         const char* msg = "Rate test message";
-        sender.start_transmission((const uint8_t*)msg, strlen(msg));
+        sender.start_transmission((const uint8_t*)msg, static_cast<uint32_t>(strlen(msg)));
         
         uint32_t time_ms = 0;
         for (int i = 0; i < 20 && !sender.is_transfer_complete(); i++) {
             for (const auto& f : channel.receive_at_b()) {
-                receiver.handle_received_frame(f.data(), f.size());
+                receiver.handle_received_frame(f.data(), static_cast<int>(f.size()));
             }
             for (const auto& f : channel.receive_at_a()) {
-                sender.handle_received_frame(f.data(), f.size());
+                sender.handle_received_frame(f.data(), static_cast<int>(f.size()));
             }
             time_ms += 100;
             sender.update(time_ms);

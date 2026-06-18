@@ -30,7 +30,7 @@ LQAConfig LQADatabase::get_config() const {
 uint32_t LQADatabase::get_current_time_ms() const {
     auto now = std::chrono::system_clock::now();
     auto duration = now.time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+    return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
 }
 
 float LQADatabase::time_weighted_average(float old_value, float new_value,

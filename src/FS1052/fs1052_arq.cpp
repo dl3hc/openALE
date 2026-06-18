@@ -399,7 +399,7 @@ void VariableARQ::process_ack(const ControlFrame& frame)
         bool acked = (frame.bit_map[byte_idx] & (1 << bit_idx)) != 0;
         
         if (acked) {
-            mark_block_acked(i);
+            mark_block_acked(static_cast<uint8_t>(i));
         }
     }
 }
@@ -486,8 +486,8 @@ void VariableARQ::create_blocks(const uint8_t* data, uint32_t length)
         DataBlock block;
         block.sequence = seq;
         block.offset = offset;
-        block.length = std::min(static_cast<uint32_t>(MAX_DATA_BLOCK_LENGTH), 
-                                length - offset);
+        block.length = static_cast<uint16_t>(std::min(static_cast<uint32_t>(MAX_DATA_BLOCK_LENGTH),
+                                length - offset));
         memcpy(block.data, data + offset, block.length);
         block.acknowledged = false;
         block.retransmit_count = 0;

@@ -168,7 +168,7 @@ float LQAMetrics::estimate_ber(int errors_corrected, int total_words) const {
     // Conservative estimate: assume each correction was 1 bit error
     // (actual could be 1-3 bits)
     float total_bits = total_words * 24.0f;
-    float estimated_bit_errors = errors_corrected;  // Conservative (minimum)
+    float estimated_bit_errors = static_cast<float>(errors_corrected);
     
     float ber = estimated_bit_errors / total_bits;
     

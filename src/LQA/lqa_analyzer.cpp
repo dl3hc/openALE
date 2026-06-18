@@ -31,7 +31,7 @@ void LQAAnalyzer::set_database(LQADatabase* database) {
 uint32_t LQAAnalyzer::get_current_time_ms() const {
     auto now = std::chrono::system_clock::now();
     auto duration = now.time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+    return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
 }
 
 void LQAAnalyzer::process_sounding(const std::string& station,

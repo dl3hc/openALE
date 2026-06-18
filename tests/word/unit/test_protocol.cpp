@@ -100,7 +100,7 @@ bool test_ascii_codec() {
         bool encode_success = (encoded != 0xFFFFFFFF);
         
         char decoded[4];
-        bool decode_success = WordParser::decode_ascii(encoded, PreambleType::TO, decoded);
+        WordParser::decode_ascii(encoded, PreambleType::TO, decoded);
         
         bool pass = (encode_success == test.should_succeed);
         if (pass && test.should_succeed) {

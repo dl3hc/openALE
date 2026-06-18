@@ -14,6 +14,9 @@
 #include <iostream>
 #include <iomanip>
 #include <cstring>
+#ifdef _MSC_VER
+#pragma warning(disable: 4996)  // strcpy: safe usage with fixed-size ALE address fields
+#endif
 
 using namespace ale;
 using namespace ale::aqc;

@@ -1,5 +1,9 @@
 // hamlib_radio.cpp
 
+#ifdef _MSC_VER
+#pragma warning(disable: 4996)  // strncpy: safe usage with explicit null termination below
+#endif
+
 #include "pal/radios/hamlib_radio.h"
 #include <cstring>
 #include <utility>

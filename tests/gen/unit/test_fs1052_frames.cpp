@@ -87,7 +87,7 @@ void test_data_frame_format() {
     
     // Add test data
     const char* test_data = "Hello, FS-1052!";
-    frame.data_length = strlen(test_data);
+    frame.data_length = static_cast<uint16_t>(strlen(test_data));
     memcpy(frame.data, test_data, frame.data_length);
     
     uint8_t buffer[1200];
@@ -169,7 +169,7 @@ void test_data_frame_roundtrip() {
     original.msg_byte_offset = 4096;
     
     const char* test_data = "Round-trip test data for FS-1052 protocol";
-    original.data_length = strlen(test_data);
+    original.data_length = static_cast<uint16_t>(strlen(test_data));
     memcpy(original.data, test_data, original.data_length);
     
     // Format
@@ -234,7 +234,7 @@ void test_frame_type_detection() {
     // Control frame
     ControlFrame ctrl_frame;
     uint8_t ctrl_buffer[256];
-    int ctrl_len = FrameFormatter::format_control_frame(ctrl_frame, ctrl_buffer, sizeof(ctrl_buffer));
+    FrameFormatter::format_control_frame(ctrl_frame, ctrl_buffer, sizeof(ctrl_buffer));
     FrameType ctrl_type = FrameParser::detect_frame_type(ctrl_buffer);
     assert(ctrl_type == FrameType::T1_CONTROL || 
            ctrl_type == FrameType::T2_CONTROL ||
@@ -246,7 +246,7 @@ void test_frame_type_detection() {
     data_frame.data_length = 5;
     memcpy(data_frame.data, "TEST", 4);
     uint8_t data_buffer[1200];
-    int data_len = FrameFormatter::format_data_frame(data_frame, data_buffer, sizeof(data_buffer));
+    FrameFormatter::format_data_frame(data_frame, data_buffer, sizeof(data_buffer));
     FrameType data_type = FrameParser::detect_frame_type(data_buffer);
     assert(data_type == FrameType::DATA);
     

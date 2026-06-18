@@ -22,7 +22,7 @@ struct TestHarness {
         sent_frames.push_back(data);
     }
     
-    void state_callback(ARQState old_state, ARQState new_state) {
+    void state_callback(ARQState /*old_state*/, ARQState new_state) {
         last_state = new_state;
     }
     
@@ -99,7 +99,7 @@ void test_simple_transmission() {
     
     // Send small message (should fit in one block)
     const char* msg = "Test message";
-    bool started = arq.start_transmission((const uint8_t*)msg, strlen(msg));
+    bool started = arq.start_transmission((const uint8_t*)msg, static_cast<uint32_t>(strlen(msg)));
     assert(started);
     
     // Should have sent at least one data frame
@@ -146,7 +146,7 @@ void test_multi_block_transmission() {
         large_data[i] = i & 0xFF;
     }
     
-    arq.start_transmission(large_data.data(), large_data.size());
+    arq.start_transmission(large_data.data(), static_cast<uint32_t>(large_data.size()));
     
     // Should have sent multiple frames (up to window size)
     assert(harness.sent_frames.size() > 1);
@@ -185,7 +185,7 @@ void test_ack_processing() {
     
     // Send data
     const char* msg = "ACK test";
-    arq.start_transmission((const uint8_t*)msg, strlen(msg));
+    arq.start_transmission((const uint8_t*)msg, static_cast<uint32_t>(strlen(msg)));
     
     // Create ACK frame
     ControlFrame ack;
@@ -227,10 +227,8 @@ void test_timeout_handling() {
     
     // Send data
     const char* msg = "Timeout test";
-    arq.start_transmission((const uint8_t*)msg, strlen(msg));
-    
-    size_t initial_frames = harness.sent_frames.size();
-    
+    arq.start_transmission((const uint8_t*)msg, static_cast<uint32_t>(strlen(msg)));
+
     // Simulate timeout
     arq.update(0);      // Start
     arq.update(1500);   // After timeout
@@ -266,7 +264,7 @@ void test_data_reception() {
     DataFrame df;
     df.sequence_number = 0;
     df.msg_byte_offset = 0;
-    df.data_length = strlen(test_data);
+    df.data_length = static_cast<uint16_t>(strlen(test_data));
     memcpy(df.data, test_data, df.data_length);
     
     uint8_t frame_buffer[1200];
@@ -302,7 +300,7 @@ void test_sequence_wrapping() {
     // Each block is 1023 bytes, so need 260 * 1023 bytes
     std::vector<uint8_t> huge_data(260 * 1000);  // Close enough
     
-    arq.start_transmission(huge_data.data(), huge_data.size());
+    arq.start_transmission(huge_data.data(), static_cast<uint32_t>(huge_data.size()));
     
     // Verify we can handle wrap (sequences go 0-255, then back to 0)
     // Just verify we sent something without crashing
@@ -327,7 +325,7 @@ void test_statistics() {
     );
     
     const char* msg = "Stats test";
-    arq.start_transmission((const uint8_t*)msg, strlen(msg));
+    arq.start_transmission((const uint8_t*)msg, static_cast<uint32_t>(strlen(msg)));
     
     const auto& stats = arq.get_stats();
     assert(stats.blocks_sent > 0);

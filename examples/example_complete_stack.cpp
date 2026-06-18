@@ -22,6 +22,9 @@
 #include <iomanip>
 #include <vector>
 #include <cstring>
+#ifdef _MSC_VER
+#pragma warning(disable: 4996)  // strncpy: safe usage with fixed-size ALE address fields
+#endif
 
 using namespace ale;
 
@@ -89,7 +92,7 @@ public:
     }
     
     // Receive audio and decode word
-    bool receive_word(ALEWord& word_out) {
+    bool receive_word(ALEWord& /*word_out*/) {
         // In real system: get audio from sound card
         // For demo: return false (no word received)
         return false;
@@ -243,7 +246,7 @@ private:
         std::cout << "Receiving incoming call...\n";
         ALEWord to_word;
         to_word.type = PreambleType::TO;
-        strncpy(to_word.address, "W1A", 3);
+        strncpy(to_word.address, "W1A", 3);  // NOLINT: fixed-size buffer, explicit null in struct init
         to_word.valid = true;
         to_word.timestamp_ms = 1000;
         
