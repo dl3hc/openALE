@@ -25,10 +25,10 @@
  *    Tdrrw   = 3×Trw    = 1176 ms   detect-rotating-redundant-word window (= 9×Tw)
  *
  *  Level 4  Equipment-class timing  (multiples of Tw = Trw/3, §"Individual calling")
- *    T1d      = Tw      =  131 ms   T₁d — late-detect additional delay
- *    Tta_fast = 0                   turnaround, fast (solid-state) equipment
- *    Tta_slow = 2×Tw    =  261 ms   turnaround, slow equipment
- *    Tt_fast  = Tw      =  131 ms   tune time, solid-state tuner
+ *    T1d      = Tw      ≈  130.67 ms  T₁d — late-detect additional delay
+ *    Tta_fast = 0                    turnaround, fast (solid-state) equipment
+ *    Tta_slow = 2×Tw    ≈  261.33 ms turnaround, slow equipment
+ *    Tt_fast  = Tw      ≈  130.67 ms tune time, solid-state tuner
  *    Tt_slow  = 8×Tw    = 1045 ms   tune time, relay tuner
  *    Twr_fast = 5×Tw    =  653 ms   Twr — wait-for-reply, fast equipment
  *    Twr_slow = 7×Tw    =  915 ms   Twr — wait-for-reply, slow equipment
@@ -128,7 +128,7 @@ constexpr double Tta_fast_ms = 0.0;              // fast equipment: ≈ 0
 constexpr double Tta_slow_ms = 2.0 * TW_MS;     // slow equipment: 2×Tw ≈ 261 ms
 
 // Tune time
-constexpr double Tt_fast_ms  = 1.0 * TW_MS;     // solid-state tuner: ≥ Tw ≈ 131 ms
+constexpr double Tt_fast_ms  = 1.0 * TW_MS;     // solid-state tuner: ≥ Tw ≈ 130.67 ms
 constexpr double Tt_slow_ms  = 8.0 * TW_MS;     // relay tuner:      ≥ 8×Tw ≈ 1045 ms
 
 // Wait-for-reply  (Twr = Ttd + Tp + T1ww + T1d + Tta + Trwp + Tp + Trd)

@@ -831,6 +831,50 @@ bool test_trw_ms_ac_waveform_003_003() {
 }
 
 // ============================================================================
+// Test AC-WAVEFORM-003-004: Tw = 130.666... ms (word duration, not 130 or 131)
+// ============================================================================
+
+bool test_tw_ms_ac_waveform_003_004() {
+    std::cout << "\n[TEST AC-WAVEFORM-003-004] Tw = 130.666... ms (not 130, not 131)\n";
+    std::cout << "===================================================================\n";
+
+    // TW_MS must equal (49/3) * 8 = 130.666... ms exactly by formula.
+    // Tolerance: 0.001 ms (well within any rounding concern).
+    const double expected_tw = (49.0 / 3.0) * ale::TTONE_MS;
+    if (std::abs(ale::TW_MS - expected_tw) > 0.001) {
+        std::cout << "FAIL: TW_MS = " << ale::TW_MS << " ms (expected " << expected_tw << ")\n";
+        return false;
+    }
+    std::cout << "PASS: TW_MS = " << ale::TW_MS << " ms (= (49/3)*8 = 130.666... ms)\n";
+
+    // Must NOT be 130 (truncated) or 131 (rounded).
+    if (ale::TW_MS == 130.0) {
+        std::cout << "FAIL: TW_MS is the truncated integer 130 ms — must be 130.666... ms\n";
+        return false;
+    }
+    std::cout << "PASS: TW_MS != 130.0 (not truncated)\n";
+
+    if (ale::TW_MS == 131.0) {
+        std::cout << "FAIL: TW_MS is 131 ms — rounded value is not allowed; must be 130.666... ms\n";
+        return false;
+    }
+    std::cout << "PASS: TW_MS != 131.0 (not rounded up)\n";
+
+    // Verify TW_MS is derived from T_SYMBOLS_PER_WORD * TTONE_MS (no hardcoding).
+    const double tw_from_parts = ale::T_SYMBOLS_PER_WORD * ale::TTONE_MS;
+    if (std::abs(ale::TW_MS - tw_from_parts) > 1e-9) {
+        std::cout << "FAIL: TW_MS (" << ale::TW_MS
+                  << ") != T_SYMBOLS_PER_WORD * TTONE_MS (" << tw_from_parts << ")\n";
+        return false;
+    }
+    std::cout << "PASS: TW_MS is derived from T_SYMBOLS_PER_WORD (" << ale::T_SYMBOLS_PER_WORD
+              << ") * TTONE_MS (" << ale::TTONE_MS << " ms) — no hardcoding\n";
+
+    std::cout << "PASS: AC-WAVEFORM-003-004\n";
+    return true;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -851,6 +895,7 @@ int run_all_tests() {
     if (test_sample_rate_ac_waveform_003_001()) { pass_count++; } else { fail_count++; }
     if (test_symbol_rate_ac_waveform_003_002()) { pass_count++; } else { fail_count++; }
     if (test_trw_ms_ac_waveform_003_003()) { pass_count++; } else { fail_count++; }
+    if (test_tw_ms_ac_waveform_003_004()) { pass_count++; } else { fail_count++; }
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }

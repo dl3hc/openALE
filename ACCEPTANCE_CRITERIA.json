@@ -471,7 +471,8 @@
       "description": "Die Wortdauer Tw beträgt physikalisch 130,66 ms. Es darf keine Konstante 131 ms oder abweichende Werte geben.",
       "module": "FSK/ale_waveform",
       "verification_hint": "Prüfe Tw_ms oder TW_MS in ale_waveform.h. Wert muss 130,66 sein (nicht 130, nicht 131).",
-      "status": "open"
+      "status": "closed",
+      "verification": "TW_MS = (49.0/3.0) * TTONE_MS = 130.666... ms in ale_timing.h (not 130, not 131). Comments corrected from '131 ms' to '130.67 ms'. Dedicated test test_tw_ms_ac_waveform_003_004() added to tests/waveform/unit/test_fsk_core.cpp; all 14 tests PASS."
     },
     {
       "id": "AC-WAVEFORM-004-001",
