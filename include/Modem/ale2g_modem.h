@@ -85,8 +85,7 @@ public:
 
     /**
      * Pull the next pending symbol frame (49 symbol values, 0–7) into out_49.
-     * Returns false when idle; caller renders silence.
-     * Thread-safe: may be called concurrently with enqueue_word().
+     * Returns false when idle. Thread-safe: may be called concurrently with enqueue_word().
      */
     bool pull_symbol_frame(uint8_t* out_49);
 
@@ -106,20 +105,10 @@ private:
 
 // ── Adaptive FEC policy (MIL-STD-188-141B A.5.2.6.3 "DO") ───────────────────────
 //
-// "Automatic adjustment of the unanimous-vote threshold and Golay mode should be
-//  provided to optimize performance under varying conditions."
-//
-// Tracks an EWMA of the per-word unanimous-vote count (0..SYMBOLS_PER_WORD) of
-// accepted words and maps that running signal-quality estimate to a recommended
-// Golay correction power and unanimous-vote acceptance threshold:
-//
-//   high quality (clean channel)   → less correction power (fewer miscorrections)
-//                                     and a higher threshold (fewer false accepts)
-//   low quality (marginal channel) → full correction power and a lower threshold
-//                                     (maintain sensitivity)
-//
-// The threshold is bounded so it can never block re-acquisition.  Pure and
-// deterministic — unit-testable in isolation of the demodulator.
+// Tracks an EWMA of per-word unanimous-vote counts and maps the running
+// signal-quality estimate to a Golay correction power and acceptance threshold:
+// clean channel → less correction, higher threshold; marginal → full correction,
+// lower threshold.  Threshold is bounded so re-acquisition is never blocked.
 class AdaptiveFec {
 public:
     void reset() { quality_ = INIT_QUALITY; }
@@ -163,14 +152,8 @@ public:
 
     /**
      * Spectrum callback — fired ~10 times/second from the audio thread.
-     *
-     * \param bins       Linear FFT magnitudes for bins 0 … count-1.
-     *                   bins[k] covers frequency k * hz_per_bin Hz.
-     *                   dB conversion: 20 * log10(bins[k])  (consumer's job).
-     * \param count      Number of bins = SPEC_FFT_N / 2 + 1 = 257.
-     * \param hz_per_bin Frequency width of one bin = 8000 / SPEC_FFT_N ≈ 15.6 Hz.
-     *
-     * The ALE channel (750–2500 Hz) maps to bins ≈ 48–160.
+     * bins[k] = linear FFT magnitude at k * hz_per_bin Hz (257 bins, ≈15.6 Hz each).
+     * ALE channel (750–2500 Hz) maps to bins ≈ 48–160.
      * Called from the audio capture thread — keep it short or hand off to a queue.
      */
     using SpectrumCallback =
