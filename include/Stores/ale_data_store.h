@@ -259,14 +259,20 @@ struct StationInfo {
  */
 class OtherStationStore {
 public:
+    /** MIL-STD-188-141B REQ-GEN-015/016: minimum 100 known remote station slots. */
+    static constexpr size_t kCapacity = 100;
+
     OtherStationStore() = default;
 
-    void add_station(const StationInfo& info);
+    /** Returns false if the store is full (kCapacity) and the address is new. */
+    bool add_station(const StationInfo& info);
     void update_contact(const std::string& address, uint32_t timestamp_ms);
     bool has_station(const std::string& address) const;
 
     const StationInfo*              get(const std::string& address) const;
     const std::vector<StationInfo>& all() const { return stations_; }
+    size_t size()  const { return stations_.size(); }
+    bool   empty() const { return stations_.empty(); }
     void clear();
 
 private:

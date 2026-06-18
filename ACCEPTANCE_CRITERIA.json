@@ -121,7 +121,8 @@
       "description": "Die Tabelle bekannter Gegenstellen (OtherStationStore oder known_stations) muss mindestens 100 Einträge aufnehmen.",
       "module": "Stores/address_book",
       "verification_hint": "Suche nach known_stations in address_book.h. Prüfe Kapazitätskonstante (min. 100).",
-      "status": "open"
+      "status": "done",
+      "verification": "OtherStationStore::kCapacity=100 added to ale_data_store.h; size()/empty() accessors added; capacity enforced in add_station() (returns bool) and update_contact() (implicit add skipped when full) in src/Stores/ale_data_store.cpp; test_other_station_store_min_capacity_100() added to tests/test_channel_net_store.cpp — 19/19 tests pass."
     },
     {
       "id": "AC-GEN-006-002",

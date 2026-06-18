@@ -596,6 +596,52 @@ bool test_channel_store_file_backend_round_trip()
 }
 
 // ============================================================================
+// OtherStationStore — capacity (AC-GEN-006-001)
+// ============================================================================
+
+bool test_other_station_store_min_capacity_100()
+{
+    std::cout << "\n[OtherStationStore] minimum capacity 100 entries (AC-GEN-006-001)\n";
+
+    OtherStationStore store;
+    for (int i = 0; i < 100; ++i) {
+        StationInfo info;
+        info.address = "S" + std::to_string(i + 1);
+        bool ok = store.add_station(info);
+        if (!ok) {
+            std::cout << "  FAIL: add_station() rejected entry " << i << " before reaching 100\n";
+            return false;
+        }
+    }
+    bool full_at_100 = (store.size() == 100);
+    std::cout << "  100 entries accepted: " << (full_at_100 ? "PASS" : "FAIL")
+              << " (size=" << store.size() << ")\n";
+
+    StationInfo extra; extra.address = "S101";
+    bool rejected = !store.add_station(extra);
+    std::cout << "  101st entry rejected at kCapacity: " << (rejected ? "PASS" : "FAIL") << "\n";
+
+    bool capacity_constant_ok = (OtherStationStore::kCapacity == 100);
+    std::cout << "  kCapacity == 100: " << (capacity_constant_ok ? "PASS" : "FAIL") << "\n";
+
+    // update_contact() on an existing entry must still work when store is full
+    store.update_contact("S1", 9999);
+    bool update_ok = (store.get("S1") && store.get("S1")->last_contact_ms == 9999);
+    bool still_100 = (store.size() == 100);
+    std::cout << "  update_contact on existing entry works when full: "
+              << (update_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  size unchanged after update: " << (still_100 ? "PASS" : "FAIL") << "\n";
+
+    // update_contact() on unknown address must NOT exceed kCapacity
+    store.update_contact("NEWGUY", 1000);
+    bool no_overflow = (store.size() == 100);
+    std::cout << "  update_contact with unknown addr doesn't overflow kCapacity: "
+              << (no_overflow ? "PASS" : "FAIL") << "\n";
+
+    return full_at_100 && rejected && capacity_constant_ok && update_ok && still_100 && no_overflow;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 
@@ -630,6 +676,9 @@ int run_all_tests()
     run("SelfAddressStore set_primary/remove",      test_self_address_store_set_primary_and_remove());
     run("SelfAddressStore min capacity 20 + fields (AC-GEN-005-001)",
         test_self_address_store_min_capacity_20());
+
+    run("OtherStationStore min capacity 100 (AC-GEN-006-001)",
+        test_other_station_store_min_capacity_100());
 
     run("ALEController channel-ID auto-assignment", test_controller_channel_id_auto_assignment());
     run("ALEController del_channel unassigns from nets", test_controller_del_channel_unassigns_from_nets());

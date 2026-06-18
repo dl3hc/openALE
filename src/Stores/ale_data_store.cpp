@@ -247,9 +247,11 @@ bool SelfAddressStore::matches_self(const std::string& address) const {
 
 // ── OtherStationStore ────────────────────────────────────────────────────────
 
-void OtherStationStore::add_station(const StationInfo& info) {
-    if (!has_station(info.address))
-        stations_.push_back(info);
+bool OtherStationStore::add_station(const StationInfo& info) {
+    if (has_station(info.address)) return false;
+    if (stations_.size() >= kCapacity) return false;
+    stations_.push_back(info);
+    return true;
 }
 
 void OtherStationStore::update_contact(const std::string& address,
@@ -261,7 +263,8 @@ void OtherStationStore::update_contact(const std::string& address,
             return;
         }
     }
-    // Implicitly add previously unknown stations seen on air
+    // Implicitly add previously unknown stations seen on air, if capacity allows
+    if (stations_.size() >= kCapacity) return;
     StationInfo info;
     info.address         = address;
     info.last_contact_ms = timestamp_ms;
