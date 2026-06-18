@@ -432,7 +432,8 @@
       "description": "Die interne Modem-Sample-Rate beträgt 8000 Hz. Diese Konstante ist in ale_waveform.h definiert.",
       "module": "FSK/ale_waveform",
       "verification_hint": "Suche nach SAMPLE_RATE oder sample_rate_hz in ale_waveform.h. Wert muss 8000 sein.",
-      "status": "open"
+      "status": "closed",
+      "verification": "ale_waveform.h:25 definiert constexpr uint32_t SAMPLE_RATE_HZ = 8000. Dedizierter Test test_sample_rate_ac_waveform_003_001 in tests/waveform/unit/test_fsk_core.cpp prüft: (1) static_assert SAMPLE_RATE_HZ==8000 (compile-time), (2) Runtime-Check SAMPLE_RATE_HZ==8000, (3) abgeleitetes SAMPLES_PER_SYMBOL==64. Alle 11 Tests grün (2026-06-18)."
     },
     {
       "id": "AC-WAVEFORM-003-002",

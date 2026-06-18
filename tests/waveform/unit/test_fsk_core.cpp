@@ -698,6 +698,37 @@ bool test_nco_32bit_accumulator_ac_waveform_002_001() {
 }
 
 // ============================================================================
+// Test AC-WAVEFORM-003-001: Sample-Rate = 8000 Hz
+// ============================================================================
+
+bool test_sample_rate_ac_waveform_003_001() {
+    std::cout << "\n[TEST AC-WAVEFORM-003-001] Sample-Rate = 8000 Hz\n";
+    std::cout << "=================================================\n";
+
+    // Compile-time: SAMPLE_RATE_HZ must be a constexpr uint32_t with value 8000
+    static_assert(SAMPLE_RATE_HZ == 8000u,
+                  "SAMPLE_RATE_HZ must equal 8000 (MIL-STD-188-141B A.5.1.3)");
+
+    // Runtime check (guards against future constant changes)
+    if (SAMPLE_RATE_HZ != 8000u) {
+        std::cout << "FAIL: SAMPLE_RATE_HZ = " << SAMPLE_RATE_HZ << " (expected 8000)\n";
+        return false;
+    }
+    std::cout << "PASS: SAMPLE_RATE_HZ = " << SAMPLE_RATE_HZ << " Hz\n";
+
+    // SAMPLES_PER_SYMBOL derived value must equal 64 (8000 / 125)
+    if (SAMPLES_PER_SYMBOL != 64u) {
+        std::cout << "FAIL: SAMPLES_PER_SYMBOL = " << SAMPLES_PER_SYMBOL << " (expected 64)\n";
+        return false;
+    }
+    std::cout << "PASS: SAMPLES_PER_SYMBOL = " << SAMPLES_PER_SYMBOL
+              << " (= SAMPLE_RATE_HZ / SYMBOL_RATE_BAUD)\n";
+
+    std::cout << "PASS: AC-WAVEFORM-003-001\n";
+    return true;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -715,6 +746,7 @@ int run_all_tests() {
     if (test_symbol_freq_mapping_ac_waveform_001_002()) { pass_count++; } else { fail_count++; }
     if (test_nco_32bit_accumulator_ac_waveform_002_001()) { pass_count++; } else { fail_count++; }
     if (test_phase_continuity_ac_waveform_002_002()) { pass_count++; } else { fail_count++; }
+    if (test_sample_rate_ac_waveform_003_001()) { pass_count++; } else { fail_count++; }
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }
