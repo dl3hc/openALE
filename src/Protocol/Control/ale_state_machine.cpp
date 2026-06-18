@@ -283,6 +283,12 @@ void ALEStateMachine::enter_state(ALEState new_state) {
                     ALESequenceBuilder::conclusion(address_book.get_self_address()).words());
             break;
 
+        case ALEState::ERROR:
+            // AC-GEN-009-001: no dead state — enable RX so the radio is always listening
+            // when not transmitting (exit_state of CALLING/HANDSHAKE leaves RX=false).
+            if (rx_enabled_callback) rx_enabled_callback(true);
+            break;
+
         default:
             break;
     }

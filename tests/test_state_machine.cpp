@@ -657,6 +657,85 @@ bool test_fast_scan_rate_td5() {
 }
 
 // ============================================================================
+// TEST 12: Always-Listen-Regel — AC-GEN-009-001
+//
+// Verifies:
+//   1. SCANNING state: rx_enabled_callback fires with true
+//   2. IDLE state: rx_enabled_callback fires with true
+//   3. ERROR state after CALLING: rx_enabled_callback fires with true
+//      (no dead state — exit_state(CALLING) sets RX=false, so ERROR must restore it)
+// ============================================================================
+bool test_always_listen_ac_gen_009_001() {
+    std::cout << "\n[TEST 12] Always-Listen-Regel — AC-GEN-009-001\n";
+    std::cout << "===============================================\n";
+
+    bool rx_current = false;
+    bool rx_callback_fired = false;
+
+    auto make_sm = [&]() {
+        ALEStateMachine sm;
+        rx_current = false;
+        rx_callback_fired = false;
+        sm.set_rx_enabled_callback([&](bool enabled) {
+            rx_current = enabled;
+            rx_callback_fired = true;
+        });
+        return sm;
+    };
+
+    // 1. SCANNING: RX must be enabled on entry
+    {
+        auto sm = make_sm();
+        sm.process_event(ALEEvent::START_SCAN);
+        const bool ok = rx_callback_fired && rx_current;
+        std::cout << "  SCANNING: rx_enabled_callback(true): " << (ok ? "PASS" : "FAIL") << "\n";
+        if (!ok) return false;
+    }
+
+    // 2. IDLE: RX must be enabled on entry (explicit STOP_SCAN)
+    {
+        auto sm = make_sm();
+        sm.process_event(ALEEvent::START_SCAN);
+        rx_callback_fired = false;
+        sm.process_event(ALEEvent::STOP_SCAN);
+        const bool ok = rx_callback_fired && rx_current;
+        std::cout << "  IDLE:     rx_enabled_callback(true): " << (ok ? "PASS" : "FAIL") << "\n";
+        if (!ok) return false;
+    }
+
+    // 3. ERROR state after CALLING must restore RX (no dead state)
+    //    exit_state(CALLING) calls rx_enabled_callback(false);
+    //    enter_state(ERROR) must call rx_enabled_callback(true).
+    {
+        auto sm = make_sm();
+        sm.process_event(ALEEvent::CALL_REQUEST);   // → CALLING (sets rx=true for LBT)
+        rx_callback_fired = false;
+        sm.process_event(ALEEvent::ERROR_OCCURRED); // → ERROR
+        // exit_state(CALLING) fires rx=false, then enter_state(ERROR) must fire rx=true
+        const bool ok = rx_callback_fired && rx_current;
+        std::cout << "  ERROR (after CALLING): rx_enabled=true (no dead state): "
+                  << (ok ? "PASS" : "FAIL") << "\n";
+        if (!ok) return false;
+    }
+
+    // 4. ERROR state after HANDSHAKE must also restore RX
+    {
+        auto sm = make_sm();
+        sm.process_event(ALEEvent::START_SCAN);
+        sm.process_event(ALEEvent::CALL_DETECTED);  // → HANDSHAKE
+        rx_callback_fired = false;
+        sm.process_event(ALEEvent::ERROR_OCCURRED); // → ERROR
+        const bool ok = rx_callback_fired && rx_current;
+        std::cout << "  ERROR (after HANDSHAKE): rx_enabled=true (no dead state): "
+                  << (ok ? "PASS" : "FAIL") << "\n";
+        if (!ok) return false;
+    }
+
+    std::cout << "PASS: Always-Listen-Regel — AC-GEN-009-001\n";
+    return true;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -681,6 +760,7 @@ int run_all_tests() {
     if (test_timing_parameters_isolation()) { pass_count++; } else { fail_count++; }
     if (test_standard_scan_rate_td2()) { pass_count++; } else { fail_count++; }
     if (test_fast_scan_rate_td5()) { pass_count++; } else { fail_count++; }
+    if (test_always_listen_ac_gen_009_001()) { pass_count++; } else { fail_count++; }
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

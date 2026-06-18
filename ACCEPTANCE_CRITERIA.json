@@ -190,7 +190,8 @@
       "description": "Das System hört permanent auf dem aktuellen Kanal, außer wenn es sendet. Im SCANNING-Zustand ist der RX-Pfad aktiv.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe ale_state_machine.cpp: Im SCANNING-Zustand muss RX aktiv sein. Es darf keine Zustände geben, in denen weder TX noch RX aktiv ist.",
-      "status": "open"
+      "status": "closed",
+      "verification": "Gap found: enter_state(ERROR) had no rx_enabled_callback call — exit_state(CALLING/HANDSHAKE) sets RX=false, leaving the radio in a dead state (no TX, no RX). Fixed by adding case ALEState::ERROR: rx_enabled_callback(true) in src/Protocol/Control/ale_state_machine.cpp. All other states (IDLE, SCANNING, CALLING-LBT, HANDSHAKE, LINKED, SOUNDING-LISTENING) already correctly enable RX on entry or sub-phase transition. test_always_listen_ac_gen_009_001() added to tests/test_state_machine.cpp — verifies SCANNING→rx=true, IDLE→rx=true, ERROR-after-CALLING→rx=true, ERROR-after-HANDSHAKE→rx=true (no dead state). 12/12 tests pass."
     },
     {
       "id": "AC-GEN-009-002",
