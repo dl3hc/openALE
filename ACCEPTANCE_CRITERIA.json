@@ -419,7 +419,8 @@
       "description": "Symbolübergänge erfolgen an Waveform-Maxima (sin=+1). Anfangsphase = 0x40000000 (= π/2 in Q32). Keine Phasensprünge bei Frequenzwechseln.",
       "module": "FSK/tone_generator",
       "verification_hint": "Prüfe tone_generator.cpp: Initialisierung der Phase auf 0x40000000. Symbolwechsel darf Phase nicht resetten.",
-      "status": "open"
+      "status": "closed",
+      "verification": "reset() setzt phase_=0x40000000; generate_symbols() setzt phase_ nie zurück. Dedizierter Test test_phase_continuity_ac_waveform_002_002 in tests/waveform/unit/test_fsk_core.cpp prüft: (1) erstes Sample = Peak (22936), (2) single-call == split-call über Symbolgrenze, (3) reset() stellt 0x40000000 wieder her. Alle 10 Tests grün (2026-06-18)."
     },
     {
       "id": "AC-WAVEFORM-003-001",

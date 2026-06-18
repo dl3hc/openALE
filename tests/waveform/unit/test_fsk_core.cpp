@@ -512,6 +512,80 @@ bool test_symbol_freq_mapping_ac_waveform_001_002() {
 }
 
 // ============================================================================
+// Test AC-WAVEFORM-002-002: NCO phase continuity at symbol transitions
+// ============================================================================
+
+bool test_phase_continuity_ac_waveform_002_002() {
+    std::cout << "\n[TEST AC-WAVEFORM-002-002] NCO: Phase continuity at symbol transitions\n";
+    std::cout << "=======================================================================\n";
+
+    // ---- 1) After reset(), phase = 0x40000000 (pi/2, sin=+1) ----
+    // sin(pi/2) = 1.0  → first sample = trunc(1.0 * amplitude * 32767) with amplitude=0.7
+    ToneGenerator gen;
+    std::vector<int16_t> buf(SAMPLES_PER_SYMBOL);
+    uint8_t sym0 = 0;
+    gen.generate_symbols(&sym0, 1, buf.data(), TEST_AMPLITUDE);
+
+    const int expected_peak = static_cast<int>(1.0f * TEST_AMPLITUDE * 32767.0f);
+    const int actual_first  = static_cast<int>(buf[0]);
+    std::cout << "  Expected first sample near peak (" << expected_peak
+              << "), got " << actual_first << "\n";
+
+    if (std::abs(actual_first - expected_peak) > 1) {
+        std::cout << "  FAIL: initial phase not at 0x40000000 (pi/2)\n";
+        return false;
+    }
+    std::cout << "  PASS: initial phase = 0x40000000 confirmed\n";
+
+    // ---- 2) No phase reset at symbol transitions ----
+    // Reference: generate [sym_a, sym_b] in a single call
+    uint8_t syms[2] = {3, 5};
+    ToneGenerator gen_ref;
+    std::vector<int16_t> ref(2 * SAMPLES_PER_SYMBOL);
+    gen_ref.generate_symbols(syms, 2, ref.data(), TEST_AMPLITUDE);
+
+    // Split: generate sym_a, then sym_b across two separate calls — no reset in between
+    ToneGenerator gen_split;
+    std::vector<int16_t> split(2 * SAMPLES_PER_SYMBOL);
+    gen_split.generate_symbols(&syms[0], 1, split.data(), TEST_AMPLITUDE);
+    gen_split.generate_symbols(&syms[1], 1, split.data() + SAMPLES_PER_SYMBOL, TEST_AMPLITUDE);
+
+    if (std::memcmp(ref.data(), split.data(), 2 * SAMPLES_PER_SYMBOL * sizeof(int16_t)) != 0) {
+        std::cout << "  FAIL: phase was reset at symbol transition (one-call vs split-call differ)\n";
+        for (uint32_t i = 0; i < 2 * SAMPLES_PER_SYMBOL; ++i) {
+            if (ref[i] != split[i]) {
+                std::cout << "  First diff at sample " << i
+                          << ": ref=" << ref[i] << " split=" << split[i] << "\n";
+                break;
+            }
+        }
+        return false;
+    }
+    std::cout << "  PASS: no phase reset at symbol transition (single-call == split-call)\n";
+
+    // ---- 3) reset() restores phase to 0x40000000 ----
+    ToneGenerator gen_r;
+    std::vector<int16_t> buf_r(SAMPLES_PER_SYMBOL);
+    uint8_t sym7 = 7;
+    gen_r.generate_symbols(&sym7, 1, buf_r.data(), TEST_AMPLITUDE); // advance phase
+    gen_r.reset();
+    gen_r.generate_symbols(&sym0, 1, buf_r.data(), TEST_AMPLITUDE);
+
+    ToneGenerator gen_fresh;
+    std::vector<int16_t> buf_fresh(SAMPLES_PER_SYMBOL);
+    gen_fresh.generate_symbols(&sym0, 1, buf_fresh.data(), TEST_AMPLITUDE);
+
+    if (std::memcmp(buf_r.data(), buf_fresh.data(), SAMPLES_PER_SYMBOL * sizeof(int16_t)) != 0) {
+        std::cout << "  FAIL: reset() did not restore phase to 0x40000000\n";
+        return false;
+    }
+    std::cout << "  PASS: reset() restores phase to 0x40000000\n";
+
+    std::cout << "PASS: AC-WAVEFORM-002-002\n";
+    return true;
+}
+
+// ============================================================================
 // Test 6: Timing Constants
 // ============================================================================
 
@@ -640,6 +714,7 @@ int run_all_tests() {
     if (test_freq_table_ac_waveform_001_001()) { pass_count++; } else { fail_count++; }
     if (test_symbol_freq_mapping_ac_waveform_001_002()) { pass_count++; } else { fail_count++; }
     if (test_nco_32bit_accumulator_ac_waveform_002_001()) { pass_count++; } else { fail_count++; }
+    if (test_phase_continuity_ac_waveform_002_002()) { pass_count++; } else { fail_count++; }
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }
