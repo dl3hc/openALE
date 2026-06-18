@@ -1,4 +1,5 @@
 ﻿#include "Word/ale_word.h"
+#include "Protocol/Message/ale_message.h"
 #include "Stores/address_book.h"
 #include <iostream>
 #include <iomanip>
@@ -939,6 +940,117 @@ bool test_ac_word_002_001_preamble_enum_table_aviii()
 }
 
 // ============================================================================
+// AC-WORD-003-001 — CMD-Wort: System-weite Bedeutung
+//
+// Verifies: (1) CMD preamble = 0b110, (2) CMD encode/decode round-trip,
+// (3) CMD is not an address-type word, (4) MessageAssembler tracks CMD
+// in message.words but does not extract it as a routing address.
+// ============================================================================
+
+bool test_ac_word_003_001_cmd_system_wide()
+{
+    std::cout << "\n[AC-WORD-003-001] CMD-Wort: System-weite Bedeutung\n";
+    std::cout << "===================================================\n";
+    bool all_pass = true;
+
+    // 1. CMD preamble = 0b110 (6) per Table A-VIII
+    {
+        bool pass = (static_cast<uint8_t>(PreambleType::CMD) == 0b110);
+        std::cout << "  CMD preamble == 0b110 (6): " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // 2. CMD uses Basic-38 charset (not Expanded-64)
+    {
+        bool pass = WordParser::uses_basic38(PreambleType::CMD);
+        std::cout << "  CMD uses Basic-38 charset: " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // 3. CMD encode/decode round-trip: payload is fully preserved
+    {
+        const char chars[3] = { 'V', 'E', 'R' };
+        uint32_t payload = WordParser::encode_ascii(chars, PreambleType::CMD);
+        bool enc_ok = (payload != 0xFFFFFFFF);
+        char out[4] = {};
+        bool dec_ok = enc_ok && WordParser::decode_ascii(payload, PreambleType::CMD, out);
+        bool match  = dec_ok && out[0] == chars[0] && out[1] == chars[1] && out[2] == chars[2];
+        uint32_t word_bits = (static_cast<uint32_t>(PreambleType::CMD) << 21) | payload;
+        bool preamble_rt = match && (WordParser::extract_preamble(word_bits) == PreambleType::CMD);
+        bool payload_rt  = preamble_rt && (WordParser::extract_payload(word_bits) == payload);
+        std::cout << "  CMD encode/decode round-trip (\"VER\"): "
+                  << (payload_rt ? "PASS" : "FAIL") << "\n";
+        all_pass &= payload_rt;
+    }
+
+    // 4. CMD is NOT an address-type preamble (TO/FROM/TIS/TWAS/THRU)
+    {
+        const PreambleType addr_types[] = {
+            PreambleType::TO, PreambleType::FROM, PreambleType::TIS,
+            PreambleType::TWAS, PreambleType::THRU
+        };
+        bool distinct = true;
+        for (auto t : addr_types) {
+            if (t == PreambleType::CMD) { distinct = false; break; }
+        }
+        std::cout << "  CMD distinct from all address-type preambles: "
+                  << (distinct ? "PASS" : "FAIL") << "\n";
+        all_pass &= distinct;
+    }
+
+    // 5. MessageAssembler tracks CMD in message.words but not as a routing address.
+    //    Frame: [TO "W1A", CMD "VER", TIS "K6K"]
+    //    After TIS (has_tis=true) the assembler finalises.
+    //    Expected: message.words contains all 3 words, CMD word is there,
+    //              to_addresses == {"W1A"}, from_address == "K6K".
+    {
+        MessageAssembler msg_asm;
+        ALEWord w_to  = WordParser::make_word(PreambleType::TO,  "W1A");
+        ALEWord w_cmd = WordParser::make_word(PreambleType::CMD, "VER");
+        ALEWord w_tis = WordParser::make_word(PreambleType::TIS, "K6K");
+        w_to.timestamp_ms  = 100;
+        w_cmd.timestamp_ms = 200;
+        w_tis.timestamp_ms = 300;
+
+        bool complete = false;
+        complete |= msg_asm.add_word(w_to);
+        complete |= msg_asm.add_word(w_cmd);
+        complete |= msg_asm.add_word(w_tis);  // TIS triggers completion
+
+        ALEMessage msg;
+        bool got = msg_asm.get_message(msg);
+
+        bool cmd_in_words = false;
+        for (const auto& w : msg.words) {
+            if (w.type == PreambleType::CMD) { cmd_in_words = true; break; }
+        }
+        bool cmd_not_in_to = true;
+        for (const auto& a : msg.to_addresses) {
+            if (a == "VER") { cmd_not_in_to = false; break; }
+        }
+        bool cmd_not_in_from = (msg.from_address != "VER");
+        bool to_ok   = (msg.to_addresses.size() == 1 && msg.to_addresses[0] == "W1A");
+        bool from_ok = (msg.from_address == "K6K");
+
+        bool pass = complete && got && cmd_in_words && cmd_not_in_to && cmd_not_in_from
+                    && to_ok && from_ok;
+        std::cout << "  MessageAssembler: CMD in words, not in addresses: "
+                  << (pass ? "PASS" : "FAIL");
+        if (!pass) {
+            std::cout << " [complete=" << complete << " got=" << got
+                      << " cmd_in_words=" << cmd_in_words
+                      << " cmd_not_in_to=" << cmd_not_in_to
+                      << " cmd_not_in_from=" << cmd_not_in_from
+                      << " to_ok=" << to_ok << " from_ok=" << from_ok << "]";
+        }
+        std::cout << "\n";
+        all_pass &= pass;
+    }
+
+    return all_pass;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -955,6 +1067,7 @@ int run_all_tests() {
     if (test_ac_word_001_001_bit_layout()) { pass_count++; } else { fail_count++; }
     if (test_ac_word_001_002_encode_decode_symmetry()) { pass_count++; } else { fail_count++; }
     if (test_ac_word_002_001_preamble_enum_table_aviii()) { pass_count++; } else { fail_count++; }
+    if (test_ac_word_003_001_cmd_system_wide()) { pass_count++; } else { fail_count++; }
     if (test_word_parsing()) { pass_count++; } else { fail_count++; }
     if (test_ascii_codec()) { pass_count++; } else { fail_count++; }
     if (test_address_book()) { pass_count++; } else { fail_count++; }

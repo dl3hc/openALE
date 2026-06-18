@@ -566,7 +566,8 @@
       "description": "CMD-Wörter (Preamble 0b110) werden system-weit verstanden. Sie sind nicht adressspezifisch. Die Payload enthält den Kommandotyp.",
       "module": "Word/ale_word",
       "verification_hint": "Prüfe ale_word.cpp: CMD-Preamble muss korrekt kodiert sein. MessageAssembler muss CMD-Wörter als System-Kommandos verarbeiten.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_word_003_001_cmd_system_wide() in tests/word/unit/test_protocol.cpp. Verifies: (1) CMD preamble == 0b110 (6) per Table A-VIII, (2) CMD uses Basic-38 charset, (3) CMD encode/decode round-trip ('VER') payload preserved, (4) CMD is distinct from all 5 address-type preambles, (5) MessageAssembler includes CMD in message.words but does not extract it as to_addresses or from_address (frame [TO 'W1A', CMD 'VER', TIS 'K6K'] → to=['W1A'], from='K6K', CMD in words). 11/11 tests PASS (build Debug, 2026-06-18)."
     },
     {
       "id": "AC-WORD-003-002",
