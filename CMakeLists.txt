@@ -413,6 +413,11 @@ target_link_libraries(test_aqc_crc ale_aqc ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_aqc_crc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AQCCRC COMMAND test_aqc_crc)
 
+add_executable(test_aqc_backward_compat tests/test_aqc_backward_compat.cpp)
+target_link_libraries(test_aqc_backward_compat ale_aqc ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_aqc_backward_compat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AQCBackwardCompat COMMAND test_aqc_backward_compat)
+
 add_executable(test_fs1052_frames tests/test_fs1052_frames.cpp)
 target_link_libraries(test_fs1052_frames ale_fs1052 ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_fs1052_frames PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

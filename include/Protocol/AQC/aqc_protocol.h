@@ -307,37 +307,66 @@ public:
 /**
  * \class SlotManager
  * Manage slotted response timing for AQC (slots 0-7)
+ *
+ * AQC backward compatibility: slot duration tracks the remote station's dwell
+ * time (TD5=200 ms at 5 ch/s; TD2=500 ms at 2 ch/s per MIL-STD-188-141B).
+ * Use the dwell_ms overload when calling a station with a known, non-standard
+ * dwell rate so that response windows align correctly.
  */
 class SlotManager {
 public:
     SlotManager();
-    
+
+    // Spec-defined dwell-rate constants (MIL-STD-188-141B Annex B §"Programmable timing")
+    static constexpr uint32_t DWELL_TD5_MS = 200u;  ///< Td(5)  — 5 ch/s basic scan
+    static constexpr uint32_t DWELL_TD2_MS = 500u;  ///< Td(2)  — 2 ch/s minimum scan
+
     /**
-     * Calculate slot timing
+     * Calculate slot timing using the default (TD5 = 200 ms) dwell rate.
      * \param slot_number Slot position (0-7)
      * \param base_time_ms Base time reference
      * \return Transmission time in milliseconds
      */
     static uint32_t calculate_slot_time(uint8_t slot_number, uint32_t base_time_ms);
-    
+
+    /**
+     * Calculate slot timing for a remote station with a known variable dwell rate.
+     * Enables backward compatibility with AQC stations scanning at TD2 (500 ms)
+     * or any other spec-conformant rate.
+     * \param slot_number Slot position (0-7)
+     * \param base_time_ms Base time reference
+     * \param dwell_ms Remote station's dwell time (e.g. DWELL_TD2_MS = 500)
+     * \return Transmission time in milliseconds
+     */
+    static uint32_t calculate_slot_time(uint8_t slot_number, uint32_t base_time_ms,
+                                        uint32_t dwell_ms);
+
+    /**
+     * Return true when dwell_ms is a spec-conformant ALE dwell rate.
+     * Accepts TD5 (200 ms) and TD2 (500 ms) as defined in MIL-STD-188-141B.
+     * \param dwell_ms Dwell duration to validate
+     * \return true if recognised and spec-compliant
+     */
+    static bool is_valid_dwell_rate(uint32_t dwell_ms);
+
     /**
      * Assign slot based on address hash
      * Distributes stations across slots to reduce collisions
-     * 
+     *
      * \param address Station address
      * \return Assigned slot (0-7)
      */
     static uint8_t assign_slot(const std::string& address);
-    
+
     /**
-     * Get slot duration in milliseconds
-     * \return Slot duration (per MIL-STD-188-141B)
+     * Get default slot duration in milliseconds (TD5 = 200 ms).
+     * \return Slot duration
      */
     static uint32_t get_slot_duration_ms();
-    
+
 private:
-    static constexpr uint32_t SLOT_DURATION_MS = 200;  ///< 200ms per slot
-    static constexpr uint8_t NUM_SLOTS = 8;            ///< 8 slots total
+    static constexpr uint32_t SLOT_DURATION_MS = DWELL_TD5_MS;  ///< default: 200 ms (TD5)
+    static constexpr uint8_t  NUM_SLOTS        = 8;              ///< 8 slots total
 };
 
 } // namespace aqc

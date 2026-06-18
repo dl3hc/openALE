@@ -74,7 +74,7 @@
       "description": "Das System kann mit AQC-ALE-Stationen zusammenarbeiten, die variable Dwell-Raten einsetzen. AQC-Frames werden korrekt erkannt und verarbeitet.",
       "module": "Protocol/aqc_protocol",
       "verification_hint": "Prüfe aqc_protocol.h/cpp auf Behandlung variabler Dwell-Zeiten und Rückwärtskompatibilitätslogik.",
-      "status": "open"
+      "status": "closed"
     },
 
     {

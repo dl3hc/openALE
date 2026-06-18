@@ -337,11 +337,24 @@ bool AQCCRC::validate_crc16(const uint8_t* data, size_t length) {
 SlotManager::SlotManager() {}
 
 uint32_t SlotManager::calculate_slot_time(uint8_t slot_number, uint32_t base_time_ms) {
+    return calculate_slot_time(slot_number, base_time_ms, SLOT_DURATION_MS);
+}
+
+uint32_t SlotManager::calculate_slot_time(uint8_t slot_number, uint32_t base_time_ms,
+                                           uint32_t dwell_ms) {
     if (slot_number >= NUM_SLOTS) {
         slot_number = NUM_SLOTS - 1;
     }
-    
-    return base_time_ms + (slot_number * SLOT_DURATION_MS);
+    // Guard: never divide by zero if caller passes 0; fall back to default.
+    const uint32_t effective_dwell = (dwell_ms > 0) ? dwell_ms : SLOT_DURATION_MS;
+    return base_time_ms + (slot_number * effective_dwell);
+}
+
+bool SlotManager::is_valid_dwell_rate(uint32_t dwell_ms) {
+    // MIL-STD-188-141B Annex B §"Programmable timing" defines two scan rates:
+    //   TD5 = 200 ms (5 ch/s, basic)   — mandatory baseline
+    //   TD2 = 500 ms (2 ch/s, minimum) — supported for backward compatibility
+    return (dwell_ms == DWELL_TD5_MS) || (dwell_ms == DWELL_TD2_MS);
 }
 
 uint8_t SlotManager::assign_slot(const std::string& address) {
