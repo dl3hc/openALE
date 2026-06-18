@@ -385,6 +385,61 @@ bool test_end_to_end_modem() {
 }
 
 // ============================================================================
+// Test AC-WAVEFORM-001-001: 8 orthogonal tones, 750–2500 Hz, 250 Hz spacing
+// ============================================================================
+
+bool test_freq_table_ac_waveform_001_001() {
+    std::cout << "\n[TEST AC-WAVEFORM-001-001] Frequency Table (8 tones, 750-2500 Hz)\n";
+    std::cout << "====================================================================\n";
+
+    // Exactly 8 tones
+    if (NUM_TONES != 8) {
+        std::cout << "FAIL: NUM_TONES = " << NUM_TONES << " (expected 8)\n";
+        return false;
+    }
+    std::cout << "PASS: NUM_TONES = 8\n";
+
+    // Lowest tone rank 0 = 750 Hz
+    if (TONE_FREQS_HZ[0] != 750) {
+        std::cout << "FAIL: TONE_FREQS_HZ[0] = " << TONE_FREQS_HZ[0] << " Hz (expected 750)\n";
+        return false;
+    }
+    std::cout << "PASS: TONE_FREQS_HZ[0] = 750 Hz\n";
+
+    // Highest tone rank 7 = 2500 Hz
+    if (TONE_FREQS_HZ[7] != 2500) {
+        std::cout << "FAIL: TONE_FREQS_HZ[7] = " << TONE_FREQS_HZ[7] << " Hz (expected 2500)\n";
+        return false;
+    }
+    std::cout << "PASS: TONE_FREQS_HZ[7] = 2500 Hz\n";
+
+    // Equal 250 Hz spacing across all consecutive pairs
+    for (uint32_t i = 1; i < NUM_TONES; ++i) {
+        uint32_t spacing = TONE_FREQS_HZ[i] - TONE_FREQS_HZ[i - 1];
+        if (spacing != TONE_SPACING_HZ) {
+            std::cout << "FAIL: spacing between rank " << (i - 1) << " (" << TONE_FREQS_HZ[i-1]
+                      << " Hz) and rank " << i << " (" << TONE_FREQS_HZ[i]
+                      << " Hz) = " << spacing << " Hz (expected " << TONE_SPACING_HZ << ")\n";
+            return false;
+        }
+    }
+    std::cout << "PASS: All " << (NUM_TONES - 1) << " spacings = " << TONE_SPACING_HZ << " Hz\n";
+
+    // Expected table per MIL-STD-188-141B
+    constexpr std::array<uint32_t, 8> expected = {750, 1000, 1250, 1500, 1750, 2000, 2250, 2500};
+    for (uint32_t i = 0; i < NUM_TONES; ++i) {
+        if (TONE_FREQS_HZ[i] != expected[i]) {
+            std::cout << "FAIL: TONE_FREQS_HZ[" << i << "] = " << TONE_FREQS_HZ[i]
+                      << " Hz (expected " << expected[i] << ")\n";
+            return false;
+        }
+    }
+    std::cout << "PASS: TONE_FREQS_HZ = {750, 1000, 1250, 1500, 1750, 2000, 2250, 2500} Hz\n";
+    std::cout << "PASS: AC-WAVEFORM-001-001\n";
+    return true;
+}
+
+// ============================================================================
 // Test 6: Timing Constants
 // ============================================================================
 
@@ -472,6 +527,7 @@ int run_all_tests() {
     int pass_count = 0;
     int fail_count = 0;
     
+    if (test_freq_table_ac_waveform_001_001()) { pass_count++; } else { fail_count++; }
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }

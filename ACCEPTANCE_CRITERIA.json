@@ -380,7 +380,8 @@
       "description": "Die Frequenztabelle enthält genau 8 Töne im Bereich 750 Hz bis 2500 Hz mit gleichem Abstand (250 Hz). Symbol 0 → 750 Hz, Symbol 7 → 2500 Hz.",
       "module": "FSK/ale_waveform",
       "verification_hint": "Prüfe ale_waveform.h auf FREQ_TABLE oder äquivalent. Erwartete Werte: {750, 1000, 1250, 1500, 1750, 2000, 2250, 2500} Hz.",
-      "status": "open"
+      "status": "closed",
+      "verification": "TONE_FREQS_HZ = {750,1000,1250,1500,1750,2000,2250,2500} Hz in include/FSK/ale_waveform.h. NUM_TONES=8, TONE_SPACING_HZ=250. Static_assert prüft alle Frequenzen als Vielfache von TONE_SPACING_HZ. Expliziter Unit-Test test_freq_table_ac_waveform_001_001() in tests/waveform/unit/test_fsk_core.cpp: prüft NUM_TONES==8, TONE_FREQS_HZ[0]==750, TONE_FREQS_HZ[7]==2500, alle 7 Abstände==250 Hz, exakte Tabellenwerte. ctest -C Debug -R FSKCore: 1/1 PASSED (2026-06-18)."
     },
     {
       "id": "AC-WAVEFORM-001-002",
