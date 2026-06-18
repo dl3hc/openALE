@@ -356,6 +356,44 @@ struct OperatingParameters {
     bool     amd_enabled         = true;    ///< Accept AMD (Automatic Message Display) calls
     bool     lbt_enabled         = true;    ///< Listen-Before-Transmit
     uint32_t lbt_listen_ms       = 1000;    ///< LBT listen window (SW default; ALE spec: Twt_ale_ms = 784 ms)
+
+    // ── Setters (REQ-GEN-019) ─────────────────────────────────────────────────
+
+    /// Scan-rate: minimum TD2_MS (500 ms, 2 chps). Returns false if below spec floor.
+    bool set_scan_dwell_ms(uint32_t ms) {
+        if (ms < static_cast<uint32_t>(ale::TD2_MS)) return false;
+        scan_dwell_ms = ms;
+        return true;
+    }
+
+    /// Inter-sounding interval — unconstrained by spec.
+    void set_sounding_period_ms(uint32_t ms) { sounding_period_ms = ms; }
+
+    /// Call timeout: minimum Twa_ms (30 s). Returns false if below spec floor.
+    bool set_call_timeout_ms(uint32_t ms) {
+        if (ms < ale::Twa_ms) return false;
+        call_timeout_ms = ms;
+        return true;
+    }
+
+    /// AMD message length cap: maximum 90 characters (MIL-STD-188-141B). Returns false if exceeded.
+    bool set_amd_max_length(uint32_t len) {
+        if (len > 90u) return false;
+        amd_max_length = len;
+        return true;
+    }
+
+    /// LQA accept-flag: enable/disable recording and use of LQA scores.
+    void set_lqa_enabled(bool enabled) { lqa_enabled = enabled; }
+
+    /// AMD accept-flag: enable/disable acceptance of AMD calls.
+    void set_amd_enabled(bool enabled) { amd_enabled = enabled; }
+
+    /// LBT accept-flag: enable/disable Listen-Before-Transmit.
+    void set_lbt_enabled(bool enabled) { lbt_enabled = enabled; }
+
+    /// LBT listen window — unconstrained; ALE spec floor is Twt_ale_ms = 784 ms.
+    void set_lbt_listen_ms(uint32_t ms) { lbt_listen_ms = ms; }
 };
 
 } // namespace ale

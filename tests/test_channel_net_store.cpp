@@ -642,6 +642,101 @@ bool test_other_station_store_min_capacity_100()
 }
 
 // ============================================================================
+// OperatingParameters — operator-programmable setters (AC-GEN-007-001)
+// ============================================================================
+
+bool test_operating_parameters_setters_ac_gen_007_001()
+{
+    std::cout << "\n[OperatingParameters] operator-programmable setters (AC-GEN-007-001)\n";
+
+    OperatingParameters p;
+
+    // ── defaults ────────────────────────────────────────────────────────────
+    bool def_scan = (p.scan_dwell_ms == static_cast<uint32_t>(ale::TD2_MS));
+    std::cout << "  default scan_dwell_ms == TD2_MS: " << (def_scan ? "PASS" : "FAIL") << "\n";
+
+    bool def_timeout = (p.call_timeout_ms == ale::Twa_ms);
+    std::cout << "  default call_timeout_ms == Twa_ms: " << (def_timeout ? "PASS" : "FAIL") << "\n";
+
+    bool def_flags = (p.lqa_enabled && p.amd_enabled && p.lbt_enabled);
+    std::cout << "  default accept-flags all true: " << (def_flags ? "PASS" : "FAIL") << "\n";
+
+    // ── scan_dwell_ms setter ────────────────────────────────────────────────
+    bool scan_valid = p.set_scan_dwell_ms(1000);
+    std::cout << "  set_scan_dwell_ms(1000) returns true: " << (scan_valid ? "PASS" : "FAIL") << "\n";
+
+    bool scan_applied = (p.scan_dwell_ms == 1000u);
+    std::cout << "  scan_dwell_ms updated to 1000: " << (scan_applied ? "PASS" : "FAIL") << "\n";
+
+    bool scan_reject = !p.set_scan_dwell_ms(100); // below TD2_MS floor
+    std::cout << "  set_scan_dwell_ms(100) rejected (< TD2_MS): " << (scan_reject ? "PASS" : "FAIL") << "\n";
+
+    bool scan_unchanged = (p.scan_dwell_ms == 1000u); // must not have been altered
+    std::cout << "  scan_dwell_ms unchanged after rejection: " << (scan_unchanged ? "PASS" : "FAIL") << "\n";
+
+    // ── sounding_period_ms setter ───────────────────────────────────────────
+    p.set_sounding_period_ms(300000);
+    bool sounding_ok = (p.sounding_period_ms == 300000u);
+    std::cout << "  set_sounding_period_ms(300000): " << (sounding_ok ? "PASS" : "FAIL") << "\n";
+
+    // ── call_timeout_ms setter ──────────────────────────────────────────────
+    bool timeout_valid = p.set_call_timeout_ms(60000);
+    std::cout << "  set_call_timeout_ms(60000) returns true: " << (timeout_valid ? "PASS" : "FAIL") << "\n";
+
+    bool timeout_applied = (p.call_timeout_ms == 60000u);
+    std::cout << "  call_timeout_ms updated to 60000: " << (timeout_applied ? "PASS" : "FAIL") << "\n";
+
+    bool timeout_reject = !p.set_call_timeout_ms(1000); // below Twa_ms floor
+    std::cout << "  set_call_timeout_ms(1000) rejected (< Twa_ms): " << (timeout_reject ? "PASS" : "FAIL") << "\n";
+
+    bool timeout_unchanged = (p.call_timeout_ms == 60000u);
+    std::cout << "  call_timeout_ms unchanged after rejection: " << (timeout_unchanged ? "PASS" : "FAIL") << "\n";
+
+    // ── amd_max_length setter ───────────────────────────────────────────────
+    bool amd_len_valid = p.set_amd_max_length(64);
+    std::cout << "  set_amd_max_length(64) returns true: " << (amd_len_valid ? "PASS" : "FAIL") << "\n";
+
+    bool amd_len_applied = (p.amd_max_length == 64u);
+    std::cout << "  amd_max_length updated to 64: " << (amd_len_applied ? "PASS" : "FAIL") << "\n";
+
+    bool amd_len_reject = !p.set_amd_max_length(91); // exceeds 90-char spec cap
+    std::cout << "  set_amd_max_length(91) rejected (> 90): " << (amd_len_reject ? "PASS" : "FAIL") << "\n";
+
+    bool amd_len_unchanged = (p.amd_max_length == 64u);
+    std::cout << "  amd_max_length unchanged after rejection: " << (amd_len_unchanged ? "PASS" : "FAIL") << "\n";
+
+    // ── accept-flags ────────────────────────────────────────────────────────
+    p.set_lqa_enabled(false);
+    bool lqa_off = !p.lqa_enabled;
+    std::cout << "  set_lqa_enabled(false): " << (lqa_off ? "PASS" : "FAIL") << "\n";
+
+    p.set_lqa_enabled(true);
+    bool lqa_on = p.lqa_enabled;
+    std::cout << "  set_lqa_enabled(true): " << (lqa_on ? "PASS" : "FAIL") << "\n";
+
+    p.set_amd_enabled(false);
+    bool amd_off = !p.amd_enabled;
+    std::cout << "  set_amd_enabled(false): " << (amd_off ? "PASS" : "FAIL") << "\n";
+
+    p.set_lbt_enabled(false);
+    bool lbt_off = !p.lbt_enabled;
+    std::cout << "  set_lbt_enabled(false): " << (lbt_off ? "PASS" : "FAIL") << "\n";
+
+    // ── lbt_listen_ms setter ────────────────────────────────────────────────
+    p.set_lbt_listen_ms(2000);
+    bool lbt_ms_ok = (p.lbt_listen_ms == 2000u);
+    std::cout << "  set_lbt_listen_ms(2000): " << (lbt_ms_ok ? "PASS" : "FAIL") << "\n";
+
+    return def_scan && def_timeout && def_flags
+        && scan_valid && scan_applied && scan_reject && scan_unchanged
+        && sounding_ok
+        && timeout_valid && timeout_applied && timeout_reject && timeout_unchanged
+        && amd_len_valid && amd_len_applied && amd_len_reject && amd_len_unchanged
+        && lqa_off && lqa_on && amd_off && lbt_off
+        && lbt_ms_ok;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 
@@ -679,6 +774,9 @@ int run_all_tests()
 
     run("OtherStationStore min capacity 100 (AC-GEN-006-001)",
         test_other_station_store_min_capacity_100());
+
+    run("OperatingParameters operator-programmable setters (AC-GEN-007-001)",
+        test_operating_parameters_setters_ac_gen_007_001());
 
     run("ALEController channel-ID auto-assignment", test_controller_channel_id_auto_assignment());
     run("ALEController del_channel unassigns from nets", test_controller_del_channel_unassigns_from_nets());
