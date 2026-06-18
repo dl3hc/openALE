@@ -132,13 +132,42 @@ void test_score_computation() {
     
     // High SNR, low BER = high score
     db.update_entry(7073000, "REMOTE", 28.0f, 0.001f, 0, 100);
-    
+
     auto entry = db.get_entry(7073000, "REMOTE");
     assert(entry != nullptr);
-    assert(entry->score > 20.0f);  // Should be high quality
-    assert(entry->score <= 31.0f); // Max score is 31
-    
+    assert(entry->score > 20.0f);            // Should be high quality
+    assert(entry->score <= LQA_QUALITY_MAX); // Bounded to 30 (AC-GEN-001-002)
+
     std::cout << "  Score: " << entry->score << std::endl;
+    std::cout << "  PASS" << std::endl;
+}
+
+// AC-GEN-001-002: the internal channel-quality scale is 0 (worst) .. 30 (best);
+// no computed LQA value may leave [0, 30], and the 31 "unknown" sentinel is
+// never produced by compute_score, even under saturating inputs.
+void test_score_range_bounds() {
+    std::cout << "Test: Score range bounds [0,30]..." << std::endl;
+
+    LQADatabase db;
+    LQAConfig config;  // default weights sum to 1.0
+    db.set_config(config);
+
+    // (1) Saturating "perfect" inputs: huge SNR, zero BER, fresh contact.
+    db.update_entry(14100000, "BEST", 999.0f, 0.0f, 0, 1000);
+    auto best = db.get_entry(14100000, "BEST");
+    assert(best != nullptr);
+    assert(best->score <= LQA_QUALITY_MAX);          // never exceeds 30
+    assert(best->score < LQA_QUALITY_UNKNOWN);        // never reaches 31 sentinel
+    assert(best->score >= LQA_QUALITY_MIN);
+
+    // (2) Worst-case inputs: negative SNR, BER = 1.0 → score floored at 0.
+    db.update_entry(14200000, "WORST", -50.0f, 1.0f, 99, 1000);
+    auto worst = db.get_entry(14200000, "WORST");
+    assert(worst != nullptr);
+    assert(worst->score >= LQA_QUALITY_MIN);          // never below 0
+    assert(worst->score <= LQA_QUALITY_MAX);
+
+    std::cout << "  best=" << best->score << " worst=" << worst->score << std::endl;
     std::cout << "  PASS" << std::endl;
 }
 
@@ -284,6 +313,7 @@ int main() {
     test_extended_metrics();
     test_multiple_stations();
     test_score_computation();
+    test_score_range_bounds();
     test_prune_stale_entries();
     test_save_and_load();
     test_export_csv();

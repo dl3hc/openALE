@@ -243,22 +243,25 @@ void LQADatabase::clear() {
 float LQADatabase::compute_score(const LQAEntry& entry) const {
     float score = 0.0f;
     
-    // SNR component (0-31 scale)
-    // Map SNR dB to 0-31: 0 dB = 0, 31 dB+ = 31
-    float snr_component = std::min(31.0f, std::max(0.0f, entry.snr_db));
+    // Quality scale is 0 (worst) .. 30 (best); 31 is the reserved "unknown"
+    // sentinel and must never be produced here (AC-GEN-001-002, A.4.1.5).
+
+    // SNR component (0-30 scale)
+    // Map SNR dB to 0-30: 0 dB = 0, 30 dB+ = 30
+    float snr_component = std::min(LQA_QUALITY_MAX, std::max(0.0f, entry.snr_db));
     score += snr_component * config_.snr_weight;
-    
-    // Success rate component (0-31 scale)
-    // Based on BER: 0 BER = 31, high BER = 0
+
+    // Success rate component (0-30 scale)
+    // Based on BER: 0 BER = 30, high BER = 0
     float success_rate = 0.0f;
     if (entry.total_words > 0) {
-        // Convert BER to success rate (1.0 - BER) and scale to 0-31
-        success_rate = (1.0f - std::min(1.0f, entry.ber)) * 31.0f;
+        // Convert BER to success rate (1.0 - BER) and scale to 0-30
+        success_rate = (1.0f - std::min(1.0f, entry.ber)) * LQA_QUALITY_MAX;
     }
     score += success_rate * config_.success_weight;
-    
-    // Recency component (0-31 scale)
-    // Recent contact = 31, old contact = 0
+
+    // Recency component (0-30 scale)
+    // Recent contact = 30, old contact = 0
     uint32_t now = get_current_time_ms();
     uint32_t last_activity = entry.last_activity_ms();
 
@@ -266,12 +269,12 @@ float LQADatabase::compute_score(const LQAEntry& entry) const {
         uint32_t age_ms = now - last_activity;
         float age_factor = 1.0f - (static_cast<float>(age_ms) / config_.max_age_ms);
         age_factor = std::max(0.0f, std::min(1.0f, age_factor));
-        float recency = age_factor * 31.0f;
+        float recency = age_factor * LQA_QUALITY_MAX;
         score += recency * config_.recency_weight;
     }
-    
-    // Clamp to 0-31 range
-    return std::min(31.0f, std::max(0.0f, score));
+
+    // Clamp to [0, 30] range — never reach the 31 "unknown" sentinel
+    return std::min(LQA_QUALITY_MAX, std::max(LQA_QUALITY_MIN, score));
 }
 
 bool LQADatabase::save_to_file(const std::string& filepath) const {

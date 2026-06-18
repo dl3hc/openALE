@@ -70,7 +70,7 @@ struct Channel {
 
     // ── Runtime ──────────────────────────────────────────────────────────
     uint32_t    next_sound_ms     = 0;   ///< Countdown until next sounding
-    float       lqa_score         = 0.f;
+    float       lqa_score         = 0.f; ///< Link-quality score, 0=worst..30=best (A.4.1.5)
     uint32_t    last_scan_time_ms = 0;
     uint32_t    call_count        = 0;
 

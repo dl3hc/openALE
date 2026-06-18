@@ -1065,8 +1065,10 @@ void ALEStateMachine::update_link_quality(const LinkQuality& lq) {
     }
 
     // Route heuristic LQA score update through channel manager (Schritt 6).
-    float score = 100.0f - (static_cast<float>(lq.fec_errors) * 10.0f);
-    score = std::max(0.0f, std::min(100.0f, score));
+    // Quality scale is 0=worst..30=best (A.4.1.5, AC-GEN-001-002): each
+    // FEC-corrected error costs 3 points; >=10 errors collapses to 0.
+    float score = LQA_QUALITY_MAX - (static_cast<float>(lq.fec_errors) * 3.0f);
+    score = std::max(LQA_QUALITY_MIN, std::min(LQA_QUALITY_MAX, score));
     channel_manager_.update_lqa_score(channel_manager_.current_index(), score);
 }
 

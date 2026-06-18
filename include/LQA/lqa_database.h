@@ -22,8 +22,25 @@
 namespace ale {
 
 /**
+ * @brief Channel-quality scale bounds (MIL-STD-188-141B A.4.1.5, figure A-4).
+ *
+ * The internal channel-quality value runs from 0 (worst) to 30 (best) on a
+ * SINAD basis; the value 31 is reserved as the "unknown / no measurement"
+ * sentinel (REQ-GEN-003 / AC-GEN-001-002, AC-GEN-005-3). A measured quality
+ * therefore must never exceed LQA_QUALITY_MAX — only the explicit
+ * LQA_QUALITY_UNKNOWN sentinel may take the value 31.
+ *
+ * (Note: the on-air SINAD/BER CMD-LQA fields use the spec's inverted "score"
+ *  convention where 0 is best; see A.5.6.5. This constant governs the internal
+ *  higher-is-better quality representation used for ranking and display.)
+ */
+static constexpr float LQA_QUALITY_MAX     = 30.0f;  ///< best measured quality
+static constexpr float LQA_QUALITY_MIN     = 0.0f;   ///< worst measured quality
+static constexpr float LQA_QUALITY_UNKNOWN = 31.0f;  ///< "no measurement" sentinel
+
+/**
  * @brief Single LQA entry for a specific channel/station combination
- * 
+ *
  * Tracks all quality metrics for one remote station on one frequency.
  */
 struct LQAEntry {
@@ -38,7 +55,7 @@ struct LQAEntry {
     float noise_floor_dbm;           ///< Noise floor measurement (dBm)
     uint32_t last_sounding_ms;       ///< Timestamp of last sounding (ms since epoch)
     uint32_t last_contact_ms;        ///< Timestamp of last contact (ms since epoch)
-    float score;                     ///< Computed composite LQA score (0-31)
+    float score;                     ///< Computed composite quality score (0=worst .. 30=best)
     uint32_t sample_count;           ///< Number of samples in this entry
     
     /**
@@ -279,10 +296,12 @@ public:
      * @brief Compute composite LQA score for an entry
      * 
      * Implements weighted scoring algorithm using SNR, success rate, and recency.
-     * Score range: 0.0 (worst) to 31.0 (best) per MIL-STD-188-141B.
-     * 
+     * Score range: LQA_QUALITY_MIN (0, worst) to LQA_QUALITY_MAX (30, best) per
+     * MIL-STD-188-141B A.4.1.5. 31 is reserved as the "unknown" sentinel and is
+     * never produced by this function.
+     *
      * @param entry Entry to score
-     * @return Composite score (0-31)
+     * @return Composite score in [0, 30]
      */
     float compute_score(const LQAEntry& entry) const;
 

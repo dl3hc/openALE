@@ -26,7 +26,7 @@ namespace ale {
  */
 struct ChannelRank {
     uint32_t frequency_hz;    ///< Channel frequency
-    float score;              ///< Composite LQA score (0-31)
+    float score;              ///< Composite LQA score (0=worst .. 30=best)
     std::string best_station; ///< Station with best LQA on this channel
     uint32_t last_update_ms;  ///< Last update timestamp
     
@@ -237,7 +237,7 @@ private:
     
     /**
      * @brief Quality level from score
-     * @param score LQA score (0-31)
+     * @param score LQA score (0=worst .. 30=best)
      * @return Quality level string
      */
     std::string score_to_quality_level(float score) const;
