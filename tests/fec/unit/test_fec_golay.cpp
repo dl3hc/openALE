@@ -69,32 +69,76 @@ bool test_ac_fec_001_001_generator_polynomial() {
 
 // AC-FEC-001-002: Compile-time encode table with 4096 entries, each yielding a
 // 24-bit codeword (info | parity). REQ-FEC-006, REQ-FEC-007 (FEAT-FEC-001).
+//
+// Three sub-checks:
+//  1. ENCODE_TABLE_SIZE == 4096 (compile-time)
+//  2. All 12 G-matrix basis rows match MIL-STD-188-141B Figure A-6 exactly
+//  3. All 4096 encode() outputs are 24-bit and systematic (info in bits 23..12)
 bool test_ac_fec_001_002_encode_table() {
     std::cout << "\n[TEST FEC-1b] AC-FEC-001-002: Encode-Tabelle 4096 Eintraege, 24-Bit-Codewort\n";
     std::cout << "------------------------------------------------------------------------------\n";
 
-    // Compile-time: ENCODE_TABLE_SIZE must be 4096 (2^12 info words).
+    // -- (1) Compile-time size check ----------------------------------------------
     static_assert(Golay::ENCODE_TABLE_SIZE == 4096u,
                   "ENCODE_TABLE_SIZE must equal 4096");
     std::cout << "  ENCODE_TABLE_SIZE = " << Golay::ENCODE_TABLE_SIZE << " (OK)\n";
 
-    // For every 12-bit info word the encode table must produce a valid 24-bit
-    // codeword where:
-    //   bits 23..12 == info word  (systematic code)
-    //   bits 11.. 0 == 12-bit parity
-    //   no bits above bit 23 are set
+    // -- (2) G-matrix basis vectors per MIL-STD-188-141B Figure A-6 --------------
+    // The generator matrix G = [I12 | P].  Each row i gives the parity word for
+    // the single-bit info word info=2^(11-i).  Parity bits are read MSB-first
+    // from Figure A-6 (groups of 3 binary digits separated by spaces).
+    //
+    // Row  1 (info=0x800): 101 011 100 011 = 0xAE3
+    // Row  2 (info=0x400): 111 110 010 010 = 0xF92
+    // Row  3 (info=0x200): 110 100 101 011 = 0xD2B
+    // Row  4 (info=0x100): 110 001 110 110 = 0xC76
+    // Row  5 (info=0x080): 110 011 011 001 = 0xCD9
+    // Row  6 (info=0x040): 011 001 101 101 = 0x66D
+    // Row  7 (info=0x020): 001 100 110 111 = 0x337
+    // Row  8 (info=0x010): 101 101 111 000 = 0xB78
+    // Row  9 (info=0x008): 010 110 111 100 = 0x5BC
+    // Row 10 (info=0x004): 001 011 011 110 = 0x2DE
+    // Row 11 (info=0x002): 101 110 001 101 = 0xB8D
+    // Row 12 (info=0x001): 010 111 000 111 = 0x5C7
+    struct BasisCase { uint16_t info; uint16_t parity; const char* label; };
+    static constexpr BasisCase G_ROWS[12] = {
+        { 0x800, 0xAE3, "Row  1 (bit 11)" },
+        { 0x400, 0xF92, "Row  2 (bit 10)" },
+        { 0x200, 0xD2B, "Row  3 (bit  9)" },
+        { 0x100, 0xC76, "Row  4 (bit  8)" },
+        { 0x080, 0xCD9, "Row  5 (bit  7)" },
+        { 0x040, 0x66D, "Row  6 (bit  6)" },
+        { 0x020, 0x337, "Row  7 (bit  5)" },
+        { 0x010, 0xB78, "Row  8 (bit  4)" },
+        { 0x008, 0x5BC, "Row  9 (bit  3)" },
+        { 0x004, 0x2DE, "Row 10 (bit  2)" },
+        { 0x002, 0xB8D, "Row 11 (bit  1)" },
+        { 0x001, 0x5C7, "Row 12 (bit  0)" },
+    };
+
+    for (const auto& bc : G_ROWS) {
+        const uint16_t got = Golay::extract_parity(Golay::encode(bc.info));
+        if (got != bc.parity) {
+            std::cout << "FAIL G-matrix " << bc.label
+                      << ": got 0x" << std::hex << got
+                      << " expected 0x" << bc.parity << std::dec << "\n";
+            return false;
+        }
+    }
+    std::cout << "  G-matrix (Fig. A-6): all 12 basis-vector parities match spec OK\n";
+
+    // -- (3) All 4096 entries: 24-bit codeword, systematic form ------------------
+    // bits 23..12 == info (systematic code); no bits above 23 set.
     uint32_t fail_count = 0;
     for (uint32_t info = 0; info < Golay::ENCODE_TABLE_SIZE; ++info) {
         const uint32_t cw = Golay::encode(static_cast<uint16_t>(info));
 
-        // Must fit in 24 bits.
         if (cw >> 24) {
             std::cout << "FAIL: encode(0x" << std::hex << info
                       << ") = 0x" << cw << " exceeds 24 bits\n" << std::dec;
             ++fail_count;
             continue;
         }
-        // Systematic form: upper 12 bits == info.
         if ((cw >> 12) != info) {
             std::cout << "FAIL: encode(0x" << std::hex << info
                       << ") upper 12 bits = 0x" << (cw >> 12)

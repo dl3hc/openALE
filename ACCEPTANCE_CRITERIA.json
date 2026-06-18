@@ -609,7 +609,7 @@
       "module": "FEC/golay",
       "verification_hint": "Prüfe golay.h: ENCODE_TABLE oder encode_table muss constexpr/static mit Größe 4096 sein.",
       "status": "closed",
-      "verification": "test_ac_fec_001_002_encode_table() in tests/fec/unit/test_fec_golay.cpp: static_assert(ENCODE_TABLE_SIZE==4096); alle 4096 encode()-Eintraege auf 24-Bit + systematische Form geprueft. 11/11 Tests gruen."
+      "verification": "test_ac_fec_001_002_encode_table() in tests/fec/unit/test_fec_golay.cpp: (1) static_assert(ENCODE_TABLE_SIZE==4096); (2) alle 12 G-Matrix-Basisvektoren gegen MIL-STD-188-141B Figure A-6 geprueft (Row 1..12, Paritaeten 0xAE3..0x5C7); (3) alle 4096 encode()-Ausgaben auf 24-Bit + systematische Form. 11/11 Tests gruen."
     },
     {
       "id": "AC-FEC-002-001",
