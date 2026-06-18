@@ -3,6 +3,7 @@
  * \brief Unit tests for Extended Golay (24,12) FEC codec and word interleaver
  *
  * Covers: AC-FEC-001-001, AC-FEC-001-002,
+ *         AC-FEC-002-001,
  *         AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
@@ -153,6 +154,83 @@ bool test_ac_fec_001_002_encode_table() {
     }
 
     std::cout << "  All 4096 entries: 24-bit codeword, systematic form OK\n";
+    std::cout << "PASS\n";
+    return true;
+}
+
+// AC-FEC-002-001: Decoder reliably corrects 1, 2, or 3 bit errors; 4+ → DETECTED.
+// REQ-FEC-010 (FEAT-FEC-002, MIL-STD-188-141B A.5.2.2.2.2)
+//
+// Verification hint: all C(24,3) = 2024 three-bit error patterns tested.
+bool test_ac_fec_002_001_three_bit_correction() {
+    std::cout << "\n[TEST FEC-11] AC-FEC-002-001: 1/2/3-Bit-Fehler korrigierbar, 4+ DETECTED\n";
+    std::cout << "--------------------------------------------------------------------------\n";
+
+    static constexpr uint16_t REF = 0xA5A;
+    const uint32_t cw = Golay::encode(REF);
+    uint32_t fail_count = 0;
+
+    // Weight-1: all 24 single-bit patterns → DECODE_CORRECTED, errors_corrected == 1
+    for (int i = 0; i < 24; ++i) {
+        uint32_t mask = 1u << i;
+        uint16_t out = 0;
+        Golay::DecodeResult r = Golay::decode(cw ^ mask, out);
+        if (r.flag != Golay::DECODE_CORRECTED || r.errors_corrected != 1 || out != REF) {
+            std::cout << "FAIL weight-1 mask=0x" << std::hex << mask
+                      << " flag=0x" << (int)r.flag
+                      << " ec=" << std::dec << (int)r.errors_corrected << "\n";
+            ++fail_count;
+        }
+    }
+    if (fail_count) { std::cout << "FAIL\n"; return false; }
+    std::cout << "  weight-1 (24 patterns): all DECODE_CORRECTED, errors_corrected=1 OK\n";
+
+    // Weight-2: all C(24,2) = 276 patterns → DECODE_CORRECTED, errors_corrected == 2
+    for (int i = 0; i < 24; ++i) {
+        for (int j = i + 1; j < 24; ++j) {
+            uint32_t mask = (1u << i) | (1u << j);
+            uint16_t out = 0;
+            Golay::DecodeResult r = Golay::decode(cw ^ mask, out);
+            if (r.flag != Golay::DECODE_CORRECTED || r.errors_corrected != 2 || out != REF) {
+                std::cout << "FAIL weight-2 mask=0x" << std::hex << mask << std::dec << "\n";
+                ++fail_count;
+            }
+        }
+    }
+    if (fail_count) { std::cout << "FAIL\n"; return false; }
+    std::cout << "  weight-2 (276 patterns): all DECODE_CORRECTED, errors_corrected=2 OK\n";
+
+    // Weight-3: all C(24,3) = 2024 patterns → DECODE_CORRECTED, errors_corrected == 3
+    for (int i = 0; i < 24; ++i) {
+        for (int j = i + 1; j < 24; ++j) {
+            for (int k = j + 1; k < 24; ++k) {
+                uint32_t mask = (1u << i) | (1u << j) | (1u << k);
+                uint16_t out = 0;
+                Golay::DecodeResult r = Golay::decode(cw ^ mask, out);
+                if (r.flag != Golay::DECODE_CORRECTED || r.errors_corrected != 3 || out != REF) {
+                    std::cout << "FAIL weight-3 mask=0x" << std::hex << mask << std::dec << "\n";
+                    ++fail_count;
+                }
+            }
+        }
+    }
+    if (fail_count) { std::cout << "FAIL\n"; return false; }
+    std::cout << "  weight-3 (2024 patterns): all DECODE_CORRECTED, errors_corrected=3 OK\n";
+
+    // Weight-4 samples → DECODE_DETECTED (not correctable)
+    static const uint32_t w4_masks[] = { 0x0000000Fu, 0x000000F0u, 0x00000F00u, 0x0000F000u };
+    for (uint32_t m : w4_masks) {
+        uint16_t out = 0;
+        Golay::DecodeResult r = Golay::decode(cw ^ m, out);
+        if (r.flag != Golay::DECODE_DETECTED) {
+            std::cout << "FAIL weight-4 mask=0x" << std::hex << m
+                      << " expected DECODE_DETECTED got flag=0x" << (int)r.flag << std::dec << "\n";
+            ++fail_count;
+        }
+    }
+    if (fail_count) { std::cout << "FAIL\n"; return false; }
+    std::cout << "  weight-4 (4 samples): all DECODE_DETECTED OK\n";
+
     std::cout << "PASS\n";
     return true;
 }
@@ -627,6 +705,7 @@ int run_all_tests() {
 
     if (test_ac_fec_001_001_generator_polynomial()) { pass_count++; } else { fail_count++; }
     if (test_ac_fec_001_002_encode_table())         { pass_count++; } else { fail_count++; }
+    if (test_ac_fec_002_001_three_bit_correction()) { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }

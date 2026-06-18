@@ -621,7 +621,8 @@
       "description": "Der Golay(24,12)-Decoder korrigiert zuverlässig 1, 2 oder 3 Bit-Fehler in einem 24-Bit-Codewort. Bei 4+ Fehlern wird DETECTED (nicht CORRECTED) zurückgegeben.",
       "module": "FEC/golay",
       "verification_hint": "Prüfe golay.cpp: Syndrome-basierte Dekodierschleife. Testreihe muss alle 3-Fehler-Korrekturfälle abdecken.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_fec_002_001_three_bit_correction() in tests/fec/unit/test_fec_golay.cpp: (1) alle 24 Gewicht-1-Fehlermuster → DECODE_CORRECTED, errors_corrected=1; (2) alle 276 Gewicht-2-Fehlermuster → DECODE_CORRECTED, errors_corrected=2; (3) alle 2024 Gewicht-3-Fehlermuster → DECODE_CORRECTED, errors_corrected=3; (4) 4 Gewicht-4-Stichproben → DECODE_DETECTED. 12/12 Tests gruen."
     },
     {
       "id": "AC-FEC-002-002",
