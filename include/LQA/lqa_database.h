@@ -136,6 +136,9 @@ public:
     /// Total cell capacity (design goal 10 000; min. req. 4 000 per REQ-GEN-017 / AC-GEN-006-002).
     static constexpr size_t kCapacity = 10000;
 
+    /// Minimum data-retention period without external power (REQ-GEN-018 / AC-GEN-006-003): 1 hour.
+    static constexpr uint32_t kMinRetentionMs = 3600000u;
+
     /**
      * @brief Construct empty LQA database
      */

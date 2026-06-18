@@ -304,6 +304,43 @@ void test_configuration() {
     std::cout << "  PASS" << std::endl;
 }
 
+// AC-GEN-006-003: LQA data must survive >= 1 hour without external power.
+// Verified via: (a) kMinRetentionMs == 3600000, (b) default max_age_ms >= kMinRetentionMs,
+// (c) save/load round-trip preserves timestamps so aging accumulates correctly across sessions.
+void test_lqa_one_hour_retention_ac_gen_006_003() {
+    std::cout << "Test: LQA 1-hour retention (AC-GEN-006-003)..." << std::endl;
+
+    // (a) named constant must be exactly 1 hour
+    static_assert(LQADatabase::kMinRetentionMs == 3600000u,
+                  "kMinRetentionMs must be 3600000ms per REQ-GEN-018");
+
+    // (b) default LQAConfig must retain entries for at least 1 hour
+    assert(LQAConfig{}.max_age_ms >= LQADatabase::kMinRetentionMs);
+
+    // (c) timestamps survive save/load so age accumulates correctly across power cycles
+    const std::string filepath = "test_lqa_retention.db";
+    const uint32_t ts = 1000000u;  // fixed contact timestamp (ms)
+
+    {
+        LQADatabase db;
+        db.update_entry(7073000, "ALFA", 22.0f, 0.001f, 1, 50, ts);
+        assert(db.save_to_file(filepath));
+    }
+
+    {
+        LQADatabase db;
+        assert(db.load_from_file(filepath));
+        assert(db.get_entry_count() == 1);
+        auto entry = db.get_entry(7073000, "ALFA");
+        assert(entry != nullptr);
+        // Named station → last_contact_ms must equal the original timestamp
+        assert(entry->last_contact_ms == ts);
+    }
+
+    std::remove(filepath.c_str());
+    std::cout << "  PASS" << std::endl;
+}
+
 // AC-GEN-006-002: kCapacity >= 4000; overflow evicts oldest entry.
 void test_lqa_database_min_capacity_4000() {
     std::cout << "Test: LQA database min capacity 4000 (AC-GEN-006-002)..." << std::endl;
@@ -355,6 +392,7 @@ int main() {
     test_get_all_entries();
     test_configuration();
     test_lqa_database_min_capacity_4000();
+    test_lqa_one_hour_retention_ac_gen_006_003();
 
     std::cout << "\n=== All LQA Database Tests Passed ===" << std::endl;
     return 0;

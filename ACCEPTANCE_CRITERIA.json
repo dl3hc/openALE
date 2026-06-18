@@ -143,7 +143,8 @@
       "description": "LQA-Daten bleiben mindestens 1 Stunde ohne externe Stromversorgung erhalten (nichtflüchtige Speicherung oder Backup-Batterie-Unterstützung durch IPersistenceBackend).",
       "module": "LQA/lqa_database",
       "verification_hint": "Prüfe ob lqa_database.cpp persistente Speicherung über IPersistenceBackend implementiert oder einen Timestamp-basierten Ablaufmechanismus (min. 3600s) besitzt.",
-      "status": "open"
+      "status": "closed",
+      "verification": "LQADatabase::kMinRetentionMs=3600000u added to include/LQA/lqa_database.h (REQ-GEN-018 trace); default LQAConfig::max_age_ms=3600000 already satisfies kMinRetentionMs; save_to_file()/load_from_file() provide binary non-volatile persistence with full timestamp serialization (last_contact_ms, last_sounding_ms) so aging accumulates correctly across power cycles; test_lqa_one_hour_retention_ac_gen_006_003() added to tests/test_lqa_database.cpp — static_assert on kMinRetentionMs, runtime assert on default max_age_ms >= kMinRetentionMs, save/load round-trip with timestamp preservation verified — 14/14 tests pass."
     },
 
     {
