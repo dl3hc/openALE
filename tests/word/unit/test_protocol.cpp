@@ -1051,6 +1051,118 @@ bool test_ac_word_003_001_cmd_system_wide()
 }
 
 // ============================================================================
+// AC-WORD-003-002 — REP darf nicht unmittelbar auf TIS/TWAS folgen
+//
+// Spec: A.5.2.3.4.2 (REQ-WORD-010), A.5.2.3.4.1 (REQ-WORD-009).
+// Rule: rep_not_preceded_by_self_tis_twas() — REP is illegal when its
+// immediately preceding word is TIS, TWAS, or REP itself.
+// A DATA word between TIS/TWAS and REP breaks the adjacency → valid.
+// ============================================================================
+
+bool test_ac_word_003_002_rep_not_after_tis_twas()
+{
+    std::cout << "\n[AC-WORD-003-002] REP darf nicht unmittelbar auf TIS/TWAS folgen\n";
+    std::cout << "===================================================================\n";
+    bool all_pass = true;
+
+    // ── Valid: REP after DATA (not TIS/TWAS) ─────────────────────────────────
+    {
+        // [TIS "SAM", DATA "UEL", REP "@@"] — REP follows DATA, not TIS → valid
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TIS,  "SAM"),
+            WordParser::make_word(PreambleType::DATA, "UEL"),
+            WordParser::make_word(PreambleType::REP,  "@@@"),
+        };
+        bool pass = FrameValidator::rep_not_preceded_by_self_tis_twas(seq);
+        std::cout << "  valid: TIS,DATA,REP (REP not adjacent to TIS): "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+    {
+        // [TWAS "REJ", DATA "ABC", REP "DEF"] — REP follows DATA, not TWAS → valid
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TWAS, "REJ"),
+            WordParser::make_word(PreambleType::DATA, "ABC"),
+            WordParser::make_word(PreambleType::REP,  "DEF"),
+        };
+        bool pass = FrameValidator::rep_not_preceded_by_self_tis_twas(seq);
+        std::cout << "  valid: TWAS,DATA,REP (REP not adjacent to TWAS): "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+    {
+        // [TO "ABC", REP "DEF"] — REP follows TO → valid
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TO,  "ABC"),
+            WordParser::make_word(PreambleType::REP, "DEF"),
+        };
+        bool pass = FrameValidator::rep_not_preceded_by_self_tis_twas(seq);
+        std::cout << "  valid: TO,REP: " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+    {
+        // Single TIS word — no REP present → vacuously valid
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TIS, "SAM"),
+        };
+        bool pass = FrameValidator::rep_not_preceded_by_self_tis_twas(seq);
+        std::cout << "  valid: TIS only (no REP): "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // ── Invalid: REP directly after TIS ──────────────────────────────────────
+    {
+        // [TIS "SAM", REP "ABC"] — forbidden by spec
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TIS, "SAM"),
+            WordParser::make_word(PreambleType::REP, "ABC"),
+        };
+        bool pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(seq);
+        std::cout << "  invalid: TIS,REP rejected: " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+    {
+        // [TO "ABC", TIS "SAM", REP "DEF"] — REP directly follows TIS
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TO,  "ABC"),
+            WordParser::make_word(PreambleType::TIS, "SAM"),
+            WordParser::make_word(PreambleType::REP, "DEF"),
+        };
+        bool pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(seq);
+        std::cout << "  invalid: TO,TIS,REP (REP after TIS) rejected: "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    // ── Invalid: REP directly after TWAS ─────────────────────────────────────
+    {
+        // [TWAS "REJ", REP "ABC"] — forbidden by spec
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TWAS, "REJ"),
+            WordParser::make_word(PreambleType::REP,  "ABC"),
+        };
+        bool pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(seq);
+        std::cout << "  invalid: TWAS,REP rejected: " << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+    {
+        // [TO "ABC", TWAS "REJ", REP "DEF"] — REP directly follows TWAS
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TO,   "ABC"),
+            WordParser::make_word(PreambleType::TWAS, "REJ"),
+            WordParser::make_word(PreambleType::REP,  "DEF"),
+        };
+        bool pass = !FrameValidator::rep_not_preceded_by_self_tis_twas(seq);
+        std::cout << "  invalid: TO,TWAS,REP (REP after TWAS) rejected: "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= pass;
+    }
+
+    return all_pass;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -1068,6 +1180,7 @@ int run_all_tests() {
     if (test_ac_word_001_002_encode_decode_symmetry()) { pass_count++; } else { fail_count++; }
     if (test_ac_word_002_001_preamble_enum_table_aviii()) { pass_count++; } else { fail_count++; }
     if (test_ac_word_003_001_cmd_system_wide()) { pass_count++; } else { fail_count++; }
+    if (test_ac_word_003_002_rep_not_after_tis_twas()) { pass_count++; } else { fail_count++; }
     if (test_word_parsing()) { pass_count++; } else { fail_count++; }
     if (test_ascii_codec()) { pass_count++; } else { fail_count++; }
     if (test_address_book()) { pass_count++; } else { fail_count++; }

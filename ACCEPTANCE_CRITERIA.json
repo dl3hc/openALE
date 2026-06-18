@@ -580,7 +580,8 @@
       "description": "In einer Wortsequenz darf ein REP-Wort nie direkt nach einem TIS- oder TWAS-Wort stehen (frame_validator.cpp). Diese Sequenzregel wird bei der Frame-Validierung geprüft.",
       "module": "Protocol/frame_validator",
       "verification_hint": "Prüfe frame_validator.cpp: Es muss eine Regel geben, die REP nach TIS/TWAS als ungültig markiert.",
-      "status": "open"
+      "status": "closed",
+      "verification": "FrameValidator::rep_not_preceded_by_self_tis_twas() in src/Word/ale_word.cpp. Tests in tests/word/unit/test_protocol.cpp: test_ac_word_003_002_rep_not_after_tis_twas() — 8/8 sub-cases PASS (valid: TIS/TWAS→DATA→REP and TO→REP; invalid: TIS→REP, TO→TIS→REP, TWAS→REP, TO→TWAS→REP). Build+run 2026-06-18, 12/12 overall PASS."
     },
     {
       "id": "AC-FEC-001-001",
