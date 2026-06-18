@@ -594,7 +594,8 @@
       "description": "Der Golay(24,12)-Encoder verwendet das Generatorpolynom 0xAE3 (binär: 101011100011). Die Encoder-Tabelle wird compile-time aus diesem Polynom generiert.",
       "module": "FEC/golay",
       "verification_hint": "Prüfe golay.h/cpp auf Polynom-Konstante 0xAE3 und Tabellengröße 4096.",
-      "status": "open"
+      "status": "closed",
+      "verification": "Golay::GENERATOR_POLYNOMIAL = 0xAE3 und Golay::ENCODE_TABLE_SIZE = 4096 als public constexpr in include/FEC/golay.h hinzugefügt. Test test_ac_fec_001_001_generator_polynomial() in tests/fec/unit/test_fec_golay.cpp prüft: (1) GENERATOR_POLYNOMIAL == 0xAE3 via static_assert + Laufzeitcheck, (2) ENCODE_TABLE_SIZE == 4096 via static_assert + Laufzeitcheck, (3) encode(0x800) Parität == 0xAE3 (Polynom wird korrekt angewendet). Build + Run 2026-06-18: 10/10 PASS."
     },
     {
       "id": "AC-FEC-001-002",

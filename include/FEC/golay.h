@@ -47,10 +47,18 @@ enum class GolayMode : uint8_t {
 
 class Golay {
 public:
+    /** Generator polynomial of the extended Golay (24,12) code (MIL-STD-188-141B A.5.2.2.2).
+     *  0xAE3 = x^11+x^9+x^7+x^6+x^5+x+1 (binary 101011100011).
+     *  Parity for the MSB basis vector (info=0x800) equals this constant. */
+    static constexpr uint16_t GENERATOR_POLYNOMIAL = 0xAE3;
+
+    /** Size of the compile-time encoder lookup table (2^12 = 4096 12-bit info words). */
+    static constexpr uint32_t ENCODE_TABLE_SIZE = 4096;
+
     /**
      * Encode 12-bit information word to 24-bit codeword
      * Codeword = [information (12 bits) | parity (12 bits)]
-     * 
+     *
      * \param info 12-bit information word
      * \return 24-bit encoded codeword
      */

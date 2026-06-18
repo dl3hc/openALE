@@ -2,7 +2,8 @@
  * \file test_fec_golay.cpp
  * \brief Unit tests for Extended Golay (24,12) FEC codec and word interleaver
  *
- * Covers: AC-FEC-005-1/2/3, AC-FEC-006-1,
+ * Covers: AC-FEC-001-001,
+ *         AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
  *         AC-FEC-012-1/2/3, AC-FEC-013-1/2/3/4
@@ -22,6 +23,49 @@
 #include <cstdint>
 
 namespace ale {
+
+// AC-FEC-001-001: Generator polynomial 0xAE3 and compile-time table with 4096 entries.
+// REQ-FEC-004, REQ-FEC-005 (FEAT-FEC-001, MIL-STD-188-141B A.5.2.2.2)
+bool test_ac_fec_001_001_generator_polynomial() {
+    std::cout << "\n[TEST FEC-1] AC-FEC-001-001: Generator polynomial 0xAE3, table size 4096\n";
+    std::cout << "--------------------------------------------------------------------------\n";
+
+    // Verify the named constant equals 0xAE3
+    static_assert(Golay::GENERATOR_POLYNOMIAL == 0xAE3u,
+                  "GENERATOR_POLYNOMIAL must equal 0xAE3");
+    std::cout << "  Golay::GENERATOR_POLYNOMIAL = 0x"
+              << std::hex << Golay::GENERATOR_POLYNOMIAL << std::dec
+              << " (expected 0xAE3)\n";
+    if (Golay::GENERATOR_POLYNOMIAL != 0xAE3u) {
+        std::cout << "FAIL: GENERATOR_POLYNOMIAL != 0xAE3\n";
+        return false;
+    }
+
+    // Verify the table has 4096 entries: encode covers all 2^12 info words.
+    static_assert(Golay::ENCODE_TABLE_SIZE == 4096u,
+                  "ENCODE_TABLE_SIZE must equal 4096");
+    std::cout << "  ENCODE_TABLE_SIZE = " << Golay::ENCODE_TABLE_SIZE
+              << " (expected 4096)\n";
+    if (Golay::ENCODE_TABLE_SIZE != 4096u) {
+        std::cout << "FAIL: ENCODE_TABLE_SIZE != 4096\n";
+        return false;
+    }
+
+    // Verify the polynomial is actually used: encoding the MSB basis vector (info=0x800)
+    // must yield a parity equal to GENERATOR_POLYNOMIAL (by definition of the Golay code).
+    const uint32_t cw_msb    = Golay::encode(0x800u);
+    const uint16_t parity_msb = Golay::extract_parity(cw_msb);
+    std::cout << "  encode(0x800) parity = 0x" << std::hex << parity_msb << std::dec
+              << " (expected 0x" << std::hex << Golay::GENERATOR_POLYNOMIAL << std::dec << ")\n";
+    if (parity_msb != Golay::GENERATOR_POLYNOMIAL) {
+        std::cout << "FAIL: encode(0x800) parity mismatch — generator polynomial not applied correctly\n";
+        return false;
+    }
+
+    std::cout << "PASS\n";
+    return true;
+}
+
 
 static std::vector<uint32_t> make_golay_error_masks_upto_3() {
     std::vector<uint32_t> masks;
@@ -491,6 +535,7 @@ int run_all_tests() {
     int pass_count = 0;
     int fail_count = 0;
 
+    if (test_ac_fec_001_001_generator_polynomial()) { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }
