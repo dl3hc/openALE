@@ -85,7 +85,8 @@
       "description": "Der ChannelStore muss mindestens 100 Kanaleinträge aufnehmen können. Jeder Eintrag enthält TX-Frequenz, RX-Frequenz und Modul-/Modus-Information.",
       "module": "Stores/ale_data_store",
       "verification_hint": "Suche in ale_data_store.h nach ChannelStore-Klasse oder vergleichbarer Struktur. Prüfe die definierte Kapazitätskonstante (min. 100).",
-      "status": "closed"
+      "status": "closed",
+      "verification": "ChannelStore (include/Stores/ale_data_store.h) nutzte std::vector<Channel> ohne Kapazitätsgrenze — kein Constant, keine Enforcement. Geändert: (1) static constexpr size_t kCapacity = 100 zur Klasse hinzugefügt; (2) add_channel() von void auf bool geändert, gibt false zurück bei Duplikat oder vollen Store (src/Stores/ale_data_store.cpp). Channel-Struct hatte rx_frequency_hz, tx_frequency_hz, rx_mode/tx_mode bereits. Tests ergänzt in tests/test_channel_net_store.cpp: test_channel_store_min_capacity_100() (100 Einträge akzeptiert, 101. abgelehnt, Felder vorhanden, kCapacity==100) und test_channel_store_duplicate_rejected(). 15/15 Tests grün."
     },
     {
       "id": "AC-GEN-004-002",
