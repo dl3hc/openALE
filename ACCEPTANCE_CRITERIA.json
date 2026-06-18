@@ -85,7 +85,7 @@
       "description": "Der ChannelStore muss mindestens 100 Kanaleinträge aufnehmen können. Jeder Eintrag enthält TX-Frequenz, RX-Frequenz und Modul-/Modus-Information.",
       "module": "Stores/ale_data_store",
       "verification_hint": "Suche in ale_data_store.h nach ChannelStore-Klasse oder vergleichbarer Struktur. Prüfe die definierte Kapazitätskonstante (min. 100).",
-      "status": "open"
+      "status": "closed"
     },
     {
       "id": "AC-GEN-004-002",

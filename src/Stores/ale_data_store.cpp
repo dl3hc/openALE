@@ -10,9 +10,11 @@ namespace ale {
 
 // ── ChannelStore ──────────────────────────────────────────────────────────────
 
-void ChannelStore::add_channel(const Channel& ch) {
-    if (!has_channel(ch.rx_frequency_hz))
-        channels_.push_back(ch);
+bool ChannelStore::add_channel(const Channel& ch) {
+    if (has_channel(ch.rx_frequency_hz)) return false;
+    if (channels_.size() >= kCapacity)   return false;
+    channels_.push_back(ch);
+    return true;
 }
 
 void ChannelStore::remove_channel(uint32_t rx_frequency_hz) {

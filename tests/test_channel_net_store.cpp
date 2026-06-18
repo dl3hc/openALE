@@ -372,6 +372,64 @@ bool test_initiate_call_without_contact_leaves_target_scan_channels_untouched()
 }
 
 // ============================================================================
+// ChannelStore — capacity (AC-GEN-004-001)
+// ============================================================================
+
+bool test_channel_store_min_capacity_100()
+{
+    std::cout << "\n[ChannelStore] minimum capacity 100 entries, all fields present (AC-GEN-004-001)\n";
+
+    ChannelStore store;
+    for (int i = 0; i < 100; ++i) {
+        Channel ch;
+        ch.rx_frequency_hz = static_cast<uint32_t>(3000000 + i * 1000);
+        ch.tx_frequency_hz = ch.rx_frequency_hz;
+        ch.rx_mode = "USB";
+        ch.tx_mode = "USB";
+        bool ok = store.add_channel(ch);
+        if (!ok) {
+            std::cout << "  FAIL: add_channel rejected entry " << i << " before reaching 100\n";
+            return false;
+        }
+    }
+    bool full_at_100 = (store.size() == 100);
+    std::cout << "  100 channels accepted: " << (full_at_100 ? "PASS" : "FAIL")
+              << " (size=" << store.size() << ")\n";
+
+    Channel extra;
+    extra.rx_frequency_hz = 99000000;
+    bool rejected = !store.add_channel(extra);
+    std::cout << "  101st entry rejected at kCapacity: " << (rejected ? "PASS" : "FAIL") << "\n";
+
+    const auto& first = store.all()[0];
+    bool has_fields = (first.rx_frequency_hz == 3000000
+                    && first.tx_frequency_hz == 3000000
+                    && first.rx_mode == "USB");
+    std::cout << "  Channel has rx_freq/tx_freq/mode fields: " << (has_fields ? "PASS" : "FAIL") << "\n";
+
+    bool capacity_constant_ok = (ChannelStore::kCapacity == 100);
+    std::cout << "  kCapacity == 100: " << (capacity_constant_ok ? "PASS" : "FAIL") << "\n";
+
+    return full_at_100 && rejected && has_fields && capacity_constant_ok;
+}
+
+bool test_channel_store_duplicate_rejected()
+{
+    std::cout << "\n[ChannelStore] duplicate rx_frequency_hz rejected (AC-GEN-004-001)\n";
+
+    ChannelStore store;
+    bool first  = store.add_channel(Channel(7100000));
+    bool second = !store.add_channel(Channel(7100000));
+    bool size_1 = (store.size() == 1);
+
+    std::cout << "  first add accepted: "    << (first  ? "PASS" : "FAIL") << "\n";
+    std::cout << "  duplicate rejected: "    << (second ? "PASS" : "FAIL") << "\n";
+    std::cout << "  size remains 1: "        << (size_1 ? "PASS" : "FAIL") << "\n";
+
+    return first && second && size_1;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 
@@ -394,6 +452,9 @@ int run_all_tests()
     run("NetStore assign/unassign channel",         test_net_store_assign_unassign_channel());
     run("NetStore unassign_channel_everywhere",     test_net_store_unassign_everywhere());
     run("net_scan_channel_count counts enabled only", test_net_scan_channel_count());
+
+    run("ChannelStore min capacity 100 + fields",  test_channel_store_min_capacity_100());
+    run("ChannelStore duplicate rejected",         test_channel_store_duplicate_rejected());
 
     run("ContactStore add/update/remove",           test_contact_store_add_update_remove());
 

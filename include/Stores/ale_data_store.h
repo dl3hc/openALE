@@ -29,9 +29,13 @@ namespace ale {
  */
 class ChannelStore {
 public:
+    /** MIL-STD-188-141B Table A-III: 100-channel nonvolatile channel memory. */
+    static constexpr size_t kCapacity = 100;
+
     ChannelStore() = default;
 
-    void add_channel(const Channel& ch);
+    /** Returns false if the channel is a duplicate (same rx_frequency_hz) or the store is full. */
+    bool add_channel(const Channel& ch);
     void remove_channel(uint32_t rx_frequency_hz);
     bool has_channel(uint32_t rx_frequency_hz) const;
     void set_enabled(uint32_t rx_frequency_hz, bool enabled);
