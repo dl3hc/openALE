@@ -224,7 +224,8 @@
       "description": "AQC-ALE-Frames packen 3 Zeichen in ein 16-Bit-Wort. Das Bit-Layout entspricht der AQC-Spezifikation und unterscheidet sich erkennbar vom Base-ALE-24-Bit-Wort.",
       "module": "Protocol/aqc_protocol",
       "verification_hint": "Prüfe aqc_protocol.h auf AQC-Word-Struktur (16-Bit). Vergleiche mit ALEWord (24-Bit) in ale_word.h.",
-      "status": "open"
+      "status": "closed",
+      "verification": "AQCWord-Struct in include/Protocol/AQC/aqc_protocol.h ergänzt: uint16_t raw (16 Bit) mit Bit-Layout [15]=type_flag, [14:10]=char1, [9:5]=char2, [4:0]=char3 (3×5 Bit AQC-32-Zeichensatz, A–Z=0–25, '0'–'5'=26–31). Statische Methoden encode(), from_chars(), to_chars(), char_to_aqc32(), aqc32_to_char() implementiert. Klar abgegrenzt von ALEWord (24 Bit: 3-Bit-Präambel + 3×7-Bit-Basic-38-Payload). Tests in tests/aqc/unit/test_aqc_word_format.cpp: TEST 1 (Wortbreite 16 vs. 24 Bit, static_assert), TEST 2 (Bit-Layout-Verifikation), TEST 3 (Encode/Decode-Roundtrip 5 Fälle), TEST 4 (AQC-32-Zeichensatz komplett), TEST 5 (from_chars/to_chars), TEST 6 (Ungültige Zeichen abgelehnt). 25/25 Tests grün."
     },
     {
       "id": "AC-GEN-010-002",

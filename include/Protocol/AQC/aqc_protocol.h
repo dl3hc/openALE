@@ -25,6 +25,114 @@ namespace ale {
 namespace aqc {
 
 // ============================================================================
+// AQC 16-bit Compact Word Format
+// ============================================================================
+
+/**
+ * \struct AQCWord
+ * AQC-ALE 16-bit compact word format (MIL-STD-188-141B Appendix C).
+ *
+ * Packs 3 characters into 16 bits — visibly more compact than the 24-bit
+ * Base-ALE word (ALEWord: 3-bit preamble + 3×7-bit payload = 24 bits).
+ *
+ * Bit layout:
+ * \code
+ *  [15]    type_flag — 0=address word, 1=control word
+ *  [14:10] char1     — first character, 5-bit AQC-32 code
+ *  [9:5]   char2     — second character, 5-bit AQC-32 code
+ *  [4:0]   char3     — third character, 5-bit AQC-32 code
+ * \endcode
+ *
+ * AQC-32 character set (5 bits per character, 32 values):
+ *   Codes 0–25  → 'A'–'Z'
+ *   Codes 26–31 → '0'–'5'
+ *
+ * Contrast with ALEWord (ale_word.h):
+ *   ALEWord: 3-bit preamble (8 types) + 3×7-bit payload (Basic-38) = 24 bits
+ *   AQCWord: 1-bit type flag (2 types) + 3×5-bit payload (AQC-32)  = 16 bits
+ */
+struct AQCWord {
+    uint16_t raw; ///< 16-bit packed word
+
+    AQCWord() : raw(0) {}
+    explicit AQCWord(uint16_t r) : raw(r) {}
+
+    /// True for control words; false for address words.
+    bool     type_flag() const { return (raw >> 15) & 1u; }
+    /// First character code (0–31, AQC-32).
+    uint8_t  char1()     const { return (raw >> 10) & 0x1Fu; }
+    /// Second character code (0–31, AQC-32).
+    uint8_t  char2()     const { return (raw >>  5) & 0x1Fu; }
+    /// Third character code (0–31, AQC-32).
+    uint8_t  char3()     const { return  raw        & 0x1Fu; }
+
+    /**
+     * Encode three AQC-32 character codes and a type flag into a 16-bit word.
+     * \param type_flag  false=address, true=control
+     * \param c1 c2 c3   AQC-32 character codes (must be 0–31)
+     * \return Packed AQCWord.
+     */
+    static AQCWord encode(bool type_flag, uint8_t c1, uint8_t c2, uint8_t c3) {
+        uint16_t r = (static_cast<uint16_t>(type_flag ? 1u : 0u) << 15)
+                   | (static_cast<uint16_t>(c1 & 0x1Fu) << 10)
+                   | (static_cast<uint16_t>(c2 & 0x1Fu) <<  5)
+                   |  static_cast<uint16_t>(c3 & 0x1Fu);
+        return AQCWord(r);
+    }
+
+    // ------------------------------------------------------------------
+    // AQC-32 character set helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Convert an ASCII character to its 5-bit AQC-32 code.
+     * \return Code 0–31 on success; 0xFF if the character is not in AQC-32.
+     */
+    static uint8_t char_to_aqc32(char ch) {
+        if (ch >= 'A' && ch <= 'Z') return static_cast<uint8_t>(ch - 'A');
+        if (ch >= '0' && ch <= '5') return static_cast<uint8_t>(26 + (ch - '0'));
+        return 0xFFu; // not representable in AQC-32
+    }
+
+    /**
+     * Convert a 5-bit AQC-32 code back to its ASCII character.
+     * \return ASCII char on success; '\0' for an out-of-range code.
+     */
+    static char aqc32_to_char(uint8_t code) {
+        if (code <= 25u) return static_cast<char>('A' + code);
+        if (code <= 31u) return static_cast<char>('0' + (code - 26u));
+        return '\0';
+    }
+
+    /**
+     * Build an AQCWord from three ASCII characters and a type flag.
+     * Characters must belong to the AQC-32 set (A–Z, 0–5).
+     * \param[out] out  Resulting word on success.
+     * \return true on success; false if any character is not in AQC-32.
+     */
+    static bool from_chars(bool type_flag, char c1, char c2, char c3, AQCWord& out) {
+        uint8_t code1 = char_to_aqc32(c1);
+        uint8_t code2 = char_to_aqc32(c2);
+        uint8_t code3 = char_to_aqc32(c3);
+        if (code1 == 0xFFu || code2 == 0xFFu || code3 == 0xFFu) return false;
+        out = encode(type_flag, code1, code2, code3);
+        return true;
+    }
+
+    /**
+     * Decode an AQCWord back to three ASCII characters.
+     * \param[out] c1 c2 c3  Decoded characters.
+     * \return true (AQC-32 codes are always in range 0–31).
+     */
+    bool to_chars(char& c1, char& c2, char& c3) const {
+        c1 = aqc32_to_char(char1());
+        c2 = aqc32_to_char(char2());
+        c3 = aqc32_to_char(char3());
+        return (c1 != '\0' && c2 != '\0' && c3 != '\0');
+    }
+};
+
+// ============================================================================
 // Data Element (DE) Definitions per MIL-STD-188-141B
 // ============================================================================
 
