@@ -284,23 +284,58 @@ void test_get_all_entries() {
 
 void test_configuration() {
     std::cout << "Test: Configuration..." << std::endl;
-    
+
     LQADatabase db;
-    
+
     LQAConfig config;
     config.snr_weight = 0.6f;
     config.success_weight = 0.3f;
     config.recency_weight = 0.1f;
     config.max_age_ms = 600000;
-    
+
     db.set_config(config);
-    
+
     auto retrieved = db.get_config();
     assert(std::abs(retrieved.snr_weight - 0.6f) < 0.01f);
     assert(std::abs(retrieved.success_weight - 0.3f) < 0.01f);
     assert(std::abs(retrieved.recency_weight - 0.1f) < 0.01f);
     assert(retrieved.max_age_ms == 600000);
-    
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// AC-GEN-006-002: kCapacity >= 4000; overflow evicts oldest entry.
+void test_lqa_database_min_capacity_4000() {
+    std::cout << "Test: LQA database min capacity 4000 (AC-GEN-006-002)..." << std::endl;
+
+    // Verify compile-time constant
+    static_assert(LQADatabase::kCapacity >= 4000,
+                  "kCapacity must be at least 4000 per REQ-GEN-017");
+
+    // Fill to capacity + 5 using unique (freq, station) pairs.
+    // Use sequential timestamps so the oldest is deterministic.
+    LQADatabase db;
+    const size_t over = LQADatabase::kCapacity + 5;
+    for (size_t i = 0; i < over; ++i) {
+        uint32_t freq = static_cast<uint32_t>(1000000 + i);
+        std::string station = "ST" + std::to_string(i);
+        db.update_entry(freq, station, 15.0f, 0.01f, 0, 10,
+                        static_cast<uint32_t>(i + 1));  // timestamp = i+1 ms
+    }
+
+    // Size must not exceed capacity
+    assert(db.get_entry_count() <= LQADatabase::kCapacity);
+
+    // The very first entry (timestamp=1, oldest) must have been evicted
+    assert(db.get_entry(1000000, "ST0") == nullptr);
+
+    // The most recently inserted entry must still be present
+    uint32_t last_freq = static_cast<uint32_t>(1000000 + over - 1);
+    std::string last_station = "ST" + std::to_string(over - 1);
+    assert(db.get_entry(last_freq, last_station) != nullptr);
+
+    std::cout << "  kCapacity=" << LQADatabase::kCapacity
+              << " entry_count=" << db.get_entry_count() << std::endl;
     std::cout << "  PASS" << std::endl;
 }
 
@@ -319,7 +354,8 @@ int main() {
     test_export_csv();
     test_get_all_entries();
     test_configuration();
-    
+    test_lqa_database_min_capacity_4000();
+
     std::cout << "\n=== All LQA Database Tests Passed ===" << std::endl;
     return 0;
 }

@@ -133,6 +133,9 @@ struct LQAConfig {
  */
 class LQADatabase {
 public:
+    /// Total cell capacity (design goal 10 000; min. req. 4 000 per REQ-GEN-017 / AC-GEN-006-002).
+    static constexpr size_t kCapacity = 10000;
+
     /**
      * @brief Construct empty LQA database
      */
@@ -328,9 +331,12 @@ private:
      * @param old_samples Number of samples in old value
      * @return Weighted average
      */
-    float time_weighted_average(float old_value, float new_value, 
+    float time_weighted_average(float old_value, float new_value,
                                uint32_t old_samples) const;
-    
+
+    /// Evicts the entry with the oldest last_activity_ms() when entries_ is full.
+    void evict_oldest_if_full();
+
     LQAConfig config_;                           ///< Configuration parameters
     std::map<EntryKey, LQAEntry> entries_;      ///< Database of LQA entries
 };

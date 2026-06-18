@@ -109,7 +109,7 @@
       "description": "Der SelfAddressStore (in AddressBook oder ale_data_store) muss mindestens 20 eigene Stationsadressen speichern können, inkl. Slot-Nummern und gültiger Kanalliste.",
       "module": "Stores/address_book",
       "verification_hint": "Prüfe address_book.h auf self_address-Datenstruktur und zugehörige Kapazitätskonstante (min. 20).",
-      "status": "done",
+      "status": "closed",
       "verification": "SelfAddressStore::kCapacity=20 added to ale_data_store.h; capacity enforced in add() (src/Stores/ale_data_store.cpp); test_self_address_store_min_capacity_20() added to tests/test_channel_net_store.cpp — 18/18 tests pass."
     },
 
@@ -121,7 +121,7 @@
       "description": "Die Tabelle bekannter Gegenstellen (OtherStationStore oder known_stations) muss mindestens 100 Einträge aufnehmen.",
       "module": "Stores/address_book",
       "verification_hint": "Suche nach known_stations in address_book.h. Prüfe Kapazitätskonstante (min. 100).",
-      "status": "done",
+      "status": "closed",
       "verification": "OtherStationStore::kCapacity=100 added to ale_data_store.h; size()/empty() accessors added; capacity enforced in add_station() (returns bool) and update_contact() (implicit add skipped when full) in src/Stores/ale_data_store.cpp; test_other_station_store_min_capacity_100() added to tests/test_channel_net_store.cpp — 19/19 tests pass."
     },
     {
@@ -132,7 +132,8 @@
       "description": "Die LQADatabase muss mindestens 4000 LQA-Zellen (bilaterale SINAD/BER/Multipath pro Kanal-Station-Paar) speichern können.",
       "module": "LQA/lqa_database",
       "verification_hint": "Prüfe lqa_database.h auf Kapazitätsdefinitionen. Mindestgröße: 4000 Zellen (Designziel: 10000).",
-      "status": "open"
+      "status": "closed",
+      "verification": "LQADatabase::kCapacity=10000 added to include/LQA/lqa_database.h; evict_oldest_if_full() helper added to src/LQA/lqa_database.cpp and called in both update_entry() and update_entry_extended() else-branches to enforce the cap via LRU-style eviction (oldest last_activity_ms() dropped on overflow); static_assert(kCapacity >= 4000) in test; test_lqa_database_min_capacity_4000() added to tests/test_lqa_database.cpp — fills kCapacity+5 unique entries, verifies entry_count<=kCapacity and oldest entry evicted — 13/13 tests pass."
     },
     {
       "id": "AC-GEN-006-003",

@@ -33,7 +33,7 @@ uint32_t LQADatabase::get_current_time_ms() const {
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
 
-float LQADatabase::time_weighted_average(float old_value, float new_value, 
+float LQADatabase::time_weighted_average(float old_value, float new_value,
                                          uint32_t old_samples) const {
     // Time-weighted averaging: newer samples get more weight
     // Formula: weighted_avg = (old * decay * old_samples + new) / (old_samples * decay + 1)
@@ -41,6 +41,16 @@ float LQADatabase::time_weighted_average(float old_value, float new_value,
     float weighted_old = old_value * decay * old_samples;
     float total_weight = old_samples * decay + 1.0f;
     return (weighted_old + new_value) / total_weight;
+}
+
+void LQADatabase::evict_oldest_if_full() {
+    if (entries_.size() < kCapacity) return;
+    auto oldest = entries_.begin();
+    for (auto it = std::next(oldest); it != entries_.end(); ++it) {
+        if (it->second.last_activity_ms() < oldest->second.last_activity_ms())
+            oldest = it;
+    }
+    entries_.erase(oldest);
 }
 
 void LQADatabase::update_entry(uint32_t frequency_hz,
@@ -100,7 +110,8 @@ void LQADatabase::update_entry(uint32_t frequency_hz,
         
         // Compute initial score
         entry.score = compute_score(entry);
-        
+
+        evict_oldest_if_full();
         entries_[key] = entry;
     }
 }
@@ -173,7 +184,8 @@ void LQADatabase::update_entry_extended(uint32_t frequency_hz,
         
         // Compute initial score
         entry.score = compute_score(entry);
-        
+
+        evict_oldest_if_full();
         entries_[key] = entry;
     }
 }
