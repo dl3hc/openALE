@@ -366,7 +366,8 @@
       "description": "Data Block Message verwendet CRC16 zur Integritätssicherung und unterstützt transparente Binärdaten (nicht nur ASCII).",
       "module": "Protocol/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.h auf DBM-Typ mit CRC16-Feld und binärem Datenmodus.",
-      "status": "open"
+      "status": "closed",
+      "verification": "encode_dbm() implementiert in src/Protocol/ale_orderwire_protocols.cpp. DbmBlock-Struct (payload, crc16, buffered) in include/Protocol/ale_orderwire_protocols.h. 10 Unit-Tests in tests/gen/unit/test_dbm_orderwire_tx.cpp: Frame-Aufbau (CMD DBM + DATA/REP), CRC-16/CCITT-Anhang, transparente Binärdaten (0x00-0xFF akzeptiert, MSB bei >0x7F maskiert), keine aufeinanderfolgenden gleichen Präambeln. ctest -C Debug -R DBMOrderwireTx: 1/1 PASSED (2026-06-18)."
     },
     {
       "id": "AC-WAVEFORM-001-001",

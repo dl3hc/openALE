@@ -110,4 +110,73 @@ std::vector<ALEWord> encode_dtm(const std::string& text, bool crc_enabled)
     return words;
 }
 
+// ── DBM — Data Block Message (A.5.7.4) ────────────────────────────────────────
+
+// Build a transparent-binary DATA/REP word from 3 raw bytes.
+// DBM is not restricted to Expanded-64: any byte 0x00–0xFF is valid.
+// The MSB of each byte is masked off (& 0x7F) to fit the 7-bit ALE character slot.
+static ALEWord make_dbm_data_word(PreambleType pt, const uint8_t bytes[3])
+{
+    ALEWord w{};
+    w.type = pt;
+    const uint32_t b0 = bytes[0] & 0x7Fu;
+    const uint32_t b1 = bytes[1] & 0x7Fu;
+    const uint32_t b2 = bytes[2] & 0x7Fu;
+    w.raw_payload = (b0 << 14) | (b1 << 7) | b2;
+    w.address[0]  = static_cast<char>(b0);
+    w.address[1]  = static_cast<char>(b1);
+    w.address[2]  = static_cast<char>(b2);
+    w.address[3]  = '\0';
+    w.valid       = true;
+    return w;
+}
+
+// CRC-16/CCITT (poly 0x1021, init 0xFFFF) over raw binary bytes (A.5.7.4).
+static uint16_t compute_dbm_crc(const uint8_t* data, size_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= static_cast<uint16_t>(data[i]) << 8;
+        for (int b = 0; b < 8; ++b)
+            crc = (crc & 0x8000u) ? static_cast<uint16_t>((crc << 1) ^ 0x1021u)
+                                  : static_cast<uint16_t>(crc << 1);
+    }
+    return crc;
+}
+
+std::vector<ALEWord> encode_dbm(const std::vector<uint8_t>& payload, bool crc_enabled)
+{
+    std::vector<ALEWord> words;
+    words.reserve(1 + (payload.size() + 2) / 3 + (crc_enabled ? 1 : 0));
+
+    // Word 0: CMD DBM — Basic-38 identifier "DBM" (A.5.7.4)
+    const char dbm_id[3] = {'D', 'B', 'M'};
+    words.push_back(WordParser::make_word(PreambleType::CMD, dbm_id));
+
+    // Data words: transparent binary, alternating DATA/REP
+    for (size_t i = 0; i < payload.size(); i += 3) {
+        uint8_t bytes[3] = {0, 0, 0};  // zero-pad partial last triplet
+        for (size_t j = 0; j < 3 && i + j < payload.size(); ++j)
+            bytes[j] = payload[i + j];
+        const PreambleType pt = (words.size() % 2 == 1) ? PreambleType::DATA
+                              :                            PreambleType::REP;
+        words.push_back(make_dbm_data_word(pt, bytes));
+    }
+
+    // CRC word: CRC-16/CCITT over the payload bytes
+    if (crc_enabled) {
+        const uint16_t crc = compute_dbm_crc(payload.data(), payload.size());
+        const uint8_t crc_bytes[3] = {
+            static_cast<uint8_t>(crc >> 8),   // high byte
+            static_cast<uint8_t>(crc & 0xFFu), // low byte
+            0x00u                              // padding
+        };
+        const PreambleType pt = (words.size() % 2 == 1) ? PreambleType::DATA
+                              :                            PreambleType::REP;
+        words.push_back(make_dbm_data_word(pt, crc_bytes));
+    }
+
+    return words;
+}
+
 } // namespace ale

@@ -470,6 +470,11 @@ target_link_libraries(test_dtm_orderwire_tx ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_dtm_orderwire_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME DTMOrderwireTx COMMAND test_dtm_orderwire_tx)
 
+add_executable(test_dbm_orderwire_tx tests/gen/unit/test_dbm_orderwire_tx.cpp)
+target_link_libraries(test_dbm_orderwire_tx ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_dbm_orderwire_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME DBMOrderwireTx COMMAND test_dbm_orderwire_tx)
+
 add_executable(test_lqa_database tests/gen/unit/test_lqa_database.cpp)
 target_link_libraries(test_lqa_database ale_lqa ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_database PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
