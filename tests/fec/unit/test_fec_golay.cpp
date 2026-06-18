@@ -2,7 +2,7 @@
  * \file test_fec_golay.cpp
  * \brief Unit tests for Extended Golay (24,12) FEC codec and word interleaver
  *
- * Covers: AC-FEC-001-001,
+ * Covers: AC-FEC-001-001, AC-FEC-001-002,
  *         AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
@@ -66,6 +66,52 @@ bool test_ac_fec_001_001_generator_polynomial() {
     return true;
 }
 
+
+// AC-FEC-001-002: Compile-time encode table with 4096 entries, each yielding a
+// 24-bit codeword (info | parity). REQ-FEC-006, REQ-FEC-007 (FEAT-FEC-001).
+bool test_ac_fec_001_002_encode_table() {
+    std::cout << "\n[TEST FEC-1b] AC-FEC-001-002: Encode-Tabelle 4096 Eintraege, 24-Bit-Codewort\n";
+    std::cout << "------------------------------------------------------------------------------\n";
+
+    // Compile-time: ENCODE_TABLE_SIZE must be 4096 (2^12 info words).
+    static_assert(Golay::ENCODE_TABLE_SIZE == 4096u,
+                  "ENCODE_TABLE_SIZE must equal 4096");
+    std::cout << "  ENCODE_TABLE_SIZE = " << Golay::ENCODE_TABLE_SIZE << " (OK)\n";
+
+    // For every 12-bit info word the encode table must produce a valid 24-bit
+    // codeword where:
+    //   bits 23..12 == info word  (systematic code)
+    //   bits 11.. 0 == 12-bit parity
+    //   no bits above bit 23 are set
+    uint32_t fail_count = 0;
+    for (uint32_t info = 0; info < Golay::ENCODE_TABLE_SIZE; ++info) {
+        const uint32_t cw = Golay::encode(static_cast<uint16_t>(info));
+
+        // Must fit in 24 bits.
+        if (cw >> 24) {
+            std::cout << "FAIL: encode(0x" << std::hex << info
+                      << ") = 0x" << cw << " exceeds 24 bits\n" << std::dec;
+            ++fail_count;
+            continue;
+        }
+        // Systematic form: upper 12 bits == info.
+        if ((cw >> 12) != info) {
+            std::cout << "FAIL: encode(0x" << std::hex << info
+                      << ") upper 12 bits = 0x" << (cw >> 12)
+                      << " (expected 0x" << info << ")\n" << std::dec;
+            ++fail_count;
+        }
+    }
+
+    if (fail_count) {
+        std::cout << "FAIL: " << fail_count << " entries invalid\n";
+        return false;
+    }
+
+    std::cout << "  All 4096 entries: 24-bit codeword, systematic form OK\n";
+    std::cout << "PASS\n";
+    return true;
+}
 
 static std::vector<uint32_t> make_golay_error_masks_upto_3() {
     std::vector<uint32_t> masks;
@@ -536,6 +582,7 @@ int run_all_tests() {
     int fail_count = 0;
 
     if (test_ac_fec_001_001_generator_polynomial()) { pass_count++; } else { fail_count++; }
+    if (test_ac_fec_001_002_encode_table())         { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }
