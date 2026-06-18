@@ -393,7 +393,8 @@
       "description": "Das Symbol-zu-Frequenz-Mapping entspricht exakt Tabelle A-III des MIL-STD. Die Zuordnung ist bijektiv (keine Doppelbelegung).",
       "module": "FSK/ale_waveform",
       "verification_hint": "Prüfe FREQ_TO_SYMBOL und SYMBOL_TO_FREQ in ale_waveform.h auf Konsistenz und Übereinstimmung mit Table A-III.",
-      "status": "open"
+      "status": "closed",
+      "verification": "FREQ_TO_SYMBOL={0,1,3,2,6,7,5,4} und SYMBOL_TO_FREQ={750,1000,1500,1250,2500,2250,1750,2000} Hz in include/FSK/ale_waveform.h. SYMBOL_TO_FREQ constexpr-erzeugt als Inverse von FREQ_TO_SYMBOL+TONE_FREQS_HZ. static_assert prüft Bijektivität: SYMBOL_TO_FREQ[FREQ_TO_SYMBOL[rank]]==TONE_FREQS_HZ[rank] für alle Ranks. test_symbol_freq_mapping_ac_waveform_001_002() in tests/waveform/unit/test_fsk_core.cpp: prüft FREQ_TO_SYMBOL gegen Table A-III, SYMBOL_TO_FREQ gegen Table A-III, Bijektivität Roundtrip, keine Duplikat-Frequenzen. ctest -C Debug -R FSKCore: 8/8 PASSED (2026-06-18)."
     },
     {
       "id": "AC-WAVEFORM-002-001",

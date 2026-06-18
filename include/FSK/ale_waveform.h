@@ -73,6 +73,22 @@ constexpr bool freq_to_symbol_is_permutation() {
 static_assert(freq_to_symbol_is_permutation(),
               "FREQ_TO_SYMBOL must list each symbol value 0..7 exactly once");
 
+// (3) Inverse of FREQ_TO_SYMBOL: symbol value → tone frequency (Hz).
+//     Derived from TONE_FREQS_HZ + FREQ_TO_SYMBOL; single source of truth.
+constexpr std::array<uint32_t, NUM_TONES> SYMBOL_TO_FREQ = []() constexpr {
+    std::array<uint32_t, NUM_TONES> result{};
+    for (uint32_t rank = 0; rank < NUM_TONES; ++rank)
+        result[FREQ_TO_SYMBOL[rank]] = TONE_FREQS_HZ[rank];
+    return result;
+}();
+
+static_assert([]() constexpr {
+    for (uint32_t rank = 0; rank < NUM_TONES; ++rank)
+        if (SYMBOL_TO_FREQ[FREQ_TO_SYMBOL[rank]] != TONE_FREQS_HZ[rank])
+            return false;
+    return true;
+}(), "SYMBOL_TO_FREQ must be the exact inverse of FREQ_TO_SYMBOL");
+
 // FFT parameters
 constexpr uint32_t FFT_SIZE        = 64;
 constexpr uint32_t FFT_BIN_OFFSET  = 6;

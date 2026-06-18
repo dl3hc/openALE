@@ -440,6 +440,78 @@ bool test_freq_table_ac_waveform_001_001() {
 }
 
 // ============================================================================
+// Test AC-WAVEFORM-001-002: 3-bit symbol ↔ frequency mapping (Table A-III)
+// ============================================================================
+
+bool test_symbol_freq_mapping_ac_waveform_001_002() {
+    std::cout << "\n[TEST AC-WAVEFORM-001-002] Symbol↔Frequency Mapping (Table A-III)\n";
+    std::cout << "===================================================================\n";
+
+    // Expected Table A-III (MIL-STD-188-141B A.5.1.2): frequency → symbol value
+    // rank:    0     1     2     3     4     5     6     7
+    // freq:  750  1000  1250  1500  1750  2000  2250  2500 Hz
+    // sym:     0     1     3     2     6     7     5     4
+    constexpr std::array<uint8_t, 8> expected_freq_to_symbol = {0, 1, 3, 2, 6, 7, 5, 4};
+
+    // Expected inverse: symbol value → frequency (Hz)
+    // sym:     0     1     2     3     4     5     6     7
+    // freq:  750  1000  1500  1250  2500  2250  1750  2000 Hz
+    constexpr std::array<uint32_t, 8> expected_symbol_to_freq = {750, 1000, 1500, 1250, 2500, 2250, 1750, 2000};
+
+    bool ok = true;
+
+    // Verify FREQ_TO_SYMBOL matches Table A-III exactly
+    for (uint32_t rank = 0; rank < NUM_TONES; ++rank) {
+        if (FREQ_TO_SYMBOL[rank] != expected_freq_to_symbol[rank]) {
+            std::cout << "FAIL: FREQ_TO_SYMBOL[" << rank << "] = " << (int)FREQ_TO_SYMBOL[rank]
+                      << " (expected " << (int)expected_freq_to_symbol[rank] << ")\n";
+            ok = false;
+        }
+    }
+    if (ok) std::cout << "PASS: FREQ_TO_SYMBOL matches Table A-III\n";
+
+    // Verify SYMBOL_TO_FREQ matches Table A-III exactly
+    for (uint32_t sym = 0; sym < NUM_TONES; ++sym) {
+        if (SYMBOL_TO_FREQ[sym] != expected_symbol_to_freq[sym]) {
+            std::cout << "FAIL: SYMBOL_TO_FREQ[" << sym << "] = " << SYMBOL_TO_FREQ[sym]
+                      << " Hz (expected " << expected_symbol_to_freq[sym] << " Hz)\n";
+            ok = false;
+        }
+    }
+    if (ok) std::cout << "PASS: SYMBOL_TO_FREQ matches Table A-III\n";
+
+    // Verify bijection: SYMBOL_TO_FREQ[FREQ_TO_SYMBOL[rank]] == TONE_FREQS_HZ[rank]
+    for (uint32_t rank = 0; rank < NUM_TONES; ++rank) {
+        uint8_t sym = FREQ_TO_SYMBOL[rank];
+        uint32_t roundtrip_freq = SYMBOL_TO_FREQ[sym];
+        if (roundtrip_freq != TONE_FREQS_HZ[rank]) {
+            std::cout << "FAIL: Bijection broken at rank " << rank
+                      << ": SYMBOL_TO_FREQ[FREQ_TO_SYMBOL[" << rank << "]] = "
+                      << roundtrip_freq << " Hz (expected " << TONE_FREQS_HZ[rank] << " Hz)\n";
+            ok = false;
+        }
+    }
+    if (ok) std::cout << "PASS: SYMBOL_TO_FREQ is bijective inverse of FREQ_TO_SYMBOL\n";
+
+    // Verify SYMBOL_TO_FREQ contains no duplicate frequencies
+    std::array<bool, 9> freq_seen{};
+    for (uint32_t sym = 0; sym < NUM_TONES; ++sym) {
+        uint32_t f = SYMBOL_TO_FREQ[sym];
+        uint32_t idx = (f - 750) / 250;
+        if (idx >= 8 || freq_seen[idx]) {
+            std::cout << "FAIL: Duplicate or out-of-range frequency " << f
+                      << " Hz at symbol " << sym << "\n";
+            ok = false;
+        }
+        freq_seen[idx] = true;
+    }
+    if (ok) std::cout << "PASS: SYMBOL_TO_FREQ has no duplicate frequencies\n";
+
+    if (ok) std::cout << "PASS: AC-WAVEFORM-001-002\n";
+    return ok;
+}
+
+// ============================================================================
 // Test 6: Timing Constants
 // ============================================================================
 
@@ -528,6 +600,7 @@ int run_all_tests() {
     int fail_count = 0;
     
     if (test_freq_table_ac_waveform_001_001()) { pass_count++; } else { fail_count++; }
+    if (test_symbol_freq_mapping_ac_waveform_001_002()) { pass_count++; } else { fail_count++; }
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
     if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
     if (test_majority_voting()) { pass_count++; } else { fail_count++; }
