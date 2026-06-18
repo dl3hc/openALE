@@ -331,4 +331,156 @@ bool MessageStore::pop_oldest(ALEMessage& out) {
     return true;
 }
 
+// Binary file format (version 1):
+//   magic   : "PCALE_MSG\0"  (10 bytes)
+//   version : uint32_t       (== 1)
+//   capacity: uint32_t
+//   count   : uint32_t
+//   per message:
+//     call_type    : uint8_t
+//     to_count     : uint32_t  -> N length-prefixed strings
+//     from_len     : uint32_t  -> chars
+//     data_count   : uint32_t  -> N length-prefixed strings
+//     word_count   : uint32_t  -> N (PreambleType u8, address[4], raw_payload u32,
+//                                    fec_errors u8, unanimous_votes u8, valid u8, timestamp u32)
+//     start_time_ms: uint32_t
+//     duration_ms  : uint32_t
+//     complete     : uint8_t
+
+static void write_string(std::ofstream& f, const std::string& s) {
+    uint32_t len = static_cast<uint32_t>(s.size());
+    f.write(reinterpret_cast<const char*>(&len), sizeof(len));
+    f.write(s.data(), len);
+}
+
+static bool read_string(std::ifstream& f, std::string& s) {
+    uint32_t len = 0;
+    if (!f.read(reinterpret_cast<char*>(&len), sizeof(len))) return false;
+    s.resize(len);
+    if (len > 0 && !f.read(s.data(), len)) return false;
+    return true;
+}
+
+bool MessageStore::save_to_file(const std::string& filepath) const {
+    std::ofstream file(filepath, std::ios::binary);
+    if (!file.is_open()) return false;
+
+    const char magic[] = "PCALE_MSG";
+    file.write(magic, sizeof(magic));  // 10 bytes incl. null
+
+    uint32_t version  = 1;
+    uint32_t cap      = static_cast<uint32_t>(capacity_);
+    uint32_t count    = static_cast<uint32_t>(messages_.size());
+    file.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    file.write(reinterpret_cast<const char*>(&cap),     sizeof(cap));
+    file.write(reinterpret_cast<const char*>(&count),   sizeof(count));
+
+    for (const auto& msg : messages_) {
+        uint8_t ct = static_cast<uint8_t>(msg.call_type);
+        file.write(reinterpret_cast<const char*>(&ct), sizeof(ct));
+
+        uint32_t to_n = static_cast<uint32_t>(msg.to_addresses.size());
+        file.write(reinterpret_cast<const char*>(&to_n), sizeof(to_n));
+        for (const auto& addr : msg.to_addresses) write_string(file, addr);
+
+        write_string(file, msg.from_address);
+
+        uint32_t data_n = static_cast<uint32_t>(msg.data_content.size());
+        file.write(reinterpret_cast<const char*>(&data_n), sizeof(data_n));
+        for (const auto& d : msg.data_content) write_string(file, d);
+
+        uint32_t word_n = static_cast<uint32_t>(msg.words.size());
+        file.write(reinterpret_cast<const char*>(&word_n), sizeof(word_n));
+        for (const auto& w : msg.words) {
+            uint8_t wt = static_cast<uint8_t>(w.type);
+            file.write(reinterpret_cast<const char*>(&wt),              sizeof(wt));
+            file.write(w.address, 4);
+            file.write(reinterpret_cast<const char*>(&w.raw_payload),   sizeof(w.raw_payload));
+            file.write(reinterpret_cast<const char*>(&w.fec_errors),    sizeof(w.fec_errors));
+            file.write(reinterpret_cast<const char*>(&w.unanimous_votes), sizeof(w.unanimous_votes));
+            uint8_t valid = w.valid ? 1 : 0;
+            file.write(reinterpret_cast<const char*>(&valid),           sizeof(valid));
+            file.write(reinterpret_cast<const char*>(&w.timestamp_ms),  sizeof(w.timestamp_ms));
+        }
+
+        file.write(reinterpret_cast<const char*>(&msg.start_time_ms), sizeof(msg.start_time_ms));
+        file.write(reinterpret_cast<const char*>(&msg.duration_ms),   sizeof(msg.duration_ms));
+        uint8_t complete = msg.complete ? 1 : 0;
+        file.write(reinterpret_cast<const char*>(&complete), sizeof(complete));
+    }
+
+    return file.good();
+}
+
+bool MessageStore::load_from_file(const std::string& filepath) {
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file.is_open()) return false;
+
+    char magic[10] = {};
+    if (!file.read(magic, sizeof(magic))) return false;
+    if (std::string(magic) != "PCALE_MSG") return false;
+
+    uint32_t version = 0;
+    if (!file.read(reinterpret_cast<char*>(&version), sizeof(version))) return false;
+    if (version != 1) return false;
+
+    uint32_t cap   = 0;
+    uint32_t count = 0;
+    if (!file.read(reinterpret_cast<char*>(&cap),   sizeof(cap)))   return false;
+    if (!file.read(reinterpret_cast<char*>(&count), sizeof(count))) return false;
+
+    std::vector<ALEMessage> loaded;
+    loaded.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        ALEMessage msg;
+
+        uint8_t ct = 0;
+        if (!file.read(reinterpret_cast<char*>(&ct), sizeof(ct))) return false;
+        msg.call_type = static_cast<CallType>(ct);
+
+        uint32_t to_n = 0;
+        if (!file.read(reinterpret_cast<char*>(&to_n), sizeof(to_n))) return false;
+        msg.to_addresses.resize(to_n);
+        for (auto& addr : msg.to_addresses)
+            if (!read_string(file, addr)) return false;
+
+        if (!read_string(file, msg.from_address)) return false;
+
+        uint32_t data_n = 0;
+        if (!file.read(reinterpret_cast<char*>(&data_n), sizeof(data_n))) return false;
+        msg.data_content.resize(data_n);
+        for (auto& d : msg.data_content)
+            if (!read_string(file, d)) return false;
+
+        uint32_t word_n = 0;
+        if (!file.read(reinterpret_cast<char*>(&word_n), sizeof(word_n))) return false;
+        msg.words.resize(word_n);
+        for (auto& w : msg.words) {
+            uint8_t wt = 0;
+            if (!file.read(reinterpret_cast<char*>(&wt), sizeof(wt))) return false;
+            w.type = static_cast<PreambleType>(wt);
+            if (!file.read(w.address, 4)) return false;
+            if (!file.read(reinterpret_cast<char*>(&w.raw_payload),    sizeof(w.raw_payload)))    return false;
+            if (!file.read(reinterpret_cast<char*>(&w.fec_errors),     sizeof(w.fec_errors)))     return false;
+            if (!file.read(reinterpret_cast<char*>(&w.unanimous_votes),sizeof(w.unanimous_votes))) return false;
+            uint8_t valid = 0;
+            if (!file.read(reinterpret_cast<char*>(&valid), sizeof(valid))) return false;
+            w.valid = (valid != 0);
+            if (!file.read(reinterpret_cast<char*>(&w.timestamp_ms), sizeof(w.timestamp_ms))) return false;
+        }
+
+        if (!file.read(reinterpret_cast<char*>(&msg.start_time_ms), sizeof(msg.start_time_ms))) return false;
+        if (!file.read(reinterpret_cast<char*>(&msg.duration_ms),   sizeof(msg.duration_ms)))   return false;
+        uint8_t complete = 0;
+        if (!file.read(reinterpret_cast<char*>(&complete), sizeof(complete))) return false;
+        msg.complete = (complete != 0);
+
+        loaded.push_back(std::move(msg));
+    }
+
+    messages_ = std::move(loaded);
+    capacity_ = (cap >= kMinMessages) ? cap : kMinMessages;
+    return true;
+}
+
 } // namespace ale

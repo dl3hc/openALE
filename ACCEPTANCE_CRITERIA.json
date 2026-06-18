@@ -178,7 +178,8 @@
       "description": "Gespeicherte Nachrichten bleiben nach einem Stromausfall mindestens 1 Stunde erhalten (nichtflüchtige Persistierung).",
       "module": "Stores/ale_data_store",
       "verification_hint": "Prüfe ob MessageStore über IPersistenceBackend persistiert oder äquivalente Nicht-Flüchtigkeits-Logik implementiert.",
-      "status": "open"
+      "status": "closed",
+      "verification": "MessageStore::kMinRetentionMs=3600000u added to include/Stores/ale_data_store.h (REQ-GEN-020 / AC-GEN-008-002 trace); save_to_file()/load_from_file() added to MessageStore with binary serialization (magic PCALE_MSG, version 1) covering all ALEMessage fields (call_type, to_addresses, from_address, data_content, words incl. PreambleType/address/raw_payload/fec_errors/unanimous_votes/valid/timestamp_ms, start_time_ms, duration_ms, complete) and capacity; helper write_string/read_string in ale_data_store.cpp; test_message_store_retention_ac_gen_008_002() added to tests/test_channel_net_store.cpp — verifies static_assert on kMinRetentionMs, 12-message fill, save/load round-trip with all fields correct (call_type, addresses, data, words), and corrupt-magic rejection — 22/22 tests pass."
     },
 
     {

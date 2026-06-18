@@ -321,9 +321,11 @@ private:
 class MessageStore {
 public:
     /** Minimum number of messages the store must hold (REQ-GEN-020). */
-    static constexpr size_t kMinMessages = 12;
+    static constexpr size_t   kMinMessages    = 12;
     /** Minimum total character capacity across all stored messages (REQ-GEN-020). */
-    static constexpr size_t kMinChars    = 1000;
+    static constexpr size_t   kMinChars       = 1000;
+    /** Minimum data-retention period without external power (REQ-GEN-020 / AC-GEN-008-002): 1 hour. */
+    static constexpr uint32_t kMinRetentionMs = 3600000u;
 
     explicit MessageStore(size_t capacity = 64);
 
@@ -335,6 +337,12 @@ public:
     void   clear()       { messages_.clear(); }
 
     const std::vector<ALEMessage>& all() const { return messages_; }
+
+    /** Persist all messages to a binary file. Returns false on I/O error. */
+    bool save_to_file(const std::string& filepath) const;
+
+    /** Replace current contents from a previously saved file. Returns false on error or version mismatch. */
+    bool load_from_file(const std::string& filepath);
 
 private:
     std::vector<ALEMessage> messages_;

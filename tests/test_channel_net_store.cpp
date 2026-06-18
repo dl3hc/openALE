@@ -808,9 +808,123 @@ bool test_message_store_min_capacity_ac_gen_008_001()
         && clamp_ok && total_chars_ok && evict_size_ok && evict_oldest_ok;
 }
 
-// ============================================================================
-// Main test runner
-// ============================================================================
+// ── MessageStore save/load persistence (AC-GEN-008-002) ──────────────────────
+
+bool test_message_store_retention_ac_gen_008_002()
+{
+    std::cout << "\n[MessageStore] 1h power-loss retention via save/load (AC-GEN-008-002)\n";
+
+    // kMinRetentionMs must be at least 1 hour in milliseconds
+    static_assert(MessageStore::kMinRetentionMs >= 3600000u,
+                  "kMinRetentionMs must be >= 3600000 ms (1 hour)");
+
+    bool retention_const_ok = (MessageStore::kMinRetentionMs == 3600000u);
+    std::cout << "  kMinRetentionMs == 3600000u: "
+              << (retention_const_ok ? "PASS" : "FAIL") << "\n";
+
+    // Build a store with kMinMessages messages of varying types/addresses
+    MessageStore store;
+    const size_t N = MessageStore::kMinMessages;
+    for (size_t i = 0; i < N; ++i) {
+        ALEMessage msg;
+        msg.call_type    = (i % 2 == 0) ? CallType::INDIVIDUAL : CallType::AMD;
+        msg.from_address = "SRC" + std::to_string(i);
+        msg.to_addresses.push_back("DST" + std::to_string(i));
+        msg.data_content.push_back("PAYLOAD" + std::to_string(i));
+        msg.start_time_ms = static_cast<uint32_t>(i * 1000);
+        msg.duration_ms   = 250;
+        msg.complete      = true;
+
+        // add one word so word serialization is exercised
+        ALEWord w;
+        w.type           = PreambleType::FROM;
+        w.raw_payload    = static_cast<uint32_t>(0xABC + i);
+        w.fec_errors     = static_cast<uint8_t>(i % 4);
+        w.unanimous_votes = 48;
+        w.valid          = true;
+        w.timestamp_ms   = static_cast<uint32_t>(i * 500);
+        std::snprintf(w.address, 4, "%c%c%c",
+                      static_cast<char>('A' + i % 26),
+                      static_cast<char>('A' + (i+1) % 26),
+                      static_cast<char>('A' + (i+2) % 26));
+        msg.words.push_back(w);
+
+        store.push(msg);
+    }
+    bool filled_ok = (store.size() == N);
+    std::cout << "  store filled with " << N << " messages: "
+              << (filled_ok ? "PASS" : "FAIL") << "\n";
+
+    // Save to a temp file
+    const std::string tmpfile = "test_msgstore_tmp.bin";
+    bool save_ok = store.save_to_file(tmpfile);
+    std::cout << "  save_to_file succeeded: "
+              << (save_ok ? "PASS" : "FAIL") << "\n";
+
+    // Clear and reload — simulates power cycle
+    store.clear();
+    bool cleared_ok = store.empty();
+    std::cout << "  store cleared before reload: "
+              << (cleared_ok ? "PASS" : "FAIL") << "\n";
+
+    bool load_ok = store.load_from_file(tmpfile);
+    std::cout << "  load_from_file succeeded: "
+              << (load_ok ? "PASS" : "FAIL") << "\n";
+
+    // Verify count
+    bool count_ok = (store.size() == N);
+    std::cout << "  message count restored (" << N << "): "
+              << (count_ok ? "PASS" : "FAIL") << "\n";
+
+    // Verify message fields round-tripped correctly
+    bool fields_ok = true;
+    for (size_t i = 0; i < store.size(); ++i) {
+        const ALEMessage& m = store.all()[i];
+        CallType expected_ct = (i % 2 == 0) ? CallType::INDIVIDUAL : CallType::AMD;
+        std::string expected_from = "SRC" + std::to_string(i);
+        std::string expected_to   = "DST" + std::to_string(i);
+        std::string expected_data = "PAYLOAD" + std::to_string(i);
+        if (m.call_type != expected_ct ||
+            m.from_address != expected_from ||
+            m.to_addresses.empty() || m.to_addresses[0] != expected_to ||
+            m.data_content.empty() || m.data_content[0] != expected_data ||
+            m.start_time_ms != static_cast<uint32_t>(i * 1000) ||
+            m.duration_ms   != 250 ||
+            !m.complete) {
+            fields_ok = false;
+            break;
+        }
+        // verify word
+        if (m.words.size() != 1 ||
+            m.words[0].type != PreambleType::FROM ||
+            m.words[0].raw_payload != static_cast<uint32_t>(0xABC + i) ||
+            m.words[0].fec_errors  != static_cast<uint8_t>(i % 4) ||
+            !m.words[0].valid) {
+            fields_ok = false;
+            break;
+        }
+    }
+    std::cout << "  all message fields round-tripped correctly: "
+              << (fields_ok ? "PASS" : "FAIL") << "\n";
+
+    // Verify load rejects corrupt magic
+    bool bad_magic_ok = false;
+    {
+        std::ofstream bad("test_msgstore_bad.bin", std::ios::binary);
+        bad.write("GARBAGE123", 10);
+        bad.close();
+        MessageStore s2;
+        bad_magic_ok = !s2.load_from_file("test_msgstore_bad.bin");
+        std::remove("test_msgstore_bad.bin");
+    }
+    std::cout << "  corrupt file correctly rejected: "
+              << (bad_magic_ok ? "PASS" : "FAIL") << "\n";
+
+    std::remove(tmpfile.c_str());
+
+    return retention_const_ok && filled_ok && save_ok && cleared_ok
+        && load_ok && count_ok && fields_ok && bad_magic_ok;
+}
 
 int run_all_tests()
 {
@@ -852,6 +966,9 @@ int run_all_tests()
 
     run("MessageStore min 12 messages / 1000 chars (AC-GEN-008-001)",
         test_message_store_min_capacity_ac_gen_008_001());
+
+    run("MessageStore 1h power-loss retention via save/load (AC-GEN-008-002)",
+        test_message_store_retention_ac_gen_008_002());
 
     run("ALEController channel-ID auto-assignment", test_controller_channel_id_auto_assignment());
     run("ALEController del_channel unassigns from nets", test_controller_del_channel_unassigns_from_nets());
