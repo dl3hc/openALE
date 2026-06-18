@@ -52,7 +52,8 @@
       "description": "Die Standard-Scan-Rate beträgt 2 Kanäle/s, entsprechend einer Dwell-Zeit Td = 500 ms pro Kanal. Dieser Wert muss als Konstante oder konfigurierbarer Parameter vorhanden sein.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Suche nach Td_ms, dwell_time_ms oder scan_rate in ale_state_machine.h/cpp oder ale_timing.h. Wert muss 500 ms betragen.",
-      "status": "open"
+      "status": "passed",
+      "verification": "ale_timing.h: TD2_MS = 500.0 (2 chps minimum scan). ScanConfig.dwell_time_ms ist konfigurierbar (ale_channel_types.h:104). ALEDataStore.scan_dwell_ms defaultet auf TD2_MS. ChannelManager.check_dwell_timeout() prüft >= dwell_time_ms exakt. Test: tests/test_state_machine.cpp TEST 10 (neu 2026-06-18): TD2_MS==500 + kein Hop bei t=499ms + Hop bei t=500ms. ctest -C Debug -R StateMachine: 10/10 PASS."
     },
     {
       "id": "AC-GEN-002-002",
