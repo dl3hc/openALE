@@ -614,6 +614,49 @@ bool test_standard_scan_rate_td2() {
 }
 
 // ============================================================================
+// TEST 11: Schnelle Scan-Rate 5 ch/s — Td = 200 ms (AC-GEN-002-002)
+// Verifies:
+//   1. TD5_MS constant == 200 ms
+//   2. A scan configured with dwell_time_ms = TD5_MS does NOT hop before
+//      200 ms have elapsed (t=199 → no hop), but DOES hop at t=200 ms.
+// ============================================================================
+bool test_fast_scan_rate_td5() {
+    std::cout << "\n[TEST 11] Schnelle Scan-Rate 5 ch/s — Td = 200 ms (AC-GEN-002-002)\n";
+    std::cout << "======================================================================\n";
+
+    // --- 1. Constant check ---
+    constexpr uint32_t TD5_expected = 200u;
+    const bool constant_ok = (static_cast<uint32_t>(ale::TD5_MS) == TD5_expected);
+    std::cout << "  TD5_MS == 200 ms: " << (constant_ok ? "PASS" : "FAIL") << "\n";
+
+    // --- 2. Dwell-time enforcement ---
+    ALEStateMachine sm;
+    ChannelTracker tracker;
+    sm.set_channel_callback([&tracker](const Channel& ch) { tracker.record(ch); });
+
+    ScanConfig cfg;
+    cfg.scan_list.push_back(Channel(7100000,  "USB"));
+    cfg.scan_list.push_back(Channel(14100000, "USB"));
+    cfg.dwell_time_ms = static_cast<uint32_t>(ale::TD5_MS);  // 200 ms
+
+    sm.configure_scan(cfg);
+    sm.process_event(ALEEvent::START_SCAN);
+    tracker.clear();  // discard initial channel-select callback
+
+    // t = 199 ms: must still be on first channel (dwell not yet expired)
+    sm.update(199);
+    const bool no_hop_at_199 = (tracker.count() == 0);
+    std::cout << "  No hop at t=199 ms: " << (no_hop_at_199 ? "PASS" : "FAIL") << "\n";
+
+    // t = 200 ms: dwell expired — one hop must have occurred
+    sm.update(200);
+    const bool hop_at_200 = (tracker.count() == 1);
+    std::cout << "  Hop at t=200 ms:   " << (hop_at_200 ? "PASS" : "FAIL") << "\n";
+
+    return constant_ok && no_hop_at_199 && hop_at_200;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -637,6 +680,7 @@ int run_all_tests() {
     if (test_full_call_cycle()) { pass_count++; } else { fail_count++; }
     if (test_timing_parameters_isolation()) { pass_count++; } else { fail_count++; }
     if (test_standard_scan_rate_td2()) { pass_count++; } else { fail_count++; }
+    if (test_fast_scan_rate_td5()) { pass_count++; } else { fail_count++; }
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

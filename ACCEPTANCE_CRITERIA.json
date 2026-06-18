@@ -63,7 +63,8 @@
       "description": "Die schnelle Scan-Rate von 5 Kanälen/s (Td = 200 ms) wird unterstützt. Der Wert muss konfigurierbar oder als Alternative zur Standard-Rate vorhanden sein.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe ob Td = 200 ms als Alternative oder als separater Modus existiert.",
-      "status": "open"
+      "status": "passed",
+      "verification": "ale_timing.h: TD5_MS = 200.0 (5 chps fast scan). ScanConfig.dwell_time_ms konfigurierbar; Default = TD5_MS (ale_channel_types.h:104). Test: tests/test_state_machine.cpp TEST 11 (neu 2026-06-18): TD5_MS==200 + kein Hop bei t=199ms + Hop bei t=200ms. ctest -C Debug -R StateMachine: 11/11 PASS."
     },
     {
       "id": "AC-GEN-002-003",
