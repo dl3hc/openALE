@@ -837,7 +837,7 @@ bool test_trw_ms_ac_waveform_003_003() {
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║  PC-ALE 2.0 Clean-Room - 8-FSK Modem Unit Tests          ║\n";
+    std::cout << "║  8-FSK Modem Unit Tests                                   ║\n";
     std::cout << "║  MIL-STD-188-141B Implementation                          ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n";
     

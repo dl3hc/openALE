@@ -593,7 +593,7 @@ bool test_phase3_validators() {
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║  PC-ALE 2.0 Phase 2 - Protocol Layer Unit Tests          ║\n";
+    std::cout << "║  ALE Protocol Layer Unit Tests                            ║\n";
     std::cout << "║  MIL-STD-188-141B Word Structure & Message Assembly       ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n";
     

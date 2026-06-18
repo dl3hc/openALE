@@ -1,6 +1,6 @@
 /**
  * @file timer.h
- * @brief Platform-agnostic timer interface for PC-ALE
+ * @brief Platform-agnostic timer interface
  * 
  * @author Alex Pennington, AAM402/KY4OLB
  * @date December 2024

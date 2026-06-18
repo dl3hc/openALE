@@ -342,7 +342,7 @@ bool test_ale_legacy_file_without_ids_still_loads()
     const std::string path = "test_channel_net_legacy.ale";
     {
         std::ofstream f(path);
-        f << "# PC-ALE channel list — MIL-STD-188-141B\n";
+        f << "# ALE channel list — MIL-STD-188-141B\n";
         f << "# rx_hz tx_hz mode [label]\n";
         f << "14250000 0 USB 40m-Calling\n";
         f << "7100000 0 USB\n";

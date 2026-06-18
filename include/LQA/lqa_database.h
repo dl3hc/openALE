@@ -1,6 +1,6 @@
 /**
  * @file lqa_database.h
- * @brief Link Quality Analysis Database for PC-ALE 2.0
+ * @brief Link Quality Analysis Database
  * 
  * MIL-STD-188-141B Appendix A: LQA (Link Quality Analysis) System
  * 

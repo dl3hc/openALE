@@ -823,7 +823,7 @@ bool test_return_to_origin_ac_gen_009_003() {
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║  PC-ALE 2.0 Phase 3 - Link State Machine Tests           ║\n";
+    std::cout << "║  ALE Link State Machine Tests                             ║\n";
     std::cout << "║  MIL-STD-188-141B Link Establishment                      ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n";
     

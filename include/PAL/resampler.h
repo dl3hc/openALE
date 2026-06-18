@@ -1,6 +1,6 @@
 /**
  * @file resampler.h
- * @brief Sample rate conversion for PC-ALE (48kHz <-> 8kHz)
+ * @brief Sample rate conversion (48kHz <-> 8kHz)
  * 
  * @author Alex Pennington, AAM402/KY4OLB
  * @date December 2024

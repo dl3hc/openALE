@@ -1,8 +1,8 @@
 /**
  * @file radio.h
- * @brief Platform-agnostic radio interface for PC-ALE
+ * @brief Platform-agnostic radio interface
  * 
- * Based on PC-ALE 1.x radio.dll interface specification.
+ * Based on original radio.dll interface specification.
  * Includes frequency, mode, PTT, power, and antenna control.
  * 
  * @author Alex Pennington, AAM402/KY4OLB

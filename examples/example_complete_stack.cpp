@@ -29,11 +29,11 @@
 using namespace ale;
 
 // ============================================================================
-// Hardware Interface (using PC-ALE-PAL abstractions)
+// Hardware Interface (using PAL abstractions)
 // ============================================================================
 
 // NOTE: In a real implementation, you would:
-// 1. Clone PC-ALE-PAL: git submodule add https://github.com/Alex-Pennington/PC-ALE-PAL.git extern/PAL
+// 1. Clone PAL: git submodule add https://github.com/Alex-Pennington/PC-ALE-PAL.git extern/PAL
 // 2. Include PAL headers: #include "pal/IRadio.h", #include "pal/IAudioDriver.h"
 // 3. Create platform-specific implementations (ALSAAudioDriver, HamlibRadio, etc.)
 // 4. Inject them into ALEStateMachine
@@ -116,7 +116,7 @@ public:
     void run_demo() {
         std::cout << "\n";
         std::cout << "╔════════════════════════════════════════════════════════════╗\n";
-        std::cout << "║  PC-ALE 2.0 Complete Stack Demo                          ║\n";
+        std::cout << "║  ALE Complete Stack Demo                                  ║\n";
         std::cout << "║  Phases 1-3: Modem + Protocol + Link State Machine       ║\n";
         std::cout << "╚════════════════════════════════════════════════════════════╝\n\n";
         

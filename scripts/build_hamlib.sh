@@ -25,7 +25,7 @@ HAMLIB_SRC="${REPO_ROOT}/libs/hamlib-src"
 HAMLIB_BUILD="${REPO_ROOT}/libs/hamlib-build"
 HAMLIB_PREFIX="${REPO_ROOT}/libs/hamlib-built"
 
-echo "=== PC-ALE: Hamlib ${HAMLIB_VERSION} Build (shared DLL) ==="
+echo "=== Hamlib ${HAMLIB_VERSION} Build (shared DLL) ==="
 echo ""
 echo "Quellcode  : ${HAMLIB_SRC}"
 echo "Build-Dir  : ${HAMLIB_BUILD}"

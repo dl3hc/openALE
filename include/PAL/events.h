@@ -1,6 +1,6 @@
 /**
  * @file events.h
- * @brief Event callback interface for PC-ALE
+ * @brief Event callback interface
  * 
  * @author Alex Pennington, AAM402/KY4OLB
  * @date December 2024

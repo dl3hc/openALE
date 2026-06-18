@@ -874,7 +874,7 @@ bool ALEController::export_settings(const std::string& path)
 {
     std::ofstream f(path);
     if (!f.is_open()) return false;
-    f << "# PC-ALE settings export\n";
+    f << "# ALE settings export\n";
     f << "self_address=" << get_primary_self_address() << "\n";
     f << "channel_file=" << channel_file_ << "\n";
     f << "target_scan_channels=" << get_target_scan_channels() << "\n";
@@ -997,7 +997,7 @@ bool ALEController::save_channels(const std::string& path) const
 {
     std::ofstream f(path);
     if (!f.is_open()) return false;
-    f << "# PC-ALE channel list — MIL-STD-188-141B\n";
+    f << "# ALE channel list — MIL-STD-188-141B\n";
     f << "# ID:id rx_hz tx_hz mode [label]\n";
     for (const auto& ch : calling_channels_)
         f << format_channel_line(ch) << '\n';

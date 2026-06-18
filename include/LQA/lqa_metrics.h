@@ -1,6 +1,6 @@
 ﻿/**
  * @file lqa_metrics.h
- * @brief LQA Metrics Collection for PC-ALE 2.0
+ * @brief LQA Metrics Collection
  * 
  * Collects Link Quality Analysis metrics from various sources:
  * - SNR from FFT demodulator (Phase 1)

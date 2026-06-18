@@ -1,6 +1,6 @@
 /**
  * \file apps/radio_mock.cpp
- * \brief PC-ALE Mock Radio Server — rigctld-kompatibles Test-TRX
+ * \brief Mock Radio Server — rigctld-kompatibles Test-TRX
  *
  * Startet einen TCP-Listener auf Port 4532 (default) und implementiert
  * das Hamlib rigctld-Netzwerkprotokoll.  Jede PTT- und Frequenzänderung,
@@ -141,7 +141,7 @@ static std::string handle_line(const std::string& raw)
         return make_dump_state();
 
     if (cmd == "get_info" || cmd == "\\get_info")
-        return "PC-ALE Mock Radio v1.0\nRPRT 0\n";
+        return "Mock Radio v1.0\nRPRT 0\n";
 
     // ── Frequency ─────────────────────────────────────────────────────────
     // Short: "F 14150000"   Long: "set_freq 14150000"
@@ -271,7 +271,7 @@ int main(int argc, char* argv[])
 
     std::printf("\n");
     std::printf("╔═══════════════════════════════════════════════════════╗\n");
-    std::printf("║           PC-ALE Mock Radio — rigctld Server          ║\n");
+    std::printf("║           Mock Radio — rigctld Server                 ║\n");
     std::printf("╠═══════════════════════════════════════════════════════╣\n");
     std::printf("║  Port    : %-44d ║\n", port);
     std::printf("║  Freq    : %-44.3f ║\n", s_freq_hz / 1000.0);

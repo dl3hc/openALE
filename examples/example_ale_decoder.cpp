@@ -197,7 +197,7 @@ void example_sounding() {
  */
 int main() {
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║  PC-ALE 2.0 - Phase 1 + Phase 2 Integration Examples     ║\n";
+    std::cout << "║  ALE Phase 1 + Phase 2 Integration Examples               ║\n";
     std::cout << "║  MIL-STD-188-141B 2G ALE Implementation                   ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n";
     

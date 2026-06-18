@@ -1,6 +1,6 @@
 ﻿/**
  * \example usage.cpp
- * \brief Example usage of PC-ALE 2.0 8-FSK modem core
+ * \brief Example usage of ALE 8-FSK modem core
  * 
  * Demonstrates:
  *  1. Tone generation
@@ -212,7 +212,7 @@ void example_5_complete_pipeline() {
 int main() {
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║    PC-ALE 2.0 8-FSK Modem Core - Usage Examples           ║\n";
+    std::cout << "║    ALE 8-FSK Modem Core - Usage Examples                  ║\n";
     std::cout << "║    MIL-STD-188-141B Automatic Link Establishment          ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n";
     

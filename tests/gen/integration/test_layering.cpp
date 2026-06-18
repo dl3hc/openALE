@@ -192,7 +192,7 @@ int main() {
     const fs::path include_root = root / "include";
 
     std::cout << "\n===========================================\n";
-    std::cout << "  PC-ALE Architecture — Sublayer separation\n";
+    std::cout << "  ALE Architecture — Sublayer separation\n";
     std::cout << "  AC-GEN-001-001 (MIL-STD-188-141B A.5)\n";
     std::cout << "===========================================\n";
 

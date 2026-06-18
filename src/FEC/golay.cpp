@@ -19,7 +19,7 @@ std::once_flag Golay::syndrome_init_flag;
 // Full 4096-entry encode table for Extended Golay (24,12).
 // Indexed by 12-bit information word; value is the 12-bit parity.
 //
-// Source: PC-ALE reference (Charles Brain / Ilkka Toivanen, GPL).
+// Source: Charles Brain / Ilkka Toivanen, GPL (original ALE reference implementation).
 // All 4096 entries verified by the Golay linearity property:
 //   encode(a XOR b) == encode(a) XOR encode(b)
 // The 12 basis vectors (encode(2^i)) were extracted from the reference,

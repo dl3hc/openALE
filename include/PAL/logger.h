@@ -1,6 +1,6 @@
 /**
  * @file logger.h
- * @brief Platform-agnostic logging interface for PC-ALE
+ * @brief Platform-agnostic logging interface
  * 
  * @author Alex Pennington, AAM402/KY4OLB
  * @date December 2024

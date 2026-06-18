@@ -484,7 +484,7 @@ bool test_golay_correction_modes() {
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "===========================================\n";
-    std::cout << "  PC-ALE FEC / Golay (24,12) Unit Tests\n";
+    std::cout << "  FEC / Golay (24,12) Unit Tests\n";
     std::cout << "  MIL-STD-188-141B A.5.2.2\n";
     std::cout << "===========================================\n";
 
