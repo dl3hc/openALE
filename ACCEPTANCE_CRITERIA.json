@@ -74,7 +74,8 @@
       "description": "Das System kann mit AQC-ALE-Stationen zusammenarbeiten, die variable Dwell-Raten einsetzen. AQC-Frames werden korrekt erkannt und verarbeitet.",
       "module": "Protocol/aqc_protocol",
       "verification_hint": "Prüfe aqc_protocol.h/cpp auf Behandlung variabler Dwell-Zeiten und Rückwärtskompatibilitätslogik.",
-      "status": "closed"
+      "status": "closed",
+      "verification": "Befund: SlotManager (aqc_protocol.h) verwendete fest SLOT_DURATION_MS=200 — kein Mechanismus für TD2-Stationen (500 ms). AQC-Frame-Parsing war timing-agnostisch und korrekt, aber Slot-Zeitberechnung für Gegenstationen mit TD2-Dwell nicht möglich. Änderungen: aqc_protocol.h — SlotManager erhält DWELL_TD5_MS=200/DWELL_TD2_MS=500-Konstanten (spec-traceable aus Annex B), Overload calculate_slot_time(slot, base, dwell_ms) und is_valid_dwell_rate(dwell_ms) (akzeptiert nur TD5/TD2). aqc_parser.cpp — Default-Overload delegiert an parametrisierten; is_valid_dwell_rate impl. Tests: tests/test_aqc_backward_compat.cpp (5 Tests, neu): Slot-Timing TD5/TD2 numerisch verifiziert, is_valid_dwell_rate Grenzen, AQC-Probe/Handshake-Parsing raten-unabhängig, alle 8 Slots korrekt für beide Dwell-Raten. ctest -C Debug -R AQCBackwardCompat|AQCParser|AQCCRC: 5+9+9=23/23 PASS."
     },
 
     {
