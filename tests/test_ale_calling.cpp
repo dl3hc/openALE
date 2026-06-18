@@ -1259,6 +1259,60 @@ bool test_initiate_group_call_three_members_tx_sequence()
 }
 
 // ============================================================================
+// AC-GEN-009-002 — "nicht bereits in einem Link" guard:
+// A new incoming individual call received while already LINKED must be
+// silently ignored; the SM must stay LINKED and must not transmit a response.
+// ============================================================================
+
+bool test_individual_call_ignored_when_already_linked()
+{
+    std::cout << "\n[ALWAYS-ANSWER] Individual call while LINKED is silently ignored\n";
+
+    // Arrange: drive SAM (caller) to LINKED state via normal 3-way handshake.
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"SAM", /*scan_ch=*/0);
+    sm.initiate_call("JOE");
+    advance_to_tx_start(sm);
+    for (int i = 0; i < 3; ++i) sm.on_word_complete(); // drain leading + conclusion
+
+    const uint32_t t0 = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+
+    // JOE's response: TO SAM + TIS JOE.
+    sm.update(t0 + 100);
+    sm.process_received_word(rx_word(PreambleType::TO,  "SAM"));
+    sm.update(t0 + 200);
+    sm.process_received_word(rx_word(PreambleType::TIS, "JOE"));
+
+    // Conclusion settle → SENDING_ACK → drain ACK → LINKED.
+    sm.update(t0 + 200 + ALETimingConstants::Tdrw_ms + 1);
+    sm.update(t0 + 200 + ALETimingConstants::Tdrw_ms + 2);
+    for (int i = 0; i < 3; ++i) sm.on_word_complete();
+
+    bool linked = (sm.get_state() == ALEState::LINKED);
+    std::cout << "  reached LINKED: " << (linked ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+
+    // Act: a third party (OTH) calls SAM while SAM is already LINKED.
+    cap.clear();
+    const uint32_t t1 = t0 + 200 + ALETimingConstants::Tdrw_ms + 1000;
+    feed_incoming_call(sm, /*self=*/"SAM", /*caller=*/"OTH", t1);
+
+    // Advance past the conclusion-settle window to let any auto-response trigger.
+    sm.update(t1 + 10u * ALETimingConstants::Trw_ms + ALETimingConstants::Tdrw_ms + 1u);
+
+    bool still_linked = (sm.get_state() == ALEState::LINKED);
+    bool no_response  = cap.empty();
+
+    std::cout << "  SM stays in LINKED (incoming call ignored): "
+              << (still_linked ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+    std::cout << "  no response transmitted to new caller: "
+              << (no_response ? "PASS" : "FAIL") << "\n";
+
+    return linked && still_linked && no_response;
+}
+
+// ============================================================================
 // T-07 — Caller-side link termination returns to the pre-link state.
 //
 // Regression: terminate_link() (CMD:TERMINATE) sends TO peer ×2 + TWAS self
@@ -1467,6 +1521,10 @@ int run_all_tests()
         test_await_accept_timeout_falls_back_to_auto_accept());
     run("RX-MULTIWORD full accept path at 15-char addresses",
         test_rx_multiword_full_accept_15char());
+
+    // AC-GEN-009-002 — "not already in a link" guard
+    run("ALWAYS-ANSWER individual call while LINKED is silently ignored",
+        test_individual_call_ignored_when_already_linked());
 
     // T-07 — caller-side termination regression
     run("T-07 caller CMD:TERMINATE returns to pre-link state",

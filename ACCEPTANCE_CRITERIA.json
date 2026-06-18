@@ -198,10 +198,11 @@
       "feature": "FEAT-GEN-009",
       "requirement": ["REQ-GEN-021"],
       "title": "Always-Answer-Regel",
-      "description": "Das System antwortet auf einen gültigen Individual-Call automatisch, sofern es nicht bereits in einem Link ist und accept_calls=true gesetzt ist.",
+      "description": "Das System beantwortet einen gültigen Individual-Call automatisch, wenn es nicht bereits in einem Link ist und accept_calls=true gesetzt ist. Ist accept_calls=false, muss der Individual-Call manuell angenommen werden. Bei manueller Ablehnung gilt der Call als rejected. (via TWAS Wort)",
       "module": "Protocol/ale_state_machine",
-      "verification_hint": "Prüfe ale_state_machine.cpp: Nach Empfang eines vollständigen Calls mit eigener Adresse muss eine Response eingeleitet werden (HANDSHAKE-Zustand).",
-      "status": "open"
+      "verification_hint": "Prüfe in ale_state_machine.cpp, ob nach Empfang eines vollständigen Individual-Calls mit eigener Adresse bei accept_calls=true automatisch eine Antwort im HANDSHAKE-Zustand initiiert wird. Bei accept_calls=false muss ein manueller Annahme-/Ablehnungsmechanismus vorhanden sein; bei Ablehnung muss der Status rejected gesetzt werden.",
+      "status": "closed",
+      "verification": "Implementierung vollständig in ale_state_machine.cpp: (1) require_explicit_accept_=false → Auto-Antwort via SLOT_WAIT→CHANNEL_CHECK→SENDING_RESPONSE (TO caller×2 + TIS self). (2) require_explicit_accept_=true → AWAIT_ACCEPT-Gate; accept_call() löst Annahme aus, reject_call() sendet TWAS. (3) Incoming call im LINKED-Zustand wird silently ignoriert (keine CALL_DETECTED-Verarbeitung). Tests in tests/test_ale_calling.cpp: test_await_accept_holds_until_accept_call (PASS), test_await_accept_reject_sends_twas (PASS), test_await_accept_timeout_falls_back_to_auto_accept (PASS), test_individual_call_ignored_when_already_linked (PASS). 36/36 Tests grün."
     },
     {
       "id": "AC-GEN-009-003",
