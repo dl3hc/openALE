@@ -208,6 +208,15 @@ public:
      */
     static bool from_precedes_cmd_only(const std::vector<ALEWord>& words);
 
+    // ── REQ-WORD-004 / REQ-WORD-005 (TIS / TWAS mutual exclusion) ──────────
+
+    /**
+     * AC-WORD-004-5 / AC-WORD-005-5: TIS and TWAS must not both appear in
+     * the same ALE frame (A.5.2.3.2.2 / A.5.2.3.2.3).
+     * \return true if the sequence does not contain both TIS and TWAS.
+     */
+    static bool tis_twas_mutually_exclusive(const std::vector<ALEWord>& words);
+
     // ── REQ-WORD-006 (THRU / group-call scanning section) ───────────────────
 
     /**

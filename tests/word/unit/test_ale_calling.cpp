@@ -1056,6 +1056,170 @@ bool test_group_call_max_5_targets()
 }
 
 // ============================================================================
+// AC-WORD-002-002 — All five address preamble types correct
+//
+// Consolidated verification per MIL-STD-188-141B A.5.2.3.2 (REQ-WORD-003–007):
+//   TO   (2) — Calling section (individual / net)
+//   TIS  (5) — Conclusion section (protocol continuation / Accept-Sound)
+//   TWAS (3) — Conclusion section (protocol termination / Reject-Sound)
+//   THRU (1) — Scanning section of group calls only
+//   FROM (4) — Quick ID: only immediately before CMD (Message section)
+//
+// New coverage added: TIS/TWAS mutual exclusion
+//   (AC-WORD-004-5 / AC-WORD-005-5: must not both appear in the same frame)
+// ============================================================================
+
+bool test_ac_word_002_002_address_preambles_correct_frames()
+{
+    std::cout << "\n[AC-WORD-002-002] Address preambles TO/TIS/TWAS/THRU/FROM — correct frames\n";
+    std::cout << "============================================================================\n";
+    bool all_pass = true;
+
+    // 1. All five types are encodable / decodable with Basic 38 characters
+    {
+        struct Case { PreambleType type; const char* name; char c1, c2, c3; };
+        const Case types[] = {
+            { PreambleType::TO,   "TO",   'W', '1', 'A' },
+            { PreambleType::TIS,  "TIS",  'S', 'A', 'M' },
+            { PreambleType::TWAS, "TWAS", 'R', 'E', 'J' },
+            { PreambleType::THRU, "THRU", 'A', 'B', 'C' },
+            { PreambleType::FROM, "FROM", 'K', '6', 'K' },
+        };
+        bool enc_dec_pass = true;
+        for (const auto& c : types) {
+            const char chars[3] = { c.c1, c.c2, c.c3 };
+            uint32_t payload = WordParser::encode_ascii(chars, c.type);
+            char decoded[4] = {};
+            bool ok = (payload != 0xFFFFFFFF)
+                   && WordParser::decode_ascii(payload, c.type, decoded)
+                   && decoded[0] == c.c1 && decoded[1] == c.c2 && decoded[2] == c.c3;
+            if (!ok) enc_dec_pass = false;
+            std::cout << "  encode/decode " << c.name << " \"" << c.c1 << c.c2 << c.c3
+                      << "\": " << (ok ? "PASS" : "FAIL") << "\n";
+        }
+        all_pass &= enc_dec_pass;
+    }
+
+    // 2. TO used in Calling section (frame-level): validator allows TO before CMD
+    {
+        const char sam[3] = {'S','A','M'};
+        const char cmd[3] = {'C','M','D'};
+        std::vector<ALEWord> calling_frame = {
+            WordParser::make_word(PreambleType::TO,  sam),
+            WordParser::make_word(PreambleType::CMD, cmd),
+        };
+        bool ok = FrameValidator::cmd_not_before_address_section(calling_frame)
+               && FrameValidator::first_cmd_begins_message_section(calling_frame);
+        std::cout << "  TO in Calling section (TO→CMD valid): " << (ok ? "PASS" : "FAIL") << "\n";
+        all_pass &= ok;
+    }
+
+    // 3. TIS used in Conclusion section: frame with TO→TIS is structurally valid
+    {
+        const char joe[3] = {'J','O','E'};
+        const char sam[3] = {'S','A','M'};
+        std::vector<ALEWord> accept_frame = {
+            WordParser::make_word(PreambleType::TO,  joe),
+            WordParser::make_word(PreambleType::TIS, sam),
+        };
+        bool ok = FrameValidator::thru_in_scanning_section_only(accept_frame)
+               && FrameValidator::no_consecutive_same_preamble(accept_frame);
+        std::cout << "  TIS in Conclusion section (TO→TIS valid): " << (ok ? "PASS" : "FAIL") << "\n";
+        all_pass &= ok;
+    }
+
+    // 4. TWAS used in Conclusion section: frame with TO→TWAS is structurally valid
+    {
+        const char joe[3] = {'J','O','E'};
+        const char sam[3] = {'S','A','M'};
+        std::vector<ALEWord> reject_frame = {
+            WordParser::make_word(PreambleType::TO,   joe),
+            WordParser::make_word(PreambleType::TWAS, sam),
+        };
+        bool ok = FrameValidator::thru_in_scanning_section_only(reject_frame)
+               && FrameValidator::no_consecutive_same_preamble(reject_frame);
+        std::cout << "  TWAS in Conclusion section (TO→TWAS valid): " << (ok ? "PASS" : "FAIL") << "\n";
+        all_pass &= ok;
+    }
+
+    // 5. TIS/TWAS mutually exclusive (AC-WORD-004-5 / AC-WORD-005-5)
+    {
+        const char sam[3] = {'S','A','M'};
+        const char joe[3] = {'J','O','E'};
+
+        // Valid: TIS only
+        std::vector<ALEWord> tis_only = {
+            WordParser::make_word(PreambleType::TO,  joe),
+            WordParser::make_word(PreambleType::TIS, sam),
+        };
+        bool v1 = FrameValidator::tis_twas_mutually_exclusive(tis_only);
+        std::cout << "  TIS only — mutually exclusive: " << (v1 ? "PASS" : "FAIL") << "\n";
+
+        // Valid: TWAS only
+        std::vector<ALEWord> twas_only = {
+            WordParser::make_word(PreambleType::TO,   joe),
+            WordParser::make_word(PreambleType::TWAS, sam),
+        };
+        bool v2 = FrameValidator::tis_twas_mutually_exclusive(twas_only);
+        std::cout << "  TWAS only — mutually exclusive: " << (v2 ? "PASS" : "FAIL") << "\n";
+
+        // Invalid: both TIS and TWAS in the same frame
+        std::vector<ALEWord> both = {
+            WordParser::make_word(PreambleType::TO,   joe),
+            WordParser::make_word(PreambleType::TIS,  sam),
+            WordParser::make_word(PreambleType::TWAS, sam),
+        };
+        bool v3 = !FrameValidator::tis_twas_mutually_exclusive(both);
+        std::cout << "  TIS+TWAS in same frame rejected: " << (v3 ? "PASS" : "FAIL") << "\n";
+
+        // Valid: neither TIS nor TWAS (e.g. scanning-only frame)
+        std::vector<ALEWord> neither = {
+            WordParser::make_word(PreambleType::THRU, joe),
+            WordParser::make_word(PreambleType::REP,  joe),
+        };
+        bool v4 = FrameValidator::tis_twas_mutually_exclusive(neither);
+        std::cout << "  Neither TIS nor TWAS — mutually exclusive: " << (v4 ? "PASS" : "FAIL") << "\n";
+
+        all_pass &= (v1 && v2 && v3 && v4);
+    }
+
+    // 6. THRU used in Scanning section of group calls only (not after TO/TIS/TWAS)
+    {
+        const char abc[3] = {'A','B','C'};
+        const char sam[3] = {'S','A','M'};
+        std::vector<ALEWord> group_scan = {
+            WordParser::make_word(PreambleType::THRU, abc),
+            WordParser::make_word(PreambleType::REP,  abc),
+            WordParser::make_word(PreambleType::TO,   sam),
+            WordParser::make_word(PreambleType::TIS,  sam),
+        };
+        bool ok = FrameValidator::thru_in_scanning_section_only(group_scan)
+               && FrameValidator::thru_rep_alternates({
+                      WordParser::make_word(PreambleType::THRU, abc),
+                      WordParser::make_word(PreambleType::REP,  abc),
+                  });
+        std::cout << "  THRU in Scanning section only (group call): " << (ok ? "PASS" : "FAIL") << "\n";
+        all_pass &= ok;
+    }
+
+    // 7. FROM used as Quick ID (only immediately before CMD)
+    {
+        const char sam[3] = {'S','A','M'};
+        const char cmd[3] = {'C','M','D'};
+        std::vector<ALEWord> quick_id = {
+            WordParser::make_word(PreambleType::FROM, sam),
+            WordParser::make_word(PreambleType::CMD,  cmd),
+        };
+        bool ok = FrameValidator::from_count_valid(quick_id)
+               && FrameValidator::from_precedes_cmd_only(quick_id);
+        std::cout << "  FROM as Quick ID (FROM→CMD only): " << (ok ? "PASS" : "FAIL") << "\n";
+        all_pass &= ok;
+    }
+
+    return all_pass;
+}
+
+// ============================================================================
 // Star group calling (A.5.5.4.3) — N-member ad-hoc group call construction.
 //
 // scanning_call_group()/leading_call_group() build the TX side of a star
@@ -1425,6 +1589,10 @@ int run_all_tests()
         if (result) { ++pass_count; }
         else        { ++fail_count; std::cout << "  *** FAILED: " << name << "\n"; }
     };
+
+    // AC-WORD-002-002 — All five address preamble types correct
+    run("AC-WORD-002-002 address preambles TO/TIS/TWAS/THRU/FROM correct frames",
+        test_ac_word_002_002_address_preambles_correct_frames());
 
     // AC-WORD-003: TO
     run("AC-WORD-003-1 individual scanning → TO",

@@ -553,7 +553,8 @@
       "description": "Alle fünf Adress-Preamble-Typen sind implementiert und werden für die korrekten Frames verwendet: TO für Calling, TIS/TWAS für Conclusion, THRU/FROM für Relay.",
       "module": "Word/ale_word",
       "verification_hint": "Prüfe WordParser-Klasse und zugehörige Tests. Alle 5 Adress-Preambles müssen en- und decodierbar sein.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_word_002_002_address_preambles_correct_frames() in tests/word/unit/test_ale_calling.cpp. Added FrameValidator::tis_twas_mutually_exclusive() (AC-WORD-004-5/005-5: TIS+TWAS cannot coexist in same frame). Consolidated 7-point check: (1) all 5 types encode/decode with Basic 38, (2) TO valid in Calling section, (3) TIS valid in Conclusion, (4) TWAS valid in Conclusion, (5) TIS/TWAS mutually exclusive (4 sub-cases), (6) THRU only in Scanning section, (7) FROM only before CMD. 37/37 tests PASS (build Debug, 2026-06-18)."
     },
     {
       "id": "AC-WORD-003-001",

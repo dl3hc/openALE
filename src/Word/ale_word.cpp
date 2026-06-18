@@ -167,6 +167,18 @@ const char* WordParser::word_type_name(PreambleType type)
 // FrameValidator
 // ============================================================================
 
+bool FrameValidator::tis_twas_mutually_exclusive(const std::vector<ALEWord>& words)
+{
+    // AC-WORD-004-5 / AC-WORD-005-5: TIS and TWAS are mutually exclusive within
+    // a single ALE frame.  TIS invites protocol continuation; TWAS terminates it.
+    bool has_tis = false, has_twas = false;
+    for (const auto& w : words) {
+        if (w.type == PreambleType::TIS)  has_tis  = true;
+        if (w.type == PreambleType::TWAS) has_twas = true;
+    }
+    return !(has_tis && has_twas);
+}
+
 bool FrameValidator::from_count_valid(const std::vector<ALEWord>& words)
 {
     int count = 0;
