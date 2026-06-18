@@ -1,0 +1,1838 @@
+{
+  "meta": {
+    "project": "PC-ALE",
+    "standard": "MIL-STD-188-141B Appendix A",
+    "created": "2026-06-17",
+    "version": "1.0",
+    "description": "Acceptance criteria for iterative code review. Each criterion maps to a specific feature and requirement, and can be verified independently against the codebase by a review agent.",
+    "status_values": ["open", "passed", "failed", "blocked", "not_applicable"],
+    "id_schema": "AC-<AREA>-<feature_num>-<ac_num>"
+  },
+  "acceptance_criteria": [
+
+    {
+      "id": "AC-GEN-001-001",
+      "feature": "FEAT-GEN-001",
+      "requirement": ["REQ-GEN-001", "REQ-GEN-002"],
+      "title": "ALE Data-Link Sublayer-Trennung",
+      "description": "Der ALE-Stack besteht aus mindestens drei logisch getrennten Schichten: FEC-Sublayer, LP-Sublayer und ALE-Sublayer. Diese müssen als getrennte Module oder klar voneinander abgegrenzte Klassen implementiert sein.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe, ob FEC (FEC/), Word (Word/), Protocol (Protocol/) als separate Verzeichnisse mit eigenem Header existieren und keine zirkulären Abhängigkeiten bestehen.",
+      "status": "passed",
+      "verification": "FEC/, Word/, Protocol/ existieren als getrennte include-/src-Verzeichnisse mit eigenen Headern. Datei-Include-Graph (81 Dateien) ist azyklisch; Schichtung FEC(unten)<-Word<-Protocol ohne Rückwärtskanten. ale_timing.h ist ein abhängigkeitsfreier Blatt-Header, daher kein realer Build-Zyklus trotz FSK-Verzeichnis-Gruppierung. Guard-Test: tests/architecture/integration/test_layering.cpp (ctest: Architecture, PASS)."
+    },
+    {
+      "id": "AC-GEN-001-002",
+      "feature": "FEAT-GEN-001",
+      "requirement": ["REQ-GEN-003"],
+      "title": "LQA-Qualitätsskala 0–30",
+      "description": "Die interne Kanalqualität wird auf einer Skala von 0 (schlechteste) bis 30 (beste) dargestellt. Kein LQA-Wert darf diesen Bereich überschreiten.",
+      "module": "LQA/lqa_metrics",
+      "verification_hint": "Suche nach Konstanten oder Clamp-Logik für SINAD-/BER-Qualitätswerte in lqa_metrics.h/cpp. Prüfe ob Werte auf [0,30] begrenzt werden.",
+      "status": "passed",
+      "verification": "Skala auf [0,30] vereinheitlicht (31 reserviert als 'unbekannt'-Sentinel, A.4.1.5). Neue spec-traceable Konstanten LQA_QUALITY_MIN/MAX/UNKNOWN in lqa_database.h. compute_score (lqa_database.cpp) clamped jetzt auf [0,30] statt [0,31]. Zweiter, inkonsistenter LQA-Pfad gefunden und behoben: ALEStateMachine::update_link_quality nutzte 0–100-Heuristik -> auf 0–30 umgestellt; Channel.lqa_score-Doku angeglichen. Tests: test_lqa_database.cpp::test_score_range_bounds (Sättigungs-/Worst-Case-Grenzen, nie 31), test_score_computation auf LQA_QUALITY_MAX getightet. Volle Suite 23/23 PASS."
+    },
+    {
+      "id": "AC-GEN-001-003",
+      "feature": "FEAT-GEN-001",
+      "requirement": ["REQ-GEN-005"],
+      "title": "Stop-Scan bei Adress-Match",
+      "description": "Der Scan-Betrieb wird unterbrochen, wenn ein empfangenes ALE-Wort eine gültige, eigene Adresse enthält. Die State Machine muss von SCANNING in einen Call-Empfangszustand wechseln.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_state_machine.cpp: Bei ALEState::SCANNING muss nach einer Adress-Übereinstimmung ein Zustandswechsel (z.B. nach HANDSHAKE) erfolgen.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-002-001",
+      "feature": "FEAT-GEN-002",
+      "requirement": ["REQ-GEN-006"],
+      "title": "Standard Scan-Rate 2 ch/s",
+      "description": "Die Standard-Scan-Rate beträgt 2 Kanäle/s, entsprechend einer Dwell-Zeit Td = 500 ms pro Kanal. Dieser Wert muss als Konstante oder konfigurierbarer Parameter vorhanden sein.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Suche nach Td_ms, dwell_time_ms oder scan_rate in ale_state_machine.h/cpp oder ale_timing.h. Wert muss 500 ms betragen.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-002-002",
+      "feature": "FEAT-GEN-002",
+      "requirement": ["REQ-GEN-007"],
+      "title": "Schnelle Scan-Rate 5 ch/s",
+      "description": "Die schnelle Scan-Rate von 5 Kanälen/s (Td = 200 ms) wird unterstützt. Der Wert muss konfigurierbar oder als Alternative zur Standard-Rate vorhanden sein.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ob Td = 200 ms als Alternative oder als separater Modus existiert.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-002-003",
+      "feature": "FEAT-GEN-002",
+      "requirement": ["REQ-GEN-008"],
+      "title": "AQC-Rückwärtskompatibilität",
+      "description": "Das System kann mit AQC-ALE-Stationen zusammenarbeiten, die variable Dwell-Raten einsetzen. AQC-Frames werden korrekt erkannt und verarbeitet.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.h/cpp auf Behandlung variabler Dwell-Zeiten und Rückwärtskompatibilitätslogik.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-004-001",
+      "feature": "FEAT-GEN-004",
+      "requirement": ["REQ-GEN-013"],
+      "title": "Kanalspeicher: Mindestkapazität 100 Einträge",
+      "description": "Der ChannelStore muss mindestens 100 Kanaleinträge aufnehmen können. Jeder Eintrag enthält TX-Frequenz, RX-Frequenz und Modul-/Modus-Information.",
+      "module": "Stores/ale_data_store",
+      "verification_hint": "Suche in ale_data_store.h nach ChannelStore-Klasse oder vergleichbarer Struktur. Prüfe die definierte Kapazitätskonstante (min. 100).",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-004-002",
+      "feature": "FEAT-GEN-004",
+      "requirement": ["REQ-GEN-013"],
+      "title": "Kanalspeicher: Nichtflüchtige Speicherung",
+      "description": "Der ChannelStore persistiert Daten über IPersistenceBackend. Es existiert mindestens ein IPersistenceBackend-Interface, das von konkreten Implementierungen (Datei, EEPROM) abgeleitet werden kann.",
+      "module": "Stores/ale_data_store",
+      "verification_hint": "Suche nach IPersistenceBackend in ale_data_store.h. Prüfe ob ChannelStore eine save()/load()-Methode oder äquivalent besitzt.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-005-001",
+      "feature": "FEAT-GEN-005",
+      "requirement": ["REQ-GEN-014"],
+      "title": "Selbstadressspeicher: Mindestens 20 Einträge",
+      "description": "Der SelfAddressStore (in AddressBook oder ale_data_store) muss mindestens 20 eigene Stationsadressen speichern können, inkl. Slot-Nummern und gültiger Kanalliste.",
+      "module": "Stores/address_book",
+      "verification_hint": "Prüfe address_book.h auf self_address-Datenstruktur und zugehörige Kapazitätskonstante (min. 20).",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-006-001",
+      "feature": "FEAT-GEN-006",
+      "requirement": ["REQ-GEN-015", "REQ-GEN-016"],
+      "title": "Fremdstations-Tabelle: Min. 100 Einträge",
+      "description": "Die Tabelle bekannter Gegenstellen (OtherStationStore oder known_stations) muss mindestens 100 Einträge aufnehmen.",
+      "module": "Stores/address_book",
+      "verification_hint": "Suche nach known_stations in address_book.h. Prüfe Kapazitätskonstante (min. 100).",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-006-002",
+      "feature": "FEAT-GEN-006",
+      "requirement": ["REQ-GEN-017"],
+      "title": "LQA-Datenbank: Min. 4000 Zellen",
+      "description": "Die LQADatabase muss mindestens 4000 LQA-Zellen (bilaterale SINAD/BER/Multipath pro Kanal-Station-Paar) speichern können.",
+      "module": "LQA/lqa_database",
+      "verification_hint": "Prüfe lqa_database.h auf Kapazitätsdefinitionen. Mindestgröße: 4000 Zellen (Designziel: 10000).",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-006-003",
+      "feature": "FEAT-GEN-006",
+      "requirement": ["REQ-GEN-018"],
+      "title": "LQA-Daten: 1-Stunden-Retention",
+      "description": "LQA-Daten bleiben mindestens 1 Stunde ohne externe Stromversorgung erhalten (nichtflüchtige Speicherung oder Backup-Batterie-Unterstützung durch IPersistenceBackend).",
+      "module": "LQA/lqa_database",
+      "verification_hint": "Prüfe ob lqa_database.cpp persistente Speicherung über IPersistenceBackend implementiert oder einen Timestamp-basierten Ablaufmechanismus (min. 3600s) besitzt.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-007-001",
+      "feature": "FEAT-GEN-007",
+      "requirement": ["REQ-GEN-019"],
+      "title": "Betriebsparameter: Programmierbarkeit durch Operator",
+      "description": "Scan-Rate, Timing-Parameter, Accept-Flags und LQA-Einstellungen sind durch den Operator oder Controller programmierbar. OperatingParameters-Klasse bietet entsprechende Setter.",
+      "module": "Stores/ale_data_store",
+      "verification_hint": "Prüfe OperatingParameters in ale_data_store.h auf vorhandene Set-Methoden für scan_rate, accept_flags, lqa_settings.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-008-001",
+      "feature": "FEAT-GEN-008",
+      "requirement": ["REQ-GEN-020"],
+      "title": "Nachrichtenspeicher: Min. 12 Nachrichten",
+      "description": "MessageStore speichert mindestens 12 Nachrichten mit einer Gesamtkapazität von mindestens 1000 Zeichen.",
+      "module": "Stores/ale_data_store",
+      "verification_hint": "Suche nach MessageStore oder message_memory in ale_data_store.h. Prüfe Kapazitätskonstanten (min. 12 Nachrichten, min. 1000 Zeichen).",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-008-002",
+      "feature": "FEAT-GEN-008",
+      "requirement": ["REQ-GEN-020"],
+      "title": "Nachrichtenspeicher: 1h Stromausfall-Retention",
+      "description": "Gespeicherte Nachrichten bleiben nach einem Stromausfall mindestens 1 Stunde erhalten (nichtflüchtige Persistierung).",
+      "module": "Stores/ale_data_store",
+      "verification_hint": "Prüfe ob MessageStore über IPersistenceBackend persistiert oder äquivalente Nicht-Flüchtigkeits-Logik implementiert.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-009-001",
+      "feature": "FEAT-GEN-009",
+      "requirement": ["REQ-GEN-021"],
+      "title": "Always-Listen-Regel",
+      "description": "Das System hört permanent auf dem aktuellen Kanal, außer wenn es sendet. Im SCANNING-Zustand ist der RX-Pfad aktiv.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_state_machine.cpp: Im SCANNING-Zustand muss RX aktiv sein. Es darf keine Zustände geben, in denen weder TX noch RX aktiv ist.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-009-002",
+      "feature": "FEAT-GEN-009",
+      "requirement": ["REQ-GEN-021"],
+      "title": "Always-Answer-Regel",
+      "description": "Das System antwortet auf einen gültigen Individual-Call automatisch, sofern es nicht bereits in einem Link ist und accept_calls=true gesetzt ist.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_state_machine.cpp: Nach Empfang eines vollständigen Calls mit eigener Adresse muss eine Response eingeleitet werden (HANDSHAKE-Zustand).",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-009-003",
+      "feature": "FEAT-GEN-009",
+      "requirement": ["REQ-GEN-021"],
+      "title": "Always-Scan-Regel",
+      "description": "Nach Beendigung eines Links oder Anrufs kehrt das System automatisch in den SCANNING-Zustand zurück.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe alle Terminal-Zustände (LINKED, ERROR) in ale_state_machine.cpp: Alle müssen nach Timeout oder Abschluss nach SCANNING transitieren.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-010-001",
+      "feature": "FEAT-GEN-010",
+      "requirement": ["REQ-GEN-022", "REQ-GEN-023"],
+      "title": "AQC-Frame: 16-Bit-Kompaktformat",
+      "description": "AQC-ALE-Frames packen 3 Zeichen in ein 16-Bit-Wort. Das Bit-Layout entspricht der AQC-Spezifikation und unterscheidet sich erkennbar vom Base-ALE-24-Bit-Wort.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.h auf AQC-Word-Struktur (16-Bit). Vergleiche mit ALEWord (24-Bit) in ale_word.h.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-010-002",
+      "feature": "FEAT-GEN-010",
+      "requirement": ["REQ-GEN-025"],
+      "title": "AQC-Rückwärtskompatibilität mit Base-ALE",
+      "description": "AQC-ALE-Frames können von einem Base-ALE-System empfangen werden, ohne dass dieses abstürzt oder in einen Fehler-Zustand wechselt. Der Fixed-Bit-Mechanismus muss implementiert sein.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.cpp auf Differenzierungslogik zwischen AQC und Base-ALE Frames. Fixed-Bit muss in der Payload gesetzt sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-011-001",
+      "feature": "FEAT-GEN-011",
+      "requirement": ["MIL-STD-188-141B A.5.6.6.1"],
+      "title": "CMD VERSION: Korrekte v/s Kodierung",
+      "description": "Das CMD VERSION-Wort verwendet die `v/s` Zeichensequenz im Payload. KVC-Komponenten-Bits sind gemäß Standard gesetzt.",
+      "module": "Protocol/ale_version_caps",
+      "verification_hint": "Suche in ale_version_caps.h/cpp nach VERSION-CMD-Konstruktion. Prüfe ob Payload 'v', '/', 's' (Basic-38-kodiert) enthält.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-012-001",
+      "feature": "FEAT-GEN-012",
+      "requirement": ["MIL-STD-188-141B A.5.6.6.2"],
+      "title": "Capabilities Query: c/q Preamble",
+      "description": "Die Capabilities-Anfrage (Query) verwendet die Zeichensequenz `c/q` im CMD-Wort.",
+      "module": "Protocol/ale_version_caps",
+      "verification_hint": "Prüfe ale_version_caps.cpp auf Query-Frame-Konstruktion mit 'c', '/', 'q' Payload.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-012-002",
+      "feature": "FEAT-GEN-012",
+      "requirement": ["MIL-STD-188-141B A.5.6.6.2"],
+      "title": "Capabilities Report: c/r + 5 DATA-Wörter",
+      "description": "Der Capabilities-Report beginnt mit CMD `c/r` und enthält genau 5 nachfolgende DATA-Wörter mit den Feldern: Scan Rate, LP, ALQA, Orderwire, Scheduling.",
+      "module": "Protocol/ale_version_caps",
+      "verification_hint": "Prüfe ale_version_caps.cpp: Report-Frame muss CMD('c/r') gefolgt von genau 5 DATA-Wörtern aufbauen.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-014-001",
+      "feature": "FEAT-GEN-014",
+      "requirement": ["MIL-STD-188-141B A.5.7.2"],
+      "title": "AMD: Nachricht wird nach Empfang sofort angezeigt",
+      "description": "Eine empfangene AMD-Nachricht wird sofort dem Operator/Anwendungs-Layer gemeldet (Callback, Event oder Queue-Eintrag). Kein Pufferung ohne Benachrichtigung.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.cpp oder ale_message.cpp auf AMD-Empfangsverarbeitung und zugehörigen Callback/Event.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-014-002",
+      "feature": "FEAT-GEN-014",
+      "requirement": ["MIL-STD-188-141B A.5.7.2"],
+      "title": "AMD: Nachricht wird im Orderwire-Abschnitt gesendet",
+      "description": "AMD-Nachrichten werden ausschließlich im Message-Abschnitt eines ALE-Frames (nach Conclusion / im LinkedPhase::ORDERWIRE) übertragen.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ob AMD-Transmission nur aus LinkedPhase::ORDERWIRE oder CallingPhase::MESSAGE initiiert wird.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-015-001",
+      "feature": "FEAT-GEN-015",
+      "requirement": ["MIL-STD-188-141B A.5.7.3"],
+      "title": "DTM: CMD DTM + DATA/REP Struktur",
+      "description": "Data Text Message verwendet CMD DTM gefolgt von DATA/REP-Wortpaaren. Optional wird ein CRC-Wort angehängt.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.h auf DTM-Frame-Typ und zugehörige Konstruktionsmethode.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-016-001",
+      "feature": "FEAT-GEN-016",
+      "requirement": ["MIL-STD-188-141B A.5.7.4"],
+      "title": "DBM: CRC16 und transparenter Datenmodus",
+      "description": "Data Block Message verwendet CRC16 zur Integritätssicherung und unterstützt transparente Binärdaten (nicht nur ASCII).",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.h auf DBM-Typ mit CRC16-Feld und binärem Datenmodus.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-WAVEFORM-001-001",
+      "feature": "FEAT-WAVEFORM-001",
+      "requirement": ["REQ-WAVEFORM-001", "REQ-WAVEFORM-002"],
+      "title": "8 orthogonale Töne: 750–2500 Hz",
+      "description": "Die Frequenztabelle enthält genau 8 Töne im Bereich 750 Hz bis 2500 Hz mit gleichem Abstand (250 Hz). Symbol 0 → 750 Hz, Symbol 7 → 2500 Hz.",
+      "module": "FSK/ale_waveform",
+      "verification_hint": "Prüfe ale_waveform.h auf FREQ_TABLE oder äquivalent. Erwartete Werte: {750, 1000, 1250, 1500, 1750, 2000, 2250, 2500} Hz.",
+      "status": "open"
+    },
+    {
+      "id": "AC-WAVEFORM-001-002",
+      "feature": "FEAT-WAVEFORM-001",
+      "requirement": ["REQ-WAVEFORM-003"],
+      "title": "3-Bit-Symbol ↔ Frequenz-Mapping (Tabelle A-III)",
+      "description": "Das Symbol-zu-Frequenz-Mapping entspricht exakt Tabelle A-III des MIL-STD. Die Zuordnung ist bijektiv (keine Doppelbelegung).",
+      "module": "FSK/ale_waveform",
+      "verification_hint": "Prüfe FREQ_TO_SYMBOL und SYMBOL_TO_FREQ in ale_waveform.h auf Konsistenz und Übereinstimmung mit Table A-III.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-WAVEFORM-002-001",
+      "feature": "FEAT-WAVEFORM-002",
+      "requirement": ["REQ-WAVEFORM-004"],
+      "title": "NCO: 32-Bit-Phasenakkumulator",
+      "description": "Der NCO-Tongenerator verwendet einen 32-Bit-Phasenakkumulator (uint32_t phase_). Phase-Increment = (freq_hz << 32) / SAMPLE_RATE_HZ (Integer-Arithmetik).",
+      "module": "FSK/tone_generator",
+      "verification_hint": "Prüfe tone_generator.h: phase_ muss uint32_t sein. phase_increment_ berechnet sich aus Frequenz und Sample-Rate ganzzahlig.",
+      "status": "open"
+    },
+    {
+      "id": "AC-WAVEFORM-002-002",
+      "feature": "FEAT-WAVEFORM-002",
+      "requirement": ["REQ-WAVEFORM-005"],
+      "title": "NCO: Phasenkontinuität an Symbolübergängen",
+      "description": "Symbolübergänge erfolgen an Waveform-Maxima (sin=+1). Anfangsphase = 0x40000000 (= π/2 in Q32). Keine Phasensprünge bei Frequenzwechseln.",
+      "module": "FSK/tone_generator",
+      "verification_hint": "Prüfe tone_generator.cpp: Initialisierung der Phase auf 0x40000000. Symbolwechsel darf Phase nicht resetten.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-WAVEFORM-003-001",
+      "feature": "FEAT-WAVEFORM-003",
+      "requirement": ["REQ-WAVEFORM-006"],
+      "title": "Sample-Rate = 8000 Hz",
+      "description": "Die interne Modem-Sample-Rate beträgt 8000 Hz. Diese Konstante ist in ale_waveform.h definiert.",
+      "module": "FSK/ale_waveform",
+      "verification_hint": "Suche nach SAMPLE_RATE oder sample_rate_hz in ale_waveform.h. Wert muss 8000 sein.",
+      "status": "open"
+    },
+    {
+      "id": "AC-WAVEFORM-003-002",
+      "feature": "FEAT-WAVEFORM-003",
+      "requirement": ["REQ-WAVEFORM-007"],
+      "title": "Symbol-Rate = 125 Symbole/s",
+      "description": "Die Symbol-Rate beträgt 125 Symbole/s, entsprechend 8 ms/Symbol (64 Samples/Symbol bei 8 kHz).",
+      "module": "FSK/ale_waveform",
+      "verification_hint": "Prüfe SYMBOL_RATE oder SAMPLES_PER_SYMBOL in ale_waveform.h. Wert muss SAMPLES_PER_SYMBOL=64 sein.",
+      "status": "open"
+    },
+    {
+      "id": "AC-WAVEFORM-003-003",
+      "feature": "FEAT-WAVEFORM-003",
+      "requirement": ["REQ-WAVEFORM-009"],
+      "title": "Trw = 392 ms (49 Symbole × 8 ms)",
+      "description": "Die Wortdauer Trw beträgt exakt 392 ms (49 Symbole à 8 ms). Dieser Wert ist nicht als 3×Tw_ms (3×130 = 390) zu berechnen.",
+      "module": "FSK/ale_waveform",
+      "verification_hint": "Prüfe Trw_ms oder TRW_MS in ale_waveform.h oder ale_timing.h. Wert muss 392 sein (nicht 390).",
+      "status": "open"
+    },
+    {
+      "id": "AC-WAVEFORM-003-004",
+      "feature": "FEAT-WAVEFORM-003",
+      "requirement": ["REQ-WAVEFORM-008"],
+      "title": "Tw = 130,66 ms (im Code gerundet auf 130 ms)",
+      "description": "Die Zeichendauer Tw beträgt physikalisch 130,66 ms. Im Code wird 130 ms verwendet. Es darf keine Konstante 131 ms oder abweichende Werte geben.",
+      "module": "FSK/ale_waveform",
+      "verification_hint": "Prüfe Tw_ms oder TW_MS in ale_waveform.h. Wert muss 130 sein (nicht 131, nicht 131).",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-WAVEFORM-004-001",
+      "feature": "FEAT-WAVEFORM-004",
+      "requirement": ["REQ-WAVEFORM-011"],
+      "title": "Frequenzgenauigkeit ≤ ±1 Hz",
+      "description": "Jeder der 8 FSK-Töne weicht im Test maximal ±1 Hz vom Sollwert ab. Testdatei test_tone_accuracy.cpp deckt alle 8 Töne ab.",
+      "module": "tests/test_tone_accuracy.cpp",
+      "verification_hint": "Prüfe ob test_tone_accuracy.cpp existiert und alle 8 Töne auf ±1 Hz testet (z.B. via FFT-Peak-Analyse).",
+      "status": "open"
+    },
+    {
+      "id": "AC-WAVEFORM-004-002",
+      "feature": "FEAT-WAVEFORM-004",
+      "requirement": ["REQ-WAVEFORM-013"],
+      "title": "Timing-Genauigkeit ≤ 10 ppm",
+      "description": "Die zeitliche Genauigkeit der Symbolgrenzen beträgt maximal 10 ppm (0,001%). Testreihe in test_tone_accuracy.cpp oder äquivalent.",
+      "module": "tests/test_tone_accuracy.cpp",
+      "verification_hint": "Suche nach Timing-Genauigkeitstest in tests/. Wert muss ≤ 10 ppm validiert werden.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-WORD-001-001",
+      "feature": "FEAT-WORD-001",
+      "requirement": ["REQ-WORD-001"],
+      "title": "Bit-Layout: W1=bit23 (MSB), W24=bit0 (LSB)",
+      "description": "Im 24-Bit-Word ist W1 das höchstwertige Bit (bit23) und W24 das niederwertigste Bit (bit0). Preamble sitzt in bits[23:21], Char1 in bits[20:14], Char2 in bits[13:7], Char3 in bits[6:0].",
+      "module": "Word/ale_word",
+      "verification_hint": "Prüfe ale_word.h: encode() muss (preamble << 21) | (c1 << 14) | (c2 << 7) | c3 berechnen. Preamble-Extraktion: word >> 21.",
+      "status": "open"
+    },
+    {
+      "id": "AC-WORD-001-002",
+      "feature": "FEAT-WORD-001",
+      "requirement": ["REQ-WORD-002"],
+      "title": "Encode/Decode-Symmetrie",
+      "description": "encode(decode(w)) == w für alle gültigen 24-Bit-Worte. decode(encode(p, c1, c2, c3)) liefert exakt (p, c1, c2, c3) zurück.",
+      "module": "Word/ale_word",
+      "verification_hint": "Prüfe Tests für ALEWord encode/decode in tests/. Roundtrip-Test muss vorhanden sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-WORD-002-001",
+      "feature": "FEAT-WORD-002",
+      "requirement": ["REQ-WORD-003"],
+      "title": "PreambleType: 8 Werte gemäß Tabelle A-VIII",
+      "description": "Das PreambleType-Enum enthält genau 8 Werte: TO (0b000), TIS (0b001), TWAS (0b010), THRU (0b011), FROM (0b100), CMD (0b101), DATA (0b110), REP (0b111) — oder equivalent gemäß Table A-VIII.",
+      "module": "Word/ale_word",
+      "verification_hint": "Prüfe ale_word.h enum PreambleType (oder WordType): alle 8 Werte mit korrekten numerischen Codes.",
+      "status": "open"
+    },
+    {
+      "id": "AC-WORD-002-002",
+      "feature": "FEAT-WORD-002",
+      "requirement": ["REQ-WORD-003", "REQ-WORD-004", "REQ-WORD-005", "REQ-WORD-006", "REQ-WORD-007"],
+      "title": "Adresswörter TO/TIS/TWAS/THRU/FROM korrekt",
+      "description": "Alle fünf Adress-Preamble-Typen sind implementiert und werden für die korrekten Frames verwendet: TO für Calling, TIS/TWAS für Conclusion, THRU/FROM für Relay.",
+      "module": "Word/ale_word",
+      "verification_hint": "Prüfe WordParser-Klasse und zugehörige Tests. Alle 5 Adress-Preambles müssen en- und decodierbar sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-WORD-003-001",
+      "feature": "FEAT-WORD-003",
+      "requirement": ["REQ-WORD-008"],
+      "title": "CMD-Wort: System-weite Bedeutung",
+      "description": "CMD-Wörter (Preamble 0b101) werden system-weit verstanden. Sie sind nicht adressspezifisch. Die Payload enthält den Kommandotyp.",
+      "module": "Word/ale_word",
+      "verification_hint": "Prüfe ale_word.cpp: CMD-Preamble muss korrekt kodiert sein. MessageAssembler muss CMD-Wörter als System-Kommandos verarbeiten.",
+      "status": "open"
+    },
+    {
+      "id": "AC-WORD-003-002",
+      "feature": "FEAT-WORD-003",
+      "requirement": ["REQ-WORD-009", "REQ-WORD-010"],
+      "title": "REP darf nicht unmittelbar auf TIS/TWAS folgen",
+      "description": "In einer Wortsequenz darf ein REP-Wort nie direkt nach einem TIS- oder TWAS-Wort stehen (frame_validator.cpp). Diese Sequenzregel wird bei der Frame-Validierung geprüft.",
+      "module": "Protocol/frame_validator",
+      "verification_hint": "Prüfe frame_validator.cpp: Es muss eine Regel geben, die REP nach TIS/TWAS als ungültig markiert.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FEC-001-001",
+      "feature": "FEAT-FEC-001",
+      "requirement": ["REQ-FEC-004", "REQ-FEC-005"],
+      "title": "Golay(24,12): Generatorpolynom 0xAE3",
+      "description": "Der Golay(24,12)-Encoder verwendet das Generatorpolynom 0xAE3 (binär: 101011100011). Die Encoder-Tabelle wird compile-time aus diesem Polynom generiert.",
+      "module": "FEC/golay",
+      "verification_hint": "Prüfe golay.h/cpp auf Polynom-Konstante 0xAE3 und Tabellengröße 4096.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FEC-001-002",
+      "feature": "FEAT-FEC-001",
+      "requirement": ["REQ-FEC-006", "REQ-FEC-007"],
+      "title": "Golay-Encoder: Compile-Time Tabelle mit 4096 Einträgen",
+      "description": "Die Encode-Tabelle hat 4096 Einträge (2^12 Datenwörter). Jeder Eintrag liefert das 24-Bit-Codewort inkl. Parität.",
+      "module": "FEC/golay",
+      "verification_hint": "Prüfe golay.h: ENCODE_TABLE oder encode_table muss constexpr/static mit Größe 4096 sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FEC-002-001",
+      "feature": "FEAT-FEC-002",
+      "requirement": ["REQ-FEC-010"],
+      "title": "Golay-Decoder: Bis zu 3 Bit-Fehler korrigierbar",
+      "description": "Der Golay(24,12)-Decoder korrigiert zuverlässig 1, 2 oder 3 Bit-Fehler in einem 24-Bit-Codewort. Bei 4+ Fehlern wird DETECTED (nicht CORRECTED) zurückgegeben.",
+      "module": "FEC/golay",
+      "verification_hint": "Prüfe golay.cpp: Syndrome-basierte Dekodierschleife. Testreihe muss alle 3-Fehler-Korrekturfälle abdecken.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FEC-002-002",
+      "feature": "FEAT-FEC-002",
+      "requirement": ["REQ-FEC-011"],
+      "title": "Golay-Decoder: Rückgabe-Flags DECODE_OK / CORRECTED / DETECTED",
+      "description": "Die Decoder-Funktion gibt einen Status zurück: DECODE_OK (fehlerfreier Empfang), CORRECTED (1-3 Fehler korrigiert), DETECTED (4+ Fehler erkannt, nicht korrigiert).",
+      "module": "FEC/golay",
+      "verification_hint": "Prüfe golay.h auf DecodeResult-Enum oder äquivalente Status-Rückgabe. Alle drei Zustände müssen vorhanden sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FEC-003-001",
+      "feature": "FEAT-FEC-003",
+      "requirement": ["REQ-FEC-012"],
+      "title": "Interleave-Muster: A₁B₁A₂B₂…A₂₄B₂₄S₄₉",
+      "description": "Das Bit-Interleave-Muster verschränkt Coder-A-Bits (Positionen 0,2,4,…,46) mit Coder-B-Bits (Positionen 1,3,5,…,47). Bit 48 ist der Stuff-Bit S49 = 0.",
+      "module": "FEC/interleaver",
+      "verification_hint": "Prüfe interleaver.cpp: out[2k] = Coder-A-Bit k, out[2k+1] = Coder-B-Bit k (k=0..23), out[48] = 0.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FEC-003-002",
+      "feature": "FEAT-FEC-003",
+      "requirement": ["REQ-FEC-013"],
+      "title": "Coder-B-Parität ist invertiert",
+      "description": "Die Paritätsbits von Coder B (G13–G24) werden vor dem Interleaving bit-invertiert (~). Beim Deinterleaving/Decodieren muss diese Invertierung rückgängig gemacht werden.",
+      "module": "FEC/interleaver",
+      "verification_hint": "Prüfe ale_fec_codec.cpp: Bei Coder B muss Parity mit ~ (Bitwise NOT) invertiert werden. DD-003 beschreibt das genaue Layout.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FEC-004-001",
+      "feature": "FEAT-FEC-004",
+      "requirement": ["REQ-FEC-014", "REQ-FEC-015"],
+      "title": "3×-Redundanz: Jedes 49-Bit-Wort dreifach gesendet",
+      "description": "Jedes interleaved 49-Bit-Wort wird 3-mal gesendet (insgesamt 147 Bit = 49 Symbole je 3 Bit pro Symbol). Der Modem-TX-Pfad erzeugt 147-Symbol-Bursts.",
+      "module": "FSK/symbol_decoder",
+      "verification_hint": "Prüfe ale2g_modem.cpp oder symbol_decoder.cpp: TX-Burst-Länge muss 147 Symbole sein (3×49).",
+      "status": "open"
+    },
+    {
+      "id": "AC-FEC-004-002",
+      "feature": "FEAT-FEC-004",
+      "requirement": ["REQ-FEC-016", "REQ-FEC-017"],
+      "title": "Majority-Vote auf Stride-49-Basis",
+      "description": "Der Majority-Vote kombiniert die drei Übertragungen auf Stride-49-Basis: Symbol[i], Symbol[i+49], Symbol[i+98] werden verglichen (i=0..48). 2-von-3 Mehrheit entscheidet.",
+      "module": "FSK/symbol_decoder",
+      "verification_hint": "Prüfe symbol_decoder.cpp auf majority_vote()-Funktion mit Stride-49 (mod-49 Indexierung). Keine lineare 1-of-3 Logik.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FEC-005-001",
+      "feature": "FEAT-FEC-005",
+      "requirement": ["REQ-FEC-019"],
+      "title": "Unanimous-Vote-Zähler in ALEWord",
+      "description": "Die ALEWord-Struktur enthält ein Feld unanimous_votes (0–48), das die Anzahl der Bits zählt, bei denen alle drei Übertragungen übereinstimmen (exklusive Stuff-Bit S49).",
+      "module": "FSK/symbol_decoder",
+      "verification_hint": "Prüfe ale_word.h auf unanimous_votes-Feld. Prüfe symbol_decoder.cpp auf Zählinkrementierung bei unanimem Vote.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FRAME-001-001",
+      "feature": "FEAT-FRAME-001",
+      "requirement": ["REQ-FRAME-001"],
+      "title": "Frame-Grundstruktur: Calling + Message + Conclusion",
+      "description": "Ein ALE-Frame besteht aus dem Calling-Abschnitt (obligatorisch), gefolgt vom optionalen Message-Abschnitt und dem Conclusion-Abschnitt (obligatorisch). Diese Reihenfolge darf nicht vertauscht werden.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe CallingPhase-Enum in ale_state_machine.h: SCANNING_CALL, LEADING_CALL, MESSAGE, CONCLUSION müssen in dieser Reihenfolge durchlaufen werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FRAME-001-002",
+      "feature": "FEAT-FRAME-001",
+      "requirement": ["REQ-FRAME-001"],
+      "title": "FROM muss vor CMD stehen",
+      "description": "In einer gültigen Frame-Sequenz muss ein FROM-Wort (Quick-ID) immer vor einem CMD-Wort stehen. Diese Sequenzregel ist in frame_validator.cpp durchgesetzt.",
+      "module": "Protocol/frame_validator",
+      "verification_hint": "Prüfe frame_validator.cpp auf FROM-vor-CMD-Validierung.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FRAME-001-003",
+      "feature": "FEAT-FRAME-001",
+      "requirement": ["REQ-FRAME-001"],
+      "title": "Alle Wörter sind Trw-synchron",
+      "description": "Jedes gesendete Wort beginnt auf einem Trw-Grid-Slot (first_call_tx_ms + n × 392 ms). Es gibt keine Wörter, die außerhalb des Trw-Rasters beginnen (Ausnahme: LISTENING-Phase).",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe handle_calling() in ale_state_machine.cpp: next_slot_ms = first_call_tx_ms + call_cycle_count × Trw_ms.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FRAME-002-001",
+      "feature": "FEAT-FRAME-002",
+      "requirement": ["REQ-FRAME-002"],
+      "title": "Scanning Call: Nur 1. Adress-Wort (TO)",
+      "description": "Während des Scanning-Abschnitts wird nur das erste Wort der Zieladresse (TO-Wort) wiederholt gesendet. Kein DATA/REP in der Scanning-Phase.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe handle_calling() bei CallingPhase::SCANNING_CALL: Es wird exakt 1 Wort (TO mit erstem 3-Char-Chunk) gesendet.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FRAME-002-002",
+      "feature": "FEAT-FRAME-002",
+      "requirement": ["REQ-FRAME-005"],
+      "title": "Scanning Call: Tsc = C × 2 × Trw",
+      "description": "Die Scanning-Call-Dauer Tsc berechnet sich als Anzahl der Kanäle C multipliziert mit 2 × Trw (784 ms). Die Gesamtwiederholungen entsprechen dieser Dauer.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_state_machine.cpp: scan_cycles berechnet aus channel_count × 2 (pro Kanal 2 Trw-Slots).",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FRAME-003-001",
+      "feature": "FEAT-FRAME-003",
+      "requirement": ["REQ-FRAME-004"],
+      "title": "Leading Call: Vollständige Adresse zweifach",
+      "description": "Im Leading-Abschnitt wird die vollständige Zieladresse (alle Wörter) zweimal gesendet. Max. 5 Wörter für Adressen bis 15 Zeichen.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe handle_calling() bei CallingPhase::LEADING_CALL: Alle Adress-Wörter werden in der Sequenz TO/DATA/REP gesendet, zweimal durchlaufen.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FRAME-005-001",
+      "feature": "FEAT-FRAME-005",
+      "requirement": ["REQ-FRAME-010"],
+      "title": "Conclusion: TIS oder TWAS mit eigener Adresse",
+      "description": "Der Conclusion-Abschnitt besteht aus einem TIS-Wort (normale Beendigung) oder TWAS-Wort (Link-Terminierung) gefolgt von der eigenen Stationsadresse.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe handle_calling() bei CallingPhase::CONCLUSION: Preamble muss TIS oder TWAS sein, Payload = self_address.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FRAME-005-002",
+      "feature": "FEAT-FRAME-005",
+      "requirement": ["REQ-FRAME-011"],
+      "title": "Conclusion: RX-Fenster öffnet nach Tlww",
+      "description": "Nach Senden der Conclusion wartet die State Machine Tlww (= Twr = 915 ms) und öffnet dann ein RX-Fenster (LISTENING-Phase).",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe Übergang CONCLUSION → LISTENING in ale_state_machine.cpp. Warte-Zeit muss Twr_ms oder Tlww_ms sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FRAME-006-001",
+      "feature": "FEAT-FRAME-006",
+      "requirement": ["REQ-FRAME-012"],
+      "title": "Sequenzregel: THRU/REP müssen alternieren",
+      "description": "In einer gültigen Sequenz dürfen THRU und REP nicht direkt aufeinander folgen (kein THRU-THRU und kein REP-REP). frame_validator.cpp erzwingt diese Regel.",
+      "module": "Protocol/frame_validator",
+      "verification_hint": "Prüfe frame_validator.cpp auf Alternierungsprüfung für THRU und REP.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FRAME-006-002",
+      "feature": "FEAT-FRAME-006",
+      "requirement": ["REQ-FRAME-013"],
+      "title": "Ta max = 1960 ms (5 Wörter × Trw)",
+      "description": "Der Address-Abschnitt (Ta) darf maximal 1960 ms dauern (5 Trw-Slots). Dies entspricht maximal 5 Adress-Wörtern.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe Limits in ale_state_machine.cpp oder ale_timing.h: TA_MAX_WORDS=5, entspricht 5×392=1960ms.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-SYNC-001-001",
+      "feature": "FEAT-SYNC-001",
+      "requirement": ["REQ-SYNC-001", "REQ-SYNC-002"],
+      "title": "first_call_tx_ms: Einmalig gesetzt, nie zurückgesetzt",
+      "description": "first_call_tx_ms wird exakt einmal beim Eintritt in ALEState::CALLING gesetzt (in enter_state(CALLING)). Es wird zu keinem Zeitpunkt während des Call-Zyklus zurückgesetzt oder überschrieben.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Suche alle Schreibzugriffe auf first_call_tx_ms in ale_state_machine.cpp. Es darf nur eine Zuweisung existieren (in enter_state oder handle_calling bei erstem Aufruf).",
+      "status": "open"
+    },
+    {
+      "id": "AC-SYNC-001-002",
+      "feature": "FEAT-SYNC-001",
+      "requirement": ["REQ-SYNC-003"],
+      "title": "Alle Slot-Zeiten relativ zu first_call_tx_ms",
+      "description": "Jeder TX-Slot wird berechnet als: next_slot_ms = first_call_tx_ms + call_cycle_count × Trw_ms. Es gibt keine andere Zeitbasis für TX-Slots.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe handle_calling() in ale_state_machine.cpp auf Slot-Berechnung. Nur erste_call_tx_ms + n×Trw darf als Basis verwendet werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-SYNC-001-003",
+      "feature": "FEAT-SYNC-001",
+      "requirement": ["REQ-SYNC-004"],
+      "title": "call_cycle_count läuft phasenübergreifend durch",
+      "description": "call_cycle_count wird beim Phasenwechsel (SCANNING_CALL → LEADING_CALL → CONCLUSION) nicht zurückgesetzt. Nur call_cycles_in_phase wird beim Phasenwechsel auf 0 zurückgesetzt.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe Phasenwechsel-Logik in on_word_complete(): call_cycle_count++ immer, call_cycles_in_phase=0 nur bei Phasenwechsel.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-SYNC-002-001",
+      "feature": "FEAT-SYNC-002",
+      "requirement": ["REQ-SYNC-005"],
+      "title": "Empfangsseitige Wortsynchronisation: 49-Symbol-Grenzen",
+      "description": "Der RX-Pfad erkennt die 49-Symbol-Wortgrenzen über einen Sliding-Window-Energiedetektor oder vergleichbare Methode. Sync wird innerhalb der ersten 2 empfangenen Wörter hergestellt.",
+      "module": "FSK/ale_waveform",
+      "verification_hint": "Prüfe fft_demodulator.cpp oder ale_waveform.cpp auf Wortsynchronisations-Algorithmus. Muss Stride-49-Erkennung implementieren.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-SYNC-003-001",
+      "feature": "FEAT-SYNC-003",
+      "requirement": ["REQ-SYNC-006", "REQ-SYNC-007"],
+      "title": "9 Sync-Kriterien gemäß A.5.2.6.3",
+      "description": "Die Wortsynchronisation verwendet alle 9 Kriterien: unanimous-vote-Zähler, Golay-Decodemodi (3/4, 2/5, 1/6, 0/7), gültiger Preamble, gültige Basic-38-Zeichen, Frame-Struktur.",
+      "module": "FSK/ale_waveform",
+      "verification_hint": "Prüfe ale_waveform.cpp oder symbol_decoder.cpp auf is_valid_sync()-Funktion, die alle 9 Sync-Kriterien auswertet.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-SOUND-001-001",
+      "feature": "FEAT-SOUND-001",
+      "requirement": ["REQ-SOUND-002", "REQ-SOUND-003"],
+      "title": "Single-Channel Sounding: Nur auf unbesetztem Kanal",
+      "description": "Sounding wird nur gesendet, wenn der Kanal als unbesetzt gilt (LBT bestanden). Ein besetzter Kanal wird übersprungen.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe SOUNDING-Zustandslogik in ale_state_machine.cpp: LBT-Check muss vor dem Senden des Sounding-Frames erfolgen.",
+      "status": "open"
+    },
+    {
+      "id": "AC-SOUND-001-002",
+      "feature": "FEAT-SOUND-001",
+      "requirement": ["REQ-SOUND-004"],
+      "title": "Sounding: Conclusion-Frame mit TIS/TWAS + Eigenadresse",
+      "description": "Ein Sounding-Frame besteht ausschließlich aus dem Conclusion-Abschnitt: TIS-Wort (Single-Channel Sounding) oder TWAS-Wort mit eigener Stationsadresse.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe SOUNDING-Zustand in ale_state_machine.cpp: Gesendeter Frame muss nur TIS/TWAS + self_address enthalten (kein Scanning/Leading).",
+      "status": "open"
+    },
+    {
+      "id": "AC-SOUND-001-003",
+      "feature": "FEAT-SOUND-001",
+      "requirement": ["REQ-SOUND-005"],
+      "title": "Sounding: Redundanz Trs ≥ 784 ms (2 × Trw)",
+      "description": "Das Sounding-Wort wird mindestens 2 Trw-Slots lang (≥ 784 ms) gesendet, um eine ausreichende Empfangswahrscheinlichkeit zu gewährleisten.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe Sounding-Schleife: Wort wird mindestens 2× wiederholt (2 × Trw_ms = 784 ms Gesamtdauer).",
+      "status": "open"
+    },
+    {
+      "id": "AC-SOUND-002-001",
+      "feature": "FEAT-SOUND-002",
+      "requirement": ["REQ-SOUND-006", "REQ-SOUND-007"],
+      "title": "Multichannel-Sounding: Tss ≥ Ts_max",
+      "description": "Das Multichannel-Scanning-Sounding deckt alle Kanäle ab und benötigt mindestens Ts_max (50.000 ms) für einen vollständigen Scan-Durchlauf.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe SOUNDING-Mehrkanallogik: Gesamtdauer Tss muss >= 50000ms (Ts_max) sein, bevor der nächste Sounding-Zyklus beginnt.",
+      "status": "open"
+    },
+    {
+      "id": "AC-SOUND-003-001",
+      "feature": "FEAT-SOUND-003",
+      "requirement": ["MIL-STD-188-141B A.5.3.2"],
+      "title": "Single-Channel-Sounding: Nur Conclusion-Abschnitt, kein Calling",
+      "description": "Ein Single-Channel-Sounding-Frame enthält ausschließlich den Conclusion-Abschnitt (TIS- oder TWAS-Wort mit eigener Stationsadresse). Es gibt keinen Scanning-Call-Abschnitt und keinen Message-Abschnitt. Die State Machine wechselt bei Sounding direkt von SCANNING in den Conclusion-Sendezustand.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe SOUNDING-Zustand in ale_state_machine.cpp: CallingPhase::SCANNING_CALL und CallingPhase::MESSAGE dürfen nicht durchlaufen werden. Direkt TIS/TWAS + self_address senden. Keine Zieladresse in Sounding-Frames.",
+      "status": "open"
+    },
+    {
+      "id": "AC-SOUND-003-002",
+      "feature": "FEAT-SOUND-003",
+      "requirement": ["MIL-STD-188-141B A.5.3.2"],
+      "title": "Sounding: Mindest-Redundanzzeit Trs = 784 ms (2 × Trw)",
+      "description": "Die minimale Redundanzzeit für Single-Channel-Sounding beträgt Trs = 784 ms (2 × Trw = 2 × 392 ms). Das Conclusion-Wort (TIS/TWAS + eigene Adresse) wird mindestens zweimal im Trw-Raster wiederholt, bevor zum nächsten Kanal gewechselt wird.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_timing.h auf TRS_MIN_MS = 784 oder Sounding-Schleifenbedingung: sound_repeat_count >= 2. Vergleiche mit AC-SOUND-001-003 (FEAT-SOUND-001 verwendet dieselbe Mindestzeit).",
+      "status": "open"
+    },
+    
+    {
+      "id": "AC-CHAN-001-001",
+      "feature": "FEAT-CHAN-001",
+      "requirement": ["REQ-CHAN-001", "REQ-CHAN-002"],
+      "title": "Automatische Kanalauswahl aus vordefinierten Kanälen",
+      "description": "Der ChannelSelector wählt automatisch aus einer vordefinierten Kanalliste (channel_set) den besten Kanal basierend auf LQA-Daten aus. Es gibt keine zufällige Kanalauswahl ohne LQA-Grundlage.",
+      "module": "Protocol/ale_channel_selector",
+      "verification_hint": "Prüfe ale_channel_selector.cpp auf select_best_channel()-Funktion, die LQA-Scores aus lqa_database verwendet.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CHAN-002-001",
+      "feature": "FEAT-CHAN-002",
+      "requirement": ["REQ-CHAN-011", "REQ-CHAN-012"],
+      "title": "BER-Messung: Nicht-unanime Vote-Zählung (0–48)",
+      "description": "Der BER-Wert wird als Anzahl der Bits berechnet, bei denen kein unanimer Vote vorliegt (0 = perfekte Qualität, 48 = schlechteste Qualität). Range muss 0–48 sein.",
+      "module": "LQA/lqa_metrics",
+      "verification_hint": "Prüfe lqa_metrics.cpp: BER = 48 - unanimous_votes (oder äquivalent: Anzahl nicht-unanimer Bits).",
+      "status": "open"
+    },
+    {
+      "id": "AC-CHAN-002-002",
+      "feature": "FEAT-CHAN-002",
+      "requirement": ["REQ-CHAN-013"],
+      "title": "SINAD-Messung: Skala 0–30 dB",
+      "description": "Der SINAD-Messwert wird auf der Skala 0 (0 dB) bis 30 (30+ dB) dargestellt. Kein Wert außerhalb dieses Bereichs.",
+      "module": "LQA/lqa_metrics",
+      "verification_hint": "Prüfe lqa_metrics.cpp: SINAD-Wert wird auf [0,30] geclämpt oder gemappt.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CHAN-002-003",
+      "feature": "FEAT-CHAN-002",
+      "requirement": ["REQ-CHAN-015"],
+      "title": "Multipath-Messung: 0–6 ms Bereich",
+      "description": "Die Multipath-Verzögerung wird im Bereich 0–6 ms (optional) gemessen und als 3-Bit-Wert (0–7, wobei 7 = 6+ ms) dargestellt.",
+      "module": "LQA/lqa_metrics",
+      "verification_hint": "Prüfe lqa_metrics.cpp auf Multipath-Feld (multipath_delay_ms). Wert 0..6 ms → 3-Bit (0..7).",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CHAN-003-001",
+      "feature": "FEAT-CHAN-003",
+      "requirement": ["REQ-CHAN-016", "REQ-CHAN-017", "REQ-CHAN-018", "REQ-CHAN-019"],
+      "title": "CMD-LQA-Word: Bit-Layout BER/SINAD/MP/KA1",
+      "description": "Das CMD-LQA-Wort hat folgendes Bit-Layout im 21-Bit-Payload: Bits 20–16 = BER (5 Bit), Bits 15–11 = SINAD (5 Bit), Bits 10–8 = Multipath (3 Bit), Bit 7 = KA1 (LQA-Request-Flag).",
+      "module": "LQA/lqa_metrics",
+      "verification_hint": "Prüfe encode_lqa_cmd() in lqa_metrics.cpp oder ale_channel_selector.cpp. Bit-Maske und Shift-Operationen müssen obigem Layout entsprechen.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CHAN-006-001",
+      "feature": "FEAT-CHAN-006",
+      "requirement": ["REQ-CHAN-031", "REQ-CHAN-032"],
+      "title": "LBT: Default-Warte-Zeit 2s (allgemein) / 784 ms (nur ALE)",
+      "description": "Listen-Before-Transmit wartet standardmäßig 2000 ms auf einem allgemeinen Kanal und 784 ms auf einem ALE-Only-Kanal, bevor gesendet wird.",
+      "module": "Protocol/ale_channel_selector",
+      "verification_hint": "Prüfe ale_channel_selector.h auf LBT_WAIT_GENERAL_MS (2000) und LBT_WAIT_ALE_MS (784).",
+      "status": "open"
+    },
+    {
+      "id": "AC-CHAN-006-002",
+      "feature": "FEAT-CHAN-006",
+      "requirement": ["REQ-CHAN-033"],
+      "title": "LBT: Kanal als besetzt markieren wenn Aktivität erkannt",
+      "description": "Wenn während der LBT-Wartezeit Signalaktivität über dem Schwellwert erkannt wird, gilt der Kanal als besetzt. Der nächste Kanal wird versucht.",
+      "module": "Protocol/ale_channel_selector",
+      "verification_hint": "Prüfe listen_before_transmit() in ale_channel_selector.cpp: Bei Aktivitätserkennung muss channel_busy = true gesetzt werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CHAN-006-003",
+      "feature": "FEAT-CHAN-006",
+      "requirement": ["REQ-CHAN-034"],
+      "title": "LBT: Operator-Override möglich",
+      "description": "Der Operator kann LBT deaktivieren oder die Wartezeit überschreiben. Ein entsprechendes Flag (lbt_override) muss in OperatingParameters existieren.",
+      "module": "Protocol/ale_channel_selector",
+      "verification_hint": "Prüfe OperatingParameters in ale_data_store.h auf lbt_override oder lbt_enabled-Flag.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-LINK-001-001",
+      "feature": "FEAT-LINK-001",
+      "requirement": ["REQ-LINK-001", "REQ-LINK-002"],
+      "title": "Individual Call senden: SCANNING → LEADING → CONCLUSION",
+      "description": "Ein ausgehender Individual Call durchläuft exakt die Phasen CallingPhase::SCANNING_CALL → LEADING_CALL → CONCLUSION in dieser Reihenfolge.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe initiate_call() und handle_calling() in ale_state_machine.cpp: CallingPhase-Übergänge müssen SCANNING_CALL → LEADING_CALL → CONCLUSION sein.",
+      "status": "open"
+    },
+    {
+      "id": "AC-LINK-001-002",
+      "feature": "FEAT-LINK-001",
+      "requirement": ["REQ-LINK-016", "REQ-LINK-017"],
+      "title": "Twr-Wartezeit nach Conclusion: 915 ms",
+      "description": "Nach dem Senden der Conclusion wartet die State Machine mindestens Twr_ms (915 ms) auf eine Response. Kein sofortiges Retry oder Kanalwechsel.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe LISTENING-Phase-Timeout in ale_state_machine.cpp: Timeout muss >= Twr_ms (915) sein.",
+      "status": "open"
+    },
+    {
+      "id": "AC-LINK-001-003",
+      "feature": "FEAT-LINK-001",
+      "requirement": ["REQ-LINK-007", "REQ-LINK-008"],
+      "title": "Kanalwechsel bei keiner Antwort",
+      "description": "Wenn innerhalb von Twr_ms keine gültige Response empfangen wurde, versucht die State Machine den nächsten Kanal in der Kanalliste (channel rejection).",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe LISTENING-Timeout-Handler: Wechsel zum nächsten Kanal nach Twr-Ablauf ohne Response.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-LINK-002-001",
+      "feature": "FEAT-LINK-002",
+      "requirement": ["REQ-LINK-004", "REQ-LINK-005"],
+      "title": "Empfangener Call: Adress-Matching",
+      "description": "Beim Empfang eines ALE-Calls wird jedes TO-Wort gegen alle eigenen Adressen (inkl. Wildcard) geprüft. Bei Match wird der Call-Empfang eingeleitet.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe on_word_received() in ale_state_machine.cpp: Bei TO-Wort muss address_book.matches_self() aufgerufen werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-LINK-002-002",
+      "feature": "FEAT-LINK-002",
+      "requirement": ["REQ-LINK-006"],
+      "title": "Response: 2 × Trw LBT vor Antwort",
+      "description": "Bevor die angerufene Station eine Response sendet, wartet sie mindestens 2 Trw-Slots (784 ms) und prüft den Kanal auf Belegung (LBT).",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe HANDSHAKE-Response-Phase: Vor TX-Beginn muss 2×Trw (784ms) gewartet und LBT durchgeführt werden.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-LINK-003-001",
+      "feature": "FEAT-LINK-003",
+      "requirement": ["REQ-LINK-020"],
+      "title": "Link hergestellt: Twa-Activity-Timer = 30 s",
+      "description": "Nach Link-Herstellung (LinkedPhase::ACTIVE) ist ein Activity-Timer (Twa = 30.000 ms) aktiv. Bei Ablauf ohne Aktivität wird der Link terminiert.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe LINKED-Zustand in ale_state_machine.cpp: twa_timeout_ms oder TWA_MS muss 30000 sein. Timer-Reset bei jeder Aktivität.",
+      "status": "open"
+    },
+    {
+      "id": "AC-LINK-003-002",
+      "feature": "FEAT-LINK-003",
+      "requirement": ["REQ-LINK-021", "REQ-LINK-022", "REQ-LINK-023"],
+      "title": "Link-Termination mit TWAS",
+      "description": "Ein Link wird durch Senden eines TWAS-Frames terminiert. Die State Machine wechselt von LINKED::TERMINATING zurück nach SCANNING.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe LinkedPhase::TERMINATING in ale_state_machine.cpp: TWAS mit self_address wird gesendet, danach Übergang nach SCANNING.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-LINK-004-001",
+      "feature": "FEAT-LINK-004",
+      "requirement": ["REQ-LINK-024"],
+      "title": "Kollisionserkennung: Phasenunterbrechung → Frame verwerfen",
+      "description": "Wenn während des Empfangs eines Frames eine Phasendiskontinuität erkannt wird (Kollision), wird der Frame verworfen und kein Retry auf demselben Kanal eingeleitet.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe on_word_received() oder frame_validator.cpp: Bei erkannter Kollision (Sync-Verlust) muss Frame verworfen und discard_frame() aufgerufen werden.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-LINK-006-001",
+      "feature": "FEAT-LINK-006",
+      "requirement": ["REQ-LINK-025", "REQ-LINK-026"],
+      "title": "Slotted Response: Slot-Größe = 14 × Tw",
+      "description": "Im Net-Call-Protokoll (One-to-Many) hat jeder Response-Slot eine einheitliche Größe von 14 Tw ≈ 1829 ms.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe NET_CALL_SLOT_SIZE in ale_timing.h oder ale_state_machine.h: 14 × Tw_ms = 14 × 130 = 1820 ms (oder 14 × 130.66 ≈ 1829 ms).",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-LINK-007-001",
+      "feature": "FEAT-LINK-007",
+      "requirement": ["REQ-LINK-035", "REQ-LINK-036"],
+      "title": "Star Group Call: Max 12 Wörter total",
+      "description": "Ein Star Group Call (TO mehrere Empfänger mit THRU/REP) enthält maximal 12 Wörter insgesamt.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe GROUP_CALL_MAX_WORDS in ale_state_machine.h oder frame_validator.cpp: Limit muss 12 sein.",
+      "status": "open"
+    },
+    {
+      "id": "AC-LINK-007-002",
+      "feature": "FEAT-LINK-007",
+      "requirement": ["REQ-LINK-037"],
+      "title": "Group Call: THRU/REP alternieren im Scanning",
+      "description": "Im Scanning-Abschnitt eines Group Calls alternieren THRU und REP Wörter (THRU/REP/THRU/REP…). Keine zwei gleichen Preambles hintereinander.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe Scanning-Phase für Group Calls: Wort-Konstruktionslogik muss zwischen THRU und REP alternieren.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-LINK-008-001",
+      "feature": "FEAT-LINK-008",
+      "requirement": ["REQ-LINK-044"],
+      "title": "AllCall: Adresse @?@ bedeutet Hören-Nur",
+      "description": "AllCall-Adresse ist @?@ (3 Zeichen). Empfangende Stationen antworten nicht auf AllCall-Frames. Kein Response-Slot.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe call_type_detector.cpp: AllCall muss @?@-Adresse erkennen und respond_allowed=false setzen.",
+      "status": "open"
+    },
+    {
+      "id": "AC-LINK-008-002",
+      "feature": "FEAT-LINK-008",
+      "requirement": ["REQ-LINK-045"],
+      "title": "AnyCall: Zufälliger Slot 1–16",
+      "description": "Auf einen AnyCall (@@?) antwortet jede empfangende Station in einem zufällig gewählten Slot (1–16). Gleichverteilung der Slot-Auswahl.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe HANDSHAKE-Response für AnyCall: Random-Slot-Selektion muss auf [1,16] beschränkt sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-ADDR-001-001",
+      "feature": "FEAT-ADDR-001",
+      "requirement": ["REQ-ADDR-001", "REQ-ADDR-002"],
+      "title": "Basic-38-Zeichensatz: A–Z, 0–9, @, ?",
+      "description": "Gültige ALE-Adress-Zeichen sind: A–Z (26), 0–9 (10), @ (Wildcard/Padding), ? (Wildcardzeichen) = 38 Zeichen. is_valid_basic38_char() muss exakt diese 38 Zeichen akzeptieren.",
+      "module": "Word/ale_word",
+      "verification_hint": "Prüfe is_valid_basic38_char() in ale_word.cpp. Alle 38 Zeichen müssen true liefern, alle anderen false.",
+      "status": "open"
+    },
+    {
+      "id": "AC-ADDR-001-002",
+      "feature": "FEAT-ADDR-001",
+      "requirement": ["REQ-ADDR-016"],
+      "title": "Adresse darf nicht nur Top-3-Bit-Muster sein",
+      "description": "Eine Adresse, die ausschließlich aus Zeichen mit identischen Top-3-Bits besteht (= Preamble-Konflikt), ist ungültig. Diese Validierung ist in der Adressvalidierung implementiert.",
+      "module": "Word/ale_word",
+      "verification_hint": "Prüfe Adressvalidierung in ale_word.cpp oder address_book.cpp: Adressen mit homogenem Preamble-Bit-Muster müssen abgelehnt werden.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-ADDR-002-001",
+      "feature": "FEAT-ADDR-002",
+      "requirement": ["REQ-ADDR-003", "REQ-ADDR-004"],
+      "title": "Adress-Chunking: 3-Zeichen-Gruppen mit @-Padding",
+      "description": "chunk_address() teilt eine Adresse in 3-Zeichen-Gruppen und paddet das letzte Chunk mit @ auf 3 Zeichen, falls kürzer. Bei 15 Zeichen entstehen genau 5 Chunks.",
+      "module": "Word/ale_word",
+      "verification_hint": "Prüfe chunk_address() in ale_word.cpp: Iteration i+=3, Padding mit '@'. Rückgabe: max 5 Chunks.",
+      "status": "open"
+    },
+    {
+      "id": "AC-ADDR-002-002",
+      "feature": "FEAT-ADDR-002",
+      "requirement": ["REQ-ADDR-006", "REQ-ADDR-007"],
+      "title": "Adress-Wortsequenz: TO → DATA → REP (alternierend)",
+      "description": "Die Worttyp-Sequenz für mehrteilige Adressen ist: 1. Wort = TO/TIS/TWAS/THRU, 2. Wort = DATA, 3. Wort = REP, 4. Wort = DATA, 5. Wort = REP.",
+      "module": "Word/ale_word",
+      "verification_hint": "Prüfe make_address_words() oder chunk_address() in ale_word.cpp: Worttyp-Zuweisung DATA/REP alternierend nach erstem Wort.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-ADDR-003-001",
+      "feature": "FEAT-ADDR-003",
+      "requirement": ["REQ-ADDR-008", "REQ-ADDR-009"],
+      "title": "Net-Adresse: Gemeinsame Adresse mit Slot-Nummern",
+      "description": "Eine Net-Adresse ist eine Adresse, die von mehreren Stationen geteilt wird. Jede Station hat eine eindeutige Slot-Nummer innerhalb des Nets.",
+      "module": "Stores/address_book",
+      "verification_hint": "Prüfe address_book.h auf NetAddress-Typ oder known_nets mit Slot-Nummern-Zuweisung.",
+      "status": "open"
+    },
+    {
+      "id": "AC-ADDR-003-002",
+      "feature": "FEAT-ADDR-003",
+      "requirement": ["REQ-ADDR-010"],
+      "title": "AllCall-Adresse = @?@, AnyCall-Adresse = @@?",
+      "description": "AllCall ist genau @?@ (3 Zeichen). AnyCall ist genau @@? (3 Zeichen). Diese sind als Konstanten oder als Sonderfall im Adressbuch definiert.",
+      "module": "Stores/address_book",
+      "verification_hint": "Suche nach ALLCALL_ADDR oder \"@?@\" und ANYCALL_ADDR oder \"@@?\" in address_book.h/cpp.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-ADDR-004-001",
+      "feature": "FEAT-ADDR-004",
+      "requirement": ["REQ-ADDR-012"],
+      "title": "Wildcard-Matching: ? passt auf ein beliebiges Basic-38-Zeichen",
+      "description": "match_wildcard(pattern, address) gibt true zurück wenn: gleiche Länge, jedes Zeichen im Pattern entweder identisch oder '?' ist. Ungleiche Längen → immer false.",
+      "module": "Stores/address_book",
+      "verification_hint": "Prüfe match_wildcard() in address_book.cpp: Längenprüfung zuerst, dann Zeichenvergleich mit '?' als Wildcard.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-ADDR-005-001",
+      "feature": "FEAT-ADDR-005",
+      "requirement": ["REQ-ADDR-013"],
+      "title": "Null-Adresse = @@@ (3 @-Zeichen)",
+      "description": "Die Null-Adresse ist genau @@@ (drei @-Zeichen). Sie wird für bestimmte Protokollzwecke (z.B. ungültige/fehlende Adresse) verwendet.",
+      "module": "Stores/address_book",
+      "verification_hint": "Suche nach NULL_ADDR oder \"@@@\" in address_book.h. Prüfe ob is_null_address() korrekt auf @@@ prüft.",
+      "status": "open"
+    },
+    {
+      "id": "AC-ADDR-005-002",
+      "feature": "FEAT-ADDR-005",
+      "requirement": ["REQ-ADDR-015"],
+      "title": "In-Link-Adresse = ?@? (alle Link-Mitglieder)",
+      "description": "Die In-Link-Adresse ?@? adressiert alle Stationen, die sich aktuell im selben Link befinden. Sie wird im LINKED-Zustand erkannt und passend verarbeitet.",
+      "module": "Stores/address_book",
+      "verification_hint": "Suche nach INLINK_ADDR oder \"?@?\" in address_book.h. Prüfe ob is_inlink_address() korrekt erkennt.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-AQC-001-001",
+      "feature": "FEAT-AQC-001",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.1"],
+      "title": "AQC-Word Bit-Layout: 3-Bit Preamble | 1-Bit ADF | 16-Bit Addr | 4-Bit Data",
+      "description": "Jedes AQC-Wort ist 24 Bit breit und gliedert sich in vier Felder: 3-Bit Preamble (Bits 23–21), 1-Bit Address-Differentiation-Flag ADF (Bit 20), 16-Bit Packed Address (Bits 19–4) und 4-Bit Data-Exchange (Bits 3–0). Diese Feldgrenzen müssen als Bitmasken-Konstanten oder Bit-Struct in aqc_protocol.h erkennbar sein.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.h auf Bitmask-Konstanten oder Bit-Struct für AQC-Word. Erwartete Felder: AQC_PREAMBLE_SHIFT=21 (3 Bit), AQC_ADF_BIT=Bit20, AQC_PACKED_ADDR_SHIFT=4 (16 Bit), AQC_DATA_EXCHANGE_MASK=0xF.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-001-002",
+      "feature": "FEAT-AQC-001",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.1"],
+      "title": "Base-40-Packing: char1×1600 + char2×40 + char3",
+      "description": "Die Base-40-Kodierung packt drei Adresszeichen in einen 16-Bit-Wert nach der Formel: packed = ordinal(char1) × 1600 + ordinal(char2) × 40 + ordinal(char3). Die Dekodierung ist die exakte Umkehrung. Encode- und Decode-Richtung müssen beide implementiert sein und korrekte Rundreise-Ergebnisse liefern.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Suche in aqc_protocol.cpp nach pack_base40() oder aqc_pack_address(). Prüfe Formel val=o1*1600+o2*40+o3 und Umkehrung: o1=val/1600, o2=(val%1600)/40, o3=val%40. Roundtrip-Test mit mehreren Adressen.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-001-003",
+      "feature": "FEAT-AQC-001",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.1"],
+      "title": "ASCII-38-Ordinalwerte: '0'–'9'=0–9, 'A'–'Z'=10–35, '@'=36, '?'=37",
+      "description": "Die Ordinalwert-Zuordnung für das Base-40-System lautet: '0'–'9' → 0–9, 'A'–'Z' → 10–35, '@' → 36, '?' → 37. Alle anderen Zeichen sind ungültig. Eine Funktion char_to_aqc_ordinal() oder eine Lookup-Tabelle muss exakt diese 38 Zuordnungen abbilden.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.cpp auf char_to_aqc_ordinal() oder AQC_ORDINAL_TABLE. Testwerte: '0'→0, '9'→9, 'A'→10, 'Z'→35, '@'→36, '?'→37. Alle anderen Eingaben müssen als ungültig (-1 oder Exception) behandelt werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-001-004",
+      "feature": "FEAT-AQC-001",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.1"],
+      "title": "ADF-Bit gesetzt + gültiger Adressbereich 1641–62358",
+      "description": "Das Address-Differentiation-Flag (ADF = MSB des 16-Bit-Packed-Address-Feldes, Bit 15) muss in jedem AQC-Word gesetzt sein, um Verwechslung mit Baseline-2G-ALE-Frames zu vermeiden. Der gültige Packed-Address-Bereich ist 1641 ('000') bis 62358 ('ZZZ'). Werte außerhalb dieses Bereichs sind ungültig.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.h auf AQC_ADF_BIT (Bit 15 des 16-Bit-Feldes muss immer 1 sein). Suche nach AQC_ADDR_MIN=1641 und AQC_ADDR_MAX=62358. Prüfe Gültigkeitsprüfung in aqc_validate_packed_address().",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-AQC-002-001",
+      "feature": "FEAT-AQC-002",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.2"],
+      "title": "8 AQC-Preamble-Typen als Enum mit korrekten Bitmuster-Werten",
+      "description": "Das AQC-Protokoll definiert exakt 8 Preamble-Typen mit folgenden 3-Bit-Werten: DATA=0b000, INLINK=0b001, TO=0b010, TWAS=0b011, PART2=0b100, TIS=0b101, CMD=0b110, REP=0b111. Diese müssen als Enum-Werte oder Konstanten mit exakt diesen numerischen Werten implementiert sein.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Suche in aqc_protocol.h nach AQCPreamble-Enum oder AQC_PREAMBLE_*-Konstanten. Prüfe jeden der 8 Werte: DATA=0, INLINK=1, TO=2, TWAS=3, PART2=4, TIS=5, CMD=6, REP=7.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-002-002",
+      "feature": "FEAT-AQC-002",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.2"],
+      "title": "INLINK-Preamble: eigenständiger AQC-Typ ohne 2G-Äquivalent",
+      "description": "Der AQC-Preamble INLINK (001) besitzt kein Pendant im Baseline-2G-ALE und darf nicht auf einen 2G-Preamble-Typ gemappt oder mit einem solchen verglichen werden. Die State-Machine muss INLINK als eigenständigen AQC-Worttyp verarbeiten.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.cpp und ale_state_machine.cpp: AQC_PREAMBLE_INLINK darf nicht durch Casting oder Mapping einem Baseline-2G-Typ (ALEPreamble) zugeordnet sein. INLINK-Empfang muss dedizierten Handler-Zweig haben.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-002-003",
+      "feature": "FEAT-AQC-002",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.2"],
+      "title": "PART2-Preamble: AQC-spezifisch für zweiten Adressteil",
+      "description": "Der AQC-Preamble PART2 (100) ist AQC-spezifisch, hat kein Baseline-2G-Äquivalent und wird im Calling-Cycle als zweites Adresswort eingesetzt. Er muss als eigenständiger Enum-Wert mit Wert 4 (0b100) implementiert sein. Die Calling-Cycle-Logik muss PART2 nach dem TO-Frame für das zweite Adresswort verwenden.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.h: AQC_PREAMBLE_PART2 == 4. Prüfe Calling-Cycle-Aufbau in aqc_protocol.cpp: Das zweite Adresswort muss mit PART2 als Preamble übertragen werden.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-AQC-003-001",
+      "feature": "FEAT-AQC-003",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.3"],
+      "title": "AQC-Adresse: 1–6 Zeichen, ASCII-38-Zeichensatz",
+      "description": "AQC-ALE-Adressen bestehen aus 1 bis 6 Zeichen des ASCII-38-Zeichensatzes ('0'–'9', 'A'–'Z', '@', '?'). Adressen mit 0 oder mehr als 6 Zeichen sind ungültig. Eine Validierungsfunktion muss sowohl Länge als auch Zeichensatz prüfen und ungültige Adressen ablehnen.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe is_valid_aqc_address() oder aqc_validate_address() in aqc_protocol.cpp: Länge muss im Bereich [1,6] liegen. Zeichensatz-Prüfung analog zu is_valid_basic38_char(). Testfälle: Länge 0 → ungültig, Länge 7 → ungültig, '@' → gültig.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-003-002",
+      "feature": "FEAT-AQC-003",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.3"],
+      "title": "OTA-Format: genau 2 AQC-Wörter (Zeichen 1–3 / 4–6) mit @-Stuffing",
+      "description": "Over-The-Air wird jede AQC-Adresse immer als exakt 2 AQC-Wörter übertragen: Wort 1 enthält Zeichen 1–3, Wort 2 enthält Zeichen 4–6. Adressen mit weniger als 6 Zeichen werden mit '@' auf 6 Zeichen aufgefüllt (Stuffing am Ende). Eine 2-Zeichen-Adresse 'AB' wird als 'AB@@@@' übertragen.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe make_aqc_address_words() in aqc_protocol.cpp: Rückgabe muss immer genau 2 AQC-Wörter sein. Stuffing-Logik: Auffüllung mit '@' bis Länge 6. Testfall: 'AB' → Wort1=pack('A','B','@'), Wort2=pack('@','@','@').",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-003-003",
+      "feature": "FEAT-AQC-003",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.3"],
+      "title": "AllCall-Adressformat: Zeichen 4–6 identisch mit Zeichen 1–3",
+      "description": "Bei einem AQC-AllCall sind die Zeichen 4–6 der Adresse identisch mit den Zeichen 1–3 (Wiederholung des ersten 3-Zeichen-Blocks). Diese Eigenschaft unterscheidet AllCall von regulären Adressen und muss bei der AllCall-Erkennung und -Konstruktion geprüft werden.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_is_allcall() in aqc_protocol.cpp: Bedingung addr[3]==addr[0] && addr[4]==addr[1] && addr[5]==addr[2] (nach Stuffing). Prüfe AllCall-Konstruktion: zweiter 3-Zeichen-Block = Kopie des ersten.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-003-004",
+      "feature": "FEAT-AQC-003",
+      "requirement": ["MIL-STD-188-141B A.5.8.1.4"],
+      "title": "AQC-Call-Typen: Unit, StarNet, AllCall, AnyCall (kein Group)",
+      "description": "AQC-ALE unterstützt genau vier Call-Typen: Unit Call (Einzelruf), StarNet Call (Netzruf), AllCall und AnyCall. Group Calls sind in AQC-ALE explizit nicht vorgesehen – stattdessen werden sequentielle Unit Calls eingesetzt. Ein AQCCallType-Enum darf keinen GROUP_CALL-Wert enthalten.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Suche in aqc_protocol.h nach AQCCallType-Enum oder AQC_CALL_TYPE_*-Konstanten. Erlaubte Werte: UNIT, STAR_NET, ALL_CALL, ANY_CALL. Ein GROUP_CALL-Wert darf nicht existieren.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-AQC-004-001",
+      "feature": "FEAT-AQC-004",
+      "requirement": ["MIL-STD-188-141B A.5.8.2.1"],
+      "title": "Timing-Konstante AQC_CALL_DURATION_PER_CHANNEL_SEC = 0.196",
+      "description": "Die Rufzyklusdauer pro Suchkanal beträgt exakt 0,196 Sekunden. Diese Konstante muss als AQC_CALL_DURATION_PER_CHANNEL_SEC (oder äquivalent als 196 ms) in aqc_protocol.h oder aqc_timing.h definiert sein. Der Wert darf weder auf 0,200 s gerundet noch aus anderen Größen abgeleitet werden.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Suche in aqc_protocol.h oder aqc_timing.h nach AQC_CALL_DURATION_PER_CHANNEL_SEC oder AQC_CALL_DURATION_MS. Erwarteter Wert: 0.196 s bzw. 196 ms.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-004-002",
+      "feature": "FEAT-AQC-004",
+      "requirement": ["MIL-STD-188-141B A.5.8.2.1"],
+      "title": "Gesamtrufdauer = N_channels × 0.196 s",
+      "description": "Die Gesamtdauer eines AQC-Unit-Calls ergibt sich aus: total_duration = Anzahl_Suchkanäle × 0,196 s. Die Berechnungsformel im Code muss exakt dieser Multiplikation entsprechen. Keine additive oder tabellenbasierte Alternative ist erlaubt.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.cpp auf Berechnung der Gesamtrufdauer: total_duration_ms = num_channels * AQC_CALL_DURATION_MS (196). Prüfe, ob keine alternative Berechnungsmethode (z.B. feste Tabelle) verwendet wird.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-004-003",
+      "feature": "FEAT-AQC-004",
+      "requirement": ["MIL-STD-188-141B A.5.8.2.2"],
+      "title": "Leading Call: Zieladresse wird genau einmal gesendet (nicht zweimal)",
+      "description": "Im AQC-Unit-Call sendet der Leading Call die Zieladresse exakt einmal. Im Gegensatz zu Baseline-2G-ALE, wo die Adresse zweimal übertragen wird, darf der AQC-Calling-Cycle-Generator die Adresse nicht wiederholen. Diese Differenz ist protokollkritisch.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe AQC-Calling-Cycle-Aufbau in aqc_protocol.cpp: Adressübertragung im Leading Call darf nur count==1 Wiederholung aufweisen. Kommentar oder Assert sollte auf Unterschied zu Baseline-2G (count==2) hinweisen.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-004-004",
+      "feature": "FEAT-AQC-004",
+      "requirement": ["MIL-STD-188-141B A.5.8.2.2"],
+      "title": "AQC-ACK-Frame: nur Conclusion (kein TO+TIS-Handshake)",
+      "description": "Das AQC-ACK-Frame enthält ausschließlich die Conclusion-Phase. Im Unterschied zu Baseline-2G-ALE gibt es kein vorgeschaltetes TO+TIS-Handshake-Muster. Nach Empfang eines vollständigen AQC-Calls muss die Response-Logik direkt ein Conclusion-Frame senden.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe AQC-Response-Logik in aqc_protocol.cpp: Nach vollständigem Call-Empfang (mit eigener Adresse) muss ACK als reines Conclusion-Frame gesendet werden. Kein vorheriges TO-Frame, kein TIS-Frame.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-AQC-005-001",
+      "feature": "FEAT-AQC-005",
+      "requirement": ["MIL-STD-188-141B A.5.8.2.3"],
+      "title": "AQC-StarNet Call: Netzadresse als Call-Probe",
+      "description": "Im AQC-StarNet-Call wird die Netzadresse (nicht eine individuelle Stationsadresse) als Call-Probe übertragen. Die Implementierung muss die Netzadresse aus der known_nets-Struktur entnehmen und als Call-Probe im TO-Frame setzen.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.cpp auf StarNet-Call-Konstruktion: Call-Probe-Adresse im TO-Frame muss aus known_nets bzw. einer NetAddress-Struktur stammen. Es darf keine individuelle Stationsadresse als StarNet-Probe verwendet werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-005-002",
+      "feature": "FEAT-AQC-005",
+      "requirement": ["MIL-STD-188-141B A.5.8.2.3"],
+      "title": "Slot 0 (Non-Members): Antwortfenster 17 Tw breit",
+      "description": "Slot 0 im AQC-StarNet-Call ist für Nicht-Mitglieder des Netzes reserviert (Stationen, die dem Netz beitreten wollen) und hat ein Antwortfenster von 17 Tw. Diese Breite ist als Konstante zu definieren und in der Slot-Timing-Berechnung zu verwenden.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Suche in aqc_protocol.h oder aqc_timing.h nach AQC_STARNET_SLOT0_WIDTH_TW oder äquivalent. Wert muss 17 sein. Prüfe ob Slot-0-Timing vor den Mitglieder-Slots berechnet wird.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-005-003",
+      "feature": "FEAT-AQC-005",
+      "requirement": ["MIL-STD-188-141B A.5.8.2.3"],
+      "title": "Slots 1+ (Net-Members): Antwortfenster 11 Tw (vs. 2G: 14 Tw)",
+      "description": "Mitglieder-Slots (Slot 1 und höher) im AQC-StarNet-Call haben ein Antwortfenster von 11 Tw. Im Vergleich zu Baseline-2G-ALE (14 Tw) sind AQC-Mitglieder-Slots um 3 Tw schmaler. Der Wert 11 Tw muss als benannte Konstante definiert und in der Slot-Zeitberechnung verwendet werden.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Suche in aqc_protocol.h nach AQC_STARNET_MEMBER_SLOT_WIDTH_TW. Wert muss 11 sein. Prüfe ob Slot-Offset-Berechnung korrekt: offset(slot_n) = 17*Tw + (n-1)*11*Tw.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-005-004",
+      "feature": "FEAT-AQC-005",
+      "requirement": ["MIL-STD-188-141B A.5.8.2.3"],
+      "title": "StarNet Handshake: 2-Wort-Adresse in TO und TIS",
+      "description": "Im AQC-StarNet-Handshake werden TO- und TIS-Frames mit vollständigen 2-Wort-AQC-Adressen übertragen, analog zu allen anderen AQC-Adressübertragungen. Eine verkürzte 1-Wort-Form ist für StarNet nicht erlaubt. Kein LQA-Wert im ACK außer via Data-Exchange-Bits.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe StarNet-Handshake-Frame-Konstruktion in aqc_protocol.cpp: TO-Frame und TIS-Frame müssen jeweils 2 AQC-Adresswörter erzeugen. Prüfe ACK-Frame: LQA darf nur in den 4-Bit Data-Exchange-Bits kodiert sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-AQC-006-001",
+      "feature": "FEAT-AQC-006",
+      "requirement": ["MIL-STD-188-141B A.5.8.3"],
+      "title": "MsgID-Feld: 5 Bits, nur Werte 0–7 gültig (> 7 verboten)",
+      "description": "Das MsgID-Feld der AQC-Orderwire-Nachrichten ist 5 Bit breit. Nur die Werte 0–7 sind zulässig; Werte 8–31 sind verboten, da sie mit ALE-Orderwire-Nachrichten in Konflikt stehen. Eine Gültigkeitsprüfung muss MsgID > 7 ablehnen und als Protokollfehler behandeln.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_orderwire.cpp oder aqc_protocol.cpp auf Validierung des MsgID-Feldes: Bedingung msgid <= 7 muss erzwungen sein. Suche nach AQC_ORDERWIRE_MSGID_MAX=7 oder entsprechender Guard-Bedingung.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-006-002",
+      "feature": "FEAT-AQC-006",
+      "requirement": ["MIL-STD-188-141B A.5.8.3"],
+      "title": "Pflicht-Orderwire: AMD_DICTIONARY (0), CHANNEL_DEFINITION (1), SLOT_ASSIGNMENT (2)",
+      "description": "Die drei Pflicht-Orderwire-Nachrichten AMD_DICTIONARY (MsgID=0), CHANNEL_DEFINITION (MsgID=1) und SLOT_ASSIGNMENT (MsgID=2) müssen vollständig implementiert sein – je mit Encode- und Decode-Funktion. Fehlt einer der drei, ist AQC-Betrieb nicht normkonform.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.h/cpp auf Implementierung aller drei Pflicht-Nachrichten mit IDs 0, 1, 2. Jede muss eine Build- und eine Parse-Methode besitzen. Unvollständige Implementierungen (nur Enum-Wert ohne Logik) zählen nicht.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-006-003",
+      "feature": "FEAT-AQC-006",
+      "requirement": ["MIL-STD-188-141B A.5.8.3"],
+      "title": "Optionale Orderwire-Nachrichten: IDs 3–7 definiert",
+      "description": "Die optionalen Orderwire-Nachrichten LIST_DB_CONTENT (3), LIST_DB_ACTIV_TIME (4), SET_DB_ACTIV_TIME (5), DEFINE_DB_CONTENT (6) und DB_CONTENT_LISTING (7) sind als benannte Enum-Werte oder Konstanten vorhanden. Für jeden ID-Wert existiert zumindest ein Handler-Stub oder eine Dispatch-Weiche.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Suche in aqc_protocol.h nach AQCMsgID-Enum oder AQC_MSGID_*-Konstanten: alle 8 Werte 0–7 müssen benannt sein. Prüfe Dispatch-Logik: für IDs 3–7 muss mindestens ein case/Handler-Stub vorhanden sein.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-006-004",
+      "feature": "FEAT-AQC-006",
+      "requirement": ["MIL-STD-188-141B A.5.8.3"],
+      "title": "Operator-ACK/NAK-Fenster = 15 Sekunden",
+      "description": "Nach Empfang einer AQC-Orderwire-Nachricht, die eine Operator-Bestätigung erfordert, beträgt das Zeitfenster für ACK oder NAK genau 15 Sekunden. Nach Ablauf dieses Timers wird die Nachricht automatisch verworfen oder als NAK gewertet. Der Timeout-Wert muss als Konstante definiert sein.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Suche in aqc_protocol.h oder ale_timing.h nach AQC_OPERATOR_ACK_TIMEOUT_SEC oder AQC_OPERATOR_ACK_TIMEOUT_MS. Wert muss 15 s bzw. 15000 ms sein. Prüfe Timer-Logik in aqc_orderwire_receive_handler().",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-AQC-007-001",
+      "feature": "FEAT-AQC-007",
+      "requirement": ["MIL-STD-188-141B A.5.8.4"],
+      "title": "LP-Modus: alle 24-Bit-AQC-Wörter verschlüsselt (Appendix B)",
+      "description": "Im LP-Modus (Linking Protection) werden alle 24-Bit-AQC-Wörter gemäß Appendix B des MIL-STD-188-141B verschlüsselt. Es darf kein AQC-Wort unverschlüsselt übertragen werden. Die Verschlüsselung wird auf das gesamte 24-Bit-Wort angewendet, bevor es gesendet wird.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe aqc_protocol.cpp: Im LP-Modus müssen alle build_aqc_word()-Aufrufe durch encrypt_lp_word() oder aqc_apply_lp() geleitet werden. Kein Wort darf im LP-Modus ohne Verschlüsselung in den TX-Puffer gestellt werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-007-002",
+      "feature": "FEAT-AQC-007",
+      "requirement": ["MIL-STD-188-141B A.5.8.4"],
+      "title": "Scanning-Call LP-Wort-Nummern: TO=Word 0, PART2=Word 1",
+      "description": "Im Scanning-Call werden LP-Wort-Nummern für den Verschlüsselungskontext zugewiesen: TO-Frame → LP Word Number 0, PART2-Frame → LP Word Number 1. Diese Wort-Nummern sind normativ festgelegt und dürfen nicht vertauscht oder frei gewählt werden.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe LP-Wort-Nummern-Zuweisung in aqc_protocol.cpp für den Scanning-Call: AQC_LP_WORD_SCAN_TO=0, AQC_LP_WORD_SCAN_PART2=1. Prüfe ob diese Werte beim Aufruf der LP-Verschlüsselungsfunktion korrekt übergeben werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-007-003",
+      "feature": "FEAT-AQC-007",
+      "requirement": ["MIL-STD-188-141B A.5.8.4"],
+      "title": "Conclusion LP-Wort-Nummern: TIS/TWAS=Word 2, PART2=Word 3",
+      "description": "In der Conclusion-Phase werden LP-Wort-Nummern wie folgt zugewiesen: TIS-Frame → LP Word Number 2, TWAS-Frame → LP Word Number 2 (identisch mit TIS), PART2-Frame in der Conclusion → LP Word Number 3. TIS und TWAS teilen dieselbe Wort-Nummer 2.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe LP-Wort-Nummern für Conclusion-Phase in aqc_protocol.cpp: AQC_LP_WORD_CONC_TIS=2, AQC_LP_WORD_CONC_TWAS=2, AQC_LP_WORD_CONC_PART2=3. Sicherstellen dass TIS und TWAS denselben Wert 2 verwenden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-AQC-007-004",
+      "feature": "FEAT-AQC-007",
+      "requirement": ["MIL-STD-188-141B A.5.8.4"],
+      "title": "2-Wort-ACK LP: Word 0 & Word 1 + TOD nach Ende TO-Wort",
+      "description": "Das 2-Wort-ACK im LP-Modus verwendet LP Word Number 0 für das erste ACK-Wort und LP Word Number 1 für das zweite ACK-Wort. Der Time-Of-Day (TOD)-Referenzzeitpunkt wird nach dem Ende des Scanning-Call-TO-Wortes definiert und muss im LP-Kontext korrekt gesetzt werden.",
+      "module": "Protocol/aqc_protocol",
+      "verification_hint": "Prüfe ACK-Frame-Konstruktion im LP-Modus: Erstes ACK-Wort verwendet AQC_LP_WORD_ACK_0=0, zweites AQC_LP_WORD_ACK_1=1. TOD-Zeitstempel muss auf Ende des Scanning-Call-TO-Wortes gesetzt sein (nicht auf Empfangszeitpunkt des ACK-Starts).",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CMD-001-001",
+      "feature": "FEAT-CMD-001",
+      "requirement": ["MIL-STD-188-141B A.5.6.1"],
+      "title": "CRC-FCS: Polynom 0x1021 (CRC-CCITT / FED-STD-1003)",
+      "description": "Die CRC-Berechnung für CMD-FCS-Wörter verwendet das Polynom 0x1021 (CRC-CCITT, konform zu FED-STD-1003). Das 16-Bit-CRC-Ergebnis wird korrekt in das CMD-Wort eingebettet. Testvektoren aus FED-STD-1003 müssen reproduzierbar berechnet werden.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.h/.cpp auf CRC-Berechnungsfunktion. Das verwendete Polynom muss explizit 0x1021 sein. Verifiziere anhand bekannter FED-STD-1003-Testvektoren.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-001-002",
+      "feature": "FEAT-CMD-001",
+      "requirement": ["MIL-STD-188-141B A.5.6.1"],
+      "title": "CMD CRC-Wort: Präambel 110, Erstes Zeichen x/y/z/{",
+      "description": "Das CMD CRC-Wort (Frame-Check-Sequence) verwendet die Präambel-Bits '110'. Das erste Zeichen im Payload ist eines von 'x' (0x78), 'y' (0x79), 'z' (0x7A) oder '{' (0x7B) gemäß Basic-38-Zeichensatz. Keine anderen Präambel- oder Zeichenwerte sind zulässig.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe CMD-CRC-Wort-Konstruktion in ale_orderwire_protocols.cpp. Präambel-Bits müssen 0b110 sein. Das erste Payload-Zeichen muss im Bereich 0x78–0x7B liegen (Basic-38-kodiert).",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-001-003",
+      "feature": "FEAT-CMD-001",
+      "requirement": ["MIL-STD-188-141B A.5.6.1"],
+      "title": "CRC deckt alle ALE-Wörter seit letztem CRC-Wort",
+      "description": "Der CRC-Wert deckt lückenlos alle ALE-Wörter ab, die seit dem vorherigen CMD-CRC-Wort (oder seit dem Ende des Calling-Cycle) übertragen wurden. Nach Auswertung eines CMD-CRC-Worts wird der Akkumulator zurückgesetzt. Überlappungen oder Lücken im Abdeckungsbereich sind unzulässig.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe CRC-Akkumulationslogik in ale_orderwire_protocols.cpp. Der Akkumulator muss nach jedem CMD-CRC-Wort zurückgesetzt werden und alle zwischenliegenden ALE-Wörter einschließen. Prüfe auch den Grenzfall 'erstes CMD-CRC nach Calling-Cycle-Ende'.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CMD-002-001",
+      "feature": "FEAT-CMD-002",
+      "requirement": ["MIL-STD-188-141B A.5.6.2"],
+      "title": "Power-Control CMD: Anforderung und Statusmeldung",
+      "description": "Das optionale Power-Control-CMD unterstützt zwei Modi: die Anforderung einer Leistungsanpassung (request) sowie die Meldung des aktuellen Leistungspegels (report). Beide Funktionen müssen im CMD-Wort durch distinkte Kodierungen unterscheidbar sein.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Suche in ale_orderwire_protocols.h nach PowerControlCmd-Struktur oder äquivalentem Enum/Klasse. Prüfe ob Request- und Report-Modus durch separate Werte oder Flags unterschieden werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-002-002",
+      "feature": "FEAT-CMD-002",
+      "requirement": ["MIL-STD-188-141B A.5.6.2"],
+      "title": "KP1–KP3 Steuerbits für Leistungsanpassungstyp",
+      "description": "Die Steuerbits KP1, KP2 und KP3 im Power-Control-CMD definieren den Anpassungstyp gemäß A.5.6.2 (z.B. Erhöhen/Verringern, absolut/relativ). Bitpositionen und Bedeutung müssen exakt dem Standard entsprechen.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.h/.cpp auf KP1-, KP2-, KP3-Bitfelder oder äquivalente Konstanten. Bit-Positionen innerhalb des CMD-Worts müssen mit MIL-STD A.5.6.2 übereinstimmen.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-002-003",
+      "feature": "FEAT-CMD-002",
+      "requirement": ["MIL-STD-188-141B A.5.6.2"],
+      "title": "Leistungsdelta in dB: relative und absolute Spezifikation",
+      "description": "Das Power-Control-CMD kodiert eine Leistungsänderung in dB sowohl als relativen als auch als absoluten Wert. Kodierung und Dekodierung des dB-Delta-Felds müssen korrekt implementiert sein und den vollen definierten Wertebereich abdecken.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe Encode/Decode-Logik für das dB-Delta-Feld in ale_orderwire_protocols.cpp. Relative und absolute Spezifikation müssen klar unterschieden werden. Grenzwerte des Felds (min./max. dB) müssen implementiert sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CMD-003-001",
+      "feature": "FEAT-CMD-003",
+      "requirement": ["MIL-STD-188-141B A.5.6.3.1"],
+      "title": "Kanalbezeichnung: 5-stellige BCD-Zeichenfolge (20 Bit)",
+      "description": "CMD A.5.6.3.1 kodiert die Kanalfrequenz als 5-stellige BCD-Zeichenfolge (20 Bit, je 4 Bit pro Dezimalziffer). Alle 5 Stellen müssen korrekt gesetzt, übertragen und dekodiert werden.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ChannelDesignationCmd oder äquivalente Klasse in ale_orderwire_protocols.h. Das BCD-Feld muss genau 20 Bit umfassen und 5 Dezimalziffern repräsentieren. Teste Grenzwerte (00000 und 99999).",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-003-002",
+      "feature": "FEAT-CMD-003",
+      "requirement": ["MIL-STD-188-141B A.5.6.3.2"],
+      "title": "Frequenzbezeichnung: 7-Bit-Binärwert (0–127), abs./rel.",
+      "description": "CMD A.5.6.3.2 kodiert die Frequenzangabe als 7-Bit-Binärwert im Bereich 0–127. Ein Flag im CMD-Wort unterscheidet zwischen absoluter Frequenz und relativer Verschiebung. Beide Modi müssen korrekt kodiert und interpretiert werden.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe FrequencyDesignationCmd in ale_orderwire_protocols.h. Das Frequenzfeld muss 7 Bit umfassen (Wertebereich 0–127) und ein Absolut/Relativ-Flag enthalten. Wertebereichsüberschreitung muss abgefangen werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-003-003",
+      "feature": "FEAT-CMD-003",
+      "requirement": ["MIL-STD-188-141B A.5.6.3.3"],
+      "title": "Vollduplex-Verhandlung (optional, A.5.6.3.3)",
+      "description": "Das optionale Full-Duplex-Independent-Link-CMD (A.5.6.3.3) ermöglicht die Aushandlung einer unabhängigen TX/RX-Verbindung. Ist die Funktion nicht implementiert, muss ein empfangenes Full-Duplex-CMD fehlerfrei ignoriert (übersprungen) werden, ohne die State Machine in einen Fehlerzustand zu versetzen.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.h auf FullDuplexCmd oder äquivalenten Typ. Falls nicht implementiert: Verifiziere in ale_orderwire_protocols.cpp, dass der CMD-Parser unbekannte Channel-CMD-Subtypen fehlerfrei überspringt.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CMD-004-001",
+      "feature": "FEAT-CMD-004",
+      "requirement": ["MIL-STD-188-141B A.5.6.4.1"],
+      "title": "Tune-and-Wait CMD: Gegenstation wartet auf Kanal",
+      "description": "Der Tune-and-Wait-Befehl (A.5.6.4.1) weist die Gegenstation an, auf den angegebenen Kanal zu wechseln und dort auf weitere Übertragungen zu warten. Nach Empfang dieses CMDs muss die State Machine den angegebenen Kanal abstimmen und in einen definierten Wartezustand wechseln.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Suche in ale_orderwire_protocols.h/.cpp nach TuneAndWaitCmd oder TUNE_WAIT. Prüfe ob nach Empfang ein Kanalwechsel initiiert wird und die Station in einem Warte-Zustand verbleibt (kein Scan-Rückfall).",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-004-002",
+      "feature": "FEAT-CMD-004",
+      "requirement": ["MIL-STD-188-141B A.5.6.4.2"],
+      "title": "Scheduling: 4 Zeitauflösungen (1/8s, 1s, 1min, 1h)",
+      "description": "Das Scheduling-CMD (A.5.6.4.2) unterstützt vier Zeitauflösungen: Fein=1/8 s (125 ms), Mittel=1 s, Grob=1 min (60 s), Sehr Grob=1 h (3600 s). Auflösungsstufe und Zeitwert müssen korrekt kodiert, übertragen und dekodiert werden.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe SchedulingCmd-Klasse in ale_orderwire_protocols.h auf ein Auflösungs-Enum (FINE/MEDIUM/COARSE/VERY_COARSE) und die Skalierungsfaktoren 125 ms, 1000 ms, 60000 ms, 3600000 ms.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-004-003",
+      "feature": "FEAT-CMD-004",
+      "requirement": ["MIL-STD-188-141B A.5.6.4.3", "MIL-STD-188-141B A.5.6.4.4", "MIL-STD-188-141B A.5.6.4.5"],
+      "title": "Time Exchange: Time-Is/Request, Coarse-Time, XOR-Auth",
+      "description": "Das Time-Exchange-Protokoll (A.5.6.4.3) umfasst Time-Is- und Time-Request-CMDs. Das Coarse-Time-Word (A.5.6.4.4) enthält Datum, Uhrzeit und Qualitätsfeld. Das Authentifizierungswort (A.5.6.4.5) ist das XOR aller 24-Bit-Wörter des Time-Exchange-Austauschs.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.cpp auf TimeExchangeCmd, CoarseTimeWord und TimeAuthWord. XOR-Akkumulation aller 24-Bit-Wörter muss für das Authentication-Word vorhanden sein. Time-Is und Time-Request müssen unterschieden werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-004-004",
+      "feature": "FEAT-CMD-004",
+      "requirement": ["MIL-STD-188-141B A.5.6.4.6"],
+      "title": "Zeitqualität 0–7: 6 definierte Zeitfenster (20ms–60s)",
+      "description": "Das Zeitqualitätsfeld (A.5.6.4.6) enthält ganzzahlige Werte 0–7 (0=keine Qualität, 7=unbegrenzte Qualität). Sechs Zeitfenster decken den Bereich von 20 ms bis 60 s ab. Werte außerhalb von 0–7 werden als ungültig abgewiesen.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe TimeQuality-Enum oder Konstantendefinitionen in ale_orderwire_protocols.h. Werte 0–7 müssen definiert sein. Die 6 Fenstergrenzen (z.B. 20ms, 200ms, 1s, 10s, 30s, 60s) müssen als Konstanten vorhanden sein. Ungültige Werte (>7) müssen abgefangen werden.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CMD-005-001",
+      "feature": "FEAT-CMD-005",
+      "requirement": ["MIL-STD-188-141B A.5.6.5"],
+      "title": "Mode-Control CMD: Zeichenwert 'm' (0x6D)",
+      "description": "Der optionale Mode-Control-Befehl (A.5.6.5) verwendet das CMD-Zeichen 'm' (ASCII 0x6D, Basic-38-kodiert). Die Kodierung in das ALE-CMD-Wort muss exakt diesem Zeichenwert entsprechen.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Suche in ale_orderwire_protocols.h/.cpp nach MODE_CONTROL_CHAR oder der Konstante 0x6D resp. 'm'. Prüfe CMD-Wort-Konstruktion: Das erste CMD-Zeichen muss 0x6D (Basic-38) sein.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-005-002",
+      "feature": "FEAT-CMD-005",
+      "requirement": ["MIL-STD-188-141B A.5.6.5"],
+      "title": "Modem-Select CMD: Zeichenwert 'n' (0x6E), Modem-Code",
+      "description": "Der Modem-Select-Befehl verwendet das CMD-Zeichen 'n' (ASCII 0x6E, Basic-38-kodiert). Die initiierende Station sendet diesen CMD mit dem gewünschten Modem-Code im Payload.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Suche nach MODEM_SELECT_CHAR = 0x6E oder 'n' in ale_orderwire_protocols.h/.cpp. Prüfe ob der Modem-Code als Payload des CMDs korrekt übertragen wird.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-005-003",
+      "feature": "FEAT-CMD-005",
+      "requirement": ["MIL-STD-188-141B A.5.6.5"],
+      "title": "Modem-Select: Akzeptanz und Gegenvorschlag",
+      "description": "Die antwortende Station kann den vorgeschlagenen Modem akzeptieren (Echo des CMDs mit gleichem Modem-Code) oder einen Gegenvorschlag senden (CMD mit alternativem Modem-Code). Beide Szenarien müssen als distinkte Antwortpfade implementiert sein.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.cpp auf Logik zur Modem-Auswahl-Antwort. Akzeptanz (gleicher Modem-Code) und Counter-Proposal (anderer Modem-Code) müssen als separate Pfade erkennbar sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CMD-006-001",
+      "feature": "FEAT-CMD-006",
+      "requirement": ["MIL-STD-188-141B A.5.6.7"],
+      "title": "Do-Not-Respond CMD setzt respond_flag = false",
+      "description": "Nach Empfang des Do-Not-Respond-CMDs (A.5.6.7) wird respond_flag (oder eine äquivalente Zustandsvariable) auf false gesetzt. Das System antwortet auf nachfolgende Rufe nicht mehr, solange dieses Flag aktiv ist. Es ist kein Drei-Wege-Handshake erforderlich.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Suche in ale_orderwire_protocols.cpp oder ale_state_machine.cpp nach respond_flag_ oder do_not_respond_. Prüfe ob nach Empfang des CMDs das Flag auf false gesetzt wird und nachfolgende Call-Empfänge unterdrückt werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-006-002",
+      "feature": "FEAT-CMD-006",
+      "requirement": ["MIL-STD-188-141B A.5.6.7"],
+      "title": "Do-Not-Respond: Ausnahmen für LQA-Request und ARQ",
+      "description": "Trotz aktivem Do-Not-Respond-Flag darf das System auf LQA-Request-CMDs antworten sowie auf DTM/DBM-Nachrichten mit gesetztem ARQ-Flag reagieren. Diese beiden Ausnahmen müssen explizit in der Antwortlogik implementiert sein.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe Antwortlogik in ale_orderwire_protocols.cpp: LQA-Request-Behandlung und ARQ-Flag-Prüfung bei DTM/DBM müssen die respond_flag-Sperre gezielt umgehen. Beide Ausnahmen müssen als dedizierte Bedingungen erkennbar sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CMD-007-001",
+      "feature": "FEAT-CMD-007",
+      "requirement": ["MIL-STD-188-141B A.5.6.9"],
+      "title": "UUF: 16.384 Codes über 14-Bit Unique Index (UI)",
+      "description": "Das UUF-CMD (A.5.6.9) kodiert bis zu 16.384 eindeutige Funktionscodes über ein 14-Bit-Feld (UI-Wert 0–16383). Alle Werte des vollständigen Bereichs müssen darstellbar, übertragbar und dekodierbar sein.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe UUF-CMD-Struktur in ale_orderwire_protocols.h auf 14-Bit-UI-Feld. Maximaler Wert muss 16383 (0x3FFF) sein. Grenzwerte 0 und 16383 in Kodierungs-/Dekodierungsroutinen testen.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-007-002",
+      "feature": "FEAT-CMD-007",
+      "requirement": ["MIL-STD-188-141B A.5.6.9"],
+      "title": "CMD STAY vor UUF spezifiziert Wartezeit",
+      "description": "Wenn ein CMD STAY dem UUF-Befehl vorangestellt ist, definiert dieser die Wartezeit vor Ausführung der UUF-Funktion. Die Verknüpfung von CMD STAY und nachfolgendem UUF-CMD muss korrekt erkannt und interpretiert werden.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Suche in ale_orderwire_protocols.cpp nach Verarbeitung von CMD STAY in Kombination mit nachfolgendem UUF. Prüfe ob stay_time_ oder äquivalente Variable in die UUF-Ausführungslogik einfließt.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CMD-007-003",
+      "feature": "FEAT-CMD-007",
+      "requirement": ["MIL-STD-188-141B A.5.6.9"],
+      "title": "UUF nur im Message-Abschnitt, außerhalb des Calling-Frames",
+      "description": "UUF-Befehle dürfen ausschließlich im Message-Abschnitt eines ALE-Frames übertragen werden und sollen wenn möglich außerhalb des Calling/Response-Frames platziert werden.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.cpp auf den Einfügepunkt von UUF-CMDs. UUF-CMDs dürfen nicht im Calling- oder Response-Abschnitt erscheinen; ihr Auftreten muss auf LinkedPhase::ORDERWIRE oder den MESSAGE-Abschnitt beschränkt sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-003-001",
+      "feature": "FEAT-GEN-003",
+      "requirement": ["REQ-GEN-009"],
+      "title": "Kanalbesetzt-Erkennung: ≥80% bei 0 dB / ≥99% bei 6 dB SNR",
+      "description": "Die Occupancy-Detection erkennt aktive ALE-Signale bei AWGN-Kanal mit SNR = 0 dB in mindestens 80 % der Fälle und bei SNR = 6 dB in mindestens 99 % der Fälle. Die Falsch-Alarm-Rate (false positive) darf ≤1 % betragen.",
+      "module": "tests/test_gen_performance",
+      "verification_hint": "Prüfe test_gen_performance.cpp auf Testfälle für Occupancy-Detection bei SNR 0 dB und 6 dB. Alternativ: Prüfe fft_demodulator.cpp oder symbol_decoder.cpp auf Erkennungsschwellwerte (occupancy_threshold). Statistischer Test mit ≥100 Iterationen je SNR-Stufe.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-003-002",
+      "feature": "FEAT-GEN-003",
+      "requirement": ["REQ-GEN-010"],
+      "title": "Verkettungswahrscheinlichkeit: Pl ≥95% bei SNR 0 dB, 14 s Limit",
+      "description": "Die Linking-Probability gemäß Tabelle A-II muss folgende SNR-Schwellwerte einhalten: SNR −2,5 dB → Pl ≥25 %, SNR −1,5 dB → Pl ≥50 %, SNR −0,5 dB → Pl ≥85 %, SNR 0,0 dB → Pl ≥95 %. Die maximale Verkettungszeit darf 14.000 ms nicht überschreiten.",
+      "module": "tests/test_gen_performance",
+      "verification_hint": "Prüfe test_gen_performance.cpp auf Pl-Testfälle pro SNR-Stufe (statistische Auswertung über ≥200 Call-Versuche). Alternativ: Prüfe ale_timing.h oder ale_state_machine.h auf MAX_LINKING_TIME_MS = 14000.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-003-003",
+      "feature": "FEAT-GEN-003",
+      "requirement": ["REQ-GEN-010"],
+      "title": "Wortredundanz: Call ≤23, Response ≤3, ACK ≤3 Wörter",
+      "description": "Die maximale Redundanz-Wortanzahl pro ALE-Zyklus ist begrenzt: Call-Abschnitt ≤23 redundante Wörter, Response-Sequenz ≤3 Wörter, ACK-Sequenz ≤3 Wörter. Diese Grenzen stellen sicher, dass die max. Verkettungszeit von 14.000 ms nicht überschritten wird.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_state_machine.h oder ale_timing.h auf MAX_CALL_REDUNDANT_WORDS (≤23), MAX_RESPONSE_WORDS (≤3), MAX_ACK_WORDS (≤3). Prüfe Zählerlogik in handle_calling() und handle_response().",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-003-004",
+      "feature": "FEAT-GEN-003",
+      "requirement": ["REQ-GEN-011", "REQ-GEN-012"],
+      "title": "AQC-ALE Verknüpfungswahrscheinlichkeit Level 1 & 2",
+      "description": "Das AQC-ALE-Protokoll muss separate Linking-Probability-Anforderungen für Level 1 und Level 2 gemäß A.4.2.3.1 und A.4.2.3.2 implementieren. AQC-spezifische Performance-Parameter sind von den Base-ALE-Parametern getrennt und explizit im Code vorhanden.",
+      "module": "tests/test_gen_performance",
+      "verification_hint": "Prüfe aqc_protocol.h auf AQC_LP_LEVEL1_THRESHOLD und AQC_LP_LEVEL2_THRESHOLD oder äquivalente Konstanten. Prüfe test_gen_performance.cpp auf AQC-spezifische LP-Testfälle.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-009-004",
+      "feature": "FEAT-GEN-009",
+      "requirement": ["REQ-GEN-021"],
+      "title": "Regel 1 & 8: Unabhängige Empfangsbereitschaft und Konnektivitätssuche",
+      "description": "Regel 1 (Independent ALE Reception): Der ALE-Empfangspfad ist immer unabhängig vom Sendepfad aktiv — auch während ein anderer Kanal gesendet wird. Regel 8 (Always Seek Connectivity): Die State Machine versucht bei einem gescheiterten Call nach einem Backoff-Intervall erneut eine Verbindung herzustellen, sofern call_retry_enabled gesetzt ist.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Regel 1: Prüfe ale_state_machine.cpp ob RX-Aktivierung nicht von TX-Zustand abhängt (RX muss auch in CALLING aktiv sein). Regel 8: Prüfe Retry-Logik nach CALL_FAILED-Zustand auf automatischen Neuversuch.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-009-005",
+      "feature": "FEAT-GEN-009",
+      "requirement": ["REQ-GEN-021"],
+      "title": "Regel 5 & 6: LBT vor jedem TX und LQA-Austausch immer aktiv",
+      "description": "Regel 5 (Listen-Before-Transmit): Vor jedem TX-Beginn wird Listen-Before-Transmit durchgeführt. Kein Senden ohne vorherigen LBT-Check. Regel 6 (Always Exchange LQA): In jedem ausgehenden Frame wird ein CMD-LQA-Wort eingebettet, sofern die Verbindungsqualität bekannt ist.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Regel 5: Prüfe alle TX-Einstiegspunkte in ale_state_machine.cpp auf LBT-Aufruf (listen_before_transmit()). Regel 6: Prüfe ob build_call_frame() standardmäßig ein CMD-LQA-Wort einfügt, wenn lqa_exchange_enabled=true.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-009-006",
+      "feature": "FEAT-GEN-009",
+      "requirement": ["REQ-GEN-021"],
+      "title": "Regel 7 & 9: Slotted Response und gegenseitige Fähigkeitsaushandlung",
+      "description": "Regel 7 (Slotted Response): Die Response-Wartezeit Tswt ergibt sich als Tswt = Tsw × SN, wobei SN die Slot-Nummer der Station im Net ist. Regel 9 (Mutual Capability Negotiation): Beim Link-Aufbau werden gegenseitige Fähigkeiten über CMD VERSION und Capabilities Query/Report ausgetauscht.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Regel 7: Prüfe ale_state_machine.cpp auf Tswt-Berechnung (tswt_ms = tsw_ms * slot_number). Prüfe ale_timing.h auf TSW_MS-Konstante. Regel 9: Prüfe LINKED-Einstiegslogik auf automatischen VERSION-CMD-Austausch.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-009-007",
+      "feature": "FEAT-GEN-009",
+      "requirement": ["REQ-GEN-021"],
+      "title": "Regel 10 & 11: TX/RX-Zeit und Sendeleistung minimieren",
+      "description": "Regel 10 (Minimize TX/RX Time): Die State Machine beendet den Call nach erfolgter Conclusion sofort. Regel 11 (Minimize Transmit Power): Das System bietet eine Schnittstelle zur Sendeleistungsregelung. Im Betrieb wird die niedrigste Leistung gewählt, die ausreichende LQA-Werte liefert.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Regel 10: Prüfe ob die Conclusion nach Empfang einer validen Response sofort eingeleitet wird, ohne weitere Calling-Slots. Regel 11: Prüfe ale_data_store.h oder OperatingParameters auf tx_power_level-Feld und automatische Leistungsabsenkungslogik.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-GEN-013-001",
+      "feature": "FEAT-GEN-013",
+      "requirement": ["MIL-STD-188-141B A.5.7.1"],
+      "title": "Orderwire-Basisklasse: IAleOrderwireProtocol Interface",
+      "description": "Ein gemeinsames Interface oder eine Basisklasse (z.B. IAleOrderwireProtocol oder AleOrderwireBase) ist in ale_orderwire_protocols.h deklariert. Von dieser Basis leiten AMD, DTM und DBM ab. Das Interface definiert mindestens die virtuellen Methoden encode() und decode().",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.h auf abstrakte Basisklasse mit virtuellen encode/decode-Methoden. Prüfe ob AmdProtocol, DtmProtocol und DbmProtocol von dieser Basis ableiten (public-Vererbung).",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-013-002",
+      "feature": "FEAT-GEN-013",
+      "requirement": ["MIL-STD-188-141B A.5.7.1"],
+      "title": "Orderwire Protocol-Dispatcher: CMD-Payload-Diskriminator",
+      "description": "Das Framework unterscheidet AMD, DTM und DBM anhand des CMD-Wort-Payloads beim Empfang. Ein Factory-Mechanismus oder Protocol-Dispatcher leitet eingehende Orderwire-Nachrichten an den korrekten Protocol-Handler weiter.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_orderwire_protocols.cpp auf dispatch_orderwire(), create_protocol() oder OrderwireFactory-Klasse. CMD-Payload-Vergleich muss AMD/DTM/DBM-Typen anhand definierter Konstanten unterscheiden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-GEN-013-003",
+      "feature": "FEAT-GEN-013",
+      "requirement": ["MIL-STD-188-141B A.5.7.1"],
+      "title": "Gemeinsamer Sendeweg für AMD, DTM und DBM",
+      "description": "Der Sendeweg für alle drei Orderwire-Protokolle ist vereinheitlicht: Alle Protokolle werden über denselben Message-Sektion-Buffer und dieselbe State-Machine-Phase versendet. Kein protokollspezifischer TX-Sonderpfad in der State Machine.",
+      "module": "Protocol/ale_orderwire_protocols",
+      "verification_hint": "Prüfe ale_state_machine.cpp: Ein einziger send_orderwire(IAleOrderwireProtocol*) oder queue_orderwire_message()-Aufruf muss für AMD, DTM und DBM gleichermaßen verwendet werden.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CHAN-004-001",
+      "feature": "FEAT-CHAN-004",
+      "requirement": ["MIL-STD-188-141B A.5.4.4"],
+      "title": "Rauschpegel-Messung: Mittelwert & Maximum über 60 Minuten",
+      "description": "Der Channel-Selektor erfasst kontinuierlich den Rauschpegel auf dem aktuellen Kanal und berechnet Mittelwert und Maximum über ein gleitendes Fenster von 60 Minuten (3600 s). Beide Werte werden in dB relativ zur Referenz 0,1 µV/3 kHz kodiert.",
+      "module": "Protocol/ale_channel_selector",
+      "verification_hint": "Prüfe ale_channel_selector.cpp auf noise_window_s = 3600 oder NOISE_WINDOW_MINUTES = 60. Prüfe ob rolling-average und rolling-max Algorithmus für Rauschpegel implementiert sind.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CHAN-004-002",
+      "feature": "FEAT-CHAN-004",
+      "requirement": ["MIL-STD-188-141B A.5.4.4"],
+      "title": "CMD NOISE: Kodierung und Broadcast-Übertragung",
+      "description": "Das CMD-NOISE-Wort wird mit Mittelwert- und Maximalrauschpegel aufgebaut. Es wird im Message-Abschnitt als Broadcast an alle Netzstationen übertragen. Die Kodierung erfolgt als dB-Wert relativ zur Referenz 0,1 µV/3 kHz.",
+      "module": "Protocol/ale_channel_selector",
+      "verification_hint": "Prüfe ale_channel_selector.cpp oder ale_orderwire_protocols.cpp auf encode_noise_cmd() oder build_noise_report()-Funktion. Prüfe ob das erzeugte CMD-Wort den Typ NOISE trägt und Mittelwert + Maximum enthält.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-CHAN-005-001",
+      "feature": "FEAT-CHAN-005",
+      "requirement": ["MIL-STD-188-141B A.5.4.5"],
+      "title": "Bilaterale Score-Minimierung auf Basis von LQA-SINAD",
+      "description": "Die automatische Kanalauswahl basiert auf der Minimierung des bilateralen Scores: Für jeden Kanal wird ein kombinierter Wert aus lokal gemessenem SINAD und empfangenem bilateralem SINAD der Zielstation berechnet. Der Kanal mit dem besten kombinierten Score wird gewählt.",
+      "module": "Protocol/ale_channel_selector",
+      "verification_hint": "Prüfe select_best_channel() in ale_channel_selector.cpp: Score-Berechnung muss local_sinad und bilateral_sinad kombinieren. Prüfe lqa_database.h auf bilateral_sinad-Feld im LQA-Eintrag.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CHAN-005-002",
+      "feature": "FEAT-CHAN-005",
+      "requirement": ["MIL-STD-188-141B A.5.4.5"],
+      "title": "Einzelstations-Kanalauswahl: Lokale und bilaterale Daten",
+      "description": "Bei der Single-Station-Selektion basiert die Kanalauswahl ausschließlich auf den lokal gemessenen LQA-Daten und den bilateral empfangenen LQA-Reports der Zielstation. Keine externe Koordination mit anderen Stationen.",
+      "module": "Protocol/ale_channel_selector",
+      "verification_hint": "Prüfe ale_channel_selector.cpp auf select_single_station_channel() oder äquivalente Methode. Rückfall auf Kanal mit bestem bilateral bekanntem SINAD-Score, wenn kein lokaler Messwert vorliegt.",
+      "status": "open"
+    },
+    {
+      "id": "AC-CHAN-005-003",
+      "feature": "FEAT-CHAN-005",
+      "requirement": ["MIL-STD-188-141B A.5.4.5"],
+      "title": "Multi-Station-Kanalauswahl: Aggregierte Scores aller Teilnehmer",
+      "description": "Bei der Multi-Station-Selektion werden die LQA-Scores aller Zielstationen je Kanal aggregiert. Der Kanal mit dem besten gemeinsamen Score über alle Teilnehmer wird ausgewählt (z.B. Minimum der Einzel-SINAD-Scores).",
+      "module": "Protocol/ale_channel_selector",
+      "verification_hint": "Prüfe ale_channel_selector.cpp auf select_multi_station_channel() oder aggregated_score_select(). Alle Zielstationen müssen in die Score-Berechnung einfließen. Rückfall-Strategie bei fehlenden LQA-Daten muss definiert sein.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FRAME-004-001",
+      "feature": "FEAT-FRAME-004",
+      "requirement": ["MIL-STD-188-141B A.5.2.5.2"],
+      "title": "Message-Sektion: Optionales Quick-ID-Wort (FROM) am Anfang",
+      "description": "Die Message-Sektion kann optional mit einem FROM-Wort (Quick-ID der sendenden Station) beginnen. Das FROM-Wort ist nicht obligatorisch. Es darf nur an erster Stelle der Message-Sektion stehen — niemals nach CMD/DATA/REP-Wörtern.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe CallingPhase::MESSAGE-Behandlung in ale_state_machine.cpp: FROM-Wort muss optional sein (konfigurierbar via quick_id_enabled). frame_validator.cpp muss FROM nach CMD/DATA/REP als ungültig markieren.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FRAME-004-002",
+      "feature": "FEAT-FRAME-004",
+      "requirement": ["MIL-STD-188-141B A.5.2.5.2"],
+      "title": "Message-Sektion: Ausschließlich CMD/DATA/REP Worttypen",
+      "description": "Innerhalb der Message-Sektion sind nur CMD-, DATA- und REP-Wörter zulässig. Adress-Preambles (TO, TIS, TWAS, THRU) sind in dieser Phase verboten. Die Frame-Validierung lehnt Adress-Wörter in der Message-Sektion ab.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe frame_validator.cpp oder on_word_received() in ale_state_machine.cpp: Bei CallingPhase::MESSAGE müssen TO/TIS/TWAS/THRU-Wörter abgelehnt und ein Fehler gemeldet werden.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FRAME-004-003",
+      "feature": "FEAT-FRAME-004",
+      "requirement": ["MIL-STD-188-141B A.5.2.5.2"],
+      "title": "Message-Sektion: Zeitlimit Tm_max = 11760 ms",
+      "description": "Die Message-Sektion darf maximal 11760 ms dauern (entspricht 30 Trw-Slots à 392 ms). Nach Ablauf dieses Zeitlimits wechselt die State Machine automatisch in den Conclusion-Abschnitt.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_timing.h oder ale_state_machine.h auf TM_MAX_MS = 11760 oder MESSAGE_MAX_WORDS = 30. Prüfe Timeout-Handler in CallingPhase::MESSAGE: Bei Überschreitung muss CallingPhase::CONCLUSION eingeleitet werden.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-FRAME-007-001",
+      "feature": "FEAT-FRAME-007",
+      "requirement": ["MIL-STD-188-141B A.5.5.4"],
+      "title": "Net-Call-Scan: TO mit den ersten 3 Zeichen der Netzadresse",
+      "description": "Beim Scanning-Call-Abschnitt eines Net-Calls wird im TO-Wort ausschließlich der erste 3-Zeichen-Chunk der Netzadresse übertragen. Die restlichen Adressteile werden erst im nachfolgenden Leading-Call-Abschnitt gesendet.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe handle_calling() in ale_state_machine.cpp bei call_type == NET_CALL und CallingPhase::SCANNING_CALL: TO-Wort muss nur net_address.substr(0,3) enthalten. Keine DATA/REP in dieser Phase.",
+      "status": "open"
+    },
+    {
+      "id": "AC-FRAME-007-002",
+      "feature": "FEAT-FRAME-007",
+      "requirement": ["MIL-STD-188-141B A.5.5.4"],
+      "title": "Net-Call-Scanning: Tsc_slots = Zielkanal-Anzahl × 2",
+      "description": "Die Gesamtanzahl der Scanning-Call-Slots für einen Net-Call berechnet sich als target_scan_channels × 2 (pro Zielkanal zwei Trw-Slots), analog zur Formel für Individual-Calls.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe scan_cycles-Berechnung in ale_state_machine.cpp bei NET_CALL: scan_cycles = target_scan_channels * 2. Vergleiche mit Individual-Call-Formel auf Konsistenz.",
+      "status": "open"
+    },
+
+    {
+      "id": "AC-LINK-005-001",
+      "feature": "FEAT-LINK-005",
+      "requirement": ["MIL-STD-188-141B A.5.5.3"],
+      "title": "Einheitliche Adress-Segmentierung für alle Frame-Typen",
+      "description": "Die Adress-Segmentierung für Scanning-, Leading- und Conclusion-Frames verwendet denselben Algorithmus (chunk_address oder make_address_words). Es gibt keine separaten, doppelten Implementierungen für verschiedene Phasen oder Call-Typen.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_state_machine.cpp auf doppelte Adress-Segmentierungslogik. Alle drei Phasen (SCANNING_CALL, LEADING_CALL, CONCLUSION) müssen chunk_address() oder make_address_words() aus ale_word.h/cpp aufrufen.",
+      "status": "open"
+    },
+    {
+      "id": "AC-LINK-005-002",
+      "feature": "FEAT-LINK-005",
+      "requirement": ["MIL-STD-188-141B A.5.5.3"],
+      "title": "Adresscodierung: Maximal 5 Wörter für ≤15 Zeichen",
+      "description": "Eine Adresse mit bis zu 15 Zeichen wird durch maximal 5 Wörter kodiert: 1 TO/TIS/TWAS-Wort plus bis zu 4 DATA/REP-Wörter. Adressen mit mehr als 15 Zeichen werden vor der Übertragung als ungültig abgelehnt.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_state_machine.h oder ale_word.h auf MAX_ADDR_WORDS = 5 und MAX_ADDR_LEN = 15. Prüfe Validierungslogik in initiate_call(): Zu lange Adressen müssen einen Fehler zurückgeben.",
+      "status": "open"
+    },
+    {
+      "id": "AC-LINK-005-003",
+      "feature": "FEAT-LINK-005",
+      "requirement": ["MIL-STD-188-141B A.5.5.3"],
+      "title": "Konsistente Frame-Konstruktion über Individual, Net und Group Call",
+      "description": "Individual-Call, Net-Call und Group-Call verwenden dieselbe Adress-Konstruktionsfunktion (make_address_words oder build_call_frame). Kein call-typ-spezifischer Sonderpfad in der Wort-Segmentierung.",
+      "module": "Protocol/ale_state_machine",
+      "verification_hint": "Prüfe ale_state_machine.cpp auf make_address_words()-Aufrufe: Derselbe Aufruf muss für INDIVIDUAL_CALL, NET_CALL und GROUP_CALL erscheinen. Grep nach allen Stellen, an denen ALEWord::TO/DATA/REP erzeugt werden.",
+      "status": "open"
+    }
+  ]
+}
