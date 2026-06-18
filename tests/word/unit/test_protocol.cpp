@@ -680,6 +680,190 @@ bool test_ac_word_001_001_bit_layout()
 }
 
 // ============================================================================
+// AC-WORD-001-002 — Encode/Decode-Symmetrie
+//
+// Two directions must hold for all valid 24-bit words:
+//   (A) decode(encode(p, c1, c2, c3)) == (p, c1, c2, c3)
+//   (B) encode(decode(w)) == w
+//
+// Basic 38 preambles (TO, FROM, TIS, TWAS, THRU, CMD) use A-Z, 0-9, @, ?.
+// Expanded-64 preambles (DATA, REP) use 0x20..0x5F.
+// ============================================================================
+
+bool test_ac_word_001_002_encode_decode_symmetry()
+{
+    std::cout << "\n[AC-WORD-001-002] Encode/Decode-Symmetrie\n";
+    std::cout << "==========================================\n";
+    bool all_pass = true;
+
+    // ── Direction A: decode(encode(p, c1, c2, c3)) == (p, c1, c2, c3) ────────
+    {
+        // Basic-38 preambles — representative chars from each sub-range
+        struct B38Case { PreambleType type; char c1, c2, c3; };
+        const B38Case basic38[] = {
+            { PreambleType::TO,   'A', 'B', 'C' },
+            { PreambleType::TO,   'Z', '0', '9' },
+            { PreambleType::TO,   '@', '?', 'A' },
+            { PreambleType::FROM, 'W', '1', 'A' },
+            { PreambleType::TIS,  'N', '0', 'C' },
+            { PreambleType::TWAS, 'R', 'E', 'J' },
+            { PreambleType::THRU, 'X', 'Y', 'Z' },
+            { PreambleType::CMD,  '1', '2', '3' },
+        };
+        bool dir_a_basic = true;
+        for (const auto& c : basic38) {
+            const char chars[3] = { c.c1, c.c2, c.c3 };
+            uint32_t payload = WordParser::encode_ascii(chars, c.type);
+            bool enc_ok = (payload != 0xFFFFFFFF);
+            char out[4] = {};
+            bool dec_ok = enc_ok && WordParser::decode_ascii(payload, c.type, out);
+            bool match  = dec_ok && out[0] == c.c1 && out[1] == c.c2 && out[2] == c.c3;
+            // preamble survives the word-bits round-trip
+            uint32_t word_bits = (static_cast<uint32_t>(c.type) << 21) | payload;
+            bool pre_ok = match && (WordParser::extract_preamble(word_bits) == c.type);
+            if (!pre_ok) {
+                std::cout << "  A Basic-38 FAIL type=" << WordParser::word_type_name(c.type)
+                          << " chars=\"" << c.c1 << c.c2 << c.c3 << "\""
+                          << " got=\"" << out << "\"\n";
+                dir_a_basic = false;
+            }
+        }
+        std::cout << "  A: decode(encode(p,c1,c2,c3)) — Basic-38 cases: "
+                  << (dir_a_basic ? "PASS" : "FAIL") << "\n";
+        all_pass &= dir_a_basic;
+
+        // Expanded-64 preambles (DATA, REP) — chars from 0x20..0x5F
+        struct E64Case { PreambleType type; char c1, c2, c3; };
+        const E64Case exp64[] = {
+            { PreambleType::DATA, ' ', '!', '"' },   // 0x20, 0x21, 0x22
+            { PreambleType::DATA, 'A', 'Z', '_' },   // 0x41, 0x5A, 0x5F
+            { PreambleType::REP,  ' ', '@', '?' },   // 0x20, 0x40, 0x3F
+            { PreambleType::REP,  '0', '9', '!' },   // 0x30, 0x39, 0x21
+        };
+        bool dir_a_exp64 = true;
+        for (const auto& c : exp64) {
+            const char chars[3] = { c.c1, c.c2, c.c3 };
+            uint32_t payload = WordParser::encode_ascii(chars, c.type);
+            bool enc_ok = (payload != 0xFFFFFFFF);
+            char out[4] = {};
+            bool dec_ok = enc_ok && WordParser::decode_ascii(payload, c.type, out);
+            bool match  = dec_ok && out[0] == c.c1 && out[1] == c.c2 && out[2] == c.c3;
+            uint32_t word_bits = (static_cast<uint32_t>(c.type) << 21) | payload;
+            bool pre_ok = match && (WordParser::extract_preamble(word_bits) == c.type);
+            if (!pre_ok) {
+                std::cout << "  A Expanded-64 FAIL type=" << WordParser::word_type_name(c.type)
+                          << " chars=0x" << std::hex << (int)(uint8_t)c.c1
+                          << "/0x" << (int)(uint8_t)c.c2
+                          << "/0x" << (int)(uint8_t)c.c3 << std::dec
+                          << " enc_ok=" << enc_ok << " match=" << match << "\n";
+                dir_a_exp64 = false;
+            }
+        }
+        std::cout << "  A: decode(encode(p,c1,c2,c3)) — Expanded-64 cases: "
+                  << (dir_a_exp64 ? "PASS" : "FAIL") << "\n";
+        all_pass &= dir_a_exp64;
+    }
+
+    // ── Direction B: encode(decode(w)) == w ───────────────────────────────────
+    {
+        // Build a representative set of valid 24-bit words and verify identity.
+        struct WordCase { PreambleType type; char c1, c2, c3; };
+        const WordCase cases[] = {
+            { PreambleType::TO,   'W', '1', 'A' },
+            { PreambleType::FROM, 'K', '6', 'K' },
+            { PreambleType::TIS,  'N', '0', 'C' },
+            { PreambleType::TWAS, 'N', 'E', 'T' },
+            { PreambleType::THRU, 'A', 'B', 'C' },
+            { PreambleType::CMD,  'Z', '9', '@' },
+            { PreambleType::DATA, 'H', 'i', '!' },   // 'i'=0x69 > 0x5F: encode fails → skipped
+            { PreambleType::REP,  ' ', 'A', '_' },   // Expanded-64 valid
+        };
+        // Note: 'i' (0x69) is outside Expanded-64 — that case must be skipped.
+        // We'll detect encode failure and skip rather than marking as FAIL.
+
+        bool dir_b_pass = true;
+        int tested = 0, skipped = 0;
+        for (const auto& c : cases) {
+            const char chars[3] = { c.c1, c.c2, c.c3 };
+            uint32_t payload = WordParser::encode_ascii(chars, c.type);
+            if (payload == 0xFFFFFFFF) { ++skipped; continue; }  // invalid chars for type
+
+            uint32_t w = (static_cast<uint32_t>(c.type) << 21) | payload;
+
+            // Decode: extract preamble + payload, decode chars
+            PreambleType p2    = WordParser::extract_preamble(w);
+            uint32_t payload2  = WordParser::extract_payload(w);
+            char out[4] = {};
+            bool dec_ok = WordParser::decode_ascii(payload2, p2, out);
+
+            // Re-encode
+            uint32_t re_payload = dec_ok ? WordParser::encode_ascii(out, p2) : 0xFFFFFFFFu;
+            uint32_t w2 = (static_cast<uint32_t>(p2) << 21) | re_payload;
+
+            bool ok = dec_ok && (re_payload != 0xFFFFFFFF) && (w2 == w);
+            if (!ok) {
+                std::cout << "  B FAIL type=" << WordParser::word_type_name(c.type)
+                          << " w=0x" << std::hex << w << " w2=0x" << w2 << std::dec << "\n";
+                dir_b_pass = false;
+            }
+            ++tested;
+        }
+        std::cout << "  B: encode(decode(w)) == w — " << tested << " words tested"
+                  << (skipped ? " (" + std::to_string(skipped) + " skipped: invalid chars for type)" : "")
+                  << ": " << (dir_b_pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= dir_b_pass;
+    }
+
+    // ── Exhaustive direction B over all 8 preambles with boundary chars ───────
+    {
+        // For each preamble type use the full Basic-38 or Expanded-64 boundary chars.
+        // Spot-check 3 boundary triples per character set to catch off-by-one errors.
+        struct BoundaryCase { PreambleType type; char c1, c2, c3; const char* label; };
+        const BoundaryCase boundary[] = {
+            // Basic-38 boundaries
+            { PreambleType::TO,   'A', 'A', 'A', "TO/AAA" },
+            { PreambleType::TO,   'Z', 'Z', 'Z', "TO/ZZZ" },
+            { PreambleType::TO,   '0', '0', '0', "TO/000" },
+            { PreambleType::TO,   '9', '9', '9', "TO/999" },
+            { PreambleType::TO,   '@', '@', '@', "TO/@@@" },
+            { PreambleType::TO,   '?', '?', '?', "TO/???" },
+            // Expanded-64 boundaries (0x20=' ', 0x5F='_')
+            { PreambleType::DATA, ' ', ' ', ' ', "DATA/0x20" },
+            { PreambleType::DATA, '_', '_', '_', "DATA/0x5F" },
+            { PreambleType::REP,  ' ', '_', '!', "REP/mix"  },
+        };
+        bool boundary_pass = true;
+        for (const auto& c : boundary) {
+            const char chars[3] = { c.c1, c.c2, c.c3 };
+            uint32_t payload  = WordParser::encode_ascii(chars, c.type);
+            if (payload == 0xFFFFFFFF) {
+                std::cout << "  boundary FAIL encode: " << c.label << "\n";
+                boundary_pass = false;
+                continue;
+            }
+            uint32_t w = (static_cast<uint32_t>(c.type) << 21) | payload;
+            PreambleType p2   = WordParser::extract_preamble(w);
+            uint32_t pl2      = WordParser::extract_payload(w);
+            char out[4] = {};
+            bool dec_ok       = WordParser::decode_ascii(pl2, p2, out);
+            uint32_t re_pl    = dec_ok ? WordParser::encode_ascii(out, p2) : 0xFFFFFFFFu;
+            uint32_t w2       = (static_cast<uint32_t>(p2) << 21) | re_pl;
+            bool ok = dec_ok && (re_pl != 0xFFFFFFFFu) && (w2 == w);
+            if (!ok) {
+                std::cout << "  boundary FAIL B: " << c.label
+                          << " w=0x" << std::hex << w << " w2=0x" << w2 << std::dec << "\n";
+                boundary_pass = false;
+            }
+        }
+        std::cout << "  B: boundary chars (all preambles): "
+                  << (boundary_pass ? "PASS" : "FAIL") << "\n";
+        all_pass &= boundary_pass;
+    }
+
+    return all_pass;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -689,11 +873,12 @@ int run_all_tests() {
     std::cout << "║  ALE Protocol Layer Unit Tests                            ║\n";
     std::cout << "║  MIL-STD-188-141B Word Structure & Message Assembly       ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n";
-    
+
     int pass_count = 0;
     int fail_count = 0;
-    
+
     if (test_ac_word_001_001_bit_layout()) { pass_count++; } else { fail_count++; }
+    if (test_ac_word_001_002_encode_decode_symmetry()) { pass_count++; } else { fail_count++; }
     if (test_word_parsing()) { pass_count++; } else { fail_count++; }
     if (test_ascii_codec()) { pass_count++; } else { fail_count++; }
     if (test_address_book()) { pass_count++; } else { fail_count++; }

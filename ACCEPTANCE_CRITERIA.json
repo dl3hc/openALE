@@ -523,7 +523,8 @@
       "description": "encode(decode(w)) == w für alle gültigen 24-Bit-Worte. decode(encode(p, c1, c2, c3)) liefert exakt (p, c1, c2, c3) zurück.",
       "module": "Word/ale_word",
       "verification_hint": "Prüfe Tests für ALEWord encode/decode in tests/. Roundtrip-Test muss vorhanden sein.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_word_001_002_encode_decode_symmetry() in tests/word/unit/test_protocol.cpp. Direction A: decode(encode(p,c1,c2,c3))==(p,c1,c2,c3) for all 8 preamble types (Basic-38 and Expanded-64 char sets). Direction B: encode(decode(w))==w for representative + boundary word set. 9/9 tests PASS (build Debug, 2026-06-18)."
     },
     {
       "id": "AC-WORD-002-001",
