@@ -235,7 +235,8 @@
       "description": "AQC-ALE-Frames können von einem Base-ALE-System empfangen werden, ohne dass dieses abstürzt oder in einen Fehler-Zustand wechselt. Der Fixed-Bit-Mechanismus muss implementiert sein.",
       "module": "Protocol/aqc_protocol",
       "verification_hint": "Prüfe aqc_protocol.cpp auf Differenzierungslogik zwischen AQC und Base-ALE Frames. Fixed-Bit muss in der Payload gesetzt sein.",
-      "status": "open"
+      "status": "closed",
+      "verification": "AQCProtocol-Klasse in include/Protocol/AQC/aqc_protocol.h ergänzt mit drei statischen Methoden: is_aqc_word(uint16_t raw) prüft bit15==1 (Fixed Bit = AQC-Control-Word), payload_has_aqc_fixed_bit(uint32_t payload21) prüft bit15 des 21-Bit-Base-ALE-Payloads, is_base_ale_frame(const ALEWord&) gibt true zurück wenn kein Fixed Bit gesetzt. AQCParser::is_aqc_format() von Heuristik auf feste Fixed-Bit-Prüfung umgestellt (vorher: CMD-Typ oder non-ASCII, jetzt: payload_has_aqc_fixed_bit). Mechanismus: AQC-Address-Words (type_flag=false, bit15=0) sehen für Base-ALE-Empfänger wie normale Adresswörter aus; AQC-Control-Words (type_flag=true, bit15=1) tragen den Fixed Bit — Base-ALE-Empfänger dekodiert ungültigen Payload ohne Crash. Tests in tests/aqc/unit/test_aqc_fixed_bit.cpp: TEST 1 (is_aqc_word=true für bit15=1), TEST 2 (is_aqc_word=false für bit15=0), TEST 3 (payload_has_aqc_fixed_bit), TEST 4 (Konsistenz über alle 32 AQC-32-Codes), TEST 5 (is_base_ale_frame), TEST 6 (Rückwärtskompatibilität: kein Crash bei AQC-Frame-Parsing). 4/4 AQC-Tests grün (AQCWordFormat, AQCParser, AQCBackwardCompat, AQCFixedBit)."
     },
 
     {

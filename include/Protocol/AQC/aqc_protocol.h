@@ -477,5 +477,87 @@ private:
     static constexpr uint8_t  NUM_SLOTS        = 8;              ///< 8 slots total
 };
 
+// ============================================================================
+// AQC-ALE Frame Differentiation & Fixed-Bit Mechanism
+// ============================================================================
+
+/**
+ * \class AQCProtocol
+ * AQC-ALE backward compatibility helpers: fixed-bit detection and Base-ALE
+ * frame differentiation (MIL-STD-188-141B A.4.5 / FEAT-GEN-010).
+ *
+ * Fixed-Bit Mechanism
+ * -------------------
+ * AQC *control* words (type_flag = true) always have bit 15 of their 16-bit
+ * compact word set to 1.  This "fixed bit" is the key to backward
+ * compatibility:
+ *
+ *  - AQC address words (type_flag=false, bit15=0): a Base-ALE receiver parses
+ *    them as normal address words.  The AQC-32 encoded payload produces
+ *    characters that don't match any known address, so the Base-ALE station
+ *    silently ignores the frame — no crash, no error state.
+ *
+ *  - AQC control words (type_flag=true, bit15=1): the fixed bit (bit 15 of
+ *    the 21-bit Base-ALE payload) marks the word as AQC-specific.  An
+ *    AQC-aware receiver uses it for frame discrimination; a Base-ALE receiver
+ *    encounters payload content it doesn't recognise and ignores it — again
+ *    no crash.
+ *
+ * Usage
+ * -----
+ * \code
+ *   // Detect an AQC control word from its 16-bit raw value:
+ *   bool ctrl = AQCProtocol::is_aqc_word(aqc_word.raw);
+ *
+ *   // Detect from the 21-bit Base-ALE payload (ALEWord.raw_payload):
+ *   bool aqc  = AQCProtocol::payload_has_aqc_fixed_bit(ale_word.raw_payload);
+ *
+ *   // Test whether an ALEWord is a plain Base-ALE frame (no fixed bit):
+ *   bool base = AQCProtocol::is_base_ale_frame(ale_word);
+ * \endcode
+ */
+class AQCProtocol {
+public:
+    /**
+     * Returns true if the 16-bit AQC word is an AQC control word (bit 15 = 1).
+     *
+     * Bit 15 is the "fixed bit" defined in the AQC specification.  It is set
+     * in all AQC control words (AQCWord::type_flag == true) and clear in all
+     * AQC address words (AQCWord::type_flag == false).
+     *
+     * \param raw  Raw 16-bit AQC word value (AQCWord::raw).
+     * \return     true  — bit 15 is 1, word is an AQC control word.
+     *             false — bit 15 is 0, word is an AQC address word.
+     */
+    static bool is_aqc_word(uint16_t raw) {
+        return (raw >> 15) & 1u;
+    }
+
+    /**
+     * Returns true if the 21-bit Base-ALE payload carries the AQC fixed bit.
+     *
+     * The AQC 16-bit word occupies bits [15:0] of the 21-bit Base-ALE payload.
+     * Bit 15 of that word is therefore also bit 15 of the payload.  When it is
+     * 1, the payload contains an AQC control word.
+     *
+     * \param payload21  21-bit payload from ALEWord::raw_payload.
+     * \return  true if the AQC fixed bit (payload bit 15) is set.
+     */
+    static bool payload_has_aqc_fixed_bit(uint32_t payload21) {
+        return (payload21 >> 15) & 1u;
+    }
+
+    /**
+     * Returns true if the ALEWord does NOT carry an AQC fixed bit, i.e. it is
+     * a plain Base-ALE frame.
+     *
+     * \param word  Decoded Base-ALE word.
+     * \return  true if the word is a non-AQC (Base-ALE) frame.
+     */
+    static bool is_base_ale_frame(const ALEWord& word) {
+        return !payload_has_aqc_fixed_bit(word.raw_payload);
+    }
+};
+
 } // namespace aqc
 } // namespace ale

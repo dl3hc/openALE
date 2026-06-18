@@ -45,27 +45,11 @@ static const char* TRANSACTION_CODE_NAMES[] = {
 AQCParser::AQCParser() {}
 
 bool AQCParser::is_aqc_format(const ALEWord& word) {
-    // AQC format detection heuristics:
-    // 1. CMD word type with specific payload patterns
-    // 2. DATA words with non-ASCII patterns (DE fields instead)
-    // 3. Specific bit patterns indicating AQC structure
-    
-    // For now, detect based on word type and payload analysis
-    // Full implementation would use more sophisticated detection
-    
-    if (word.type == PreambleType::CMD) {
-        // CMD words are often used for AQC signaling
-        return true;
-    }
-    
-    // Check if payload contains valid ASCII or DE pattern
-    // If all 3 characters are non-printable, likely DE format
-    if (word.address[0] < 0x20 || word.address[0] > 0x7E) {
-        // Non-ASCII, could be AQC
-        return true;
-    }
-    
-    return false;
+    // An AQC control word has the fixed bit (bit 15 of the 16-bit AQC compact
+    // word) set to 1.  That bit maps directly to bit 15 of the 21-bit Base-ALE
+    // payload.  Address words (bit 15 = 0) look like plain Base-ALE words to
+    // older receivers; control words (bit 15 = 1) carry the AQC fixed bit.
+    return AQCProtocol::payload_has_aqc_fixed_bit(word.raw_payload);
 }
 
 bool AQCParser::extract_data_elements(uint32_t payload, DataElements& de) {

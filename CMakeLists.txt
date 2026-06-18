@@ -423,6 +423,11 @@ target_link_libraries(test_aqc_backward_compat ale_aqc ale_protocol ale_fsk_core
 target_include_directories(test_aqc_backward_compat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AQCBackwardCompat COMMAND test_aqc_backward_compat)
 
+add_executable(test_aqc_fixed_bit tests/aqc/unit/test_aqc_fixed_bit.cpp)
+target_link_libraries(test_aqc_fixed_bit ale_aqc ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_aqc_fixed_bit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AQCFixedBit COMMAND test_aqc_fixed_bit)
+
 add_executable(test_fs1052_frames tests/gen/unit/test_fs1052_frames.cpp)
 target_link_libraries(test_fs1052_frames ale_fs1052 ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_fs1052_frames PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
