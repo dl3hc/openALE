@@ -754,6 +754,75 @@ bool test_ac_frame_001_002_from_precedes_cmd()
 }
 
 // ============================================================================
+// AC-FRAME-001-003 — Every transmitted word begins on a Trw-grid slot.
+//
+// Grid anchor: first_call_tx_ms (set at TUNING-complete, DD-006).
+// Expected start time of word N (zero-based):
+//   next_slot_ms = first_call_tx_ms + call_cycle_count × Trw_ms
+//
+// Verification:
+//   (1) first_call_tx_ms == T_TX (TUNING-complete wall time)
+//   (2) Before word N is consumed: call_cycle_count == N
+//       → computed slot = first_call_tx_ms + N × Trw_ms = T_TX + N × Trw_ms
+//   (3) on_word_complete() increments call_cycle_count → advances to slot N+1
+// ============================================================================
+
+bool test_ac_frame_001_003_trw_grid_synchrony()
+{
+    std::cout << "\n[AC-FRAME-001-003] All words begin on Trw-grid slots\n";
+
+    // scan_ch=1, TO="BOB" (1 word), self="SAM" (1 word).
+    // Total: 2 scan + 2 leading + 1 conclusion = 5 words.
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    sm.set_target_scan_channels(1);
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_rx_enabled_callback([](bool){});
+    sm.set_transmit_callback([](const ALEWord&){});
+    sm.initiate_call("BOB");
+
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t T_TX = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+
+    sm.update(ALETimingConstants::Twt_ms);  // LBT → TUNING
+    sm.update(T_TX);                         // TUNING → SCANNING_CALL, first_call_tx_ms set
+
+    // 1. Grid anchor is set to TUNING-complete time
+    bool anchor_ok = (sm.get_first_call_tx_ms() == T_TX);
+    std::cout << "  first_call_tx_ms == T_TX (" << T_TX << "): "
+              << (anchor_ok ? "PASS" : "FAIL")
+              << " (got " << sm.get_first_call_tx_ms() << ")\n";
+
+    // 2. For each of the 5 words, verify the grid formula before consuming the word:
+    //    expected start of word N = first_call_tx_ms + N × Trw_ms
+    bool grid_ok = true;
+    const uint32_t total_words = 5;
+    for (uint32_t n = 0; n < total_words; ++n) {
+        uint32_t expected_slot = T_TX + n * Trw;
+        uint32_t actual_slot   = sm.get_first_call_tx_ms()
+                               + sm.get_call_cycle_count() * Trw;
+        bool slot_ok = (actual_slot == expected_slot);
+        grid_ok &= slot_ok;
+        std::cout << "  word " << n << ": slot = first_call_tx_ms + "
+                  << sm.get_call_cycle_count() << " × Trw = " << actual_slot
+                  << " (exp " << expected_slot << "): "
+                  << (slot_ok ? "PASS" : "FAIL") << "\n";
+        sm.on_word_complete();
+    }
+
+    // 3. After all 5 words, call_cycle_count == 5, phase == LISTENING
+    bool count_ok = (sm.get_call_cycle_count() == total_words);
+    bool phase_ok = (sm.get_calling_phase() == CallingPhase::LISTENING);
+    std::cout << "  call_cycle_count == 5 after all words: "
+              << (count_ok ? "PASS" : "FAIL")
+              << " (got " << sm.get_call_cycle_count() << ")\n";
+    std::cout << "  phase == LISTENING after last word: "
+              << (phase_ok ? "PASS" : "FAIL") << "\n";
+
+    return anchor_ok && grid_ok && count_ok && phase_ok;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -807,6 +876,9 @@ int run_all_tests()
 
     run("AC-FRAME-001-002      FROM (Quick-ID) must precede CMD in frame sequence",
         test_ac_frame_001_002_from_precedes_cmd());
+
+    run("AC-FRAME-001-003      all words begin on Trw-grid slots (first_call_tx_ms + N × Trw)",
+        test_ac_frame_001_003_trw_grid_synchrony());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

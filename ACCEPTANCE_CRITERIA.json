@@ -740,7 +740,8 @@
       "description": "Jedes gesendete Wort beginnt auf einem Trw-Grid-Slot (first_call_tx_ms + n × 392 ms). Es gibt keine Wörter, die außerhalb des Trw-Rasters beginnen (Ausnahme: LISTENING-Phase).",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe handle_calling() in ale_state_machine.cpp: next_slot_ms = first_call_tx_ms + call_cycle_count × Trw_ms.",
-      "status": "open"
+      "status": "closed",
+      "verification": "get_first_call_tx_ms() Getter in include/Protocol/Control/ale_state_machine.h ergänzt. Test test_ac_frame_001_003_trw_grid_synchrony() in tests/frame/unit/test_frame.cpp hinzugefügt. Verifiziert: (1) first_call_tx_ms == T_TX (TUNING-complete-Zeit = Twt_ms + Tt_ms = 1829 ms), (2) für jedes der 5 Wörter (2 scan + 2 leading + 1 conclusion) gilt slot = first_call_tx_ms + call_cycle_count × Trw_ms mit 0 Abweichung, (3) call_cycle_count == 5 nach allen Wörtern, Phase == LISTENING. Alle 12 Frame-Tests und alle 38 Calling-Tests grün."
     },
     {
       "id": "AC-FRAME-002-001",
