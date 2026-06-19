@@ -823,6 +823,78 @@ bool test_ac_frame_001_003_trw_grid_synchrony()
 }
 
 // ============================================================================
+// AC-FRAME-002-002 — Tsc = C × 2 × Trw (§A.5.2.5.1 / REQ-FRAME-005)
+//
+// Two sub-checks:
+//   (1) Builder:  scanning_call(dest, C).size() == C × 2
+//   (2) SM:       SCANNING_CALL phase lasts exactly C × 2 slots before
+//                 transitioning to LEADING_CALL (call_cycles_in_phase >= C×2).
+// ============================================================================
+
+bool test_ac_frame_002_002_tsc_formula()
+{
+    std::cout << "\n[AC-FRAME-002-002] Tsc = C × 2 × Trw (scanning duration formula)\n";
+
+    struct Case { uint32_t C; uint32_t expected_slots; };
+    const Case cases[] = {
+        { 1,  2 },
+        { 2,  4 },
+        { 3,  6 },
+        { 5, 10 },
+    };
+
+    bool all_ok = true;
+
+    // ── Part 1: ALESequenceBuilder::scanning_call() produces C×2 words ──────
+    std::cout << "  [builder] scanning_call() word count == C×2:\n";
+    for (const auto& c : cases) {
+        const auto seq = ALESequenceBuilder::scanning_call("BOB", c.C);
+        const bool ok  = (seq.size() == c.expected_slots);
+        all_ok &= ok;
+        std::cout << "    C=" << c.C << ": size=" << seq.size()
+                  << " (exp " << c.expected_slots << "): "
+                  << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part 2: SM stays in SCANNING_CALL for exactly C×2 on_word_complete() ─
+    std::cout << "  [SM] SCANNING_CALL lasts exactly C×2 slots:\n";
+    const uint32_t Trw   = ALETimingConstants::Trw_ms;
+    const uint32_t T_LBT = ALETimingConstants::Twt_ms;
+    const uint32_t T_TX  = T_LBT + ALETimingConstants::Tt_ms;
+
+    for (const auto& c : cases) {
+        ALEStateMachine sm;
+        sm.set_self_address("SAM");
+        sm.set_target_scan_channels(c.C);
+        sm.set_state_callback([](ALEState, ALEState){});
+        sm.set_rx_enabled_callback([](bool){});
+        sm.set_transmit_callback([](const ALEWord&){});
+        sm.initiate_call("BOB");
+
+        sm.update(T_LBT);
+        sm.update(T_TX);
+
+        uint32_t scanning_slots = 0;
+        for (uint32_t slot = 0; slot < 100; ++slot) {
+            if (sm.get_calling_phase() != CallingPhase::SCANNING_CALL) break;
+            sm.update(T_TX + slot * Trw);
+            sm.on_word_complete();
+            ++scanning_slots;
+        }
+
+        const bool slots_ok = (scanning_slots == c.expected_slots);
+        const bool lead_ok  = (sm.get_calling_phase() == CallingPhase::LEADING_CALL);
+        all_ok &= slots_ok && lead_ok;
+        std::cout << "    C=" << c.C << ": scanning_slots=" << scanning_slots
+                  << " (exp " << c.expected_slots << ")"
+                  << " next_phase=" << (lead_ok ? "LEADING_CALL" : "OTHER")
+                  << ": " << (slots_ok && lead_ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    return all_ok;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -879,6 +951,9 @@ int run_all_tests()
 
     run("AC-FRAME-001-003      all words begin on Trw-grid slots (first_call_tx_ms + N × Trw)",
         test_ac_frame_001_003_trw_grid_synchrony());
+
+    run("AC-FRAME-002-002      Tsc = C×2×Trw: builder size and SM phase-transition slot count",
+        test_ac_frame_002_002_tsc_formula());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
