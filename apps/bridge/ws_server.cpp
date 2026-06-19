@@ -356,11 +356,18 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                     std::fprintf(stdout, "[ws_server] client connected\n");
                     std::fflush(stdout);
                 } else {
-                    // Already have a WS client or bad key
+                    // A WS session is already active, or the Sec-WebSocket-Key header is
+                    // missing/malformed.  Respond 503 (not 400: the request is syntactically
+                    // valid; the server is simply single-session by design) and close the
+                    // socket immediately.  No state is changed.
                     const std::string reject =
-                        "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        "HTTP/1.1 503 Service Unavailable\r\n"
+                        "Content-Length: 0\r\n"
+                        "Connection: close\r\n\r\n";
                     send_raw(fd, reinterpret_cast<const uint8_t*>(reject.data()), reject.size());
                     close_sock(fd);
+                    std::fprintf(stdout, "[ws_server] WS upgrade rejected — session already active\n");
+                    std::fflush(stdout);
                 }
             } else {
                 serve_static(fd, req, web_root_);
