@@ -389,10 +389,10 @@ bool test_ac_001_3_phase_sequence_via_callback_only()
               << (seq_ok ? "PASS" : "FAIL")
               << " (got " << phase_log.size() << ")\n";
 
-    // Must match CallingPhase enum order exactly (LBT=0 … NET_CALL_STUB=8).
+    // Must match CallingPhase enum order exactly.
     static const char* PNAMES[] = {
-        "LBT", "TUNING", "SCANNING_CALL", "LEADING_CALL", "MESSAGE",
-        "CONCLUSION", "LISTENING", "SENDING_ACK", "NET_CALL_STUB"
+        "LBT", "TUNING", "SCANNING_CALL", "GROUP_SCANNING_CALL",
+        "LEADING_CALL", "MESSAGE", "CONCLUSION", "LISTENING", "SENDING_ACK"
     };
 
     bool all_phases_ok = seq_ok;
@@ -407,6 +407,134 @@ bool test_ac_001_3_phase_sequence_via_callback_only()
     }
 
     return no_outside_transition && all_phases_ok;
+}
+
+// ============================================================================
+// AC-FRAME-001-001 — Frame structure: Calling (mandatory) + Message (optional) +
+// Conclusion (mandatory) in this exact order.
+//
+// Case A: no AMD orderwire — phase log must be SCANNING_CALL → LEADING_CALL → CONCLUSION.
+// Case B: AMD message "HI" — MESSAGE must appear between LEADING_CALL and CONCLUSION.
+// ============================================================================
+
+bool test_ac_frame_001_001_frame_structure_order()
+{
+    std::cout << "\n[AC-FRAME-001-001] Frame structure: Calling + [Message] + Conclusion order\n";
+
+    const uint32_t Trw   = ALETimingConstants::Trw_ms;
+    const uint32_t T_LBT = ALETimingConstants::Twt_ms;
+    const uint32_t T_TX  = T_LBT + ALETimingConstants::Tt_ms;
+
+    // Drive through LBT and TUNING, then collect the calling phase recorded
+    // after each on_word_complete(), stopping as soon as LISTENING is entered.
+    auto collect_phases = [&](ALEStateMachine& sm) -> std::vector<CallingPhase> {
+        sm.update(T_LBT);
+        sm.update(T_TX);
+        std::vector<CallingPhase> log;
+        for (uint32_t slot = 0; slot < 20; ++slot) {
+            if (sm.get_calling_phase() == CallingPhase::LISTENING) break;
+            sm.update(T_TX + slot * Trw);
+            if (sm.get_words_pending() > 0) {
+                sm.on_word_complete();
+                log.push_back(sm.get_calling_phase());
+            }
+        }
+        return log;
+    };
+
+    bool all_ok = true;
+
+    // ── Case A: no AMD message ────────────────────────────────────────────────
+    // scan_ch=1, TO="BOB" (1 word), self="SAM" (1 word).
+    // Total words: 2 scan + 2 leading + 1 conclusion = 5.
+    // Expected phase log: [SCANNING, LEADING, LEADING, CONCLUSION, LISTENING]
+    {
+        ALEStateMachine sm;
+        sm.set_self_address("SAM");
+        sm.set_target_scan_channels(1);
+        sm.set_state_callback([](ALEState, ALEState){});
+        sm.set_rx_enabled_callback([](bool){});
+        sm.set_transmit_callback([](const ALEWord&){});
+        sm.initiate_call("BOB");
+
+        auto phases = collect_phases(sm);
+
+        int scan_first = -1, lead_last = -1, msg_first = -1, concl_idx = -1;
+        for (int i = 0; i < (int)phases.size(); ++i) {
+            if (phases[i] == CallingPhase::SCANNING_CALL && scan_first == -1) scan_first = i;
+            if (phases[i] == CallingPhase::LEADING_CALL)                       lead_last  = i;
+            if (phases[i] == CallingPhase::MESSAGE      && msg_first  == -1) msg_first  = i;
+            if (phases[i] == CallingPhase::CONCLUSION   && concl_idx  == -1) concl_idx  = i;
+        }
+
+        bool scan_present      = (scan_first >= 0);
+        bool lead_present      = (lead_last  >= 0);
+        bool concl_present     = (concl_idx  >= 0);
+        bool no_message        = (msg_first  == -1);
+        bool scan_before_lead  = scan_present && lead_present  && (lead_last  > scan_first);
+        bool lead_before_concl = lead_present && concl_present && (concl_idx  > lead_last);
+
+        bool case_a_ok = scan_present && lead_present && concl_present
+                      && no_message && scan_before_lead && lead_before_concl;
+        all_ok &= case_a_ok;
+
+        std::cout << "  [no-AMD] SCANNING_CALL present: "       << (scan_present      ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [no-AMD] LEADING_CALL present: "        << (lead_present      ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [no-AMD] CONCLUSION present: "          << (concl_present     ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [no-AMD] No MESSAGE without orderwire: " << (no_message        ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [no-AMD] SCANNING before LEADING: "     << (scan_before_lead  ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [no-AMD] LEADING before CONCLUSION: "   << (lead_before_concl ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Case B: AMD message "HI" ─────────────────────────────────────────────
+    // encode_amd("HI") = 1 word; MESSAGE must appear after LEADING_CALL,
+    // before CONCLUSION.
+    {
+        ALEStateMachine sm;
+        sm.set_self_address("SAM");
+        sm.set_target_scan_channels(1);
+        sm.set_state_callback([](ALEState, ALEState){});
+        sm.set_rx_enabled_callback([](bool){});
+        sm.set_transmit_callback([](const ALEWord&){});
+
+        ALEStateMachine::PendingMessage msg;
+        msg.type    = ALEStateMachine::PendingMessage::Type::AMD;
+        msg.content = "HI";
+        sm.set_pending_message(msg);
+        sm.initiate_call("BOB");
+
+        auto phases = collect_phases(sm);
+
+        int scan_first = -1, lead_last = -1, msg_first = -1, concl_idx = -1;
+        for (int i = 0; i < (int)phases.size(); ++i) {
+            if (phases[i] == CallingPhase::SCANNING_CALL && scan_first == -1) scan_first = i;
+            if (phases[i] == CallingPhase::LEADING_CALL)                       lead_last  = i;
+            if (phases[i] == CallingPhase::MESSAGE      && msg_first  == -1) msg_first  = i;
+            if (phases[i] == CallingPhase::CONCLUSION   && concl_idx  == -1) concl_idx  = i;
+        }
+
+        bool scan_present     = (scan_first >= 0);
+        bool lead_present     = (lead_last  >= 0);
+        bool msg_present      = (msg_first  >= 0);
+        bool concl_present    = (concl_idx  >= 0);
+        bool scan_before_lead = scan_present && lead_present && (lead_last  > scan_first);
+        bool lead_before_msg  = lead_present && msg_present  && (msg_first  > lead_last);
+        bool msg_before_concl = msg_present  && concl_present && (concl_idx > msg_first);
+
+        bool case_b_ok = scan_present && lead_present && msg_present && concl_present
+                      && scan_before_lead && lead_before_msg && msg_before_concl;
+        all_ok &= case_b_ok;
+
+        std::cout << "  [AMD]    SCANNING_CALL present: "          << (scan_present     ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    LEADING_CALL present: "           << (lead_present     ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    MESSAGE present: "                << (msg_present      ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    CONCLUSION present: "             << (concl_present    ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    SCANNING before LEADING: "        << (scan_before_lead ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    LEADING before MESSAGE: "         << (lead_before_msg  ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    MESSAGE before CONCLUSION: "      << (msg_before_concl ? "PASS" : "FAIL") << "\n";
+    }
+
+    return all_ok;
 }
 
 // ============================================================================
@@ -571,6 +699,9 @@ int run_all_tests()
         test_ac_002_4_empty_frame());
 
     // ── SM / modem integration timing tests ──────────────────────────────────
+    run("AC-FRAME-001-001       frame structure: Calling + [Message] + Conclusion order",
+        test_ac_frame_001_001_frame_structure_order());
+
     run("AC-FRAME-001-2 (modem) ALE2GModem::Modulator emits one symbol frame (49 symbols) per word",
         test_ac_001_2_modem_symbol_frame_per_word());
 

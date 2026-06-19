@@ -714,7 +714,8 @@
       "description": "Ein ALE-Frame besteht aus dem Calling-Abschnitt (obligatorisch), gefolgt vom optionalen Message-Abschnitt und dem Conclusion-Abschnitt (obligatorisch). Diese Reihenfolge darf nicht vertauscht werden.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe CallingPhase-Enum in ale_state_machine.h: SCANNING_CALL, LEADING_CALL, MESSAGE, CONCLUSION müssen in dieser Reihenfolge durchlaufen werden.",
-      "status": "open"
+      "status": "closed",
+      "verification": "CallingPhase-Enum hat korrekte Reihenfolge (SCANNING_CALL → LEADING_CALL → MESSAGE → CONCLUSION → LISTENING). enqueue_call_sequence_() überträgt scanning_seq_ + leading_seq_ + message_seq_ + conclusion_seq_ in dieser Reihenfolge. on_word_complete() erzwingt die Übergänge: SCANNING→LEADING→[MESSAGE if AMD]→CONCLUSION. Test test_ac_frame_001_001_frame_structure_order() ergänzt (2 Szenarien: ohne AMD=SCANNING+LEADING+CONCLUSION, mit AMD 'HI'=SCANNING+LEADING+MESSAGE+CONCLUSION). PNAMES-Array-Bug (fehlende GROUP_SCANNING_CALL) in test_ac_001_3 behoben. Alle 10 Tests grün."
     },
     {
       "id": "AC-FRAME-001-002",
