@@ -1255,9 +1255,13 @@ std::string ALEController::process_command(const std::string& raw)
         reject_call();
         return "OK: rejecting call";
     }
-    if (cmd == "CMD:SCAN") {
+    if (cmd == "CMD:SCAN" || cmd == "CMD:START_SCANNING") {
         start_scanning();
         return "OK: scanning";
+    }
+    if (cmd == "CMD:STOP_SCANNING") {
+        start_available();
+        return "OK: available (idle)";
     }
     if (cmd == "CMD:STATUS") {
         return std::string("STATUS: ") + ALEStateMachine::state_name(state());
@@ -1393,7 +1397,8 @@ std::string ALEController::process_command(const std::string& raw)
             "  CMD:TERMINATE                       terminate current link\n"
             "  CMD:ACCEPT                          accept incoming call (manual-accept mode)\n"
             "  CMD:REJECT                          reject incoming call (TWAS)\n"
-            "  CMD:SCAN                            start channel scanning\n"
+            "  CMD:START_SCANNING                  start channel scanning (alias: CMD:SCAN)\n"
+            "  CMD:STOP_SCANNING                   stop scanning, return to IDLE (available)\n"
             "  CMD:STATUS                          print current SM state\n"
             "  CMD:ADD_CHANNEL rx_hz[:tx_hz] [mode] [label]  add/update channel\n"
             "  CMD:DEL_CHANNEL rx_hz               remove channel\n"

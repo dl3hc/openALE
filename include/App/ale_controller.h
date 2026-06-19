@@ -296,10 +296,11 @@ public:
      * Supported commands:
      *   CMD:CALL <ADDR>   — initiate individual call to ADDR
      *   CMD:AMD <text>    — queue AMD orderwire for the next CMD:CALL (max 90 chars, Expanded-64)
-     *   CMD:TERMINATE     — terminate current link
-     *   CMD:ACCEPT        — accept incoming call (manual-accept mode only)
-     *   CMD:REJECT        — reject incoming call with TWAS
-     *   CMD:SCAN          — start scanning
+     *   CMD:TERMINATE        — terminate current link
+     *   CMD:ACCEPT           — accept incoming call (manual-accept mode only)
+     *   CMD:REJECT           — reject incoming call with TWAS
+     *   CMD:START_SCANNING   — start channel scanning (alias: CMD:SCAN)
+     *   CMD:STOP_SCANNING    — stop scanning, return to IDLE (available)
      *   CMD:STATUS        — return current SM state name
      *   CMD:HELP          — list available commands
      *   CMD:ADD_CHANNEL   — add/update channel

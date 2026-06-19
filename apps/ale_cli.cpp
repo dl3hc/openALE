@@ -27,6 +27,11 @@
  *   --in-device  NAME    Audio input  device substring (RX, waveIn)
  *   --out-device NAME    Audio output device substring (TX, waveOut)
  *   --list-devices       Print available audio devices and exit
+ *   --settings   FILE    Load all settings from key=value file (FEC + timing + policy)
+ *   --scan-dwell MS      Dwell time per channel when scanning (default 200 ms)
+ *   --sounding-interval SEC  Automatic sounding interval (default 300 s)
+ *   --link-timeout SEC   Link-idle timeout (default 30 s)
+ *   --tune-time  MS      Blind-tune delay Tt (default 1045 ms)
  *
  * Single-PC full-duplex loopback with VB-Audio CABLE A+B
  * ───────────────────────────────────────────────────────
@@ -116,6 +121,8 @@ static void print_usage(const char* prog)
         "  --list-devices      Print available audio devices\n"
         "  --channels   FILE   Load channel list from .ale file on startup;\n"
         "                      auto-saves after CMD:ADD_CHANNEL / CMD:DEL_CHANNEL\n"
+        "  --settings   FILE   Load all settings (FEC + timing + accept policy);\n"
+        "                      written by SETTINGS_EXPORT, individual flags override\n"
         "  --radio      SPEC   Radio CAT/PTT:\n"
         "                        hamlib:229:COM3                   IC-7300 seriell\n"
         "                        hamlib:229:tcp://127.0.0.1:4532   via rigctld\n"
@@ -128,6 +135,12 @@ static void print_usage(const char* prog)
         "  --unanimous  N      Min unanimous 2/3-votes to accept a word, 0-49 (default 33)\n"
         "  --adaptive          Auto-adjust Golay mode + unanimous threshold to signal quality\n"
         "  --debug-rx          Log RX peak level + every demodulated word (diagnostics)\n"
+        "\n"
+        "Timing (Level-5 programmable defaults — override --settings values):\n"
+        "  --scan-dwell MS     Dwell time per channel when scanning (default 200 ms)\n"
+        "  --sounding-interval SEC  Automatic sounding interval in seconds (default 300 s)\n"
+        "  --link-timeout SEC  Link-idle timeout in seconds (default 30 s)\n"
+        "  --tune-time  MS     Blind-tune delay Tt in milliseconds (default 1045 ms)\n"
         "\n"
         "Single-PC loopback with VB-Audio CABLE A+B:\n"
         "  %s --self BOB --in-device \"CABLE-A Output\" --out-device \"CABLE-B Input\"\n"
@@ -148,7 +161,7 @@ static void print_banner(const std::string& self,
     if (call_mode)
         mode_str = ("CALL → " + target).c_str();
     else
-        mode_str = "IDLE → SCANNING (auto-accept)";
+        mode_str = "IDLE (available — CMD:START_SCANNING to scan)";
 
     std::printf("\n");
     std::printf("╔═══════════════════════════════════════════════════════╗\n");
@@ -193,6 +206,7 @@ int main(int argc, char* argv[])
     std::string out_device;
     std::string radio_spec;
     std::string channels_file;
+    std::string settings_file;
     bool list_devs    = false;
 
     // Receiver FEC / sync tuning (A.5.2.6.3); defaults = most tolerant point.
@@ -200,6 +214,12 @@ int main(int argc, char* argv[])
     int  unanimous_arg  = -1;   // -1 → keep demodulator default (33)
     bool adaptive_arg   = false;
     bool debug_rx_arg   = false;
+
+    // Timing (Level-5 programmable defaults); -1 → keep ALEStationConfig default.
+    int  scan_dwell_ms_arg      = -1;
+    int  sounding_interval_arg  = -1;
+    int  link_timeout_arg       = -1;
+    int  tune_time_arg          = -1;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--self") == 0 && i + 1 < argc) {
@@ -225,6 +245,16 @@ int main(int argc, char* argv[])
             radio_spec = argv[++i];
         } else if (std::strcmp(argv[i], "--channels") == 0 && i + 1 < argc) {
             channels_file = argv[++i];
+        } else if (std::strcmp(argv[i], "--settings") == 0 && i + 1 < argc) {
+            settings_file = argv[++i];
+        } else if (std::strcmp(argv[i], "--scan-dwell") == 0 && i + 1 < argc) {
+            scan_dwell_ms_arg = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--sounding-interval") == 0 && i + 1 < argc) {
+            sounding_interval_arg = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--link-timeout") == 0 && i + 1 < argc) {
+            link_timeout_arg = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--tune-time") == 0 && i + 1 < argc) {
+            tune_time_arg = std::atoi(argv[++i]);
         }
     }
 
@@ -277,7 +307,14 @@ int main(int argc, char* argv[])
 
     // ── Setup ALE controller ──────────────────────────────────────────────
     ALEController ctrl;
-    ctrl.set_self_address(self_addr);
+    if (!settings_file.empty()) {
+        if (ctrl.import_settings(settings_file))
+            std::printf("[>>] Loaded settings from %s\n", settings_file.c_str());
+        else
+            std::printf("[>>] Settings file '%s' not found — using defaults\n", settings_file.c_str());
+        std::fflush(stdout);
+    }
+    ctrl.set_self_address(self_addr);   // --self always overrides settings file
     // Channel list (non-volatile, .ale file)
     if (!channels_file.empty()) {
         ctrl.set_channel_file(channels_file);
@@ -306,6 +343,12 @@ int main(int argc, char* argv[])
     else if (golay_mode_arg != 3 || unanimous_arg >= 0)
         std::printf("[>>] FEC: Golay %d/%d, min unanimous votes = %u\n",
                     golay_mode_arg, 7 - golay_mode_arg, ctrl.min_unanimous_votes());
+
+    // Timing overrides — applied after settings file, so CLI flags always win.
+    if (scan_dwell_ms_arg >= 0)     ctrl.set_scan_dwell_ms(static_cast<uint32_t>(scan_dwell_ms_arg));
+    if (sounding_interval_arg >= 0) ctrl.set_sounding_interval_sec(static_cast<uint32_t>(sounding_interval_arg));
+    if (link_timeout_arg >= 0)      ctrl.set_link_idle_timeout_sec(static_cast<uint32_t>(link_timeout_arg));
+    if (tune_time_arg >= 0)         ctrl.set_max_tune_time_ms(static_cast<uint32_t>(tune_time_arg));
 
     // Wire audio device: TX routing and sample-accurate completion tracking.
     ctrl.set_audio_device(audio.get());
@@ -384,9 +427,9 @@ int main(int argc, char* argv[])
                     static_cast<double>(ALETimingConstants::Tt_ms));
         std::fflush(stdout);
     } else {
-        ctrl.start_scanning();
-        std::printf("[>>] Scanning — waiting for calls addressed to %s\n\n",
-                    self_addr.c_str());
+        ctrl.start_available();
+        std::printf("[>>] IDLE — available, waiting for calls addressed to %s\n", self_addr.c_str());
+        std::printf("[>>] Type  CMD:START_SCANNING  to begin channel scanning\n\n");
         std::fflush(stdout);
     }
 
