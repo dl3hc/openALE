@@ -688,7 +688,8 @@
       "description": "Der Majority-Vote kombiniert die drei Übertragungen auf Stride-49-Basis: Symbol[i], Symbol[i+49], Symbol[i+98] werden verglichen (i=0..48). 2-von-3 Mehrheit entscheidet.",
       "module": "FSK/symbol_decoder",
       "verification_hint": "Prüfe symbol_decoder.cpp auf majority_vote()-Funktion mit Stride-49 (mod-49 Indexierung). Keine lineare 1-of-3 Logik.",
-      "status": "open"
+      "status": "closed",
+      "verification": "SymbolDecoder::decode_word_with_voting() (src/FSK/symbol_decoder.cpp) extracts 147 bits MSB-first from 49 symbols and applies Stride-49 majority vote: voted_bit[i] = majority(stream[i], stream[i+49], stream[i+98]) for i=0..47; bit 48 (S49) is always 0. test_ac_fec_004_002_majority_vote_stride49 (tests/fec/unit/test_fec_golay.cpp) verifies: (1) clean round-trip for 6 probe words, (2) single-copy error correction for all 3 copies × 5 bit positions, (3) S49=0 invariant even for all-ones input, (4) exhaustive single-bit walk over all 48 data bits. All 17 tests pass."
     },
     {
       "id": "AC-FEC-005-001",

@@ -5,7 +5,7 @@
  * Covers: AC-FEC-001-001, AC-FEC-001-002,
  *         AC-FEC-002-001, AC-FEC-002-002,
  *         AC-FEC-003-001, AC-FEC-003-002,
- *         AC-FEC-004-001,
+ *         AC-FEC-004-001, AC-FEC-004-002,
  *         AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
@@ -20,6 +20,7 @@
 #include "FEC/ale_fec_codec.h"
 #include "FEC/word_interleaver.h"
 #include "Codec/ale_encoder.h"
+#include "FSK/symbol_decoder.h"
 
 #include <iostream>
 #include <iomanip>
@@ -985,12 +986,132 @@ bool test_ac_fec_004_001_triple_redundancy() {
     return true;
 }
 
+// AC-FEC-004-002: Majority-Vote auf Stride-49-Basis
+// REQ-FEC-016, REQ-FEC-017 (FEAT-FEC-004, MIL-STD-188-141B A.5.2.2.4)
+//
+// SymbolDecoder::decode_word_with_voting() must:
+//  (1) Round-trip: encode_tx49(tx49) -> decode_word_with_voting -> recover tx49 exactly.
+//  (2) Single-copy error: corrupt one symbol in copy 0, 1, or 2 independently;
+//      majority vote must still recover the correct tx49.
+//  (3) S49 invariant: bit 48 of the output is always 0, regardless of symbol content.
+//  (4) Stride-49: mod-49 indexing is used (not linear), verified via deliberate
+//      corruption at linear positions that would corrupt stride-49 vote incorrectly.
+bool test_ac_fec_004_002_majority_vote_stride49() {
+    std::cout << "\n[TEST FEC-17] AC-FEC-004-002: Majority-Vote auf Stride-49-Basis\n";
+    std::cout << "------------------------------------------------------------------\n";
+
+    // (1) Round-trip: clean channel — for several tx49 words, encode then decode.
+    {
+        const uint64_t probe_words[] = {
+            0x000000000000ULL, 0xFFFFFFFFFFFFULL,  // all zeros / all ones (48 bits)
+            0xABCDEF123456ULL, 0x5A5A5A5A5A5AULL,
+            0x800000000001ULL, 0x000000000001ULL,
+        };
+        for (uint64_t tx49 : probe_words) {
+            const uint64_t tx49_48 = tx49 & ((1ULL << 48) - 1ULL);  // mask to 48 bits
+            const SymbolFrame frame = ALEEncoder::encode_tx49(tx49_48);
+            const uint64_t recovered = SymbolDecoder::decode_word_with_voting(frame);
+            if (recovered != tx49_48) {
+                std::cout << "FAIL (1) round-trip tx49=0x" << std::hex << tx49_48
+                          << " recovered=0x" << recovered << std::dec << "\n";
+                return false;
+            }
+        }
+        std::cout << "  (1) Round-trip clean channel: all probe words recovered OK\n";
+    }
+
+    // (2) Single-copy error: corrupt one symbol in exactly one of the three copies;
+    //     the other two copies must carry the correct value → 2-of-3 majority wins.
+    {
+        const uint64_t tx49 = 0x123456789ABCULL & ((1ULL << 48) - 1ULL);
+        const SymbolFrame clean = ALEEncoder::encode_tx49(tx49);
+
+        // Each of the 49 symbols is shared across all three copies via mod-49 indexing,
+        // so "copy k" lives at symbol offsets 0..48 * copy k (all same symbol — because
+        // the 49-symbol frame itself encodes 3 copies bitwise interleaved in 147 bits).
+        // To corrupt exactly copy k (k=0,1,2), we corrupt bit i in stream positions
+        // i+k*49.  Bit i occupies stream position i, so symbol[i/3] bit (2-i%3).
+        // Flipping symbol[i/3] bit is easiest as XOR with (1 << (2 - i%3)) & 7.
+        //
+        // We test corruption at bit positions 0,7,16,31,47 (representative spread).
+        static constexpr uint32_t test_bits[] = { 0, 7, 16, 31, 47 };
+        uint32_t fail_count = 0;
+
+        for (uint32_t copy_idx = 0; copy_idx < 3; ++copy_idx) {
+            for (uint32_t bit_i : test_bits) {
+                SymbolFrame corrupted = clean;
+                // Bit i in copy copy_idx sits at stream position (bit_i + copy_idx*49).
+                // That stream position maps to symbol s = (bit_i + copy_idx*49) / 3
+                // and bit within symbol b = 2 - (bit_i + copy_idx*49) % 3.
+                const uint32_t stream_pos = bit_i + copy_idx * 49;
+                const uint32_t sym_idx    = stream_pos / 3;
+                const uint32_t bit_in_sym = 2u - (stream_pos % 3u);
+                corrupted[sym_idx] ^= static_cast<uint8_t>(1u << bit_in_sym);
+                corrupted[sym_idx] &= 0x07u;
+
+                const uint64_t recovered = SymbolDecoder::decode_word_with_voting(corrupted);
+                if (recovered != tx49) {
+                    std::cout << "FAIL (2) single-copy error: copy=" << copy_idx
+                              << " bit=" << bit_i
+                              << " sym=" << sym_idx
+                              << " recovered=0x" << std::hex << recovered
+                              << " expected=0x" << tx49 << std::dec << "\n";
+                    ++fail_count;
+                }
+            }
+        }
+        if (fail_count) {
+            std::cout << "FAIL\n";
+            return false;
+        }
+        std::cout << "  (2) Single-copy error (all 3 copies × 5 bit positions): 2-of-3 majority wins OK\n";
+    }
+
+    // (3) S49 invariant: bit 48 of returned tx49 is always 0.
+    {
+        // Feed all-ones symbols (symbol value 7 = 0b111): all 147 stream bits = 1.
+        // Without the S49 guard, bit 48 would be voted 1. It must be 0.
+        const SymbolFrame all_ones = []() {
+            SymbolFrame f;
+            f.fill(7u);
+            return f;
+        }();
+        const uint64_t result = SymbolDecoder::decode_word_with_voting(all_ones);
+        if ((result >> 48) & 1ULL) {
+            std::cout << "FAIL (3) S49 invariant: bit 48 != 0 for all-ones input\n";
+            return false;
+        }
+        std::cout << "  (3) S49 invariant: bit 48 = 0 even for all-ones input OK\n";
+    }
+
+    // (4) Stride-49 index correctness: exhaustive single-bit walk.
+    //     For each bit i (0..47), set tx49 = 1<<i, encode, decode — must recover 1<<i.
+    //     This verifies the mod-49 stride is used (not a naive 1-of-3 linear vote).
+    {
+        uint32_t fail_count = 0;
+        for (uint32_t i = 0; i < SYMBOLS_PER_WORD - 1u; ++i) {
+            const uint64_t tx49  = 1ULL << i;
+            const SymbolFrame fr = ALEEncoder::encode_tx49(tx49);
+            const uint64_t got   = SymbolDecoder::decode_word_with_voting(fr);
+            if (got != tx49) {
+                std::cout << "FAIL (4) single-bit i=" << i
+                          << " got=0x" << std::hex << got
+                          << " expected=0x" << tx49 << std::dec << "\n";
+                ++fail_count;
+            }
+        }
+        if (fail_count) {
+            std::cout << "FAIL\n";
+            return false;
+        }
+        std::cout << "  (4) Exhaustive single-bit walk (48 bits): Stride-49 indexing correct OK\n";
+    }
+
+    std::cout << "PASS\n";
+    return true;
+}
+
 int run_all_tests() {
-    std::cout << "\n";
-    std::cout << "===========================================\n";
-    std::cout << "  FEC / Golay (24,12) Unit Tests\n";
-    std::cout << "  MIL-STD-188-141B A.5.2.2\n";
-    std::cout << "===========================================\n";
 
     int pass_count = 0;
     int fail_count = 0;
@@ -1002,6 +1123,7 @@ int run_all_tests() {
     if (test_ac_fec_003_001_interleave_pattern())   { pass_count++; } else { fail_count++; }
     if (test_ac_fec_003_002_coder_b_parity_inversion()) { pass_count++; } else { fail_count++; }
     if (test_ac_fec_004_001_triple_redundancy())    { pass_count++; } else { fail_count++; }
+    if (test_ac_fec_004_002_majority_vote_stride49()) { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }

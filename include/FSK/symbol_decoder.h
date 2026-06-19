@@ -49,11 +49,28 @@ static uint8_t bin_to_symbol(uint32_t bin_index);
     /**
      * Majority voting for triple-redundant bit
      * Combines 3 copies of same bit for error correction
-     * 
+     *
      * \param bits Array of 3 bit values
      * \return Final bit value (0 or 1)
      */
     static uint8_t majority_vote(const uint8_t bits[3]);
+
+    /**
+     * Decode 49 received 8-FSK symbols using Stride-49 Majority-Vote.
+     *
+     * The sender transmits one 49-bit word three times (stream[j] = tx49[j%49]).
+     * Each symbol carries 3 bits MSB-first, so the 147-bit stream is recovered as:
+     *   stream[i] = (symbols[i/3] >> (2 - i%3)) & 1   for i = 0..146
+     *
+     * Voted output bit k = majority(stream[k], stream[k+49], stream[k+98]) for k=0..47.
+     * Bit 48 (S49, stuff bit) is always 0 in the returned tx49 word.
+     *
+     * Spec: MIL-STD-188-141B A.5.2.2.4
+     *
+     * \param symbols  49 received 8-FSK symbol values (each 0–7)
+     * \return         49-bit word (bits 0..47 voted, bit 48 = 0) for ALEFECCodec::deinterleave_word()
+     */
+    static uint64_t decode_word_with_voting(const std::array<uint8_t, SYMBOLS_PER_WORD>& symbols);
 
 private:
     // Lookup table: FFT bin -> symbol value (not used anymore, kept for API compatibility)

@@ -63,4 +63,24 @@ uint8_t SymbolDecoder::majority_vote(const uint8_t bits[3]) {
     return (sum >= 2) ? 1 : 0;
 }
 
+uint64_t SymbolDecoder::decode_word_with_voting(const std::array<uint8_t, SYMBOLS_PER_WORD>& symbols) {
+    // Recover the 147-bit stream from 49 symbols (MSB-first per symbol).
+    // stream[i] = (symbols[i/3] >> (2 - i%3)) & 1   for i = 0..146
+    uint8_t stream[3 * SYMBOLS_PER_WORD] = {};
+    for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
+        for (uint32_t b = 0; b < BITS_PER_SYMBOL; ++b)
+            stream[k * BITS_PER_SYMBOL + b] = (symbols[k] >> (BITS_PER_SYMBOL - 1u - b)) & 1u;
+    }
+
+    // Stride-49 majority vote: bits 0..47; bit 48 (S49) stays 0.
+    // voted_bit[i] = majority(stream[i], stream[i+49], stream[i+98])  i = 0..47
+    uint64_t tx49 = 0;
+    for (uint32_t i = 0; i < SYMBOLS_PER_WORD - 1u; ++i) {
+        const uint8_t trio[3] = { stream[i], stream[i + 49], stream[i + 98] };
+        if (majority_vote(trio))
+            tx49 |= (1ULL << i);
+    }
+    return tx49;
+}
+
 } // namespace ale
