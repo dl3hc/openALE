@@ -660,7 +660,8 @@
       "description": "Die Paritätsbits von Coder B (G13–G24) werden vor dem Interleaving bit-invertiert (~). Beim Deinterleaving/Decodieren muss diese Invertierung rückgängig gemacht werden.",
       "module": "FEC/interleaver",
       "verification_hint": "Prüfe ale_fec_codec.cpp: Bei Coder B muss Parity mit ~ (Bitwise NOT) invertiert werden. DD-003 beschreibt das genaue Layout.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_fec_003_002_coder_b_parity_inversion() in tests/fec/unit/test_fec_golay.cpp: (1) encode_word() — coder_b[11:0] == ~Golay::encode(W13..W24)[11:0] for probe words 0xABC123, 0x5A5A5A, 0x123456, 0xFFFFFF, 0x800001; (2) deinterleave_word() undoes the inversion via flip_coder_b_check_bits() and recovers the ALE word with DECODE_OK; (3) negative — decoding coder_b without un-inversion yields DECODE_DETECTED (12 inverted parity bits exceed correction capacity of 3). 15/15 Tests gruen."
     },
     {
       "id": "AC-FEC-004-001",

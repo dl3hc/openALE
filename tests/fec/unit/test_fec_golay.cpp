@@ -4,7 +4,7 @@
  *
  * Covers: AC-FEC-001-001, AC-FEC-001-002,
  *         AC-FEC-002-001, AC-FEC-002-002,
- *         AC-FEC-003-001,
+ *         AC-FEC-003-001, AC-FEC-003-002,
  *         AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
@@ -852,6 +852,72 @@ bool test_ac_fec_003_001_interleave_pattern() {
     return true;
 }
 
+// AC-FEC-003-002: Coder-B-Paritaet ist invertiert
+// REQ-FEC-013 (FEAT-FEC-003, MIL-STD-188-141B A.5.2.2.3)
+//
+// Three checks:
+//  (1) encode_word(): coder_b[11:0] == ~Golay(W13..W24)[11:0]
+//  (2) deinterleave_word() undoes the inversion, recovering the ALE word with DECODE_OK
+//  (3) Negative: decoding coder_b without un-inversion yields DECODE_DETECTED
+//      (12 inverted parity bits → distance 12 from nearest valid codeword > correction cap. of 3)
+bool test_ac_fec_003_002_coder_b_parity_inversion() {
+    std::cout << "\n[TEST FEC-14] AC-FEC-003-002: Coder-B Paritaets-Inversion (~G13..~G24)\n";
+    std::cout << "------------------------------------------------------------------------\n";
+
+    static const uint32_t probe_words[] = {
+        0xABC123u, 0x5A5A5Au, 0x123456u, 0xFFFFFFu, 0x800001u
+    };
+
+    for (uint32_t w : probe_words) {
+        const uint16_t w_lower = static_cast<uint16_t>(w & 0xFFFu);
+
+        // (1) Encode: coder_b low 12 bits must equal bitwise NOT of raw Golay(w_lower) parity
+        const uint16_t raw_parity  = Golay::encode(w_lower) & 0xFFFu;
+        const uint16_t inv_parity  = (~raw_parity) & 0xFFFu;
+
+        const GolayCoded coded      = ALEFECCodec::encode_word(w);
+        const uint16_t coded_parity = coded.coder_b & 0xFFFu;
+
+        if (coded_parity != inv_parity) {
+            std::cout << "FAIL (1) encode w=0x" << std::hex << w
+                      << ": coder_b parity=0x" << coded_parity
+                      << " expected ~Golay(w_lower)=0x" << inv_parity << std::dec << "\n";
+            return false;
+        }
+
+        // (2) Decode: deinterleave_word must undo inversion and recover the ALE word
+        const uint64_t tx = ALEFECCodec::interleave_word(coded);
+        Golay::DecodeResult fec;
+        const uint32_t recovered = ALEFECCodec::deinterleave_word(tx, fec);
+
+        if (recovered != w || fec.flag != Golay::DECODE_OK) {
+            std::cout << "FAIL (2) decode w=0x" << std::hex << w
+                      << ": recovered=0x" << recovered
+                      << " fec.flag=0x" << (int)fec.flag << std::dec << "\n";
+            return false;
+        }
+
+        // (3) Negative: decoding coded.coder_b WITHOUT un-inversion.
+        // coded.coder_b = valid_codeword(w_lower) XOR 0x000FFF (12 parity bits flipped).
+        // 0x000FFF is not a valid codeword, and minimum Golay distance is 8, so
+        // coded.coder_b is at distance >= 4 from every valid codeword → DECODE_DETECTED.
+        uint16_t out_raw = 0;
+        Golay::DecodeResult r_raw = Golay::decode(coded.coder_b, out_raw);
+        if (r_raw.flag != Golay::DECODE_DETECTED) {
+            std::cout << "FAIL (3) negative w=0x" << std::hex << w
+                      << ": decoding coder_b without un-inversion returned flag=0x"
+                      << (int)r_raw.flag << " (expected DECODE_DETECTED)\n" << std::dec;
+            return false;
+        }
+    }
+
+    std::cout << "  (1) coder_b[11:0] == ~Golay(W13..W24)[11:0] for all probe words OK\n";
+    std::cout << "  (2) deinterleave_word restores ALE word with DECODE_OK OK\n";
+    std::cout << "  (3) negative: coder_b without un-inversion -> DECODE_DETECTED OK\n";
+    std::cout << "PASS\n";
+    return true;
+}
+
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "===========================================\n";
@@ -867,6 +933,7 @@ int run_all_tests() {
     if (test_ac_fec_002_001_three_bit_correction()) { pass_count++; } else { fail_count++; }
     if (test_ac_fec_002_002_decode_flags())         { pass_count++; } else { fail_count++; }
     if (test_ac_fec_003_001_interleave_pattern())   { pass_count++; } else { fail_count++; }
+    if (test_ac_fec_003_002_coder_b_parity_inversion()) { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }
