@@ -433,7 +433,7 @@ void WasapiDevice::service_render()
             if (pulled) {
                 at_pcm_8k_.resize(SYMBOLS_PER_WORD * FFT_SIZE);
                 at_tone_gen_.generate_symbols(syms, SYMBOLS_PER_WORD,
-                                              at_pcm_8k_.data(), 0.7f);
+                                              at_pcm_8k_.data(), TX_AMPLITUDE);
                 at_render_buf_.clear();
                 at_tx_resampler_->process(at_pcm_8k_.data(),
                                           SYMBOLS_PER_WORD * FFT_SIZE,

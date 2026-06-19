@@ -48,7 +48,7 @@ int main()
     while (modem.pull_symbol_frame(syms)) {
         const size_t off = pcm8.size();
         pcm8.resize(off + SYMBOLS_PER_WORD * FFT_SIZE);
-        gen.generate_symbols(syms, SYMBOLS_PER_WORD, pcm8.data() + off, 0.7f);
+        gen.generate_symbols(syms, SYMBOLS_PER_WORD, pcm8.data() + off, TX_AMPLITUDE);
         sm.on_word_complete();
     }
     const size_t n_words = pcm8.size() / (SYMBOLS_PER_WORD * FFT_SIZE);

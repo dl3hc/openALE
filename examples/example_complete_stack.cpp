@@ -85,7 +85,7 @@ public:
         // Generate audio (Phase 1)
         // Each symbol = 64 samples, 24 symbols = 1536 samples
         std::vector<int16_t> audio(1536);  // Buffer for audio
-        generator.generate_symbols(symbols, 24, audio.data(), 1.0f);
+        generator.generate_symbols(symbols, 24, audio.data(), TX_AMPLITUDE);
         std::cout << "    Generated " << audio.size() << " audio samples\n";
         
         // In real system: send audio to sound card

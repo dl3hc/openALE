@@ -145,7 +145,7 @@ int main()
         while (modem.pull_symbol_frame(syms)) {
             const size_t off = pcm.size();
             pcm.resize(off + SYMBOLS_PER_WORD * FFT_SIZE);
-            gen.generate_symbols(syms, SYMBOLS_PER_WORD, pcm.data() + off, 0.7f);
+            gen.generate_symbols(syms, SYMBOLS_PER_WORD, pcm.data() + off, TX_AMPLITUDE);
             sm.on_word_complete();
         }
         t += tick_ms;

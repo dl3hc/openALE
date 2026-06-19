@@ -87,6 +87,12 @@ static_assert([]() constexpr {
     return true;
 }(), "SYMBOL_TO_FREQ must be the exact inverse of FREQ_TO_SYMBOL");
 
+// TX amplitude: −12 dBFS (0.25 = 20·log₁₀(0.25) ≈ −12.04 dBFS).
+// Leaves enough headroom for transceiver ALC and PA non-linearity.
+// All call-sites that produce audio for real TX or integration tests must use
+// this constant; never pass a raw 0.7 or 1.0 literal into generate_symbols().
+constexpr float TX_AMPLITUDE = 0.25f;
+
 // FFT parameters
 constexpr uint32_t FFT_SIZE        = 64;
 constexpr uint32_t FFT_BIN_OFFSET  = 6;

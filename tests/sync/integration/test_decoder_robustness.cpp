@@ -175,7 +175,7 @@ int main()
 
         const size_t off = pcm.size();
         pcm.resize(off + SYMBOLS_PER_WORD * FFT_SIZE);
-        gen.generate_symbols(frame.data(), SYMBOLS_PER_WORD, pcm.data() + off, 0.7f);
+        gen.generate_symbols(frame.data(), SYMBOLS_PER_WORD, pcm.data() + off, TX_AMPLITUDE);
     }
     pcm.insert(pcm.end(), 4096, 0);   // trailing silence
 
