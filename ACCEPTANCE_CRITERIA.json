@@ -734,14 +734,15 @@
       "id": "AC-FRAME-001-003",
       "feature": "FEAT-FRAME-001",
       "requirement": [
-        "REQ-FRAME-001"
+        "DD-006",
+        "DD-013"
       ],
-      "title": "Alle Wörter sind Trw-synchron",
-      "description": "Jedes gesendete Wort beginnt auf einem Trw-Grid-Slot (first_call_tx_ms + n × 392 ms). Es gibt keine Wörter, die außerhalb des Trw-Rasters beginnen (Ausnahme: LISTENING-Phase).",
+      "title": "Trw-Grid-Invariant: call_cycle_count als Slot-Zähler",
+      "description": "Die Formel next_slot_ms = first_call_tx_ms + call_cycle_count × Trw_ms ist eine Architekturinvariante (DD-006/DD-013), keine explizite Standardanforderung. Das Grid ergibt sich zwingend daraus, dass enqueue_call_sequence_() alle Wörter lückenlos einreiht und der Modem sie sequentiell mit je 49 Symbolen = 392 ms abspielt. first_call_tx_ms ist der einmalige TX-Anker (TUNING-complete); call_cycle_count zählt verbrauchte Trw-Slots und steuert damit die Phasenwechsel (SCANNING→LEADING→CONCLUSION). Der Standard gibt nur Phasendauern in Trw-Einheiten vor — das Grid ist die notwendige Implementierungskonsequenz.",
       "module": "Protocol/ale_state_machine",
-      "verification_hint": "Prüfe handle_calling() in ale_state_machine.cpp: next_slot_ms = first_call_tx_ms + call_cycle_count × Trw_ms.",
+      "verification_hint": "Prüfe enqueue_call_sequence_() (lückenlose Einreihung) und on_word_complete() (call_cycle_count += 1 pro Slot). Die Formel first_call_tx_ms + call_cycle_count × Trw_ms muss für jedes Wort mit 0 Abweichung stimmen.",
       "status": "closed",
-      "verification": "get_first_call_tx_ms() Getter in include/Protocol/Control/ale_state_machine.h ergänzt. Test test_ac_frame_001_003_trw_grid_synchrony() in tests/frame/unit/test_frame.cpp hinzugefügt. Verifiziert: (1) first_call_tx_ms == T_TX (TUNING-complete-Zeit = Twt_ms + Tt_ms = 1829 ms), (2) für jedes der 5 Wörter (2 scan + 2 leading + 1 conclusion) gilt slot = first_call_tx_ms + call_cycle_count × Trw_ms mit 0 Abweichung, (3) call_cycle_count == 5 nach allen Wörtern, Phase == LISTENING. Alle 12 Frame-Tests und alle 38 Calling-Tests grün."
+      "verification": "get_first_call_tx_ms() Getter in include/Protocol/Control/ale_state_machine.h ergänzt. Test test_ac_frame_001_003_trw_grid_synchrony() in tests/frame/unit/test_frame.cpp verifiziert: (1) first_call_tx_ms == T_TX (TUNING-complete-Zeit), (2) für jedes der 5 Wörter gilt next_slot = first_call_tx_ms + call_cycle_count × Trw_ms mit 0 Abweichung, (3) call_cycle_count == 5 und Phase LISTENING nach Abschluss. Invariant ist Konsequenz der lückenlosen Einreihung in enqueue_call_sequence_(), nicht expliziter Scheduler. Alle 12 Frame-Tests und 38 Calling-Tests grün."
     },
     {
       "id": "AC-FRAME-002-001",
