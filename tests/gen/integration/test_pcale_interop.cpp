@@ -202,7 +202,7 @@ static void test_decoder_accepts_reference()
             dump_symbols("pcale", ref);
         } else {
             check(fec.flag == Golay::DECODE_OK, "expected DECODE_OK for clean PCALE word");
-            check(unanimous == SYMBOLS_PER_WORD, "expected all-unanimous votes for clean PCALE word");
+            check(unanimous == SYMBOLS_PER_WORD - 1u, "expected all-unanimous votes for clean PCALE word");
         }
     }
     check(failures == 0, "our decoder failed on PCALE-encoded words");

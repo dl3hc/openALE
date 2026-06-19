@@ -21,12 +21,14 @@ bool ALEDecoder::decode(const uint8_t* symbols_49,
     // on-air bit position p lives in symbol p / BITS_PER_SYMBOL, sub-bit lane
     // (BITS_PER_SYMBOL - 1 - p % BITS_PER_SYMBOL).
     //
-    // For every bit we take the 2/3 majority and tally the UNANIMOUS positions
+    // For bits 0..47 we take the 2/3 majority and tally the UNANIMOUS positions
     // (all three copies agree) — the standard's "threshold of unanimous votes in
     // the 2/3 majority voter decoder" quality / triple-redundant-phase metric.
+    // Bit 48 (S49, stuff bit) is not voted: it stays 0 and is excluded from the
+    // unanimous count per A.5.2.2.4 ("48 possible votes").
     uint64_t tx49            = 0;
     uint8_t  unanimous_votes = 0;
-    for (uint32_t bit = 0; bit < SYMBOLS_PER_WORD; ++bit) {
+    for (uint32_t bit = 0; bit < SYMBOLS_PER_WORD - 1u; ++bit) {
         uint8_t ones = 0;   // number of '1's among this bit's three copies
         for (uint32_t copy = 0; copy < SYMBOL_REPETITION; ++copy) {
             const uint32_t p    = bit + copy * SYMBOLS_PER_WORD;        // 0..146

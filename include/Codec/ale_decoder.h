@@ -16,7 +16,8 @@
  * counts the UNANIMOUS positions (all three copies agree).
  *
  * unanimous_votes (A.5.2.6.3 "threshold of unanimous votes in the 2/3 majority
- * voter decoder"): 0..49; a clean, correctly-phased word scores 49.  It is the
+ * voter decoder"): 0..48 (bits 0..47 only; bit 48 / S49 excluded per A.5.2.2.4);
+ * a clean, correctly-phased word scores 48.  It is the
  * standard's primary signal-quality / BER and triple-redundant-phase
  * discriminator.  decode() only computes and reports it (and stores it in the
  * ALEWord); the acceptance threshold is applied by the caller (the modem's
@@ -43,8 +44,8 @@ public:
      * \param out                 [out] Decoded ALE word on success; its
      *                            unanimous_votes and fec_errors fields are always set.
      * \param fec                 [out] Combined Golay decode result (worst of A/B halves).
-     * \param unanimous_votes_out [out, optional] Unanimous 2/3-vote count (0..49);
-     *                            49 = a clean, correctly-phased word (A.5.2.6.3).
+     * \param unanimous_votes_out [out, optional] Unanimous 2/3-vote count (0..48,
+     *                            bits 0..47; S49 excluded); 48 = clean word (A.5.2.6.3).
      * \param golay_mode          Golay correction power (A.5.2.6.3); default Mode3_4.
      *
      * \return true if Golay produced DECODE_OK or DECODE_CORRECTED AND

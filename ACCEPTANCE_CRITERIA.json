@@ -701,7 +701,8 @@
       "description": "Die ALEWord-Struktur enthält ein Feld unanimous_votes (0–48), das die Anzahl der Bits zählt, bei denen alle drei Übertragungen übereinstimmen (exklusive Stuff-Bit S49).",
       "module": "FSK/symbol_decoder",
       "verification_hint": "Prüfe ale_word.h auf unanimous_votes-Feld. Prüfe symbol_decoder.cpp auf Zählinkrementierung bei unanimem Vote.",
-      "status": "open"
+      "status": "closed",
+      "verification": "Bug behoben: ale_decoder.cpp loop-bound von `< SYMBOLS_PER_WORD` (49) auf `< SYMBOLS_PER_WORD - 1u` (48) geändert, um S49 (Bit 48) aus dem unanimous-count auszuschließen. ale_decoder.h-Kommentar von 0..49 auf 0..48 korrigiert. Test test_ac_fec_005_001_unanimous_vote_counter() ergänzt (4 Szenarien: Feld-Default, clean-frame=48, single-copy-error=47, all-ones=48). Drei abhängige Tests in test_codec.cpp und test_pcale_interop.cpp auf SYMBOLS_PER_WORD-1u aktualisiert. Alle 32 Tests grün."
     },
     {
       "id": "AC-FRAME-001-001",

@@ -6,6 +6,7 @@
  *         AC-FEC-002-001, AC-FEC-002-002,
  *         AC-FEC-003-001, AC-FEC-003-002,
  *         AC-FEC-004-001, AC-FEC-004-002,
+ *         AC-FEC-005-001,
  *         AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
@@ -20,6 +21,7 @@
 #include "FEC/ale_fec_codec.h"
 #include "FEC/word_interleaver.h"
 #include "Codec/ale_encoder.h"
+#include "Codec/ale_decoder.h"
 #include "FSK/symbol_decoder.h"
 
 #include <iostream>
@@ -1111,6 +1113,99 @@ bool test_ac_fec_004_002_majority_vote_stride49() {
     return true;
 }
 
+bool test_ac_fec_005_001_unanimous_vote_counter() {
+    std::cout << "\n[TEST FEC-18] AC-FEC-005-001: unanimous_votes in ALEWord (exkl. S49)\n";
+    std::cout << "----------------------------------------------------------------------\n";
+
+    // (1) Default-constructed ALEWord: unanimous_votes must be 0.
+    {
+        ALEWord w;
+        static_assert(sizeof(w.unanimous_votes) == 1, "unanimous_votes must be uint8_t");
+        if (w.unanimous_votes != 0) {
+            std::cout << "FAIL (1) default unanimous_votes != 0\n";
+            return false;
+        }
+        std::cout << "  (1) unanimous_votes field exists, default = 0 OK\n";
+    }
+
+    // Build a clean, fully encoded ALE word for the decode tests.
+    const char chars[3] = { 'A', 'B', 'C' };
+    const ALEWord ref_word = WordParser::make_word(PreambleType::TO, chars);
+    if (!ref_word.valid) {
+        std::cout << "FAIL: make_word returned invalid word\n";
+        return false;
+    }
+    const SymbolFrame clean_frame = ALEEncoder::encode(ref_word);
+
+    // (2) Clean channel: all 48 data bits are unanimous; S49 must NOT be counted.
+    //     Expected: unanimous_votes == 48, not 49.
+    {
+        ALEWord out;
+        Golay::DecodeResult fec;
+        uint8_t uv = 0xFF;
+        const bool ok = ALEDecoder::decode(clean_frame.data(), out, fec, &uv);
+        if (!ok) {
+            std::cout << "FAIL (2) clean frame decode failed\n";
+            return false;
+        }
+        if (uv != 48u) {
+            std::cout << "FAIL (2) unanimous_votes_out=" << (int)uv
+                      << " expected 48\n";
+            return false;
+        }
+        if (out.unanimous_votes != 48u) {
+            std::cout << "FAIL (2) ALEWord.unanimous_votes=" << (int)out.unanimous_votes
+                      << " expected 48\n";
+            return false;
+        }
+        std::cout << "  (2) Clean channel: unanimous_votes=48 (S49 excluded) OK\n";
+    }
+
+    // (3) One copy of bit 0 corrupted → that bit becomes non-unanimous → count = 47.
+    //     Bit 0, copy 1 → stream position 0+1*49=49 → symbol 49/3=16, sub-bit 2-49%3=1.
+    {
+        SymbolFrame corrupted = clean_frame;
+        constexpr uint32_t stream_pos = 49u;
+        constexpr uint32_t sym_idx    = stream_pos / 3u;        // 16
+        constexpr uint32_t bit_in_sym = 2u - (stream_pos % 3u); // 1
+        corrupted[sym_idx] ^= static_cast<uint8_t>(1u << bit_in_sym);
+        corrupted[sym_idx] &= 0x07u;
+
+        ALEWord out;
+        Golay::DecodeResult fec;
+        uint8_t uv = 0xFF;
+        ALEDecoder::decode(corrupted.data(), out, fec, &uv);
+        if (uv != 47u) {
+            std::cout << "FAIL (3) after single-copy corruption: unanimous_votes="
+                      << (int)uv << " expected 47\n";
+            return false;
+        }
+        std::cout << "  (3) Single-copy error at bit 0: unanimous_votes=47 OK\n";
+    }
+
+    // (4) All-ones symbol stream: bits 0..47 are unanimous (1/1/1) AND bit 48 (S49)
+    //     is also "unanimous" among its copies — but must NOT be counted.
+    //     Expected: unanimous_votes == 48, not 49.
+    {
+        SymbolFrame all_ones;
+        all_ones.fill(7u);  // 0b111 → every stream bit = 1
+
+        ALEWord out;
+        Golay::DecodeResult fec;
+        uint8_t uv = 0xFF;
+        ALEDecoder::decode(all_ones.data(), out, fec, &uv);
+        if (uv != 48u) {
+            std::cout << "FAIL (4) all-ones stream: unanimous_votes="
+                      << (int)uv << " expected 48 (S49 not counted)\n";
+            return false;
+        }
+        std::cout << "  (4) All-ones stream: unanimous_votes=48 (S49 not counted) OK\n";
+    }
+
+    std::cout << "PASS\n";
+    return true;
+}
+
 int run_all_tests() {
 
     int pass_count = 0;
@@ -1124,6 +1219,7 @@ int run_all_tests() {
     if (test_ac_fec_003_002_coder_b_parity_inversion()) { pass_count++; } else { fail_count++; }
     if (test_ac_fec_004_001_triple_redundancy())    { pass_count++; } else { fail_count++; }
     if (test_ac_fec_004_002_majority_vote_stride49()) { pass_count++; } else { fail_count++; }
+    if (test_ac_fec_005_001_unanimous_vote_counter()) { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }

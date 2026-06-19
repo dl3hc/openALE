@@ -61,7 +61,7 @@ static void test_roundtrip_basic_preambles()
 
         check(ok, "decode returned false");
         check(fec.flag == Golay::DECODE_OK, "expected DECODE_OK for clean signal");
-        check(unanimous == SYMBOLS_PER_WORD, "expected all-unanimous votes for clean signal");
+        check(unanimous == SYMBOLS_PER_WORD - 1u, "expected all-unanimous votes for clean signal");
         check(decoded.type == word.type, "preamble type mismatch");
         check(std::strcmp(decoded.address, word.address) == 0, "address mismatch");
     }
@@ -93,9 +93,9 @@ static void test_unanimous_votes_full_on_clean_frame()
     uint8_t uv = 0xFF;
     ALEDecoder::decode(frame.data(), out, fec, &uv);
 
-    // A clean encoded frame has all three copies of each bit identical → every
-    // one of the 49 positions is unanimous (A.5.2.6.3).
-    check(uv == SYMBOLS_PER_WORD, "unanimous votes should be 49 for a perfectly encoded frame");
+    // A clean encoded frame has all three copies of each data bit identical → every
+    // one of the 48 data positions (bits 0..47) is unanimous; S49 is excluded (A.5.2.2.4).
+    check(uv == SYMBOLS_PER_WORD - 1u, "unanimous votes should be 48 for a perfectly encoded frame");
     printf("PASS  test_unanimous_votes_full_on_clean_frame\n");
 }
 
@@ -120,7 +120,7 @@ static void test_majority_vote_recovers_single_symbol_error()
     const bool ok = ALEDecoder::decode(frame.data(), out, fec, &uv);
 
     // The vote is 2:1 in favour of the correct bit for each position in symbol 0,
-    // so the majority vote still wins.  unanimous votes must drop below 49 (the
+    // so the majority vote still wins.  unanimous votes must drop below 48 (the
     // flipped bits make their positions non-unanimous).
     check(ok, "decode should succeed with one corrupted symbol");
     check(out.type == word.type, "type mismatch after error injection");
