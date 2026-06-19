@@ -727,7 +727,8 @@
       "description": "In einer gültigen Frame-Sequenz muss ein FROM-Wort (Quick-ID) immer vor einem CMD-Wort stehen. Diese Sequenzregel ist in frame_validator.cpp durchgesetzt.",
       "module": "Protocol/frame_validator",
       "verification_hint": "Prüfe frame_validator.cpp auf FROM-vor-CMD-Validierung.",
-      "status": "open"
+      "status": "closed",
+      "verification": "FrameValidator::from_precedes_cmd_only() implementiert in src/Word/ale_word.cpp (Zeile 191): iteriert über die Wortsequenz, überspringt optionale DATA/REP-Erweiterungen nach FROM, und prüft dass unmittelbar danach CMD folgt. Test test_ac_frame_001_002_from_precedes_cmd() ergänzt in tests/frame/unit/test_frame.cpp mit 5 Szenarien: (1) TO+FROM+CMD+TIS gültig, (2) TO+FROM+DATA+CMD+TIS gültig, (3) TO+TIS ohne CMD/FROM gültig (vakuös), (4) TO+CMD+FROM+TIS abgelehnt (FROM nach CMD), (5) TO+FROM orphan abgelehnt (kein CMD nach FROM). Alle 11 Tests grün."
     },
     {
       "id": "AC-FRAME-001-003",

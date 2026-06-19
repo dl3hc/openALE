@@ -666,6 +666,94 @@ bool test_ac_001_4_timing_formulas()
 }
 
 // ============================================================================
+// AC-FRAME-001-002 — FROM (Quick-ID) must precede CMD in a valid frame sequence.
+//
+// Tests FrameValidator::from_precedes_cmd_only() in the context of complete
+// ALE frame word sequences (TO-addressing + calling section + message + conclusion).
+// Distinct from AC-WORD-007-5/7 (isolated word pairs) — here the sequences
+// mirror real frames as the protocol would produce them.
+// ============================================================================
+
+bool test_ac_frame_001_002_from_precedes_cmd()
+{
+    std::cout << "\n[AC-FRAME-001-002] FROM (Quick-ID) must precede CMD in a valid frame\n";
+
+    const char dst[3] = {'B','O','B'};
+    const char src[3] = {'S','A','M'};
+    const char ext[3] = {'U','E','L'};
+    const char cmd[3] = {'V','E','R'};
+
+    bool all_ok = true;
+
+    // Case 1: valid message frame — TO + FROM + CMD + TIS
+    {
+        std::vector<ALEWord> frame = {
+            WordParser::make_word(PreambleType::TO,   dst),
+            WordParser::make_word(PreambleType::FROM, src),
+            WordParser::make_word(PreambleType::CMD,  cmd),
+            WordParser::make_word(PreambleType::TIS,  src),
+        };
+        bool ok = FrameValidator::from_precedes_cmd_only(frame);
+        all_ok &= ok;
+        std::cout << "  TO, FROM, CMD, TIS (valid): " << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    // Case 2: valid — extended FROM address (FROM + DATA) before CMD
+    {
+        std::vector<ALEWord> frame = {
+            WordParser::make_word(PreambleType::TO,   dst),
+            WordParser::make_word(PreambleType::FROM, src),
+            WordParser::make_word(PreambleType::DATA, ext),
+            WordParser::make_word(PreambleType::CMD,  cmd),
+            WordParser::make_word(PreambleType::TIS,  src),
+        };
+        bool ok = FrameValidator::from_precedes_cmd_only(frame);
+        all_ok &= ok;
+        std::cout << "  TO, FROM, DATA, CMD, TIS (valid): " << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    // Case 3: valid calling-cycle-only frame (no CMD, no FROM) — vacuously true
+    {
+        std::vector<ALEWord> frame = {
+            WordParser::make_word(PreambleType::TO,  dst),
+            WordParser::make_word(PreambleType::TIS, src),
+        };
+        bool ok = FrameValidator::from_precedes_cmd_only(frame);
+        all_ok &= ok;
+        std::cout << "  TO, TIS (no CMD, no FROM) (valid): " << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    // Case 4: invalid — CMD appears but FROM follows CMD (wrong order)
+    {
+        std::vector<ALEWord> frame = {
+            WordParser::make_word(PreambleType::TO,   dst),
+            WordParser::make_word(PreambleType::CMD,  cmd),
+            WordParser::make_word(PreambleType::FROM, src),
+            WordParser::make_word(PreambleType::TIS,  src),
+        };
+        // FROM after CMD: FROM is not followed by CMD — rejected
+        bool ok = !FrameValidator::from_precedes_cmd_only(frame);
+        all_ok &= ok;
+        std::cout << "  TO, CMD, FROM, TIS (FROM after CMD) rejected: "
+                  << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    // Case 5: invalid — FROM at end of frame with no following CMD
+    {
+        std::vector<ALEWord> frame = {
+            WordParser::make_word(PreambleType::TO,   dst),
+            WordParser::make_word(PreambleType::FROM, src),
+        };
+        bool ok = !FrameValidator::from_precedes_cmd_only(frame);
+        all_ok &= ok;
+        std::cout << "  TO, FROM (orphan FROM, no CMD) rejected: "
+                  << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    return all_ok;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -716,6 +804,9 @@ int run_all_tests()
 
     run("AC-FRAME-001-4 (formulas) Tsc/Tlc/Tcc in Trw-slot counts",
         test_ac_001_4_timing_formulas());
+
+    run("AC-FRAME-001-002      FROM (Quick-ID) must precede CMD in frame sequence",
+        test_ac_frame_001_002_from_precedes_cmd());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
