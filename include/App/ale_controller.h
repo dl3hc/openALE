@@ -297,6 +297,7 @@ public:
      *   CMD:CALL <ADDR>   — initiate individual call to ADDR
      *   CMD:AMD <text>    — queue AMD orderwire for the next CMD:CALL (max 90 chars, Expanded-64)
      *   CMD:TERMINATE     — terminate current link
+     *   CMD:ACCEPT        — accept incoming call (manual-accept mode only)
      *   CMD:REJECT        — reject incoming call with TWAS
      *   CMD:SCAN          — start scanning
      *   CMD:STATUS        — return current SM state name
@@ -429,8 +430,9 @@ public:
      *
      * When on: after the caller's conclusion is received, the SM pauses and
      * waits for accept_call()/reject_call(). If neither arrives within
-     * decision_timeout_ms, it falls back to auto-accept so an unattended
-     * station never hangs waiting for an operator.
+     * decision_timeout_ms, the call is dropped (no response sent) so the
+     * caller runs into its own call timeout. Manual accept means manual —
+     * an unanswered call must not silently link.
      */
     void set_manual_accept_mode(bool on, uint32_t decision_timeout_ms = 10000);
 

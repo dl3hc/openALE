@@ -1247,6 +1247,10 @@ std::string ALEController::process_command(const std::string& raw)
         terminate_link();
         return "OK: terminating link";
     }
+    if (cmd == "CMD:ACCEPT") {
+        accept_call();
+        return "OK: accepting call";
+    }
     if (cmd == "CMD:REJECT") {
         reject_call();
         return "OK: rejecting call";
@@ -1387,6 +1391,7 @@ std::string ALEController::process_command(const std::string& raw)
             "  CMD:CALL <ADDR>                     initiate individual call\n"
             "  CMD:AMD <text>                      queue AMD orderwire for next call (max 90 chars)\n"
             "  CMD:TERMINATE                       terminate current link\n"
+            "  CMD:ACCEPT                          accept incoming call (manual-accept mode)\n"
             "  CMD:REJECT                          reject incoming call (TWAS)\n"
             "  CMD:SCAN                            start channel scanning\n"
             "  CMD:STATUS                          print current SM state\n"

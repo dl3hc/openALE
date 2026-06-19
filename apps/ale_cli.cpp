@@ -27,7 +27,6 @@
  *   --in-device  NAME    Audio input  device substring (RX, waveIn)
  *   --out-device NAME    Audio output device substring (TX, waveOut)
  *   --list-devices       Print available audio devices and exit
- *   --no-scan            Skip scanning section (target is on a fixed channel)
  *
  * Single-PC full-duplex loopback with VB-Audio CABLE A+B
  * ───────────────────────────────────────────────────────
@@ -115,7 +114,6 @@ static void print_usage(const char* prog)
         "  --in-device  NAME   Audio input  device substring (RX, waveIn)\n"
         "  --out-device NAME   Audio output device substring (TX, waveOut)\n"
         "  --list-devices      Print available audio devices\n"
-        "  --no-scan           Skip scanning (fixed channel, shorter frames)\n"
         "  --channels   FILE   Load channel list from .ale file on startup;\n"
         "                      auto-saves after CMD:ADD_CHANNEL / CMD:DEL_CHANNEL\n"
         "  --radio      SPEC   Radio CAT/PTT:\n"
