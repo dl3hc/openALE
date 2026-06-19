@@ -751,10 +751,10 @@
         "REQ-FRAME-002"
       ],
       "title": "Scanning Call: Nur 1. Adress-Wort (TO)",
-      "description": "Während des Scanning-Abschnitts wird nur das erste Wort der Zieladresse (TO-Wort) wiederholt gesendet. Kein DATA/REP in der Scanning-Phase.",
-      "module": "Protocol/ale_state_machine",
-      "verification_hint": "Prüfe handle_calling() bei CallingPhase::SCANNING_CALL: Es wird exakt 1 Wort (TO mit erstem 3-Char-Chunk) gesendet.",
-      "status": "open"
+      "description": "Bei Individual- und Net-Calls (CallingPhase::SCANNING_CALL) enthält die Scanning-Phase ausschließlich TO-Worte mit dem ersten 3-Char-Chunk der Zieladresse — kein DATA- oder REP-Wort. Das TO-Wort wird für C × 2 Slots wiederholt (Tsc = C × 2 × Trw, A.5.2.5.1 / A.5.5.3.1). Group-Calls verwenden THRU/REP-Rotation (CallingPhase::GROUP_SCANNING_CALL) und sind separat abgedeckt.",
+      "module": "Word/ale_sequence",
+      "verification_hint": "Prüfe ALESequenceBuilder::scanning_call() in src/Word/ale_sequence.cpp: Alle C × 2 Worte haben PreambleType::TO und encode_first() (nur erster 3-Char-Chunk). Kein DATA/REP. Die State Machine (initiate_call() → Delegation an Builder, CallingPhase::SCANNING_CALL → passiv) ist reiner Konsument und enthält keine Sequenz-Logik.",
+      "status": "closed"
     },
     {
       "id": "AC-FRAME-002-002",

@@ -141,7 +141,6 @@ static void print_usage(const char* prog)
 
 static void print_banner(const std::string& self,
                           bool               call_mode,
-                          bool               no_scan,
                           const std::string& target,
                           const std::string& in_device,
                           const std::string& out_device,
@@ -150,8 +149,6 @@ static void print_banner(const std::string& self,
     const char* mode_str;
     if (call_mode)
         mode_str = ("CALL → " + target).c_str();
-    else if (no_scan)
-        mode_str = "IDLE — available (auto-accept)";
     else
         mode_str = "IDLE → SCANNING (auto-accept)";
 
@@ -199,7 +196,6 @@ int main(int argc, char* argv[])
     std::string radio_spec;
     std::string channels_file;
     bool list_devs    = false;
-    bool no_scan      = true;   // default: skip scanning, use leading-call only
 
     // Receiver FEC / sync tuning (A.5.2.6.3); defaults = most tolerant point.
     int  golay_mode_arg = 3;    // 3=3/4 (full correction)
@@ -219,8 +215,6 @@ int main(int argc, char* argv[])
             out_device = argv[++i];
         } else if (std::strcmp(argv[i], "--list-devices") == 0) {
             list_devs = true;
-        } else if (std::strcmp(argv[i], "--no-scan") == 0) {
-            no_scan = true;
         } else if (std::strcmp(argv[i], "--golay-mode") == 0 && i + 1 < argc) {
             golay_mode_arg = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--unanimous") == 0 && i + 1 < argc) {
@@ -286,8 +280,6 @@ int main(int argc, char* argv[])
     // ── Setup ALE controller ──────────────────────────────────────────────
     ALEController ctrl;
     ctrl.set_self_address(self_addr);
-    ctrl.set_target_scan_channels(no_scan ? 0u : 1u);
-
     // Channel list (non-volatile, .ale file)
     if (!channels_file.empty()) {
         ctrl.set_channel_file(channels_file);
@@ -384,7 +376,7 @@ int main(int argc, char* argv[])
         std::fflush(stdout);
     };
 
-    print_banner(self_addr, call_mode, no_scan, target_addr, in_device, out_device, radio_spec);
+    print_banner(self_addr, call_mode, target_addr, in_device, out_device, radio_spec);
 
     // ── Start ALE operation ───────────────────────────────────────────────
     if (call_mode) {
@@ -392,11 +384,6 @@ int main(int argc, char* argv[])
         std::printf("[>>] LBT %.0f ms + tune %.0f ms before first TX...\n",
                     static_cast<double>(ALETimingConstants::Twt_ms),
                     static_cast<double>(ALETimingConstants::Tt_ms));
-        std::fflush(stdout);
-    } else if (no_scan) {
-        ctrl.start_available();
-        std::printf("[>>] Available — waiting for calls addressed to %s\n\n",
-                    self_addr.c_str());
         std::fflush(stdout);
     } else {
         ctrl.start_scanning();

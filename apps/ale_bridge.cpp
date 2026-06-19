@@ -599,7 +599,6 @@ int main(int argc, char* argv[]) {
     // makes the first entry primary → set_self_address). The SM won't recognise
     // calls until then, which is correct for an unconfigured station.
     ALEController ctrl;
-    ctrl.set_target_scan_channels(0);
 
     BridgeCtx ctx{ &ctrl, &audio, &radio };
 
@@ -652,7 +651,7 @@ int main(int argc, char* argv[]) {
 
     // ── Main loop — mirrors ale_cli.cpp exactly, plus WS command drain ─────
     std::vector<int16_t> rx_buf;
-    ALEState last_state = ctrl.state();
+    std::string last_state = ctrl.display_state();
     while (g_running) {
         const uint32_t t = static_cast<uint32_t>(timer->get_time_ms());
         ctrl.update(t);
@@ -670,12 +669,15 @@ int main(int argc, char* argv[]) {
             ws.send_text(dispatch_command(ctx, parsed));
         }
 
-        const ALEState s = ctrl.state();
+        // Per-instance display state: derives "HANDSHAKE" for the caller's
+        // response-exchange sub-phases too (see ALEController::display_state()),
+        // so each side shows calling → handshake → linked from its own state.
+        std::string s = ctrl.display_state();
         if (s != last_state) {
             mj::Value e = make_event("state");
-            e.set("value", mj::Value::string(ALEStateMachine::state_name(s)));
+            e.set("value", mj::Value::string(s));
             ws.send_text(mj::dump(e));
-            last_state = s;
+            last_state = std::move(s);
         }
 
         timer->sleep_ms(1);

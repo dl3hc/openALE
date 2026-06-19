@@ -210,6 +210,63 @@ bool test_rx_multiword_full_accept_15char()
     return caller_ok && count_ok && to_addr_ok && tis_addr_ok;
 }
 
+// Regression: a CALLER must reassemble the responder's multi-word address from
+// the response conclusion (TIS + DATA/REP) WITHOUT being polluted by stale
+// handshake-collecting flags left over from a previous incoming call.
+//
+// Scenario: DL3HC was the called station in a prior (aborted) handshake — this
+// leaves hs_conclusion_rcvd = true (cleared only on HANDSHAKE entry). DL3HC then
+// places its own outbound call to DF3SR. The response addresses DL3HC: the own-TO
+// DATA extension "HC@" appears BEFORE the responder's TIS. With the cross-state
+// flag leak, those "HC" words were classified as caller-extension and appended to
+// to_address ("HC"+"HC" = "HCHC"); the fix scopes `collecting` to the current
+// state so to_address is built only from the responder's TIS conclusion.
+bool test_caller_multiword_peer_not_polluted_by_stale_hs()
+{
+    std::cout << "\n[RX-MULTIWORD] Caller peer reassembly ignores stale handshake flags\n";
+
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    const uint32_t Twt = ALETimingConstants::Twt_ms;
+    const uint32_t Tt  = ALETimingConstants::Tt_ms;
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"DL3HC", 0);
+    sm.process_event(ALEEvent::START_SCAN);
+
+    // 1) Prior incoming call from SAMUEL → enters HANDSHAKE, sets hs_conclusion_rcvd.
+    feed_incoming_call(sm, /*self=*/"DL3HC", /*caller=*/"SAMUEL");
+    bool stale_set = sm.is_hs_conclusion_rcvd();
+
+    // 2) Abort the handshake → back to SCANNING; hs_conclusion_rcvd stays true.
+    sm.process_event(ALEEvent::LINK_TIMEOUT);
+
+    // 3) DL3HC now calls DF3SR. Drive LBT/TUNING from the current clock base.
+    const uint32_t base = 1000u + 12u * Trw;
+    sm.update(base);
+    sm.initiate_call("DF3SR");
+    sm.update(base + Twt);        // LBT → TUNING
+    sm.update(base + Twt + Tt);   // TUNING → full TX sequence enqueued
+
+    // 4) Drain the caller's TX (leading TO DF3SR ×2 + conclusion TIS DL3HC = 6 words) → LISTENING.
+    for (int i = 0; i < 6; ++i) sm.on_word_complete();
+
+    // 5) Responder's frame addresses DL3HC: TO:DL3 DATA:HC@ ×2 + TIS:DF3 DATA:SR@.
+    uint32_t t = base + Twt + Tt;
+    rx_at(sm, t += Trw, PreambleType::TO,   "DL3");
+    rx_at(sm, t += Trw, PreambleType::DATA, "HC@");
+    rx_at(sm, t += Trw, PreambleType::TO,   "DL3");
+    rx_at(sm, t += Trw, PreambleType::DATA, "HC@");
+    rx_at(sm, t += Trw, PreambleType::TIS,  "DF3");
+    rx_at(sm, t += Trw, PreambleType::DATA, "SR@");
+
+    bool peer_ok = sm.get_to_address() == "DF3SR";
+    std::cout << "  prior handshake left hs_conclusion_rcvd: " << (stale_set ? "PASS" : "FAIL") << "\n";
+    std::cout << "  caller peer = \"DF3SR\": " << (peer_ok ? "PASS" : "FAIL")
+              << " (got \"" << sm.get_to_address() << "\")\n";
+
+    return stale_set && peer_ok;
+}
+
 // ============================================================================
 // MANUAL ACCEPT GATE — set_require_explicit_accept() / accept_call()
 // ============================================================================
@@ -298,9 +355,9 @@ bool test_await_accept_reject_sends_twas()
     return rejected && twas_ok;
 }
 
-bool test_await_accept_timeout_falls_back_to_auto_accept()
+bool test_await_accept_timeout_aborts_without_response()
 {
-    std::cout << "\n[ACCEPT-GATE] AWAIT_ACCEPT timeout falls back to auto-accept\n";
+    std::cout << "\n[ACCEPT-GATE] AWAIT_ACCEPT timeout drops the call (no response)\n";
 
     WordCapture cap;
     ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
@@ -315,15 +372,21 @@ bool test_await_accept_timeout_falls_back_to_auto_accept()
     bool gated_before = sm.get_handshake_phase() == HandshakePhase::AWAIT_ACCEPT && cap.empty();
     std::cout << "  still gated just before timeout: " << (gated_before ? "PASS" : "FAIL") << "\n";
 
-    // Timeout elapses → auto-accept fallback → SLOT_WAIT → CHANNEL_CHECK → SENDING_RESPONSE.
+    // Timeout elapses with no operator decision → call dropped, no response sent,
+    // SM returns to its pre-link state (SCANNING). The caller then runs into its
+    // own call timeout ("no reply").
     sm.update(t + kTimeout + 1);
     sm.update(t + kTimeout + 2);
     sm.update(t + kTimeout + 2 + Trw + 1);
 
-    bool count_ok = cap.size() == 3;
-    std::cout << "  auto-accept response sent after timeout (3 words): " << (count_ok ? "PASS" : "FAIL") << "\n";
+    bool no_response = cap.empty();
+    bool left_handshake = sm.get_state() != ALEState::HANDSHAKE;
+    std::cout << "  no response transmitted after timeout: " << (no_response ? "PASS" : "FAIL")
+              << " (sent " << cap.size() << " words)\n";
+    std::cout << "  returned to pre-link state: " << (left_handshake ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
 
-    return gated_before && count_ok;
+    return gated_before && no_response && left_handshake;
 }
 
 // 3-char JOE accepts a call from a >3-char SAM.  The caller address must be
@@ -1571,6 +1634,58 @@ bool test_sounding_listen_window_opens_on_last_word()
 }
 
 // ============================================================================
+// AC-FRAME-002-001 — Scanning Call: Only TO words with first address chunk
+// REQ-FRAME-002 / A.5.2.5.1 + A.5.5.3.1
+// Module: Word/ale_sequence (ALESequenceBuilder::scanning_call())
+// The state machine is a pure consumer — it delegates to the builder and
+// the SCANNING_CALL phase is passive (audio layer drives via on_word_complete).
+// ============================================================================
+
+bool test_ac_frame_002_001_scanning_call_only_to_words()
+{
+    std::cout << "\n[AC-FRAME-002-001] Scanning call: nur TO-Worte, C×2 Slots, kein DATA/REP\n";
+
+    // 3 scan channels → Tsc = 3 × 2 × Trw → 6 scanning words at the head of cap
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, "SAM", /*scan_ch=*/3);
+    sm.initiate_call("N1XYZ");
+    advance_to_tx_start(sm);  // fires the complete TX sequence into cap
+
+    const uint32_t expected_scan_words = 3u * 2u;  // C × 2
+
+    bool count_ok = cap.size() >= expected_scan_words;
+    std::cout << "  cap.size()=" << cap.size()
+              << " (>= " << expected_scan_words << "): "
+              << (count_ok ? "PASS" : "FAIL") << "\n";
+    if (!count_ok) return false;
+
+    bool all_to  = true;
+    bool no_ext  = true;
+    bool addr_ok = true;
+    for (uint32_t i = 0; i < expected_scan_words; ++i) {
+        const auto& w = cap.words[i];
+        if (w.type != PreambleType::TO) {
+            all_to = false;
+            std::cout << "  word[" << i << "] type="
+                      << WordParser::word_type_name(w.type) << " (expected TO)\n";
+        }
+        if (w.type == PreambleType::DATA || w.type == PreambleType::REP)
+            no_ext = false;
+        if (strncmp(w.address, "N1X", 3) != 0) {
+            addr_ok = false;
+            std::cout << "  word[" << i << "] addr=\""
+                      << std::string(w.address, 3) << "\" (expected \"N1X\")\n";
+        }
+    }
+
+    std::cout << "  all scanning words TO: "   << (all_to  ? "PASS" : "FAIL") << "\n";
+    std::cout << "  no DATA/REP in scanning: " << (no_ext  ? "PASS" : "FAIL") << "\n";
+    std::cout << "  first 3 chars = \"N1X\": " << (addr_ok ? "PASS" : "FAIL") << "\n";
+
+    return count_ok && all_to && no_ext && addr_ok;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 
@@ -1603,6 +1718,10 @@ int run_all_tests()
         test_ac_003_2_to_first_three_chars());
     run("AC-WORD-003-3 extended addresses: DATA/REP alternation",
         test_ac_003_3_extended_address_data_rep_sequence());
+
+    // AC-FRAME-002-001
+    run("AC-FRAME-002-001 scanning call: nur TO-Worte, C×2 Slots, kein DATA/REP",
+        test_ac_frame_002_001_scanning_call_only_to_words());
 
     // REQ-WORD-004: TIS
     run("REQ-WORD-004 conclusion uses TIS",
@@ -1685,10 +1804,12 @@ int run_all_tests()
         test_await_accept_holds_until_accept_call());
     run("ACCEPT-GATE reject_call() during AWAIT_ACCEPT sends TWAS",
         test_await_accept_reject_sends_twas());
-    run("ACCEPT-GATE timeout falls back to auto-accept",
-        test_await_accept_timeout_falls_back_to_auto_accept());
+    run("ACCEPT-GATE timeout drops the call without responding",
+        test_await_accept_timeout_aborts_without_response());
     run("RX-MULTIWORD full accept path at 15-char addresses",
         test_rx_multiword_full_accept_15char());
+    run("RX-MULTIWORD caller peer not polluted by stale handshake flags",
+        test_caller_multiword_peer_not_polluted_by_stale_hs());
 
     // AC-GEN-009-002 — "not already in a link" guard
     run("ALWAYS-ANSWER individual call while LINKED is silently ignored",

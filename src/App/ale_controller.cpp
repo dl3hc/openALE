@@ -364,9 +364,18 @@ void ALEController::set_self_address(const std::string& addr)
     sm_.set_self_address(addr);
 }
 
-void ALEController::set_target_scan_channels(uint32_t n)
+void ALEController::apply_config(const ALEStationConfig& cfg)
 {
-    sm_.set_target_scan_channels(n);
+    set_golay_mode(cfg.golay_mode);
+    set_min_unanimous_votes(cfg.min_unanimous_votes);
+    set_adaptive_fec(cfg.adaptive_fec);
+    set_manual_accept_mode(cfg.manual_accept_mode, cfg.accept_timeout_ms);
+    set_debug_rx(cfg.debug_rx);
+    set_scan_dwell_ms(cfg.scan_dwell_ms);
+    set_sounding_interval_sec(cfg.sounding_interval_sec);
+    set_link_idle_timeout_sec(cfg.link_idle_timeout_sec);
+    set_max_tune_time_ms(cfg.max_tune_time_ms);
+    config_.assumed_scan_channels = cfg.assumed_scan_channels;
 }
 
 void ALEController::set_calling_channels(const std::vector<Channel>& channels)
@@ -408,17 +417,26 @@ bool ALEController::send_sounding()
 
 void ALEController::apply_target_scan_channels_for(const std::string& target_addr)
 {
+    // Fallback: assumed_scan_channels wenn gesetzt, sonst eigene Kanalliste.
+    uint32_t n = (config_.assumed_scan_channels > 0)
+                     ? config_.assumed_scan_channels
+                     : static_cast<uint32_t>(calling_channels_.size());
+
+    // Net-Override falls Kontakt einem bekannten Net angehört.
     const Contact* c = contact_store_.find(target_addr);
-    if (!c) return;
-    for (const auto& net_name : c->net_members) {
-        if (const Net* net = net_store_.find(net_name)) {
-            const uint32_t count = net_scan_channel_count(*net, calling_channels_);
-            sm_.set_target_scan_channels(count);
-            emit_status("Net '" + net_name + "': scanning call sized for " + std::to_string(count)
-                        + " channel(s)");
-            return;  // first resolvable net wins (a contact may list several)
+    if (c) {
+        for (const auto& net_name : c->net_members) {
+            if (const Net* net = net_store_.find(net_name)) {
+                n = net_scan_channel_count(*net, calling_channels_);
+                emit_status("Net '" + net_name + "': scanning call sized for "
+                            + std::to_string(n) + " channel(s)");
+                break;
+            }
         }
     }
+
+    sm_.set_target_scan_channels(n);
+    emit_status("Scanning call: C=" + std::to_string(n) + " channel(s)");
 }
 
 bool ALEController::initiate_call(const std::string& target_addr)
@@ -475,6 +493,8 @@ void ALEController::accept_call()
 
 void ALEController::set_manual_accept_mode(bool on, uint32_t decision_timeout_ms)
 {
+    config_.manual_accept_mode = on;
+    config_.accept_timeout_ms  = decision_timeout_ms;
     sm_.set_require_explicit_accept(on, decision_timeout_ms);
 }
 
@@ -756,6 +776,19 @@ void ALEController::on_received_word(const ALEWord& word)
     sm_.process_received_word(word);
 }
 
+std::string ALEController::display_state() const
+{
+    const ALEState st = sm_.get_state();
+    if (st == ALEState::HANDSHAKE)
+        return "HANDSHAKE";
+    if (st == ALEState::CALLING) {
+        const CallingPhase cp = sm_.get_calling_phase();
+        if (cp == CallingPhase::LISTENING || cp == CallingPhase::SENDING_ACK)
+            return "HANDSHAKE";
+    }
+    return ALEStateMachine::state_name(st);
+}
+
 void ALEController::set_event_handler(pal::IEventHandler* handler)
 {
     event_handler_ = handler;
@@ -801,6 +834,7 @@ void ALEController::enable_automatic_sounding(bool on)
 
 void ALEController::set_sounding_interval_sec(uint32_t sec)
 {
+    config_.sounding_interval_sec = sec;
     AnalyzerConfig cfg = lqa_analyzer_.get_config();
     cfg.sounding_interval_ms = sec * 1000u;
     lqa_analyzer_.set_config(cfg);
@@ -808,6 +842,7 @@ void ALEController::set_sounding_interval_sec(uint32_t sec)
 
 void ALEController::set_scan_dwell_ms(uint32_t ms)
 {
+    config_.scan_dwell_ms = ms;
     ScanConfig cfg = sm_.get_scan_config();
     cfg.dwell_time_ms = ms;
     sm_.configure_scan(cfg);
@@ -815,6 +850,7 @@ void ALEController::set_scan_dwell_ms(uint32_t ms)
 
 void ALEController::set_link_idle_timeout_sec(uint32_t sec)
 {
+    config_.link_idle_timeout_sec = sec;
     TimingParameters tp = sm_.get_timing_parameters();
     tp.Twa_ms = sec * 1000u;
     sm_.set_timing_parameters(tp);
@@ -822,6 +858,7 @@ void ALEController::set_link_idle_timeout_sec(uint32_t sec)
 
 void ALEController::set_max_tune_time_ms(uint32_t ms)
 {
+    config_.max_tune_time_ms = ms;
     TimingParameters tp = sm_.get_timing_parameters();
     tp.Tt_ms = ms;
     sm_.set_timing_parameters(tp);
@@ -914,13 +951,17 @@ bool ALEController::export_settings(const std::string& path)
     f << "# ALE settings export\n";
     f << "self_address=" << get_primary_self_address() << "\n";
     f << "channel_file=" << channel_file_ << "\n";
-    f << "target_scan_channels=" << get_target_scan_channels() << "\n";
-    f << "golay_mode=" << static_cast<int>(golay_mode()) << "\n";
-    f << "min_unanimous_votes=" << static_cast<int>(min_unanimous_votes()) << "\n";
-    f << "adaptive_fec=" << (adaptive_fec() ? 1 : 0) << "\n";
-    f << "debug_rx=" << (debug_rx_ ? 1 : 0) << "\n";
-    f << "manual_accept_mode=" << (sm_.requires_explicit_accept() ? 1 : 0) << "\n";
-    f << "manual_accept_timeout_ms=" << sm_.accept_decision_timeout_ms() << "\n";
+    f << "assumed_scan_channels=" << config_.assumed_scan_channels << "\n";
+    f << "golay_mode=" << static_cast<int>(config_.golay_mode) << "\n";
+    f << "min_unanimous_votes=" << static_cast<int>(config_.min_unanimous_votes) << "\n";
+    f << "adaptive_fec=" << (config_.adaptive_fec ? 1 : 0) << "\n";
+    f << "debug_rx=" << (config_.debug_rx ? 1 : 0) << "\n";
+    f << "manual_accept_mode=" << (config_.manual_accept_mode ? 1 : 0) << "\n";
+    f << "manual_accept_timeout_ms=" << config_.accept_timeout_ms << "\n";
+    f << "scan_dwell_ms=" << config_.scan_dwell_ms << "\n";
+    f << "sounding_interval_sec=" << config_.sounding_interval_sec << "\n";
+    f << "link_idle_timeout_sec=" << config_.link_idle_timeout_sec << "\n";
+    f << "max_tune_time_ms=" << config_.max_tune_time_ms << "\n";
     return f.good();
 }
 
@@ -929,8 +970,7 @@ bool ALEController::import_settings(const std::string& path)
     std::ifstream f(path);
     if (!f.is_open()) return false;
 
-    bool     manual_accept_mode    = sm_.requires_explicit_accept();
-    uint32_t manual_accept_timeout = sm_.accept_decision_timeout_ms();
+    ALEStationConfig cfg = config_;  // start from current defaults
 
     std::string line;
     while (std::getline(f, line)) {
@@ -945,23 +985,31 @@ bool ALEController::import_settings(const std::string& path)
             set_primary_self_address(val);
         } else if (key == "channel_file") {
             channel_file_ = val;
-        } else if (key == "target_scan_channels") {
-            set_target_scan_channels(static_cast<uint32_t>(std::stoul(val)));
+        } else if (key == "assumed_scan_channels" || key == "target_scan_channels") {
+            cfg.assumed_scan_channels = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "golay_mode") {
-            set_golay_mode(static_cast<GolayMode>(std::stoi(val)));
+            cfg.golay_mode = static_cast<GolayMode>(std::stoi(val));
         } else if (key == "min_unanimous_votes") {
-            set_min_unanimous_votes(static_cast<uint8_t>(std::stoi(val)));
+            cfg.min_unanimous_votes = static_cast<uint8_t>(std::stoi(val));
         } else if (key == "adaptive_fec") {
-            set_adaptive_fec(val == "1");
+            cfg.adaptive_fec = (val == "1");
         } else if (key == "debug_rx") {
-            set_debug_rx(val == "1");
+            cfg.debug_rx = (val == "1");
         } else if (key == "manual_accept_mode") {
-            manual_accept_mode = (val == "1");
+            cfg.manual_accept_mode = (val == "1");
         } else if (key == "manual_accept_timeout_ms") {
-            manual_accept_timeout = static_cast<uint32_t>(std::stoul(val));
+            cfg.accept_timeout_ms = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "scan_dwell_ms") {
+            cfg.scan_dwell_ms = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "sounding_interval_sec") {
+            cfg.sounding_interval_sec = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "link_idle_timeout_sec") {
+            cfg.link_idle_timeout_sec = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "max_tune_time_ms") {
+            cfg.max_tune_time_ms = static_cast<uint32_t>(std::stoul(val));
         }
     }
-    set_manual_accept_mode(manual_accept_mode, manual_accept_timeout);
+    apply_config(cfg);
     return true;
 }
 

@@ -36,6 +36,7 @@
 #include "Protocol/Control/ale_state_machine.h"
 #include "Modem/ale2g_modem.h"
 #include "App/audio_device.h"
+#include "App/ale_station_config.h"
 #include "PAL/events.h"
 #include "LQA/lqa_database.h"
 #include "LQA/lqa_analyzer.h"
@@ -78,13 +79,20 @@ public:
      */
     void set_audio_device(AudioDevice* dev);
 
-    /**
-     * Set the assumed number of scan channels of the target station.
-     * Used to size the scanning-call section.  0 = target on a fixed channel
-     * (skips scanning section, only sends leading call + conclusion).
-     * Default: 0.
-     */
-    void set_target_scan_channels(uint32_t n);
+    /// Apply a complete station configuration in one call.
+    void apply_config(const ALEStationConfig& cfg);
+    /// Return the current station configuration (always in sync with subsystems).
+    ALEStationConfig get_config() const { return config_; }
+
+    /// Assumed channel count of the remote station for scanning-call sizing.
+    /// 0 (default) = derive automatically from own calling_channels_ size.
+    void     set_assumed_scan_channels(uint32_t n) { config_.assumed_scan_channels = n; }
+    uint32_t get_assumed_scan_channels() const      { return config_.assumed_scan_channels; }
+
+    /// @deprecated Use set_assumed_scan_channels() / apply_config().
+    void     set_target_scan_channels(uint32_t n)  { set_assumed_scan_channels(n); }
+    /// @deprecated Use get_assumed_scan_channels().
+    uint32_t get_target_scan_channels() const       { return config_.assumed_scan_channels; }
 
     /** Ordered list of channels to try on no-reply (multi-channel calling). */
     void set_calling_channels(const std::vector<Channel>& channels);
@@ -611,22 +619,22 @@ public:
     // spec-compliant signal can be acquired; tune only for special conditions.
 
     /// Select the Golay correction power: Mode3_4 (default) / 2_5 / 1_6 / 0_7.
-    void      set_golay_mode(GolayMode m)        { demodulator_.set_golay_mode(m); }
+    void      set_golay_mode(GolayMode m)        { config_.golay_mode = m; demodulator_.set_golay_mode(m); }
     GolayMode golay_mode() const                 { return demodulator_.golay_mode(); }
 
     /// Minimum unanimous 2/3-vote count to accept a word (0..49; default 33).
-    void    set_min_unanimous_votes(uint8_t v)   { demodulator_.set_min_unanimous_votes(v); }
+    void    set_min_unanimous_votes(uint8_t v)   { config_.min_unanimous_votes = v; demodulator_.set_min_unanimous_votes(v); }
     uint8_t min_unanimous_votes() const          { return demodulator_.min_unanimous_votes(); }
 
     /// A.5.2.6.3 "DO": auto-adjust Golay mode + unanimous-vote threshold to the
     /// observed signal quality (off by default).
-    void set_adaptive_fec(bool on)               { demodulator_.set_adaptive_fec(on); }
+    void set_adaptive_fec(bool on)               { config_.adaptive_fec = on; demodulator_.set_adaptive_fec(on); }
     bool adaptive_fec() const                    { return demodulator_.adaptive_fec(); }
 
     /// Diagnostics: when on, emit (via on_status_changed) the periodic RX peak
     /// level and every demodulated word (type/address/unanimous/fec).  Use to
     /// see what the receiver actually decodes (e.g. during the LISTENING window).
-    void set_debug_rx(bool on)                   { debug_rx_ = on; }
+    void set_debug_rx(bool on)                   { config_.debug_rx = on; debug_rx_ = on; }
     bool debug_rx() const                        { return debug_rx_; }
 
     // ── Spectrum / waterfall ────────────────────────────────────────────────
@@ -655,10 +663,19 @@ public:
     ALEState    state() const { return sm_.get_state(); }
     std::string self()  const { return self_addr_; }
 
-    /** Current assumed scan-channel count "C" (see initiate_call()'s auto-derivation). */
-    uint32_t get_target_scan_channels() const { return sm_.get_target_scan_channels(); }
+    /**
+     * Per-instance display state for the operator UI, derived from THIS station's
+     * own state. The calling station never enters the HANDSHAKE state — its
+     * 3-way handshake runs inside CALLING (sub-phases LISTENING / SENDING_ACK).
+     * Report "HANDSHAKE" for both the called station's HANDSHAKE state and the
+     * caller's response-exchange sub-phases, so each side shows
+     * calling → handshake → linked from its own perspective. Otherwise returns
+     * the raw ALEStateMachine::state_name().
+     */
+    std::string display_state() const;
 
 private:
+    ALEStationConfig         config_;
     ALEStateMachine          sm_;
     ALE2GModem::Modulator    modulator_;
     ALE2GModem::Demodulator  demodulator_;
