@@ -406,7 +406,7 @@ target_include_directories(test_tone_accuracy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 add_test(NAME ToneAccuracy COMMAND test_tone_accuracy)
 
 add_executable(test_fec_golay tests/fec/unit/test_fec_golay.cpp)
-target_link_libraries(test_fec_golay ale_fec ale_fsk_core)
+target_link_libraries(test_fec_golay ale_codec ale_fec ale_fsk_core)
 target_include_directories(test_fec_golay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FECGolay COMMAND test_fec_golay)
 

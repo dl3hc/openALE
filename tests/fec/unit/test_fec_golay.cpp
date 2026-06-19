@@ -5,6 +5,7 @@
  * Covers: AC-FEC-001-001, AC-FEC-001-002,
  *         AC-FEC-002-001, AC-FEC-002-002,
  *         AC-FEC-003-001, AC-FEC-003-002,
+ *         AC-FEC-004-001,
  *         AC-FEC-005-1/2/3, AC-FEC-006-1,
  *         AC-FEC-007-1, AC-FEC-009-1/2,
  *         AC-FEC-008-1, AC-FEC-010-1/2/3, AC-FEC-011-1/2,
@@ -18,6 +19,7 @@
 #include "FEC/golay.h"
 #include "FEC/ale_fec_codec.h"
 #include "FEC/word_interleaver.h"
+#include "Codec/ale_encoder.h"
 
 #include <iostream>
 #include <iomanip>
@@ -918,6 +920,71 @@ bool test_ac_fec_003_002_coder_b_parity_inversion() {
     return true;
 }
 
+// AC-FEC-004-001: 3×-Redundanz — Jedes 49-Bit-Wort dreifach gesendet
+// REQ-FEC-014, REQ-FEC-015 (FEAT-FEC-004, MIL-STD-188-141B A.5.2.2.4)
+//
+// ALEEncoder::encode_tx49 maps a 49-bit word to exactly 49 8-FSK symbols.
+// On-air stream: 147 bits = tx49 concatenated three times → stream[j] = tx49[j%49].
+// Each input bit i appears at stream positions i, i+49, i+98 (Stride-49 invariant).
+bool test_ac_fec_004_001_triple_redundancy() {
+    std::cout << "\n[TEST FEC-16] AC-FEC-004-001: 3×-Redundanz — 49-Bit-Wort dreifach gesendet\n";
+    std::cout << "-------------------------------------------------------------------------------\n";
+
+    static_assert(SYMBOLS_PER_WORD == 49, "3×49 bits / 3 bits-per-symbol = 49-symbol TX burst");
+    static_assert(BITS_PER_SYMBOL  ==  3, "8-FSK: 3 bits per symbol");
+
+    // Exhaustive single-bit walk: for each bit i set in tx49, verify the
+    // 147-bit stream reconstructed from the SymbolFrame satisfies stream[j] = tx49[j%49].
+    bool all_ok = true;
+    for (uint32_t i = 0; i < SYMBOLS_PER_WORD; ++i) {
+        const uint64_t    tx49  = 1ULL << i;
+        const SymbolFrame frame = ALEEncoder::encode_tx49(tx49);
+
+        // All 49 symbols must be 3-bit values (0–7).
+        for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
+            if (frame[k] > 7u) {
+                std::cout << "FAIL: bit i=" << i << " sym[" << k << "]="
+                          << (int)frame[k] << " out of range [0,7]\n";
+                all_ok = false;
+            }
+        }
+
+        // Reconstruct 147-bit stream (MSB-first within each 3-bit symbol).
+        uint8_t stream[3 * SYMBOLS_PER_WORD] = {};
+        for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k)
+            for (uint32_t b = 0; b < BITS_PER_SYMBOL; ++b)
+                stream[k * BITS_PER_SYMBOL + b] =
+                    (frame[k] >> (BITS_PER_SYMBOL - 1u - b)) & 1u;
+
+        // Verify stream[j] == (tx49 >> (j%49)) & 1 for all j = 0..146.
+        for (uint32_t j = 0; j < 3 * SYMBOLS_PER_WORD; ++j) {
+            const uint8_t expected = (tx49 >> (j % SYMBOLS_PER_WORD)) & 1u;
+            if (stream[j] != expected) {
+                std::cout << "FAIL: bit i=" << i
+                          << " stream[" << j << "]=" << (int)stream[j]
+                          << " expected=" << (int)expected << "\n";
+                all_ok = false;
+            }
+        }
+
+        // Explicit Stride-49 check: bit i must appear at exactly positions i, i+49, i+98.
+        if (stream[i] != 1 || stream[i + 49] != 1 || stream[i + 98] != 1) {
+            std::cout << "FAIL: bit i=" << i
+                      << " not found at all three stride-49 positions\n";
+            all_ok = false;
+        }
+    }
+
+    if (!all_ok) return false;
+
+    std::cout << "  TX burst size = " << SYMBOLS_PER_WORD << " symbols (49×3 = 147 bits) OK\n";
+    std::cout << "  All 49 symbols in range [0,7] for all probe words OK\n";
+    std::cout << "  stream[j] == tx49[j%49] for j=0..146: Stride-49 invariant holds OK\n";
+    std::cout << "  Each input bit i at positions i, i+49, i+98 OK\n";
+    std::cout << "PASS\n";
+    return true;
+}
+
 int run_all_tests() {
     std::cout << "\n";
     std::cout << "===========================================\n";
@@ -934,6 +1001,7 @@ int run_all_tests() {
     if (test_ac_fec_002_002_decode_flags())         { pass_count++; } else { fail_count++; }
     if (test_ac_fec_003_001_interleave_pattern())   { pass_count++; } else { fail_count++; }
     if (test_ac_fec_003_002_coder_b_parity_inversion()) { pass_count++; } else { fail_count++; }
+    if (test_ac_fec_004_001_triple_redundancy())    { pass_count++; } else { fail_count++; }
     if (test_golay_codec_minimal())           { pass_count++; } else { fail_count++; }
     if (test_golay_spec_compliance())         { pass_count++; } else { fail_count++; }
     if (test_golay_decode_flags())            { pass_count++; } else { fail_count++; }

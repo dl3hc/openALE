@@ -671,10 +671,11 @@
         "REQ-FEC-015"
       ],
       "title": "3×-Redundanz: Jedes 49-Bit-Wort dreifach gesendet",
-      "description": "Jedes interleaved 49-Bit-Wort wird 3-mal gesendet (insgesamt 147 Bit = 49 Symbole je 3 Bit pro Symbol). Der Modem-TX-Pfad erzeugt 147-Symbol-Bursts.",
+      "description": "Jedes interleaved 49-Bit-Wort wird dreifach übertragen. Dadurch entstehen insgesamt 147 Bit. Bei 3 Bit pro Symbol ergibt dies einen TX-Burst von 49 Symbolen.",
       "module": "FSK/symbol_decoder",
-      "verification_hint": "Prüfe ale2g_modem.cpp oder symbol_decoder.cpp: TX-Burst-Länge muss 147 Symbole sein (3×49).",
-      "status": "open"
+      "verification_hint": "Prüfe in ale2g_modem.cpp oder symbol_decoder.cpp, dass aus einem 49-Bit-Wort durch dreifache Aussendung 147 Bit erzeugt werden und der resultierende TX-Burst genau 49 Symbole umfasst. Prüfe auch, dass jedes der 49 Eingabebits an den Positionen i, i+49 und i+98 im 147-Bit-Strom erscheint und dass daraus genau 49 Symbole mit jeweils 3 Bit erzeugt werden.",
+      "status": "closed",
+      "verification": "ALEEncoder::encode_tx49 (src/Codec/ale_encoder.cpp) implements the 3× redundancy: stream[j] = tx49[j%49] for j=0..146, packed MSB-first into 49 8-FSK symbols. test_ac_fec_004_001_triple_redundancy (tests/fec/unit/test_fec_golay.cpp) exhaustively verifies the Stride-49 invariant for all 49 single-bit inputs: correct TX burst size (49 symbols), range [0,7] per symbol, and bit i at positions i, i+49, i+98. All 16 tests pass."
     },
     {
       "id": "AC-FEC-004-002",
