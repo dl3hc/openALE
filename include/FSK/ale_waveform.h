@@ -1,10 +1,9 @@
 /**
  * \file fsk/ale_waveform.h
- * \brief ALE-2G waveform parameters and physical-layer infrastructure
+ * \brief ALE-2G waveform parameters and physical-layer constants
  *
- * Physical layer constants (tone frequencies, timing, FFT parameters),
- * the tone-to-symbol mapping, and the FFT sliding-window buffer used by
- * the demodulator.
+ * Physical layer constants (tone frequencies, timing, FFT parameters)
+ * and the tone-to-symbol mapping.
  *
  * Specification: MIL-STD-188-141B Appendix A
  *  - 8-FSK modulation: 8 tones, 125 baud, 250 Hz spacing
@@ -14,9 +13,7 @@
 #pragma once
 
 #include <cstdint>
-#include <complex>
 #include <array>
-#include <vector>
 #include "Protocol/Control/ale_timing.h"
 
 namespace ale {
@@ -96,9 +93,6 @@ constexpr uint32_t FFT_BIN_OFFSET  = 6;
 constexpr uint32_t FFT_BIN_STEP    = 2;
 constexpr uint32_t FFT_BIN_SPAN    = 15;
 
-using ComplexFloat  = std::complex<float>;
-using ComplexDouble = std::complex<double>;
-
 /**
  * \struct Symbol
  * Decoded FSK symbol with confidence metrics
@@ -108,45 +102,6 @@ struct Symbol {
     float    magnitude;
     float    signal_to_noise;
     uint32_t sample_index;
-};
-
-/**
- * \class FFTBuffer
- * Circular buffer for sliding FFT analysis.
- *
- * Implements O(N) per-bin DFT computation for streaming audio.
- */
-class FFTBuffer {
-public:
-    FFTBuffer();
-
-    /**
-     * Add new sample and return updated FFT magnitudes.
-     * \param sample Audio sample value (-32768 to +32767)
-     * \return Reference to magnitude array [FFT_SIZE]
-     */
-    const std::array<float, FFT_SIZE>& push_sample(int16_t sample);
-
-    /** Get current FFT magnitudes without advancing. */
-    const std::array<float, FFT_SIZE>& get_magnitudes() const;
-
-    /** Reset buffer to zero. */
-    void reset();
-
-private:
-    std::array<float, FFT_SIZE> fft_cs_twiddle;
-    std::array<float, FFT_SIZE> fft_ss_twiddle;
-    std::array<float, FFT_SIZE> s0, s1, s2;
-    std::array<float, FFT_SIZE> coeff;
-    std::array<float, FFT_SIZE> magnitude;
-
-    uint32_t sample_count;
-    uint32_t fft_history_offset;
-    std::array<float, FFT_SIZE> sample_buffer;
-    uint32_t buffer_index;
-
-    void compute_magnitudes();
-    void compute_magnitudes_from_buffer(const std::array<float, FFT_SIZE>& samples);
 };
 
 } // namespace ale

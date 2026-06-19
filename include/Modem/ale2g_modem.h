@@ -152,8 +152,9 @@ public:
 
     /**
      * Spectrum callback — fired ~10 times/second from the audio thread.
-     * bins[k] = linear FFT magnitude at k * hz_per_bin Hz (257 bins, ≈15.6 Hz each).
-     * ALE channel (750–2500 Hz) maps to bins ≈ 48–160.
+     * bins[k] = power spectral density in dBFS at k * hz_per_bin Hz (1025 bins, ≈3.9 Hz each).
+     * ALE channel (750–2500 Hz) maps to bins ≈ 768–2560.
+     * Typical range: noise floor ≈ −90 dBFS, strong tone ≈ −20 dBFS.
      * Called from the audio capture thread — keep it short or hand off to a queue.
      */
     using SpectrumCallback =
@@ -204,7 +205,6 @@ public:
 
 private:
     static constexpr uint32_t WORD_SAMPLES         = SYMBOLS_PER_WORD * FFT_SIZE; // 3136
-    static constexpr uint32_t BUF_CAP              = WORD_SAMPLES + FFT_SIZE;     // 3200
     static constexpr uint32_t DECODE_STEP          = FFT_SIZE / 4;                // 16
     static constexpr uint32_t SILENCE_RESET_SAMPLES = 800;  // 100 ms at 8 kHz
     static constexpr int16_t  SILENCE_THRESHOLD    = 200;
@@ -242,14 +242,64 @@ private:
     }
 
     // ── Spectrum analyser (waterfall data source) ─────────────────────────
-    // Independent 512-point FFT pass on the same PCM stream.
-    // Fired ~10 times/second; does NOT affect word decoding.
-    static constexpr size_t   SPEC_FFT_N    = 512;   // bins: 0–4000 Hz, 15.625 Hz/bin
+    //
+    // Tunable parameters — both must be consistent with apps/gui/app.js:
+    //
+    //   SPEC_FFT_N   — FFT size (must be a power of 2).
+    //                  Determines frequency resolution: Hz/bin = 8000 / SPEC_FFT_N.
+    //                  ALE tone spacing is 250 Hz; any size that places each tone on
+    //                  a distinct set of bins is adequate.
+    //
+    //                  Typical values and their trade-offs:
+    //                    1024 →  7.8 Hz/bin,  32 bins/tone-gap — minimum useful
+    //                    2048 →  3.9 Hz/bin,  64 bins/tone-gap — current default
+    //                    4096 →  2.0 Hz/bin, 128 bins/tone-gap — higher resolution
+    //                    8192 →  1.0 Hz/bin, 256 bins/tone-gap — maximum, 3× memory
+    //                  Increasing SPEC_FFT_N above WORD_SAMPLES+FFT_SIZE (3200)
+    //                  automatically increases BUF_CAP (see below).
+    //
+    //   SPEC_INTERVAL — Samples consumed between consecutive FFT triggers.
+    //                   Update rate (Hz) = SAMPLE_RATE_HZ / SPEC_INTERVAL.
+    //                   Must match the JS row-interval constant (default 100 ms):
+    //                     SPEC_INTERVAL = SAMPLE_RATE_HZ × JS_ROW_MS / 1000
+    //                   e.g. 8000 × 0.100 = 800 (current default, 10 Hz).
+    //                   Lower values increase CPU load and WebSocket bandwidth
+    //                   (~4 KB × rate); the JS canvas redraws at ~60 fps anyway, so
+    //                   there is no visual gain beyond the display refresh rate.
+    //
+    //   BUF_CAP       — Derived; no manual tuning.  Automatically set to the larger
+    //                   of the decode window (WORD_SAMPLES+FFT_SIZE = 3200) and
+    //                   SPEC_FFT_N so that compute_spectrum_() can always read a
+    //                   full SPEC_FFT_N-sample history from the ring buffer.
+    //
+    // The Blackman-Harris window (−92 dB sidelobes) in compute_spectrum_() is
+    // hardcoded; it is substantially better than Hann (−31 dB) for ALE signals
+    // whose tones are 40–60 dB above the HF noise floor.
+    //
+    // ── JS counterparts (apps/gui/app.js) ────────────────────────────────────
+    // nextRowAt + 100   row interval in ms  (= 1000 * SPEC_INTERVAL / 8000)
+    // BW_LO / BW_HI     displayed Hz window  (0 / 4000 — must equal 0 / Nyquist)
+    // emaFloor α        0.03 slow / 0.97 fast  — noise-floor tracker time constant
+    // emaPeak attack    0.20  — how fast the peak level rises on a new signal
+    // emaPeak decay     0.002 — how slowly the peak level falls after the signal ends
+    // range minimum     20 dB — floor for the adaptive display range
+    // energy2rgb stops  0.20 / 0.40 / 0.60 / 0.80 — SDR rainbow gradient thresholds
+
+    static constexpr size_t   SPEC_FFT_N    = 2048;  // bins: 0–4000 Hz, ≈3.9 Hz/bin
     static constexpr uint32_t SPEC_INTERVAL = 800;   // samples between updates (~10 Hz)
+    // BUF_CAP must cover both the decode window (WORD_SAMPLES + FFT_SIZE = 3200)
+    // and the spectrum window (SPEC_FFT_N = 2048); take the larger.
+    static constexpr uint32_t BUF_CAP =
+        (WORD_SAMPLES + FFT_SIZE >= static_cast<uint32_t>(SPEC_FFT_N))
+        ? WORD_SAMPLES + FFT_SIZE
+        : static_cast<uint32_t>(SPEC_FFT_N);  // 3200
 
     SpectrumCallback              spectrum_cb_;
     uint32_t                      spec_accum_  = 0;
-    std::array<float, SPEC_FFT_N> spec_window_;  // pre-computed Hann window
+    std::array<float, SPEC_FFT_N>           spec_window_;  // pre-computed Blackman-Harris window
+    std::array<float, SPEC_FFT_N>           spec_re_;      // FFT working buffer (real)
+    std::array<float, SPEC_FFT_N>           spec_im_;      // FFT working buffer (imag)
+    std::array<float, SPEC_FFT_N / 2 + 1>  spec_bins_;    // output magnitude/dBFS bins
 
     void compute_spectrum_();
 

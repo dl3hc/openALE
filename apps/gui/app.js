@@ -63,7 +63,7 @@ function connectBridge() {
     bridgeWs = null;
     bridgePending.clear();
     applyRigState(false);  // no bridge → demo mode: radio controls live again (mock)
-    setTimeout(connectBridge, 3000);  // keep retrying quietly — bridge may start later
+    setTimeout(connectBridge, 1000);  // retry every 1 s — bridge may start after GUI loads
   };
 }
 
@@ -146,12 +146,45 @@ function onSpectrumFrame(buf) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 const canvas = document.getElementById('waterfallCanvas');
 const ctx    = canvas.getContext('2d');
-const TONES  = [750, 1000, 1250, 1500, 1750, 2000, 2250, 2500]; // ALE 8-FSK tones
-const BW_LO  = 0, BW_HI = 4000;       // FFT window = 0…Nyquist (8 kHz sample rate)
-const ALE_LO = 750, ALE_HI = 2500;    // ALE 8-FSK sub-band within the window
+// ── Waterfall configuration ───────────────────────────────────────────────────
+//
+// ❶  FREQUENCY WINDOW  (BW_LO / BW_HI)
+//    Visible Hz range of the waterfall canvas.  Must equal 0 / (sample_rate/2)
+//    so the bin mapping in genRowFromSpectrum() stays correct; do not change
+//    without also updating the modem sample rate and SPEC_FFT_N.
+//
+// ❷  ROW INTERVAL  (nextRowAt + 100, in drawWaterfall())
+//    How often a new spectrum row is inserted, in ms.  Must match the modem's
+//    SPEC_INTERVAL: row_ms = 1000 * SPEC_INTERVAL / SAMPLE_RATE_HZ.
+//    Default: 100 ms = 10 rows/s (SPEC_INTERVAL = 800, sample rate = 8000 Hz).
+//    Lower = more rows/s and finer time resolution; also more CPU for rendering.
+//
+// ❸  ADAPTIVE NORMALISATION  (in genRowFromSpectrum())
+//    Noise floor (emaFloor): slow EMA of per-frame average.
+//      α_floor  = 0.03  — time constant ≈ 1 / (2 × α × fps) s; increase to
+//                         track a rising noise floor faster, decrease to smooth it.
+//    Signal peak (emaPeak): asymmetric EMA of per-frame maximum.
+//      attack   = 0.20  — rises quickly when a new tone appears (~0.5 s to 90 %).
+//      decay    = 0.002 — falls slowly after the signal ends (~25 s to 10 %).
+//    Range minimum: Math.max(20, …) — enforces at least 20 dB of display range
+//                   even when peak ≈ floor (quiet channel, no signal).
+//    To disable adaptive normalisation and use a fixed range instead, replace
+//    genRowFromSpectrum()'s ema lines with: const floor = -90, range = 70;
+//
+// ❹  COLOUR MAP  (energy2rgb())
+//    SDR rainbow: black → blue → cyan → green → yellow → red.
+//    Transition thresholds (0–1 normalised energy): 0.20 / 0.40 / 0.60 / 0.80.
+//    Raise the first threshold to compress the black/silent region; lower the
+//    last to make strong signals reach red earlier.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TONES  = [750, 1000, 1250, 1500, 1750, 2000, 2250, 2500]; // ALE 8-FSK tones (Hz)
+const BW_LO  = 0, BW_HI = 4000;       // ❶ displayed Hz range; must equal 0…Nyquist
+const ALE_LO = 750, ALE_HI = 2500;    // ALE sub-band for the band-frame overlay only
 const ALE_GUARD = 125;                // frame padding beyond the edge tones (Hz)
-const AXIS_MAJOR = [0, 1000, 2000, 3000, 4000];  // labelled gridlines (kHz)
-const AXIS_MINOR = [500, 1500, 2500, 3500];      // unlabelled gridlines
+const AXIS_MAJOR = [0, 1000, 2000, 3000, 4000];  // labelled gridlines (Hz)
+const AXIS_MINOR = [500, 1500, 2500, 3500];      // unlabelled gridlines (Hz)
 
 let rows = [];
 let wfState  = 'scanning';  // drives signal simulation
@@ -236,20 +269,39 @@ function buildTicks() {
 new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
 resizeCanvas();
 
-// Real spectrum (bridge connected): 257 bins, 0–4000 Hz, 15.625 Hz/bin
-// (ALEController::set_spectrum_callback() doc) resampled onto the canvas
-// width. Falls back to the synthetic demo row otherwise.
+// Real spectrum (bridge connected): 1025 bins, 0–4000 Hz, ≈3.9 Hz/bin — values in dBFS.
+// Adaptive peak+floor tracking with fast-attack / slow-decay (inspired by waterfall.c AGC).
+let emaFloor  = -80;  // tracks per-frame average (noise floor proxy)
+let emaPeak   = -20;  // tracks per-frame maximum (signal peak proxy)
+let nextRowAt = 0;    // timestamp-throttle: add waterfall row every 100 ms (10 fps)
+
 function genRowFromSpectrum(spec) {
   const W = canvas.width || 1;
   const row = new Float32Array(W);
-  // Magnitude bins aren't already 0-1 energy — normalise against a running
-  // sense of "loud" so the display doesn't depend on absolute FFT scale.
-  let maxv = 1e-6;
-  for (let i = 0; i < spec.length; i++) maxv = Math.max(maxv, spec[i]);
+
+  // Per-frame stats: average (floor proxy) and max (peak proxy).
+  let sum = 0, frameMax = -200;
+  for (let i = 0; i < spec.length; i++) {
+    sum += spec[i];
+    if (spec[i] > frameMax) frameMax = spec[i];
+  }
+  // Floor: slow EMA of average — dominated by noise bins, not the few tone bins.
+  emaFloor = 0.97 * emaFloor + 0.03 * (sum / spec.length);
+  // Peak: fast attack (0.20), slow decay (0.002) — reacts to signal appearance quickly.
+  emaPeak = emaPeak + (frameMax > emaPeak ? 0.20 : 0.002) * (frameMax - emaPeak);
+
+  const floor = emaFloor;
+  const range = Math.max(20, emaPeak - emaFloor);  // adaptive; min 20 dB
+
+  const lastBin = spec.length - 1;
   for (let x = 0; x < W; x++) {
-    const hz  = BW_LO + (x / (W - 1)) * (BW_HI - BW_LO);
-    const bin = Math.min(spec.length - 1, Math.round((hz / 4000) * (spec.length - 1)));
-    row[x] = Math.min(1, spec[bin] / maxv);
+    const hz      = BW_LO + (x / (W - 1)) * (BW_HI - BW_LO);
+    const binExact = (hz / 4000) * lastBin;
+    const lo      = Math.floor(binExact);
+    const hi      = Math.min(lo + 1, lastBin);
+    const frac    = binExact - lo;
+    const val     = (1 - frac) * spec[lo] + frac * spec[hi];  // dBFS
+    row[x] = Math.max(0, Math.min(1, (val - floor) / range));
   }
   return row;
 }
@@ -283,18 +335,25 @@ function genRow() {
   return row;
 }
 
-// Map linear energy 0-1 → RGB: dark-blue → teal → green → bright-green
+// Map energy 0-1 → RGB using the classic SDR rainbow:
+// black → blue → cyan → green → yellow → red
 function energy2rgb(v) {
   v = Math.max(0, Math.min(1, v));
-  if (v < 0.28) {
-    const t = v / 0.28;
-    return [0, Math.round(18 + t * 70), Math.round(35 + t * 75)];
-  } else if (v < 0.58) {
-    const t = (v - 0.28) / 0.30;
-    return [0, Math.round(88 + t * 130), Math.round(110 - t * 25)];
+  if (v < 0.20) {
+    const t = v / 0.20;
+    return [0, 0, Math.round(t * 255)];
+  } else if (v < 0.40) {
+    const t = (v - 0.20) / 0.20;
+    return [0, Math.round(t * 255), 255];
+  } else if (v < 0.60) {
+    const t = (v - 0.40) / 0.20;
+    return [0, 255, Math.round((1 - t) * 255)];
+  } else if (v < 0.80) {
+    const t = (v - 0.60) / 0.20;
+    return [Math.round(t * 255), 255, 0];
   } else {
-    const t = (v - 0.58) / 0.42;
-    return [Math.round(t * 170), Math.round(218 + t * 37), Math.round(85 + t * 105)];
+    const t = (v - 0.80) / 0.20;
+    return [255, Math.round((1 - t) * 255), 0];
   }
 }
 
@@ -302,8 +361,12 @@ function drawWaterfall() {
   const W = canvas.width, H = canvas.height;
   if (W < 4 || H < 4) { requestAnimationFrame(drawWaterfall); return; }
 
-  rows.unshift(genRow());
-  if (rows.length > H) rows.length = H;
+  const now = performance.now();
+  if (now >= nextRowAt) {
+    rows.unshift(genRow());
+    if (rows.length > H) rows.length = H;
+    nextRowAt = now + 100;
+  }
 
   const img = ctx.createImageData(W, H);
   const d   = img.data;
@@ -1496,4 +1559,8 @@ goIdle();              // boot idle (Scan off); real state arrives via syncAllFr
 updateScanBtn();       // reflect channel count on the Scan button (>=2 channels required)
 updateSelfHeader();
 updateAutoAcceptUi();  // reflect auto-accept checkbox state on the decision-window field
-connectBridge();        // apps/ale_bridge.cpp — falls back to demo mode if not running
+// Small delay before first connect: the bridge serves CSS/JS sequentially on the same
+// thread as WebSocket upgrades.  On a cold cache load, static resources are still
+// in-flight when this code runs; 200 ms lets the browser finish requesting them so
+// the WS upgrade is not competing with a pending HTTP response.
+setTimeout(connectBridge, 200);

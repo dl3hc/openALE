@@ -90,9 +90,9 @@ public:
     uint32_t get_assumed_scan_channels() const      { return config_.assumed_scan_channels; }
 
     /// @deprecated Use set_assumed_scan_channels() / apply_config().
-    void     set_target_scan_channels(uint32_t n)  { set_assumed_scan_channels(n); }
+    void     set_target_scan_channels(uint32_t n)  { set_assumed_scan_channels(n); sm_.set_target_scan_channels(n); }
     /// @deprecated Use get_assumed_scan_channels().
-    uint32_t get_target_scan_channels() const       { return config_.assumed_scan_channels; }
+    uint32_t get_target_scan_channels() const       { return sm_.get_target_scan_channels(); }
 
     /** Ordered list of channels to try on no-reply (multi-channel calling). */
     void set_calling_channels(const std::vector<Channel>& channels);

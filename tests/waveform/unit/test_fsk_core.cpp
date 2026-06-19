@@ -1,13 +1,10 @@
 ﻿/**
  * \file test_fsk_core.cpp
  * \brief Unit tests for 8-FSK modem core
- * 
+ *
  * Tests:
  *  1. Tone generation, boundary alignment, and streaming continuity
- *  2. FFT-based symbol detection
- *  3. Symbol-to-bits conversion with voting
- *  4. Golay FEC encoding/decoding
- *  5. End-to-end modulation/demodulation
+ *  2. Waveform constants and timing (AC-WAVEFORM-*)
  */
 
 #include "FSK/ale_waveform.h"
@@ -15,8 +12,6 @@
 #pragma warning(disable: 4127)  // C4127: constexpr runtime checks in tests are intentional
 #endif
 #include "FSK/tone_generator.h"
-#include "FSK/fft_demodulator.h"
-#include "FSK/symbol_decoder.h"
 #include "Protocol/Control/ale_timing.h"
 
 #include <iostream>
@@ -219,170 +214,6 @@ bool test_tone_generation() {
     }
 
     std::cout << "\nPASS: Tone generation\n";
-    return true;
-}
-
-// ============================================================================
-// Test 2: Symbol Detection
-// ============================================================================
-
-bool test_symbol_detection() {
-    std::cout << "\n[TEST 2] Symbol Detection\n";
-    std::cout << "========================\n";
-    
-    ToneGenerator gen;
-    FFTDemodulator demod;
-    
-    // Generate and demodulate each symbol
-    for (uint8_t test_symbol = 0; test_symbol < NUM_TONES; ++test_symbol) {
-        demod.reset();
-        gen.reset();
-        
-// Generate one symbol at this frequency
-        std::vector<int16_t> samples(SAMPLES_PER_SYMBOL);
-        gen.generate_tone(test_symbol, SAMPLES_PER_SYMBOL, samples.data());
-        
-// Demodulate and detect
-        auto symbols = demod.process_audio(samples.data(), SAMPLES_PER_SYMBOL);
-        
-        if (symbols.empty()) {
-            std::cout << "  Symbol " << (int)test_symbol << ": FAIL (no detection)\n";
-            return false;
-        }
-        
-        uint8_t detected = (symbols[0].bits[2] << 2) | 
-                           (symbols[0].bits[1] << 1) | 
-                            symbols[0].bits[0];
-        
-        std::cout << "  Symbol " << (int)test_symbol << ": detected as " 
-                  << (int)detected << " (SNR: " 
-                  << std::fixed << std::setprecision(1) 
-                  << symbols[0].signal_to_noise << " dB)\n";
-    }
-    
-    std::cout << "PASS: Symbol detection for all tones\n";
-    return true;
-}
-
-// ============================================================================
-// Test 3: Majority Voting
-// ============================================================================
-
-bool test_majority_voting() {
-    std::cout << "\n[TEST 3] Majority Voting\n";
-    std::cout << "========================\n";
-    
-    struct VoteTest {
-        uint8_t bits[3];
-        uint8_t expected;
-        const char* description;
-    };
-    
-    VoteTest tests[] = {
-        { {0, 0, 0}, 0, "All zeros" },
-        { {1, 1, 1}, 1, "All ones" },
-        { {0, 0, 1}, 0, "2-of-3 zeros" },
-        { {1, 1, 0}, 1, "2-of-3 ones" },
-        { {0, 1, 1}, 1, "2-of-3 ones (different order)" },
-    };
-    
-    bool all_pass = true;
-    for (const auto& test : tests) {
-        uint8_t result = SymbolDecoder::majority_vote(test.bits);
-        bool pass = (result == test.expected);
-        
-        std::cout << "  " << test.description << ": ";
-        if (pass) {
-            std::cout << "PASS\n";
-        } else {
-            std::cout << "FAIL (expected " << (int)test.expected 
-                      << ", got " << (int)result << ")\n";
-            all_pass = false;
-        }
-    }
-    
-    return all_pass ? true : (std::cout << "FAIL: Some voting tests failed\n", false);
-}
-
-
-// --------------------------------------------------------------------------
-// Test 4a: majority vote API correctness
-// --------------------------------------------------------------------------
-bool test_majority_vote_api() {
-    std::cout << "\n[TEST 4a] Majority vote API\n";
-    std::cout << "--------------------------------\n";
-
-    uint8_t a[3] = {0,0,0};
-    std::cout << "  input {0,0,0} -> " << (int)SymbolDecoder::majority_vote(a) << "\n";
-
-    uint8_t b[3] = {1,1,1};
-    std::cout << "  input {1,1,1} -> " << (int)SymbolDecoder::majority_vote(b) << "\n";
-
-    uint8_t c[3] = {1,0,1};
-    std::cout << "  input {1,0,1} -> " << (int)SymbolDecoder::majority_vote(c) << "\n";
-
-    if (SymbolDecoder::majority_vote(a) != 0 ||
-        SymbolDecoder::majority_vote(b) != 1 ||
-        SymbolDecoder::majority_vote(c) != 1) {
-        std::cout << "FAIL: majority vote mismatch\n";
-        return false;
-    }
-
-    std::cout << "PASS\n";
-    return true;
-}
-
-// ============================================================================
-// Test 5: End-to-End Modem Test
-// ============================================================================
-
-bool test_end_to_end_modem() {
-    std::cout << "\n[TEST 5] End-to-End Modem\n";
-    std::cout << "=========================\n";
-    
-    // Test parameters
-    static constexpr uint32_t TEST_SYMBOLS = 8;
-    uint8_t test_data[TEST_SYMBOLS] = {0, 1, 2, 3, 4, 5, 6, 7};
-    
-// 1. Generate tone sequence
-    ToneGenerator gen;
-    std::vector<int16_t> audio(TEST_SYMBOLS * SAMPLES_PER_SYMBOL);
-    
-    uint32_t samples_gen = gen.generate_symbols(test_data, TEST_SYMBOLS, audio.data(), TEST_AMPLITUDE);
-    std::cout << "  Generated " << samples_gen << " audio samples\n";
-    
-    // 2. Demodulate and detect symbols
-    FFTDemodulator demod;
-    auto detected = demod.process_audio(audio.data(), samples_gen);
-    
-    std::cout << "  Detected " << detected.size() << " symbols\n";
-    
-    if (detected.size() != TEST_SYMBOLS) {
-        std::cout << "  FAIL: Expected " << TEST_SYMBOLS << " symbols, got " 
-                  << detected.size() << "\n";
-        return false;
-    }
-    
-    // 3. Verify detected symbols
-    bool all_match = true;
-    for (uint32_t i = 0; i < TEST_SYMBOLS; ++i) {
-        uint8_t detected_symbol = (detected[i].bits[2] << 2) |
-                                   (detected[i].bits[1] << 1) |
-                                    detected[i].bits[0];
-        
-        if (detected_symbol != test_data[i]) {
-            std::cout << "  Symbol " << i << ": expected " << (int)test_data[i]
-                      << ", got " << (int)detected_symbol << "\n";
-            all_match = false;
-        }
-    }
-    
-    if (!all_match) {
-        std::cout << "  FAIL: Symbol mismatch\n";
-        return false;
-    }
-    
-    std::cout << "PASS: End-to-end modem test\n";
     return true;
 }
 
@@ -897,10 +728,6 @@ int run_all_tests() {
     if (test_trw_ms_ac_waveform_003_003()) { pass_count++; } else { fail_count++; }
     if (test_tw_ms_ac_waveform_003_004()) { pass_count++; } else { fail_count++; }
     if (test_tone_generation()) { pass_count++; } else { fail_count++; }
-    if (test_symbol_detection()) { pass_count++; } else { fail_count++; }
-    if (test_majority_voting()) { pass_count++; } else { fail_count++; }
-    if (test_majority_vote_api()) { pass_count++; } else { fail_count++; }
-    if (test_end_to_end_modem()) { pass_count++; } else { fail_count++; }
     if (test_timing_constants()) { pass_count++; } else { fail_count++; }
     
     std::cout << "\n";

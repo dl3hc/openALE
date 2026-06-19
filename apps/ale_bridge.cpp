@@ -19,7 +19,7 @@
  *   GUI -> bridge : {"id":N,"cmd":"...", ...args}   (text frame)
  *   bridge -> GUI : {"id":N,"ok":bool,[...]}          (text frame, command reply)
  *                   {"event":"...", ...}              (text frame, async event)
- *                   <257 float32 LE>                  (binary frame, spectrum)
+ *                   <4097 float32 LE>                 (binary frame, spectrum — dBFS values)
  */
 
 #include "App/ale_controller.h"

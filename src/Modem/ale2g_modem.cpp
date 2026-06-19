@@ -130,11 +130,19 @@ void Modulator::advance_queue_()
 Demodulator::Demodulator()
     : ring_(BUF_CAP, 0)
 {
-    // Pre-compute Hann window for the spectrum FFT.
-    // Hann reduces spectral leakage between the 8 ALE tones (250 Hz apart).
-    for (size_t k = 0; k < SPEC_FFT_N; ++k)
-        spec_window_[k] = 0.5f * (1.0f - std::cos(
-            2.0f * static_cast<float>(M_PI) * k / static_cast<float>(SPEC_FFT_N - 1)));
+    // Blackman-Harris 4-term window — -92 dB sidelobe suppression vs Hann's -31 dB.
+    // With ALE tones 40-60 dB above the noise floor, Hann sidelobes (-31 dB) sit
+    // 9-29 dB above the noise and make each tone look broad.  Blackman-Harris keeps
+    // sidelobes below the noise floor at all realistic HF SNR values.
+    constexpr float bh_a0 = 0.35875f, bh_a1 = 0.48829f,
+                    bh_a2 = 0.14128f, bh_a3 = 0.01168f;
+    for (size_t k = 0; k < SPEC_FFT_N; ++k) {
+        const float x = 2.0f * static_cast<float>(M_PI) * k
+                                / static_cast<float>(SPEC_FFT_N - 1);
+        spec_window_[k] = bh_a0 - bh_a1 * std::cos(x)
+                                + bh_a2 * std::cos(2.0f * x)
+                                - bh_a3 * std::cos(3.0f * x);
+    }
 }
 
 void Demodulator::reset()
@@ -207,31 +215,36 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
 
 void Demodulator::compute_spectrum_()
 {
-    // Fill real/imag arrays from the last SPEC_FFT_N samples of the ring,
+    // Fill real/imag member arrays from the last SPEC_FFT_N samples of the ring,
     // scaled to [-1, +1] and weighted by the pre-computed Hann window.
-    float re[SPEC_FFT_N], im[SPEC_FFT_N];
+    // Member arrays (not stack) avoid placing ~80 KB on the audio-thread stack.
     constexpr float kScale = 1.0f / 32768.0f;
     const uint32_t base = write_pos_ - static_cast<uint32_t>(SPEC_FFT_N);
     for (size_t k = 0; k < SPEC_FFT_N; ++k) {
-        re[k] = ring_at(base + static_cast<uint32_t>(k)) * kScale * spec_window_[k];
-        im[k] = 0.0f;
+        spec_re_[k] = ring_at(base + static_cast<uint32_t>(k)) * kScale * spec_window_[k];
+        spec_im_[k] = 0.0f;
     }
 
-    fft_inplace(re, im, SPEC_FFT_N);
+    fft_inplace(spec_re_.data(), spec_im_.data(), SPEC_FFT_N);
 
     // Compute one-sided magnitude spectrum (bins 0 … SPEC_FFT_N/2).
     // Normalise by N so magnitude is independent of FFT size.
     constexpr size_t kBins = SPEC_FFT_N / 2 + 1;
     const float kNorm = 1.0f / static_cast<float>(SPEC_FFT_N);
-    float bins[kBins];
-    bins[0] = std::sqrt(re[0] * re[0] + im[0] * im[0]) * kNorm;
+    spec_bins_[0] = std::sqrt(spec_re_[0] * spec_re_[0] + spec_im_[0] * spec_im_[0]) * kNorm;
     for (size_t k = 1; k < SPEC_FFT_N / 2; ++k)
-        bins[k] = std::sqrt(re[k] * re[k] + im[k] * im[k]) * kNorm * 2.0f; // ×2: one-sided energy
-    bins[SPEC_FFT_N / 2] = std::sqrt(re[SPEC_FFT_N/2] * re[SPEC_FFT_N/2]
-                                    + im[SPEC_FFT_N/2] * im[SPEC_FFT_N/2]) * kNorm;
+        spec_bins_[k] = std::sqrt(spec_re_[k] * spec_re_[k] + spec_im_[k] * spec_im_[k]) * kNorm * 2.0f;
+    spec_bins_[SPEC_FFT_N / 2] = std::sqrt(spec_re_[SPEC_FFT_N/2] * spec_re_[SPEC_FFT_N/2]
+                                           + spec_im_[SPEC_FFT_N/2] * spec_im_[SPEC_FFT_N/2]) * kNorm;
+
+    // Convert to power dBFS (ref = full-scale Hann-windowed sine ≈ −6 dBFS).
+    // Spreads HF dynamic range (~80 dB) across the display instead of compressing
+    // everything into the top few percent of a linear scale.
+    for (size_t k = 0; k < kBins; ++k)
+        spec_bins_[k] = 10.0f * std::log10(spec_bins_[k] * spec_bins_[k] + 1e-12f);
 
     constexpr float kHzPerBin = 8000.0f / static_cast<float>(SPEC_FFT_N);
-    spectrum_cb_(bins, kBins, kHzPerBin);
+    spectrum_cb_(spec_bins_.data(), kBins, kHzPerBin);
 }
 
 float Demodulator::goertzel_power(const int16_t* block, float freq_hz)

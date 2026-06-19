@@ -22,7 +22,6 @@
 #include "FEC/word_interleaver.h"
 #include "Codec/ale_encoder.h"
 #include "Codec/ale_decoder.h"
-#include "FSK/symbol_decoder.h"
 
 #include <iostream>
 #include <iomanip>
@@ -988,10 +987,25 @@ bool test_ac_fec_004_001_triple_redundancy() {
     return true;
 }
 
+// Stride-49 majority vote: recovers tx49 from a SymbolFrame.
+// Mirrors ALEEncoder::encode_tx49() inverse: sym[k] = {tx49[3k%49], tx49[(3k+1)%49], tx49[(3k+2)%49]}
+// For each bit b, copies sit at stream positions b, b+49, b+98 → majority vote.
+static uint64_t decode_word_with_voting(const SymbolFrame& frame) {
+    uint64_t result = 0;
+    for (uint32_t b = 0; b < SYMBOLS_PER_WORD - 1u; ++b) {
+        auto bit_at = [&](uint32_t s) -> uint8_t {
+            return (frame[s / 3] >> (2u - (s % 3u))) & 1u;
+        };
+        uint8_t v0 = bit_at(b), v1 = bit_at(b + 49), v2 = bit_at(b + 98);
+        if ((v0 + v1 + v2) >= 2) result |= (1ULL << b);
+    }
+    return result;
+}
+
 // AC-FEC-004-002: Majority-Vote auf Stride-49-Basis
 // REQ-FEC-016, REQ-FEC-017 (FEAT-FEC-004, MIL-STD-188-141B A.5.2.2.4)
 //
-// SymbolDecoder::decode_word_with_voting() must:
+// decode_word_with_voting() must:
 //  (1) Round-trip: encode_tx49(tx49) -> decode_word_with_voting -> recover tx49 exactly.
 //  (2) Single-copy error: corrupt one symbol in copy 0, 1, or 2 independently;
 //      majority vote must still recover the correct tx49.
@@ -1012,7 +1026,7 @@ bool test_ac_fec_004_002_majority_vote_stride49() {
         for (uint64_t tx49 : probe_words) {
             const uint64_t tx49_48 = tx49 & ((1ULL << 48) - 1ULL);  // mask to 48 bits
             const SymbolFrame frame = ALEEncoder::encode_tx49(tx49_48);
-            const uint64_t recovered = SymbolDecoder::decode_word_with_voting(frame);
+            const uint64_t recovered = decode_word_with_voting(frame);
             if (recovered != tx49_48) {
                 std::cout << "FAIL (1) round-trip tx49=0x" << std::hex << tx49_48
                           << " recovered=0x" << recovered << std::dec << "\n";
@@ -1051,7 +1065,7 @@ bool test_ac_fec_004_002_majority_vote_stride49() {
                 corrupted[sym_idx] ^= static_cast<uint8_t>(1u << bit_in_sym);
                 corrupted[sym_idx] &= 0x07u;
 
-                const uint64_t recovered = SymbolDecoder::decode_word_with_voting(corrupted);
+                const uint64_t recovered = decode_word_with_voting(corrupted);
                 if (recovered != tx49) {
                     std::cout << "FAIL (2) single-copy error: copy=" << copy_idx
                               << " bit=" << bit_i
@@ -1078,7 +1092,7 @@ bool test_ac_fec_004_002_majority_vote_stride49() {
             f.fill(7u);
             return f;
         }();
-        const uint64_t result = SymbolDecoder::decode_word_with_voting(all_ones);
+        const uint64_t result = decode_word_with_voting(all_ones);
         if ((result >> 48) & 1ULL) {
             std::cout << "FAIL (3) S49 invariant: bit 48 != 0 for all-ones input\n";
             return false;
@@ -1094,7 +1108,7 @@ bool test_ac_fec_004_002_majority_vote_stride49() {
         for (uint32_t i = 0; i < SYMBOLS_PER_WORD - 1u; ++i) {
             const uint64_t tx49  = 1ULL << i;
             const SymbolFrame fr = ALEEncoder::encode_tx49(tx49);
-            const uint64_t got   = SymbolDecoder::decode_word_with_voting(fr);
+            const uint64_t got   = decode_word_with_voting(fr);
             if (got != tx49) {
                 std::cout << "FAIL (4) single-bit i=" << i
                           << " got=0x" << std::hex << got

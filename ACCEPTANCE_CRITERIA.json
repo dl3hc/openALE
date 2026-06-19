@@ -764,7 +764,7 @@
       ],
       "title": "Scanning Call: Tsc = C × 2 × Trw",
       "description": "Die Scanning-Call-Dauer Tsc berechnet sich als Anzahl der Kanäle C multipliziert mit 2 × Trw (784 ms). Die Gesamtwiederholungen entsprechen dieser Dauer.",
-      "module": "Protocol/ale_state_machine",
+      "module": "Protocol/ale_state_machine bzw. Word/ale_sequence",
       "verification_hint": "Prüfe ale_state_machine.cpp: scan_cycles berechnet aus channel_count × 2 (pro Kanal 2 Trw-Slots).",
       "status": "open"
     },
@@ -776,7 +776,7 @@
       ],
       "title": "Leading Call: Vollständige Adresse zweifach",
       "description": "Im Leading-Abschnitt wird die vollständige Zieladresse (alle Wörter) zweimal gesendet. Max. 5 Wörter für Adressen bis 15 Zeichen.",
-      "module": "Protocol/ale_state_machine",
+      "module": "Protocol/ale_state_machine bzw. Word/ale_sequence",
       "verification_hint": "Prüfe handle_calling() bei CallingPhase::LEADING_CALL: Alle Adress-Wörter werden in der Sequenz TO/DATA/REP gesendet, zweimal durchlaufen.",
       "status": "open"
     },
@@ -788,7 +788,7 @@
       ],
       "title": "Conclusion: TIS oder TWAS mit eigener Adresse",
       "description": "Der Conclusion-Abschnitt besteht aus einem TIS-Wort (normale Beendigung) oder TWAS-Wort (Link-Terminierung) gefolgt von der eigenen Stationsadresse.",
-      "module": "Protocol/ale_state_machine",
+      "module": "Protocol/ale_state_machine bzw. Word/ale_sequence",
       "verification_hint": "Prüfe handle_calling() bei CallingPhase::CONCLUSION: Preamble muss TIS oder TWAS sein, Payload = self_address.",
       "status": "open"
     },
@@ -800,7 +800,7 @@
       ],
       "title": "Conclusion: RX-Fenster öffnet nach Tlww",
       "description": "Nach Senden der Conclusion wartet die State Machine Tlww (= Twr = 915 ms) und öffnet dann ein RX-Fenster (LISTENING-Phase).",
-      "module": "Protocol/ale_state_machine",
+      "module": "Protocol/ale_state_machine bzw. Word/ale_sequence",
       "verification_hint": "Prüfe Übergang CONCLUSION → LISTENING in ale_state_machine.cpp. Warte-Zeit muss Twr_ms oder Tlww_ms sein.",
       "status": "open"
     },
@@ -824,7 +824,7 @@
       ],
       "title": "Ta max = 1960 ms (5 Wörter × Trw)",
       "description": "Der Address-Abschnitt (Ta) darf maximal 1960 ms dauern (5 Trw-Slots). Dies entspricht maximal 5 Adress-Wörtern.",
-      "module": "Protocol/ale_state_machine",
+      "module": "Protocol/ale_state_machine bzw. Word/ale_sequence",
       "verification_hint": "Prüfe Limits in ale_state_machine.cpp oder ale_timing.h: TA_MAX_WORDS=5, entspricht 5×392=1960ms.",
       "status": "open"
     },

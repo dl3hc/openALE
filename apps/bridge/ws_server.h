@@ -2,22 +2,20 @@
  * \file apps/bridge/ws_server.h
  * \brief Minimal single-client RFC6455 WebSocket server.
  *
- * Socket bootstrap mirrors apps/radio_mock.cpp (WSAStartup/socket/bind/listen/
- * accept, single client at a time — "ALE is single-station" applies here too:
- * one operator GUI per running bridge).
- *
  * Threading:
- *   - A dedicated I/O thread owns accept()+recv(), static-file serving for
- *     plain HTTP GETs, and the WS handshake. It never calls send_text()/
- *     send_binary() — those are called by the caller's thread. Today every
- *     send originates on the main loop (command replies, async events, AND the
- *     spectrum binary frames: ALEController's spectrum callback fires inline
- *     from feed_audio() on the main loop, not from the WASAPI audio thread).
- *     send_text()/send_binary() are still mutex-serialised so a future
- *     off-main-thread sender stays wire-safe. See docs/THREADING.md.
- *   - Received text-frame payloads are pushed into a mutex-protected queue;
- *     the main loop drains it non-blockingly via pop_message(), mirroring
- *     ale_cli.cpp's stdin_reader -> g_cmd_queue pattern.
+ *   - A dedicated I/O thread owns ALL socket operations (accept, recv, send,
+ *     close) via a WSAPoll()/poll()-based event loop (5 ms timeout). It can
+ *     serve concurrent plain-HTTP GETs (browser cold-load: index.html, app.js,
+ *     styles.css) and the WebSocket session simultaneously — no more blocking
+ *     in handle_client() that prevented accept() from running.
+ *   - send_text()/send_binary() push frames into a mutex-protected send_queue_;
+ *     the I/O thread drains it on every poll iteration (≤5 ms latency).
+ *   - Received text frames are pushed into recv_queue_ (mutex-protected);
+ *     the main loop drains it non-blockingly via pop_message().
+ *   - stop() sets running_=false, joins the I/O thread (which closes all
+ *     sockets in its cleanup section), then calls WSACleanup.  No socket is
+ *     closed before join() — eliminates the close-before-send race present in
+ *     the prior blocking design.  See docs/THREADING.md.
  */
 #pragma once
 
@@ -27,6 +25,7 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace bridge {
 
@@ -42,45 +41,62 @@ public:
     bool start(uint16_t port);
 
     /**
-     * Directory the I/O thread serves static files from for plain HTTP GETs
-     * (the apps/gui/ web root — index.html / app.js / styles.css). Must be set
-     * before start(), or left empty to disable static serving (404 everything).
-     * Read-only after start(): only the I/O thread reads it, no locking needed.
+     * Directory the I/O thread serves static files from for plain HTTP GETs.
+     * Must be set before start().  Read-only after start().
      */
     void set_web_root(std::string root) { web_root_ = std::move(root); }
 
-    /** Stop the I/O thread and close all sockets. Safe to call if not started. */
+    /** Stop the I/O thread (join first) and release all resources. */
     void stop();
 
     /** Non-blocking dequeue of one received text-frame payload. */
     bool pop_message(std::string& out);
 
-    /** Send a text frame. False (silently dropped) if no client is connected. */
+    /** Enqueue a text frame for the I/O thread to send (≤5 ms latency). */
     bool send_text(const std::string& payload);
 
-    /** Send a binary frame. False (silently dropped) if no client is connected. */
+    /** Enqueue a binary frame for the I/O thread to send (≤5 ms latency). */
     bool send_binary(const void* data, size_t len);
 
     bool is_connected() const;
 
 private:
     using SocketHandle = intptr_t;
-    static constexpr SocketHandle kInvalid = -1;
+    static constexpr SocketHandle kInvalid        = -1;
+    static constexpr int          kMaxPendingHttp = 8;
+    static constexpr size_t       kSendQueueLimit = 32;  // drop-oldest overflow guard
+
+    struct SendItem {
+        uint8_t              opcode;
+        std::vector<uint8_t> data;
+    };
+
+    struct PendingHttp {
+        SocketHandle fd = kInvalid;
+        std::string  buf;              // accumulated HTTP request bytes
+    };
 
     void io_thread_main(uint16_t port);
-    bool handle_client(SocketHandle client);
-    bool send_frame(uint8_t opcode, const uint8_t* data, size_t len);
+    bool parse_ws_frames_(SocketHandle ws_handle);  // I/O thread only
 
-    std::string  web_root_;   // static-file root for plain HTTP GETs (set before start())
-    SocketHandle listen_sock_ = kInvalid;
-    std::atomic<SocketHandle> client_{kInvalid};
-    std::thread io_thread_;
-    std::atomic<bool> running_{false};
+    std::string               web_root_;
+    SocketHandle              listen_sock_ = kInvalid;
+    std::atomic<SocketHandle> client_{kInvalid};   // kInvalid = not connected
+    std::thread               io_thread_;
+    std::atomic<bool>         running_{false};
 
-    std::mutex send_mutex_;
+    // Cross-thread queues (mutex-protected):
+    std::mutex           send_queue_mtx_;
+    std::queue<SendItem> send_queue_;
 
-    std::mutex recv_mutex_;
-    std::queue<std::string> recv_queue_;
+    std::mutex               recv_mutex_;
+    std::queue<std::string>  recv_queue_;
+
+    // I/O-thread-private state — no locking needed (only io_thread_main touches these):
+    PendingHttp pending_http_[kMaxPendingHttp];
+    std::string ws_recv_buf_;       // WS frame accumulation buffer
+    std::string ws_frag_acc_;       // reassembly buffer for fragmented messages
+    uint8_t     ws_frag_opcode_ = 0;  // 0 = no fragmented message in progress
 };
 
 } // namespace bridge

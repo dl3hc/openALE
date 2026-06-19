@@ -32,10 +32,7 @@ message(STATUS "Building for ${PLATFORM}")
 
 # Modem / FSK layer
 add_library(ale_fsk_core
-    src/FSK/fft_demodulator.cpp
     src/FSK/tone_generator.cpp
-    src/FSK/symbol_decoder.cpp
-    src/FSK/ale_waveform.cpp
 )
 
 target_include_directories(ale_fsk_core PUBLIC
@@ -552,10 +549,6 @@ add_test(NAME DecoderRobustness COMMAND test_decoder_robustness)
 add_executable(test_architecture tests/gen/integration/test_layering.cpp)
 target_compile_definitions(test_architecture PRIVATE PROJECT_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME Architecture COMMAND test_architecture)
-
-add_executable(debug_fft tests/debug_fft.cpp)
-target_link_libraries(debug_fft ale_fsk_core ale_fec)
-target_include_directories(debug_fft PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # ── Examples ──────────────────────────────────────────────────────────────────
 

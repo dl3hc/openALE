@@ -1,12 +1,11 @@
 ﻿/**
  * \file example_ale_decoder.cpp
- * \brief Example: Complete ALE decoder using Phase 1 + Phase 2
- * 
- * Demonstrates full pipeline:
- *  Audio samples → FFT demod → Symbols → Words → Messages
+ * \brief Example: ALE word parsing and message assembly
+ *
+ * Demonstrates word encoding, address book, and message assembly.
+ * Live demodulation uses ALE2GModem::Demodulator (Goertzel-based).
  */
 
-#include "FSK/fft_demodulator.h"
 #include "FSK/tone_generator.h"
 #include "Word/ale_word.h"
 #include "Stores/address_book.h"
@@ -55,24 +54,13 @@ void example_individual_call() {
     generator.generate_symbols(to_symbols.data(), 49, to_audio.data());
     generator.generate_symbols(from_symbols.data(), 49, from_audio.data());
     
-    std::cout << "Generated audio: " << to_audio.size() << " + " 
-              << from_audio.size() << " = " 
+    std::cout << "Generated audio: " << to_audio.size() << " + "
+              << from_audio.size() << " = "
               << (to_audio.size() + from_audio.size()) << " samples\n";
-    
+    std::cout << "(Live demodulation: feed audio to ALE2GModem::Demodulator via push_samples())\n";
+
     // ========================================================================
-    // Step 2: Demodulate audio to symbols
-    // ========================================================================
-    
-    FFTDemodulator demodulator;
-    
-    auto to_detected = demodulator.process_audio(to_audio.data(), static_cast<uint32_t>(to_audio.size()));
-    auto from_detected = demodulator.process_audio(from_audio.data(), static_cast<uint32_t>(from_audio.size()));
-    
-    std::cout << "Demodulated: " << to_detected.size() << " + " 
-              << from_detected.size() << " symbols\n";
-    
-    // ========================================================================
-    // Step 3: Parse symbols to ALE words
+    // Step 2: Parse symbols to ALE words
     // ========================================================================
     
     WordParser parser;
