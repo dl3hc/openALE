@@ -6,8 +6,9 @@
    to the original local-only demo behaviour, so apps/gui/ still works
    standalone for UI work. apps/gui-demo/ is the frozen, always-mock copy.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-let bridgeWs        = null;
-let bridgeConnected = false;
+let bridgeWs            = null;
+let bridgeConnected     = false;
+let bridgeReconnectTimer = null;  // guard: at most one pending reconnect
 let bridgeReqId      = 0;
 const bridgePending  = new Map();   // id -> callback(reply)
 let latestSpectrum   = null;        // Float32Array(257) from the last binary frame, or null
@@ -57,13 +58,17 @@ function connectBridge() {
     }
   };
 
-  ws.onclose = ws.onerror = () => {
+  ws.onerror = () => {};  // onclose always follows; let it handle cleanup + retry
+
+  ws.onclose = () => {
     if (bridgeConnected) pushLog([['data', 'Bridge disconnected — back to local demo mode']], '');
     bridgeConnected = false;
     bridgeWs = null;
     bridgePending.clear();
     applyRigState(false);  // no bridge → demo mode: radio controls live again (mock)
-    setTimeout(connectBridge, 1000);  // retry every 1 s — bridge may start after GUI loads
+    if (!bridgeReconnectTimer) {
+      bridgeReconnectTimer = setTimeout(() => { bridgeReconnectTimer = null; connectBridge(); }, 1000);
+    }
   };
 }
 

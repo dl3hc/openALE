@@ -352,6 +352,7 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                     ws_recv_buf_.clear();
                     ws_frag_acc_.clear();
                     ws_frag_opcode_ = 0;
+                    ws_reject_count_ = 0;
                     client_ = static_cast<SocketHandle>(fd);
                     std::fprintf(stdout, "[ws_server] client connected\n");
                     std::fflush(stdout);
@@ -366,8 +367,12 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                         "Connection: close\r\n\r\n";
                     send_raw(fd, reinterpret_cast<const uint8_t*>(reject.data()), reject.size());
                     close_sock(fd);
-                    std::fprintf(stdout, "[ws_server] WS upgrade rejected — session already active\n");
-                    std::fflush(stdout);
+                    ++ws_reject_count_;
+                    if (ws_reject_count_ == 1 || ws_reject_count_ % 50 == 0) {
+                        std::fprintf(stdout, "[ws_server] WS upgrade rejected — session already active"
+                                             " (×%u)\n", ws_reject_count_);
+                        std::fflush(stdout);
+                    }
                 }
             } else {
                 serve_static(fd, req, web_root_);
@@ -405,6 +410,7 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                 ws_recv_buf_.clear();
                 ws_frag_acc_.clear();
                 ws_frag_opcode_ = 0;
+                ws_reject_count_ = 0;
                 std::fprintf(stdout, "[ws_server] client disconnected\n");
                 std::fflush(stdout);
             }

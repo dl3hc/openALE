@@ -97,6 +97,7 @@ private:
     std::string ws_recv_buf_;       // WS frame accumulation buffer
     std::string ws_frag_acc_;       // reassembly buffer for fragmented messages
     uint8_t     ws_frag_opcode_ = 0;  // 0 = no fragmented message in progress
+    uint32_t    ws_reject_count_ = 0; // consecutive upgrade rejections; resets on connect
 };
 
 } // namespace bridge
