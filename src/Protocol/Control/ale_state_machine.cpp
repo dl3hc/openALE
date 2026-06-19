@@ -548,16 +548,21 @@ void ALEStateMachine::handle_handshake() {
 
         // ── AWAIT_ACCEPT ──────────────────────────────────────────────────
         // Operator decision gate (only entered when manual-accept mode is on).
-        // Holds here until accept_call()/reject_call() resolves accept_decided_,
-        // or the decision timeout elapses (auto-accept fallback).
+        // Holds here until accept_call()/reject_call() resolves accept_decided_.
+        // If the operator does NOT decide within accept_decision_timeout_ms_, the
+        // call is dropped (no response is sent) so the caller runs into its own
+        // call timeout ("no reply"). Manual accept means manual: an unanswered
+        // call must not silently auto-link.
         case HandshakePhase::AWAIT_ACCEPT: {
             const bool timed_out =
                 (current_time_ms - await_accept_start_ms_) >= accept_decision_timeout_ms_;
-            if (accept_decided_ || timed_out) {
-                if (timed_out && !accept_decided_)
-                    SM_TRACE("[TRACE] handle_handshake: AWAIT_ACCEPT timeout → auto-accept\n");
-                else
-                    SM_TRACE("[TRACE] handle_handshake: AWAIT_ACCEPT resolved → SLOT_WAIT\n");
+            if (!accept_decided_ && timed_out) {
+                SM_TRACE("[TRACE] handle_handshake: AWAIT_ACCEPT timeout → no answer, abort\n");
+                process_event(ALEEvent::LINK_TIMEOUT);
+                return;
+            }
+            if (accept_decided_) {
+                SM_TRACE("[TRACE] handle_handshake: AWAIT_ACCEPT resolved → SLOT_WAIT\n");
                 handshake_phase     = HandshakePhase::SLOT_WAIT;
                 slot_wait_start_ms_ = current_time_ms;
             }
@@ -928,9 +933,13 @@ void ALEStateMachine::react_calling(const WordEvent& ev) {
         }
         break;
     case WordEvent::Type::DATA_EXTENSION:
-        to_address      += ev.address;
-        active_call_from = to_address;
-        tlww_start_ms    = current_time_ms;
+        // Only extend once the responder's TIS has started the conclusion;
+        // otherwise a stray DATA before TIS would pollute to_address.
+        if (collecting_remote_conclusion) {
+            to_address      += ev.address;
+            active_call_from = to_address;
+            tlww_start_ms    = current_time_ms;
+        }
         break;
     case WordEvent::Type::TWAS_REJECTION:
         if (operator_callback)
@@ -1023,14 +1032,22 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
         current_state == ALEState::HANDSHAKE
         && handshake_phase == HandshakePhase::CHANNEL_CHECK;
 
+    // Collecting/expected_caller are STATE-SCOPED: collecting_remote_conclusion
+    // belongs to CALLING, hs_*_rcvd to HANDSHAKE. ORing them across states leaks
+    // stale handshake flags (cleared only on HANDSHAKE entry, not CALLING entry)
+    // into a later outbound call, where they misclassify the response's own-TO
+    // DATA/REP words as caller-extension and pollute to_address (→ "HCHC").
     const bool collecting =
-        collecting_remote_conclusion   // CALLING/LISTENING
-        || hs_conclusion_rcvd          // HANDSHAKE/WAIT_CYCLE_END
-        || hs_ack_tis_rcvd;            // HANDSHAKE/WAIT_ACK
+        (current_state == ALEState::CALLING   && collecting_remote_conclusion)
+        || (current_state == ALEState::HANDSHAKE && (hs_conclusion_rcvd || hs_ack_tis_rcvd));
 
     WordDecodeContext ctx;
     ctx.self_address        = address_book.get_self_address();
-    ctx.expected_caller     = caller_address.substr(0, 3);
+    // expected_caller locks the called station onto the calling peer during its
+    // HANDSHAKE only; during CALLING a stale caller_address must not gate (reject)
+    // the responder's TIS.
+    ctx.expected_caller     = (current_state == ALEState::HANDSHAKE)
+                                  ? caller_address.substr(0, 3) : std::string();
     ctx.lbt_active          = lbt_active;
     ctx.collecting_conclusion = collecting;
 

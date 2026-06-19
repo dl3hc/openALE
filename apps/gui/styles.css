@@ -26,6 +26,7 @@
       --s-idle:     #3e5870;
       --s-scanning: #00dc8c;
       --s-calling:  #ffca28;
+      --s-handshake:#29b6f6;
       --s-linked:   #00e676;
       --s-incoming: #ff8a65;
       --s-error:    #ff5252;
@@ -150,6 +151,7 @@
     .dot.idle     { background: var(--s-idle); }
     .dot.scanning { background: var(--s-scanning); animation: blink 2s infinite; }
     .dot.calling  { background: var(--s-calling); animation: blink 0.65s infinite; }
+    .dot.handshake{ background: var(--s-handshake); animation: blink 0.5s infinite; }
     .dot.linked   { background: var(--s-linked); }
     .dot.incoming { background: var(--s-incoming); animation: blink 0.38s infinite; }
 

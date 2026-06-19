@@ -592,6 +592,19 @@
           <div class="fg">
             <div class="ftoggle-row">
               <div class="ftoggle-info">
+                <div class="ftoggle-name">Auto-Accept Incoming Calls</div>
+                <div class="ftoggle-desc">ON: incoming calls are answered automatically. OFF: a call must be accepted manually (Answer) within the decision window below — otherwise it is dropped and the caller times out.</div>
+              </div>
+              <label class="ftoggle"><input type="checkbox" id="cfgAutoAccept" onchange="updateAutoAcceptUi()"><span class="ftrack"></span></label>
+            </div>
+            <div class="fg" id="acceptDecisionRow" style="margin:6px 0 12px">
+              <label class="flabel">Manual Accept Window (s)</label>
+              <input class="finput" id="cfgAcceptTimeout" type="number" value="20" min="1" style="width:120px">
+              <div class="fhint">Time the operator has to press Answer before the call is dropped (manual mode only).</div>
+            </div>
+            <hr class="fsep">
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
                 <div class="ftoggle-name">Accept Any Call</div>
                 <div class="ftoggle-desc">AcceptAnyCall — respond to individual calls from stations not in the address book</div>
               </div>

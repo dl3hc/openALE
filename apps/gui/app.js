@@ -76,6 +76,7 @@ function syncAllFromBridge() {
   syncLqaFromBridge();
   syncVfoFromBridge();
   pollRigStatus();   // establish initial radio-control lock state
+  applyManualAcceptToBridge();  // push the GUI's accept-mode default to the SM
 }
 
 // No dedicated push event exists for VFO/PTT/audio-level changes (they're
@@ -89,15 +90,16 @@ function applyStatusReply(r) {
   applyBridgeState(r.state);
 }
 
-// Map ALEState (Core) -> existing demo UI transitions. HANDSHAKE/SOUNDING
-// are transient technical states with no dedicated UI of their own here;
-// LINKED is driven by the link_established event instead (it carries the
-// peer address, which bare state doesn't).
+// Map the bridge's per-instance display state -> pill. The bridge reports
+// "HANDSHAKE" for both the called station's HANDSHAKE state and the caller's
+// response-exchange sub-phases (LISTENING/SENDING_ACK), so each side shows
+// calling → handshake → linked from its own perspective. LINKED is driven by
+// the link_established event instead (it carries the peer address).
 function applyBridgeState(state) {
   if (state === 'IDLE') goIdle();
   else if (state === 'SCANNING') goScanning();
   else if (state === 'CALLING') setStatus('Calling…', 'calling');
-  else if (state === 'HANDSHAKE') setStatus('Handshake…', 'calling');
+  else if (state === 'HANDSHAKE') setStatus('Handshake…', 'handshake');
 }
 
 function onBridgeEvent(e) {
@@ -581,10 +583,10 @@ function startCall() {
   setTimeout(goLinked, 2200);
 }
 
-// answerCall()/accept_call() is only meaningful with manual-accept mode on
-// (ALEController::set_manual_accept_mode()) — by default the SM already
-// auto-accepts, so the panel here is mostly "dismiss"; the ACCEPT command
-// is still sent so it's correct once manual-accept mode is enabled.
+// ACCEPT/REJECT resolve the manual-accept gate (AWAIT_ACCEPT). The GUI defaults
+// to manual accept (Settings ▸ Policy ▸ Auto-Accept off → MANUAL_ACCEPT_MODE on,
+// pushed on connect/save), so Answer/Decline are the operator's real decision.
+// With Auto-Accept on the SM links automatically and ACCEPT is just a dismiss.
 function answerCall() {
   showInc(false);
   if (bridgeConnected) { bridgeSend('ACCEPT', {}); return; }
@@ -1067,7 +1069,28 @@ function exportConf()   { /* TODO: serialize all cfgXxx inputs to key=value */ }
 function importConf()   { /* TODO: parse uploaded file into cfgXxx inputs */ }
 
 // Apply visible settings to the UI (real impl sends CMDs to WebSocket)
+// Auto-accept OFF ⇒ manual-accept gate ON (the SM pauses incoming calls in
+// AWAIT_ACCEPT until Answer/Decline, or drops them after the decision window so
+// the caller times out). Auto-accept ON ⇒ manual mode OFF (handshake auto-runs).
+function applyManualAcceptToBridge() {
+  if (!bridgeConnected) return;
+  const auto = document.getElementById('cfgAutoAccept')?.checked ?? false;
+  const secs = parseInt(document.getElementById('cfgAcceptTimeout')?.value, 10);
+  const timeout_ms = (Number.isFinite(secs) && secs > 0 ? secs : 15) * 1000;
+  bridgeSend('MANUAL_ACCEPT_MODE', { on: !auto, timeout_ms });
+}
+
+// Grey out the manual-accept window field when auto-accept is on (not used then).
+function updateAutoAcceptUi() {
+  const auto = document.getElementById('cfgAutoAccept')?.checked ?? false;
+  const row  = document.getElementById('acceptDecisionRow');
+  if (row) row.style.opacity = auto ? '0.45' : '1';
+  const inp = document.getElementById('cfgAcceptTimeout');
+  if (inp) inp.disabled = auto;
+}
+
 function saveSettings() {
+  applyManualAcceptToBridge();
   updateSelfHeader();
   closeSettings();
 }
@@ -1472,4 +1495,5 @@ updateRadioDisplay();  // VFO display + mode/step highlight
 goIdle();              // boot idle (Scan off); real state arrives via syncAllFromBridge()/STATUS on connect
 updateScanBtn();       // reflect channel count on the Scan button (>=2 channels required)
 updateSelfHeader();
+updateAutoAcceptUi();  // reflect auto-accept checkbox state on the decision-window field
 connectBridge();        // apps/ale_bridge.cpp — falls back to demo mode if not running
