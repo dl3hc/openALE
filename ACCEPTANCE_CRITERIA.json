@@ -818,7 +818,8 @@
       "description": "Der Conclusion-Abschnitt besteht aus einem TIS-Wort (normale Beendigung) oder TWAS-Wort (Link-Terminierung) gefolgt von der eigenen Stationsadresse.",
       "module": "Protocol/ale_state_machine bzw. Word/ale_sequence",
       "verification_hint": "Prüfe handle_calling() bei CallingPhase::CONCLUSION: Preamble muss TIS oder TWAS sein, Payload = self_address.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_frame_005_001_conclusion_tis_twas_self_address() in tests/frame/unit/test_frame.cpp verifiziert (1) ALESequenceBuilder::conclusion(self) erzeugt TIS-Anker + self_address, (2) conclusion(self, true) erzeugt TWAS-Anker + self_address, (3) 5-Zeichen-Adressen korrekt als TIS/TWAS-Anker + DATA-Erweiterungswort kodiert, (4) SM CallingPhase::CONCLUSION sendet TIS:self als letzte Wörter vor LISTENING-Übergang — verifiziert für 3-Zeichen (SAM) und 5-Zeichen (DL3HC) eigene Adressen. Alle 15 Tests grün (2026-06-20)."
     },
     {
       "id": "AC-FRAME-005-002",

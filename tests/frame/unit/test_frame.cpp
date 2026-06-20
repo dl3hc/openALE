@@ -24,6 +24,7 @@
 #include "Protocol/Control/ale_state_machine.h"
 #include "Modem/ale2g_modem.h"
 #include "Word/ale_sequence.h"
+#include "Word/address_encoder.h"
 #include "FEC/ale_fec_codec.h"
 #include "FSK/ale_waveform.h"
 #include "FSK/tone_generator.h"
@@ -987,6 +988,163 @@ bool test_ac_frame_003_001_leading_full_address_twice()
 }
 
 // ============================================================================
+// AC-FRAME-005-001 — Conclusion: TIS oder TWAS mit eigener Adresse
+//
+// Verifies (REQ-FRAME-010 / FEAT-FRAME-005 / A.5.2.3.2.3):
+//   (1) ALESequenceBuilder::conclusion() TIS path:  anchor=TIS,  payload=self
+//   (2) ALESequenceBuilder::conclusion() TWAS path: anchor=TWAS, payload=self
+//   (3) Multi-char self_address → anchor + correct DATA/REP extension words
+//   (4) SM CallingPhase::CONCLUSION: conclusion words TIS:self at tail of TX
+//   (5) SM multi-word self (>3 chars): TIS anchor + DATA extension(s)
+//
+// TIS and TWAS are mutually exclusive within one frame (A.5.2.3.2.3).
+// ============================================================================
+
+bool test_ac_frame_005_001_conclusion_tis_twas_self_address()
+{
+    std::cout << "\n[AC-FRAME-005-001] Conclusion: TIS or TWAS anchor with own address\n";
+    bool all_ok = true;
+
+    // ── Part 1: Builder — TIS path (3-char self) ─────────────────────────────
+    {
+        const auto seq = ALESequenceBuilder::conclusion("SAM");
+        const auto& w  = seq.words();
+        const bool size_ok = (w.size() == 1);
+        const bool type_ok = size_ok && (w[0].type == PreambleType::TIS);
+        const bool addr_ok = size_ok && (trim_ale_address(w[0].address) == "SAM");
+        all_ok &= size_ok && type_ok && addr_ok;
+        std::cout << "  [builder-TIS]  conclusion(\"SAM\")  = 1 word: "
+                  << (size_ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [builder-TIS]  anchor = TIS: "
+                  << (type_ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [builder-TIS]  address = \"SAM\": "
+                  << (addr_ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part 2: Builder — TWAS path (3-char self, is_reject=true) ─────────────
+    {
+        const auto seq = ALESequenceBuilder::conclusion("JOE", /*is_reject=*/true);
+        const auto& w  = seq.words();
+        const bool size_ok = (w.size() == 1);
+        const bool type_ok = size_ok && (w[0].type == PreambleType::TWAS);
+        const bool addr_ok = size_ok && (trim_ale_address(w[0].address) == "JOE");
+        all_ok &= size_ok && type_ok && addr_ok;
+        std::cout << "  [builder-TWAS] conclusion(\"JOE\",reject) = 1 word: "
+                  << (size_ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [builder-TWAS] anchor = TWAS: "
+                  << (type_ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [builder-TWAS] address = \"JOE\": "
+                  << (addr_ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part 3: Builder — multi-word TIS (5-char: TIS anchor + DATA ext) ──────
+    // "DL3HC" → [TIS:"DL3", DATA:"HC@"]; trim("HC@") == "HC".
+    {
+        const auto seq = ALESequenceBuilder::conclusion("DL3HC");
+        const auto& w  = seq.words();
+        const bool size_ok  = (w.size() == 2);
+        const bool type0_ok = size_ok && (w[0].type == PreambleType::TIS);
+        const bool addr0_ok = size_ok && (trim_ale_address(w[0].address) == "DL3");
+        const bool type1_ok = size_ok && (w[1].type == PreambleType::DATA);
+        const bool addr1_ok = size_ok && (trim_ale_address(w[1].address) == "HC");
+        all_ok &= size_ok && type0_ok && addr0_ok && type1_ok && addr1_ok;
+        std::cout << "  [multi-TIS]    conclusion(\"DL3HC\") = 2 words: "
+                  << (size_ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [multi-TIS]    w[0]=TIS:\"DL3\": "
+                  << ((type0_ok && addr0_ok) ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [multi-TIS]    w[1]=DATA:\"HC\": "
+                  << ((type1_ok && addr1_ok) ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part 4: Builder — multi-word TWAS (5-char, is_reject=true) ────────────
+    // "DL3HC" reject → [TWAS:"DL3", DATA:"HC@"]; same structure, TWAS anchor.
+    {
+        const auto seq = ALESequenceBuilder::conclusion("DL3HC", /*is_reject=*/true);
+        const auto& w  = seq.words();
+        const bool size_ok  = (w.size() == 2);
+        const bool type0_ok = size_ok && (w[0].type == PreambleType::TWAS);
+        const bool addr0_ok = size_ok && (trim_ale_address(w[0].address) == "DL3");
+        const bool type1_ok = size_ok && (w[1].type == PreambleType::DATA);
+        const bool addr1_ok = size_ok && (trim_ale_address(w[1].address) == "HC");
+        all_ok &= size_ok && type0_ok && addr0_ok && type1_ok && addr1_ok;
+        std::cout << "  [multi-TWAS]   conclusion(\"DL3HC\",reject) = 2 words: "
+                  << (size_ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [multi-TWAS]   w[0]=TWAS:\"DL3\": "
+                  << ((type0_ok && addr0_ok) ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [multi-TWAS]   w[1]=DATA:\"HC\": "
+                  << ((type1_ok && addr1_ok) ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part 5: SM — 3-char self_address, conclusion at tail of TX ───────────
+    // SAM calls BOB, scan_ch=0:
+    //   leading:    TO:"BOB" × 2 = 2 words
+    //   conclusion: TIS:"SAM"    = 1 word  (index 2 in captured sequence)
+    {
+        std::vector<ALEWord> captured;
+        ALEStateMachine sm;
+        sm.set_self_address("SAM");
+        sm.set_target_scan_channels(0);
+        sm.set_state_callback([](ALEState, ALEState){});
+        sm.set_rx_enabled_callback([](bool){});
+        sm.set_transmit_callback([&](const ALEWord& w){ captured.push_back(w); });
+        sm.initiate_call("BOB");
+        const uint32_t T_TX = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+        sm.update(ALETimingConstants::Twt_ms);
+        sm.update(T_TX);
+        for (int i = 0; i < 3; ++i) sm.on_word_complete();
+
+        const bool size_ok  = (captured.size() == 3);
+        const bool type_ok  = size_ok && (captured[2].type == PreambleType::TIS);
+        const bool addr_ok  = size_ok && (trim_ale_address(captured[2].address) == "SAM");
+        const bool phase_ok = (sm.get_calling_phase() == CallingPhase::LISTENING);
+        all_ok &= size_ok && type_ok && addr_ok;
+        std::cout << "  [SM-TIS]       2 leading + 1 conclusion (total 3): "
+                  << (size_ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [SM-TIS]       conclusion = TIS:\"SAM\": "
+                  << ((type_ok && addr_ok) ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [SM-TIS]       phase → LISTENING after conclusion: "
+                  << (phase_ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part 6: SM — 5-char self_address, two-word conclusion ────────────────
+    // DL3HC calls BOB, scan_ch=0:
+    //   leading:    TO:"BOB" × 2         = 2 words
+    //   conclusion: TIS:"DL3" + DATA:"HC" = 2 words  (indices 2..3)
+    {
+        std::vector<ALEWord> captured;
+        ALEStateMachine sm;
+        sm.set_self_address("DL3HC");
+        sm.set_target_scan_channels(0);
+        sm.set_state_callback([](ALEState, ALEState){});
+        sm.set_rx_enabled_callback([](bool){});
+        sm.set_transmit_callback([&](const ALEWord& w){ captured.push_back(w); });
+        sm.initiate_call("BOB");
+        const uint32_t T_TX = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+        sm.update(ALETimingConstants::Twt_ms);
+        sm.update(T_TX);
+        for (int i = 0; i < 4; ++i) sm.on_word_complete();
+
+        const bool size_ok  = (captured.size() == 4);
+        const bool type2_ok = size_ok && (captured[2].type == PreambleType::TIS);
+        const bool addr2_ok = size_ok && (trim_ale_address(captured[2].address) == "DL3");
+        const bool type3_ok = size_ok && (captured[3].type == PreambleType::DATA);
+        const bool addr3_ok = size_ok && (trim_ale_address(captured[3].address) == "HC");
+        const bool phase_ok = (sm.get_calling_phase() == CallingPhase::LISTENING);
+        all_ok &= size_ok && type2_ok && addr2_ok && type3_ok && addr3_ok;
+        std::cout << "  [SM-multi]     2 leading + 2 conclusion for \"DL3HC\" (total 4): "
+                  << (size_ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [SM-multi]     conclusion[0] = TIS:\"DL3\": "
+                  << ((type2_ok && addr2_ok) ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [SM-multi]     conclusion[1] = DATA:\"HC\": "
+                  << ((type3_ok && addr3_ok) ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [SM-multi]     phase → LISTENING after conclusion: "
+                  << (phase_ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    return all_ok;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1049,6 +1207,9 @@ int run_all_tests()
 
     run("AC-FRAME-003-001      leading call: full address (TO/DATA/REP) sent twice, ≤5 words",
         test_ac_frame_003_001_leading_full_address_twice());
+
+    run("AC-FRAME-005-001      conclusion: TIS or TWAS anchor with own address (builder + SM)",
+        test_ac_frame_005_001_conclusion_tis_twas_self_address());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
