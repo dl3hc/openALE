@@ -1145,6 +1145,141 @@ bool test_ac_frame_005_001_conclusion_tis_twas_self_address()
 }
 
 // ============================================================================
+// AC-FRAME-005-002 — Conclusion: RX-Fenster öffnet nach Tlww
+//
+// Verifies (REQ-FRAME-011 / FEAT-FRAME-005 / A.5.2.5.3 / A.5.5.3.1):
+//   (1) SM is in CONCLUSION phase immediately after all leading words complete
+//   (2) RX window stays CLOSED during CONCLUSION (no premature enable)
+//   (3) SM transitions to LISTENING after all conclusion words complete
+//   (4) RX window opens (rx_enabled=true) at exactly the CONCLUSION→LISTENING boundary
+//   (5) Wait in CONCLUSION = N×Trw ≥ Tlww_ms (1-word: exactly Tlww; N-word: ≥ Tlww)
+//
+// Drive pattern (scan_ch=0 to isolate CONCLUSION logic):
+//   update(Twt) + update(Twt+Tt) → enqueue; on_word_complete() × N per phase.
+// ============================================================================
+
+bool test_ac_frame_005_002_rx_window_opens_after_tlww()
+{
+    std::cout << "\n[AC-FRAME-005-002] Conclusion: RX window opens after Tlww\n";
+    bool all_ok = true;
+
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;   // 392 ms
+    const uint32_t Tlww = ALETimingConstants::Tlww_ms;  // 392 ms = 1×Trw
+    const uint32_t T_TX = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;
+
+    // ── Part 1: 1-word conclusion ("SAM", 3 chars) ───────────────────────────
+    // scan_ch=0: 2 leading + 1 conclusion = 3 words total.
+    // After 2nd word: phase = CONCLUSION, RX disabled.
+    // After 3rd word: phase = LISTENING, RX enabled.
+    // Wait in CONCLUSION = 1×Trw = Tlww_ms = 392 ms.
+    {
+        bool rx_last = false;
+        ALEStateMachine sm;
+        sm.set_self_address("SAM");
+        sm.set_target_scan_channels(0);
+        sm.set_state_callback([](ALEState, ALEState){});
+        sm.set_transmit_callback([](const ALEWord&){});
+        sm.set_rx_enabled_callback([&](bool on){ rx_last = on; });
+        sm.initiate_call("BOB");
+
+        // LBT (rx=true) → TUNING (rx=false) → TX enqueued
+        sm.update(ALETimingConstants::Twt_ms);
+        sm.update(T_TX);
+
+        // Drive 2 leading words; after 2nd word the SM enters CONCLUSION
+        sm.on_word_complete();  // leading word 1: LEADING_CALL, RX unchanged
+        sm.on_word_complete();  // leading word 2: → CONCLUSION
+        const bool phase_conclusion    = (sm.get_calling_phase() == CallingPhase::CONCLUSION);
+        const bool rx_off_at_conc      = !rx_last;   // RX must be disabled during CONCLUSION
+
+        // Drive the single conclusion word; SM must transition to LISTENING and open RX
+        bool rx_opened = false;
+        sm.set_rx_enabled_callback([&](bool on){ rx_last = on; if (on) rx_opened = true; });
+        sm.on_word_complete();  // conclusion word: → LISTENING, rx_enabled(true)
+        const bool phase_listening     = (sm.get_calling_phase() == CallingPhase::LISTENING);
+        const bool rx_open_on_listening = rx_opened && rx_last;
+
+        // Warte-Zeit für 1-Wort-Conclusion = 1×Trw = Tlww_ms (exakt)
+        const uint32_t wait_ms  = 1u * Trw;
+        const bool wait_eq_tlww = (wait_ms == Tlww);
+
+        all_ok &= phase_conclusion && rx_off_at_conc
+               && phase_listening  && rx_open_on_listening && wait_eq_tlww;
+
+        std::cout << "  [1-word] phase=CONCLUSION after leading words: "
+                  << (phase_conclusion ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [1-word] RX disabled during CONCLUSION:        "
+                  << (rx_off_at_conc ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [1-word] phase=LISTENING after conclusion:     "
+                  << (phase_listening ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [1-word] RX opens at LISTENING entry:          "
+                  << (rx_open_on_listening ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [1-word] wait=" << wait_ms << " ms == Tlww="
+                  << Tlww << " ms:               " << (wait_eq_tlww ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part 2: 2-word conclusion ("DL3HC", 5 chars) ─────────────────────────
+    // scan_ch=0: 2 leading + 2 conclusion = 4 words total.
+    // After 2nd word: phase = CONCLUSION, RX disabled.
+    // After 3rd word (1st conclusion, TIS:"DL3"): still CONCLUSION, RX still disabled.
+    // After 4th word (2nd conclusion, DATA:"HC"):  phase = LISTENING, RX enabled.
+    // Wait in CONCLUSION = 2×Trw ≥ Tlww_ms.
+    {
+        bool rx_last = false;
+        ALEStateMachine sm;
+        sm.set_self_address("DL3HC");
+        sm.set_target_scan_channels(0);
+        sm.set_state_callback([](ALEState, ALEState){});
+        sm.set_transmit_callback([](const ALEWord&){});
+        sm.set_rx_enabled_callback([&](bool on){ rx_last = on; });
+        sm.initiate_call("BOB");
+
+        sm.update(ALETimingConstants::Twt_ms);
+        sm.update(T_TX);
+
+        // 2 leading words → CONCLUSION
+        sm.on_word_complete();
+        sm.on_word_complete();
+        const bool phase_conc_start   = (sm.get_calling_phase() == CallingPhase::CONCLUSION);
+        const bool rx_off_at_conc     = !rx_last;
+
+        // 1st conclusion word (TIS:"DL3"): must NOT yet transition to LISTENING
+        sm.on_word_complete();
+        const bool phase_still_conc   = (sm.get_calling_phase() == CallingPhase::CONCLUSION);
+        const bool rx_still_off       = !rx_last;
+
+        // 2nd conclusion word (DATA:"HC"): → LISTENING, RX opens
+        sm.on_word_complete();
+        const bool phase_listening    = (sm.get_calling_phase() == CallingPhase::LISTENING);
+        const bool rx_open            = rx_last;
+
+        const uint32_t wait_ms  = 2u * Trw;
+        const bool wait_ge_tlww = (wait_ms >= Tlww);
+
+        all_ok &= phase_conc_start && rx_off_at_conc
+               && phase_still_conc && rx_still_off
+               && phase_listening  && rx_open && wait_ge_tlww;
+
+        std::cout << "  [2-word] phase=CONCLUSION after leading words:    "
+                  << (phase_conc_start ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [2-word] RX disabled when CONCLUSION begins:      "
+                  << (rx_off_at_conc ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [2-word] phase=CONCLUSION after 1st conc. word:   "
+                  << (phase_still_conc ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [2-word] RX disabled after 1st conc. word:        "
+                  << (rx_still_off ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [2-word] phase=LISTENING after 2nd conc. word:    "
+                  << (phase_listening ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [2-word] RX opens at LISTENING entry:             "
+                  << (rx_open ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [2-word] wait=" << wait_ms << " ms >= Tlww="
+                  << Tlww << " ms:              " << (wait_ge_tlww ? "PASS" : "FAIL") << "\n";
+    }
+
+    return all_ok;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1210,6 +1345,9 @@ int run_all_tests()
 
     run("AC-FRAME-005-001      conclusion: TIS or TWAS anchor with own address (builder + SM)",
         test_ac_frame_005_001_conclusion_tis_twas_self_address());
+
+    run("AC-FRAME-005-002      conclusion: RX window opens after Tlww (CONCLUSION→LISTENING)",
+        test_ac_frame_005_002_rx_window_opens_after_tlww());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

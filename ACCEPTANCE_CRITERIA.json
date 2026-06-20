@@ -828,10 +828,11 @@
         "REQ-FRAME-011"
       ],
       "title": "Conclusion: RX-Fenster öffnet nach Tlww",
-      "description": "Nach Senden der Conclusion wartet die State Machine Tlww (= Twr = 915 ms) und öffnet dann ein RX-Fenster (LISTENING-Phase).",
+      "description": "Nach Senden der Conclusion wartet die State Machine Tlww = Trw = 392 ms und öffnet dann ein RX-Fenster (LISTENING-Phase).",
       "module": "Protocol/ale_state_machine bzw. Word/ale_sequence",
       "verification_hint": "Prüfe Übergang CONCLUSION → LISTENING in ale_state_machine.cpp. Warte-Zeit muss Twr_ms oder Tlww_ms sein.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_frame_005_002_rx_window_opens_after_tlww() in tests/frame/unit/test_frame.cpp verifiziert: (1) SM in CallingPhase::CONCLUSION nach allen Leading-Wörtern; (2) RX bleibt während CONCLUSION deaktiviert; (3) SM wechselt nach on_word_complete() aller Conclusion-Wörter zu LISTENING; (4) rx_enabled(true) feuert exakt am CONCLUSION→LISTENING-Übergang; (5) Warte-Zeit N×Trw ≥ Tlww (1-Wort: 392 ms = Tlww; 2-Wort: 784 ms ≥ Tlww). Implementierung in on_word_complete() CONCLUSION-Case bereits korrekt – kein Implementierungs-Delta. Alle 16 Tests grün (2026-06-20)."
     },
     {
       "id": "AC-FRAME-006-001",
