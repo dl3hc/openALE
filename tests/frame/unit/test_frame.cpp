@@ -1280,6 +1280,64 @@ bool test_ac_frame_005_002_rx_window_opens_after_tlww()
 }
 
 // ============================================================================
+// AC-FRAME-006-001 — Sequenzregel: THRU/REP müssen alternieren
+//
+// REQ-FRAME-012 / FEAT-FRAME-006 / A.5.2.5.4
+//
+// In einer gültigen Sequenz dürfen THRU und REP nicht direkt aufeinander
+// folgen:  kein THRU-THRU und kein REP-REP.
+// FrameValidator::thru_rep_alternates() erzwingt diese Regel.
+// ============================================================================
+
+bool test_ac_frame_006_001_thru_rep_alternation_rule()
+{
+    std::cout << "\n[AC-FRAME-006-001] Sequenzregel: kein THRU-THRU, kein REP-REP\n";
+
+    const char adr1[3] = {'A','B','C'};
+    const char adr2[3] = {'X','Y','Z'};
+
+    // Valid: THRU, REP — one complete pair.
+    bool v1 = FrameValidator::thru_rep_alternates({
+        WordParser::make_word(PreambleType::THRU, adr1),
+        WordParser::make_word(PreambleType::REP,  adr1),
+    });
+    std::cout << "  THRU, REP (valid):              " << (v1 ? "PASS" : "FAIL") << "\n";
+
+    // Valid: THRU, REP, THRU, REP — two complete pairs (4 targets in rotation).
+    bool v2 = FrameValidator::thru_rep_alternates({
+        WordParser::make_word(PreambleType::THRU, adr1),
+        WordParser::make_word(PreambleType::REP,  adr1),
+        WordParser::make_word(PreambleType::THRU, adr2),
+        WordParser::make_word(PreambleType::REP,  adr2),
+    });
+    std::cout << "  THRU, REP, THRU, REP (valid):   " << (v2 ? "PASS" : "FAIL") << "\n";
+
+    // Invalid: THRU, THRU — kein THRU-THRU.
+    bool v3 = !FrameValidator::thru_rep_alternates({
+        WordParser::make_word(PreambleType::THRU, adr1),
+        WordParser::make_word(PreambleType::THRU, adr2),
+    });
+    std::cout << "  THRU, THRU rejected (THRU-THRU): " << (v3 ? "PASS" : "FAIL") << "\n";
+
+    // Invalid: THRU, REP, REP — kein REP-REP.
+    bool v4 = !FrameValidator::thru_rep_alternates({
+        WordParser::make_word(PreambleType::THRU, adr1),
+        WordParser::make_word(PreambleType::REP,  adr1),
+        WordParser::make_word(PreambleType::REP,  adr2),
+    });
+    std::cout << "  THRU, REP, REP rejected (REP-REP): " << (v4 ? "PASS" : "FAIL") << "\n";
+
+    // Invalid: REP, REP — starts with REP, no leading THRU.
+    bool v5 = !FrameValidator::thru_rep_alternates({
+        WordParser::make_word(PreambleType::REP, adr1),
+        WordParser::make_word(PreambleType::REP, adr2),
+    });
+    std::cout << "  REP, REP rejected (no leading THRU): " << (v5 ? "PASS" : "FAIL") << "\n";
+
+    return v1 && v2 && v3 && v4 && v5;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1348,6 +1406,9 @@ int run_all_tests()
 
     run("AC-FRAME-005-002      conclusion: RX window opens after Tlww (CONCLUSION→LISTENING)",
         test_ac_frame_005_002_rx_window_opens_after_tlww());
+
+    run("AC-FRAME-006-001      THRU/REP alternation: kein THRU-THRU, kein REP-REP",
+        test_ac_frame_006_001_thru_rep_alternation_rule());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

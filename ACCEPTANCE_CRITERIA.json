@@ -844,7 +844,8 @@
       "description": "In einer gültigen Sequenz dürfen THRU und REP nicht direkt aufeinander folgen (kein THRU-THRU und kein REP-REP). frame_validator.cpp erzwingt diese Regel.",
       "module": "Protocol/frame_validator",
       "verification_hint": "Prüfe frame_validator.cpp auf Alternierungsprüfung für THRU und REP.",
-      "status": "open"
+      "status": "closed",
+      "verification": "FrameValidator::thru_rep_alternates() in ale_word.cpp erzwingt die Alternierungsregel (kein THRU-THRU, kein REP-REP). Dedizierter Test test_ac_frame_006_001_thru_rep_alternation_rule() in tests/frame/unit/test_frame.cpp ergänzt. 5 Szenarien getestet (THRU-REP valid, THRU-REP-THRU-REP valid, THRU-THRU rejected, THRU-REP-REP rejected, REP-REP rejected). test_frame: 17/17 PASS."
     },
     {
       "id": "AC-FRAME-006-002",
@@ -903,7 +904,7 @@
       ],
       "title": "Empfangsseitige Wortsynchronisation: 49-Symbol-Grenzen",
       "description": "Der RX-Pfad erkennt die 49-Symbol-Wortgrenzen über einen Sliding-Window-Energiedetektor oder vergleichbare Methode. Sync wird innerhalb der ersten 2 empfangenen Wörter hergestellt.",
-      "module": "FSK/ale_waveform",
+      "module": "FSK/ale_waveform, include/Codec/ale_decoder.h",
       "verification_hint": "Prüfe fft_demodulator.cpp oder ale_waveform.cpp auf Wortsynchronisations-Algorithmus. Muss Stride-49-Erkennung implementieren.",
       "status": "open"
     },
@@ -1117,9 +1118,9 @@
         "REQ-LINK-017"
       ],
       "title": "Twr-Wartezeit nach Conclusion: 915 ms",
-      "description": "Nach dem Senden der Conclusion wartet die State Machine mindestens Twr_ms (915 ms) auf eine Response. Kein sofortiges Retry oder Kanalwechsel.",
+      "description": "Nach dem Senden der Conclusion wartet die State Machine mindestens Twr_ms auf eine Response. Kein sofortiges Retry oder Kanalwechsel.",
       "module": "Protocol/ale_state_machine",
-      "verification_hint": "Prüfe LISTENING-Phase-Timeout in ale_state_machine.cpp: Timeout muss >= Twr_ms (915) sein.",
+      "verification_hint": "Prüfe LISTENING-Phase-Timeout in ale_state_machine.cpp: Timeout muss >= Twr  =  Ttd  +  Tp  +  T1ww  +  T1ww  +  Tta  +  Trwp (if not first)  +  T1d  +  Tp + Trd sein.",
       "status": "open"
     },
     {
