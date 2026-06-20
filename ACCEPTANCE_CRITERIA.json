@@ -805,7 +805,8 @@
       "description": "Im Leading-Abschnitt wird die vollständige Zieladresse (alle Wörter) zweimal gesendet. Max. 5 Wörter für Adressen bis 15 Zeichen.",
       "module": "Protocol/ale_state_machine bzw. Word/ale_sequence",
       "verification_hint": "Prüfe handle_calling() bei CallingPhase::LEADING_CALL: Alle Adress-Wörter werden in der Sequenz TO/DATA/REP gesendet, zweimal durchlaufen.",
-      "status": "open"
+      "status": "closed",
+      "verification": "Implementierung: ALESequenceBuilder::leading_call() in src/Word/ale_sequence.cpp baut die vollständige Adresse via AddressEncoder::encode(dest, PreambleType::TO) (Chunks → TO/DATA/REP, max 5 Wörter durch 15-Zeichen-Cap in chunk()) und sendet sie via sent_twice() exakt zweimal (Tlc = 2×Tc, §A.5.5.3.1). Die State Machine (initiate_call*() → leading_seq_, on_word_complete() LEADING_CALL-Branch) ist reiner Konsument; Tlc-Slotzahl = leading_seq_.size() = 2×wpa. Neuer Test test_ac_frame_003_001_leading_full_address_twice() in tests/frame/unit/test_frame.cpp verifiziert den Inhalt: (1) vollständige Adresse mit TO/DATA/REP-Muster für 1-, 2- und 5-Wort-Adressen, (2) beide Durchläufe byte-identisch, (3) 15-Zeichen-Cap → max 5 Wörter/Durchlauf (≤10 total), inkl. Übergröße 'ABCDEFGHIJKLMNOPQRS' → 5 Wörter. Slotzahl bereits durch AC-FRAME-001-4 (Tlc=2×wpa) abgedeckt. Alle 14 Frame-Tests grün (2026-06-20)."
     },
     {
       "id": "AC-FRAME-005-001",

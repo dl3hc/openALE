@@ -895,6 +895,98 @@ bool test_ac_frame_002_002_tsc_formula()
 }
 
 // ============================================================================
+// AC-FRAME-003-001 — Leading Call: full destination address, sent twice
+// (REQ-FRAME-004 / §A.5.5.3.1).
+//
+// Verifies the *content* of the leading call (the timing-slot count is already
+// covered by AC-FRAME-001-4 / AC-FRAME-002-002):
+//   (1) The leading call carries the COMPLETE address — every 3-char chunk,
+//       not just the first word — with the TO/DATA/REP extension pattern.
+//   (2) The whole address block is sent exactly twice, identically (Tlc = 2×Tc).
+//   (3) Max 5 words per pass for a 15-char address; addresses longer than
+//       15 chars are truncated to 5 words (A.5.2.4.2), i.e. ≤10 words total.
+// ============================================================================
+
+bool test_ac_frame_003_001_leading_full_address_twice()
+{
+    std::cout << "\n[AC-FRAME-003-001] Leading call: full address sent twice (TO/DATA/REP)\n";
+
+    // Expected per-pass preamble pattern for chunk index 0..4 (A.5.2.4.3):
+    //   anchor=TO, then DATA, REP, DATA, REP.
+    static const PreambleType EXPECT_TYPES[5] = {
+        PreambleType::TO, PreambleType::DATA, PreambleType::REP,
+        PreambleType::DATA, PreambleType::REP
+    };
+
+    struct Case {
+        const char* addr;
+        uint32_t    wpa;          // words per address (chunks) after 15-char cap
+        const char* chunks[5];    // expected decoded 3-char chunks (padded with '@')
+    };
+
+    const Case cases[] = {
+        // 1-word
+        { "BOB",             1, { "BOB" } },
+        // 2-word ("MIAMI" → MIA, MI@)
+        { "MIAMI",           2, { "MIA", "MI@" } },
+        // 5-word, exactly 15 chars
+        { "ABCDEFGHIJKLMNO", 5, { "ABC", "DEF", "GHI", "JKL", "MNO" } },
+        // >15 chars → truncated to 15 → still 5 words (cap, A.5.2.4.2)
+        { "ABCDEFGHIJKLMNOPQRS", 5, { "ABC", "DEF", "GHI", "JKL", "MNO" } },
+    };
+
+    bool all_ok = true;
+
+    for (const auto& c : cases) {
+        const auto seq   = ALESequenceBuilder::leading_call(c.addr);
+        const auto& w    = seq.words();
+
+        // (2)+(3): exactly 2×wpa words, wpa never exceeds 5.
+        const bool wpa_capped = (c.wpa <= 5);
+        const bool size_ok    = (w.size() == 2u * c.wpa);
+        std::cout << "  addr=\"" << c.addr << "\": size=" << w.size()
+                  << " (exp " << (2u * c.wpa) << "), wpa=" << c.wpa
+                  << " ≤5: " << (size_ok && wpa_capped ? "PASS" : "FAIL") << "\n";
+
+        bool content_ok = size_ok && wpa_capped;
+
+        if (size_ok) {
+            for (uint32_t i = 0; i < c.wpa; ++i) {
+                // (1): full address — every chunk present with correct type.
+                const bool type_ok  = (w[i].type == EXPECT_TYPES[i]);
+                const bool chunk_ok = (std::string(w[i].address) == c.chunks[i]);
+                // (2): second pass is byte-identical to the first.
+                const ALEWord& a = w[i];
+                const ALEWord& b = w[i + c.wpa];
+                const bool dup_ok = (a.type == b.type)
+                                 && (std::string(a.address) == std::string(b.address));
+
+                content_ok &= type_ok && chunk_ok && dup_ok;
+                if (!(type_ok && chunk_ok && dup_ok)) {
+                    std::cout << "    word " << i << ": type/chunk/dup mismatch"
+                              << " (got \"" << w[i].address << "\")\n";
+                }
+            }
+        }
+
+        // No THRU/FROM/TIS/TWAS may appear in a leading call.
+        bool only_addr_types = true;
+        for (const auto& word : w) {
+            if (word.type != PreambleType::TO && word.type != PreambleType::DATA
+                && word.type != PreambleType::REP)
+                only_addr_types = false;
+        }
+        content_ok &= only_addr_types;
+        std::cout << "    only TO/DATA/REP types, both passes identical: "
+                  << (content_ok ? "PASS" : "FAIL") << "\n";
+
+        all_ok &= content_ok;
+    }
+
+    return all_ok;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -954,6 +1046,9 @@ int run_all_tests()
 
     run("AC-FRAME-002-002      Tsc = C×2×Trw: builder size and SM phase-transition slot count",
         test_ac_frame_002_002_tsc_formula());
+
+    run("AC-FRAME-003-001      leading call: full address (TO/DATA/REP) sent twice, ≤5 words",
+        test_ac_frame_003_001_leading_full_address_twice());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
