@@ -507,6 +507,11 @@ target_link_libraries(test_address_encoder ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_address_encoder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AddressEncoder COMMAND test_address_encoder)
 
+add_executable(test_addr_validation tests/addr/unit/test_addr_validation.cpp)
+target_link_libraries(test_addr_validation ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_addr_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AddrValidation COMMAND test_addr_validation)
+
 add_executable(test_ale_calling tests/word/unit/test_ale_calling.cpp)
 target_link_libraries(test_ale_calling ale_link ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_ale_calling PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

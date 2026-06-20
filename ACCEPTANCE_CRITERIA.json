@@ -1284,6 +1284,21 @@
       "status": "open"
     },
     {
+      "id": "AC-ADDR-001-003",
+      "feature": "FEAT-ADDR-001",
+      "requirement": [
+        "REQ-ADDR-001",
+        "REQ-ADDR-002",
+        "REQ-ADDR-004"
+      ],
+      "title": "App-Grenzvalidierung: Adressen außerhalb 3–15 Zeichen oder non-Basic-38 werden abgelehnt",
+      "description": "ALEController::set_self_address() und initiate_call() / initiate_group_call() müssen Adressen mit weniger als 3 oder mehr als 15 Zeichen sowie Zeichen außerhalb des Basic-38-Zeichensatzes (A–Z, 0–9, @, ?) explizit ablehnen und false zurückliefern. Der AddressEncoder (DD-007) schneidet als letztes Sicherheitsnetz still auf 15 Zeichen — die App-Grenze muss das dem Aufrufer jedoch melden, damit keine unbemerkte Adresskürzung stattfindet.",
+      "module": "App/ale_controller",
+      "verification_hint": "Prüfe ALEController::set_self_address() und initiate_call(): false bei len < 3, len > 15 oder non-Basic-38. Kein silent truncation. CLI/Bridge gibt Fehlermeldung aus.",
+      "status": "closed",
+      "verification": "Implementierung: Statischer Helper is_valid_ale_address() (file-scope, src/App/ale_controller.cpp) prüft len 3–15 + Basic-38 via WordParser::is_valid_basic38_char(). set_self_address() gibt bool zurück und schreibt self_addr_ / sm_.set_self_address() nur bei Erfolg. initiate_call() und initiate_group_call() prüfen jede Adresse vor SM-Delegation und emittieren Fehlerstatus. set_primary_self_address() propagiert den bool. ale_cli.cpp gibt bei Fehler stderr-Warnung aus. Test test_addr_validation (tests/addr/unit/test_addr_validation.cpp, 3 Testgruppen / 24 Fälle): (1) set_self_address — 7 valide, 9 invalide (zu kurz/lang/non-Basic-38) + Invariante 'kein Überschreiben bei reject'; (2) initiate_call — 4 Rejects + 1 Accept in IDLE; (3) initiate_group_call — 1 Accept, 2 Rejects. Alle 3/3 Gruppen grün. Gesamtbuild ohne Fehler (2026-06-20)."
+    },
+    {
       "id": "AC-ADDR-002-001",
       "feature": "FEAT-ADDR-002",
       "requirement": [

@@ -16,6 +16,17 @@
 
 namespace {
 
+// Validates a candidate ALE address against the Basic-38 character set and
+// the 3–15 char length limit (A.5.2.4.2 / REQ-ADDR-001/002/004).
+// The AddressEncoder will silently truncate >15-char inputs (DD-007 safety
+// net), but the app boundary must surface invalid input to the caller.
+static bool is_valid_ale_address(const std::string& addr) {
+    if (addr.size() < 3 || addr.size() > 15) return false;
+    for (char c : addr)
+        if (!ale::WordParser::is_valid_basic38_char(c)) return false;
+    return true;
+}
+
 static bool is_ale_mode(const std::string& s) {
     static const char* kModes[] = {
         "USB","LSB","AM","FM","FMW","CW","CW_R",
@@ -358,10 +369,12 @@ void ALEController::set_audio_device(AudioDevice* dev)
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-void ALEController::set_self_address(const std::string& addr)
+bool ALEController::set_self_address(const std::string& addr)
 {
+    if (!is_valid_ale_address(addr)) return false;
     self_addr_ = addr;
     sm_.set_self_address(addr);
+    return true;
 }
 
 void ALEController::apply_config(const ALEStationConfig& cfg)
@@ -441,6 +454,12 @@ void ALEController::apply_target_scan_channels_for(const std::string& target_add
 
 bool ALEController::initiate_call(const std::string& target_addr)
 {
+    if (!is_valid_ale_address(target_addr)) {
+        emit_status("ERROR: address '" + target_addr
+                    + "' invalid — must be 3–15 Basic-38 characters (A-Z, 0-9, @, ?)");
+        return false;
+    }
+
     // Reorder calling channels by LQA history for this station (best first).
     // Falls back silently to the user-configured order when no LQA data exist.
     if (!calling_channels_.empty()) {
@@ -471,6 +490,13 @@ bool ALEController::initiate_call(const std::string& target_addr)
 bool ALEController::initiate_group_call(const std::vector<std::string>& members)
 {
     if (members.empty()) return false;
+    for (const auto& m : members) {
+        if (!is_valid_ale_address(m)) {
+            emit_status("ERROR: group member '" + m
+                        + "' invalid — must be 3–15 Basic-38 characters (A-Z, 0-9, @, ?)");
+            return false;
+        }
+    }
 
     // First-member-only simplification — see header doc.
     apply_target_scan_channels_for(members.front());
@@ -1211,7 +1237,7 @@ std::vector<std::string> ALEController::get_all_self_addresses() const
 bool ALEController::set_primary_self_address(const std::string& addr)
 {
     if (!self_address_store_.set_primary(addr)) return false;
-    set_self_address(addr);  // drives sm_.set_self_address() + self_addr_
+    if (!set_self_address(addr)) return false;  // validates + drives sm_
     return true;
 }
 

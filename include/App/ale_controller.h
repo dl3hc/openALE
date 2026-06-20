@@ -55,7 +55,13 @@ public:
     ALEController();
 
     // ── Configuration ───────────────────────────────────────────────────────
-    void set_self_address(const std::string& addr);
+
+    /**
+     * Set this station's call sign (self address).
+     * Validates length (3–15 chars) and character set (Basic 38: A–Z, 0–9, @, ?).
+     * \return false if the address is invalid; the previous address is kept.
+     */
+    bool set_self_address(const std::string& addr);
 
     /**
      * Attach a radio for PTT and frequency-hopping control.

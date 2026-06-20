@@ -314,7 +314,11 @@ int main(int argc, char* argv[])
             std::printf("[>>] Settings file '%s' not found — using defaults\n", settings_file.c_str());
         std::fflush(stdout);
     }
-    ctrl.set_self_address(self_addr);   // --self always overrides settings file
+    if (!ctrl.set_self_address(self_addr))
+        std::fprintf(stderr, "[!!] Invalid self-address '%s' — must be 3-15 Basic-38 chars (A-Z, 0-9, @, ?)\n",
+                     self_addr.c_str());
+    else
+        std::printf("[>>] Self address: %s\n", self_addr.c_str());
     // Channel list (non-volatile, .ale file)
     if (!channels_file.empty()) {
         ctrl.set_channel_file(channels_file);
