@@ -6,6 +6,18 @@
  * The sine value is computed via std::sin() — no lookup table, no
  * interpolation artifacts, no alias products.
  *
+ * Quantization: TPDF dither (±1 LSB, triangular PDF) is applied before
+ * rounding to int16.  This decorrelates the quantization error from the
+ * signal, converting discrete harmonic spurs into a flat, low-level noise
+ * floor.  At 8 kHz, the 2nd/3rd harmonics of a 2500 Hz tone would otherwise
+ * fold back in-band (5000→3000 Hz, 7500→500 Hz) and appear in the waterfall.
+ *
+ * REQ-WAVEFORM-005 (slope-zero symbol boundaries) is unaffected: ±1 LSB
+ * dither does not alter the integer-cycle NCO phase continuity.
+ *
+ * The PRNG is seeded deterministically in reset() so test output is
+ * reproducible regardless of call order.
+ *
  * Specification: MIL-STD-188-141B / ALE2G
  *  - Frequencies: 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500 Hz
  *  - Sample rate: 8000 Hz
@@ -20,6 +32,7 @@
 #include "FSK/ale_waveform.h"
 #include <array>
 #include <cstdint>
+#include <random>
 
 namespace ale {
 
@@ -49,7 +62,7 @@ public:
     uint32_t generate_tone(uint8_t symbol_value, uint32_t num_samples,
                            int16_t* output, float amplitude = TX_AMPLITUDE);
 
-    /** Reset NCO to initial phase (pi/2). */
+    /** Reset NCO to initial phase (pi/2) and reseed PRNG to fixed value. */
     void reset();
 
     /**
@@ -74,6 +87,20 @@ private:
 
     // Phase increment per sample for each symbol (Q32 fixed-point, indexed by symbol value)
     std::array<uint32_t, NUM_TONES> phase_increment;
+
+    // TPDF dither PRNG — seeded deterministically in reset() for reproducibility.
+    std::minstd_rand prng_;
+    std::uniform_real_distribution<float> uniform_dist_{-0.5f, 0.5f};
+
+    // Convert a floating-point sample to int16 with TPDF dither + rounding.
+    // TPDF: two independent uniform [-0.5, 0.5] draws summed → triangular ±1 LSB.
+    inline int16_t quantize(float sample) {
+        const float dither = uniform_dist_(prng_) + uniform_dist_(prng_);
+        long v = std::lround(static_cast<double>(sample) + static_cast<double>(dither));
+        if (v >  32767) v =  32767;
+        if (v < -32768) v = -32768;
+        return static_cast<int16_t>(v);
+    }
 
     void init_phase_increments();
 };

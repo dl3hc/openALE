@@ -1,6 +1,6 @@
 /**
  * \file tone_generator.cpp
- * \brief NCO-based 8-FSK tone generator — pure std::sin(), no lookup table.
+ * \brief NCO-based 8-FSK tone generator — pure std::sin(), TPDF dither.
  *
  * The 32-bit phase accumulator advances by a tone-specific increment each
  * sample.  Because all ALE tones are exact multiples of 125 Hz (the symbol
@@ -12,18 +12,25 @@
  * the per-second call count is in the low tens of thousands — completely
  * negligible.  This eliminates all table-quantisation harmonics and alias
  * products that a 256-entry LUT with linear interpolation would introduce.
+ *
+ * int16 quantization uses TPDF dither + rounding (see tone_generator.h).
+ * Without dither, truncation of a periodic signal produces a signal-correlated
+ * quantization error: at 8 kHz, harmonics of 2500 Hz fold back in-band
+ * (5000→3000 Hz, 7500→500 Hz) and appear as discrete spurs in the waterfall.
+ * TPDF decorrelates the error → flat, low-level noise floor instead.
  */
 
 #include "FSK/tone_generator.h"
 #include <cmath>
 #include <algorithm>
+#include <cstdint>
 
 namespace ale {
 
 static_assert(SAMPLE_RATE_HZ % SYMBOL_RATE_BAUD == 0,
               "ALE2G requires an integer number of samples per symbol");
 
-ToneGenerator::ToneGenerator() {
+ToneGenerator::ToneGenerator() : prng_(0x4A4C4555u) {
     init_phase_increments();
     reset();
 }
@@ -50,6 +57,8 @@ void ToneGenerator::reset() {
     // symbol because all ALE tones complete an integer number of cycles in
     // SAMPLES_PER_SYMBOL (= 64) samples.
     phase_ = 0x40000000u;
+    // Fixed seed keeps dither reproducible across test runs.
+    prng_.seed(0x4A4C4555u);
 }
 
 uint32_t ToneGenerator::generate_symbols(const uint8_t* symbols, uint32_t num_symbols,
@@ -66,11 +75,7 @@ uint32_t ToneGenerator::generate_symbols(const uint8_t* symbols, uint32_t num_sy
         for (uint32_t s = 0; s < SAMPLES_PER_SYMBOL; ++s) {
             const double angle    = static_cast<double>(phase_) * TWO_PI_OVER_2_32;
             const float  sine_val = static_cast<float>(std::sin(angle));
-
-            int32_t sample = static_cast<int32_t>(sine_val * amplitude * 32767.0f);
-            sample = std::max(-32768, std::min(32767, sample));
-            output[samples_written++] = static_cast<int16_t>(sample);
-
+            output[samples_written++] = quantize(sine_val * amplitude * 32767.0f);
             phase_ += phase_inc;
         }
     }
@@ -88,11 +93,7 @@ uint32_t ToneGenerator::generate_tone(uint8_t symbol_value, uint32_t num_samples
     for (uint32_t i = 0; i < num_samples; ++i) {
         const double angle    = static_cast<double>(phase_) * TWO_PI_OVER_2_32;
         const float  sine_val = static_cast<float>(std::sin(angle));
-
-        int32_t sample = static_cast<int32_t>(sine_val * amplitude * 32767.0f);
-        sample = std::max(-32768, std::min(32767, sample));
-        output[i] = static_cast<int16_t>(sample);
-
+        output[i] = quantize(sine_val * amplitude * 32767.0f);
         phase_ += phase_inc;
     }
 

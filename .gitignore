@@ -2,6 +2,10 @@
 build/
 build_*/
 
+# CTest scratch + diagnostic WAV dumps (tools/tx_wav_dump)
+Testing/
+diag_wav/
+
 # Hamlib Build-Artefakte (via scripts/build_hamlib.sh erstellt)
 libs/hamlib-src/
 libs/hamlib-build/

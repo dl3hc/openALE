@@ -402,6 +402,16 @@ target_link_libraries(test_tone_accuracy ale_fsk_core ale_fec)
 target_include_directories(test_tone_accuracy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ToneAccuracy COMMAND test_tone_accuracy)
 
+add_executable(test_tone_thd tests/waveform/unit/test_tone_thd.cpp)
+target_link_libraries(test_tone_thd ale_fsk_core ale_fec)
+target_include_directories(test_tone_thd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ToneTHD COMMAND test_tone_thd)
+
+add_executable(test_tx_bandpass tests/waveform/unit/test_tx_bandpass.cpp)
+target_link_libraries(test_tx_bandpass ale_fsk_core ale_fec)
+target_include_directories(test_tx_bandpass PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME TxBandpass COMMAND test_tx_bandpass)
+
 add_executable(test_fec_golay tests/fec/unit/test_fec_golay.cpp)
 target_link_libraries(test_fec_golay ale_codec ale_fec ale_fsk_core)
 target_include_directories(test_fec_golay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -569,4 +579,9 @@ if(BUILD_EXAMPLES)
     add_executable(example_fs1052_transfer examples/example_fs1052_transfer.cpp)
     target_link_libraries(example_fs1052_transfer ale_fs1052 ale_protocol ale_fsk_core ale_fec)
     target_include_directories(example_fs1052_transfer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+    # Diagnostic tool: dump TX audio (generator/resampler) to WAV for offline inspection.
+    add_executable(tx_wav_dump tools/tx_wav_dump.cpp)
+    target_link_libraries(tx_wav_dump ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+    target_include_directories(tx_wav_dump PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 endif()

@@ -34,6 +34,7 @@
 #include "PAL/audio_driver.h"
 #include "App/resampler.h"
 #include "FSK/tone_generator.h"
+#include "FSK/tx_bandpass.h"
 #include "FSK/ale_waveform.h"
 #include <cstring>
 #include <algorithm>
@@ -177,8 +178,10 @@ private:
 
     // ── Audio-thread-only TX state (no locking needed) ────────────────────
     ToneGenerator             at_tone_gen_;
+    TxBandpass                at_tx_filter_;        // 750–2500 Hz band-pass (SSB-audio shaping)
     std::unique_ptr<Resampler> at_tx_resampler_;   // 8 kHz → device rate
     std::vector<int16_t>      at_pcm_8k_;          // ToneGenerator output (3136 samples)
+    std::vector<int16_t>      at_pcm_filt_;         // band-pass output (8 kHz, fed to resampler)
     std::vector<int16_t>      at_render_buf_;       // device-rate PCM for current word
     size_t                    at_render_pos_  = 0;  // drain position in at_render_buf_
     bool                      at_frame_pending_ = false; // true when at_render_buf_ holds a real frame
@@ -277,6 +280,8 @@ bool WasapiDevice::open(const std::string& in_device, const std::string& out_dev
 
     // Pre-reserve audio-thread scratch buffers to avoid RT allocations.
     at_pcm_8k_.reserve(SYMBOLS_PER_WORD * FFT_SIZE);
+    at_pcm_filt_.reserve(SYMBOLS_PER_WORD * FFT_SIZE);
+    at_tx_filter_.reset();
 
     std::fprintf(stderr,
         "[audio] WASAPI render '%s' %u Hz/%uch %s  |  capture '%s' %u Hz/%uch %s  (modem %u Hz)\n",
@@ -434,9 +439,15 @@ void WasapiDevice::service_render()
                 at_pcm_8k_.resize(SYMBOLS_PER_WORD * FFT_SIZE);
                 at_tone_gen_.generate_symbols(syms, SYMBOLS_PER_WORD,
                                               at_pcm_8k_.data(), TX_AMPLITUDE);
+                // SSB-audio band-pass (750–2500 Hz): strips the sub-300 Hz keying
+                // skirt and out-of-band content without touching the 8-FSK keying.
+                at_pcm_filt_.clear();
+                at_tx_filter_.process(at_pcm_8k_.data(),
+                                      SYMBOLS_PER_WORD * FFT_SIZE,
+                                      at_pcm_filt_);
                 at_render_buf_.clear();
-                at_tx_resampler_->process(at_pcm_8k_.data(),
-                                          SYMBOLS_PER_WORD * FFT_SIZE,
+                at_tx_resampler_->process(at_pcm_filt_.data(),
+                                          at_pcm_filt_.size(),
                                           at_render_buf_);
                 at_render_pos_    = 0;
                 at_frame_pending_ = true;

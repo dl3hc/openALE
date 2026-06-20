@@ -187,19 +187,26 @@ bool test_tone_generation() {
     // ------------------------------------------------------------------------
     std::cout << "\nAC-WAVEFORM-005-2 slope-zero boundary check:\n";
     {
+        // Theoretical peak: sin(pi/2)*amplitude*32767 ≈ 22936.9 (before dither).
+        // TPDF dither spans [-1, +1], so the rounded output ranges over 3 values:
+        // 22936, 22937, or 22938 — tolerance ±2 covers the full span.
+        // The property being verified is NCO phase = pi/2 at every symbol
+        // start — not the exact quantized value, which varies by ±2 due to dither.
         const int16_t expected_peak = samples_one_shot[0];
+        constexpr int DITHER_TOLERANCE = 2;
         bool slope_zero_ok = true;
         for (uint32_t sym = 1; sym < NUM_TONES; ++sym) {
             int16_t first = samples_one_shot[sym * SAMPLES_PER_SYMBOL];
-            if (first != expected_peak) {
+            if (std::abs(static_cast<int>(first) - static_cast<int>(expected_peak)) > DITHER_TOLERANCE) {
                 std::cout << "  FAIL: symbol " << sym << " starts at " << first
-                          << ", expected peak " << expected_peak << "\n";
+                          << ", expected peak " << expected_peak
+                          << " (±" << DITHER_TOLERANCE << " TPDF tolerance)\n";
                 slope_zero_ok = false;
             }
         }
         if (!slope_zero_ok) return false;
-        std::cout << "  All " << NUM_TONES << " symbols start at peak value "
-                  << expected_peak << " — slope zero confirmed\n";
+        std::cout << "  All " << NUM_TONES << " symbols start within ±" << DITHER_TOLERANCE
+                  << " of peak value " << expected_peak << " — slope zero confirmed\n";
     }
 
     // ------------------------------------------------------------------------

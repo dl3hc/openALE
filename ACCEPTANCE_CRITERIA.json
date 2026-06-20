@@ -501,6 +501,32 @@
       "verification": "test_timing_accuracy_ac_waveform_004_002() in tests/waveform/unit/test_tone_accuracy.cpp prüft 5 Sub-Kriterien: (1) SAMPLE_RATE_HZ(8000) % SYMBOL_RATE_BAUD(125) = 0 → 0.000 ppm Symbolfehler; (2) NCO-Phase-Increment für alle 8 Töne exakt (Q32_rem=0, 0.000 ppm); (3) 490 Symbole erzeugen exakt 31360 Samples → 0.000 ppm; (4) 1 Wort (49 Symbole) = exakt 3136 Samples → 0.000 ppm; (5) 125 baud × 3 bits/sym = exakt 375 bps → 0.000 ppm. Alle 5 Checks PASS, alle innerhalb 10 ppm-Limit. Testlauf: build/Debug/test_tone_accuracy.exe, 2026-06-18, Results: Passed=2 Failed=0."
     },
     {
+      "id": "AC-WAVEFORM-004-003",
+      "feature": "FEAT-WAVEFORM-004",
+      "requirement": [
+        "REQ-WAVEFORM-011"
+      ],
+      "title": "TX-Ton THD < 1 %, keine In-Band-Foldback-Spur > −55 dBc",
+      "description": "Jeder der 8 FSK-Töne muss nach TPDF-Dither und Rundung eine THD < 1 % (−40 dBc) aufweisen. Darüber hinaus darf keine der in-band gefalteten Harmonischen (z. B. 5000→3000 Hz, 7500→500 Hz bei 2500 Hz Grundton) die −55 dBc-Schwelle überschreiten — gemessen sowohl an der 8-kHz-Rohausgabe als auch nach dem 8→48-kHz-Resampler (realem TX-Pfad).",
+      "module": "tests/waveform/unit/test_tone_thd.cpp",
+      "verification_hint": "ctest -R ToneTHD — beide Subteile (A: 8 kHz, B: 48 kHz nach Resampler) müssen für alle 8 Symbole PASS liefern.",
+      "status": "open",
+      "verification": ""
+    },
+    {
+      "id": "AC-WAVEFORM-004-004",
+      "feature": "FEAT-WAVEFORM-004",
+      "requirement": [
+        "REQ-WAVEFORM-011"
+      ],
+      "title": "TX-Audio bandbegrenzt (750–2500 Hz flach, Out-of-Band ≥40 dB), Decode erhalten",
+      "description": "Der TX-Ausgangs-Bandpass (include/FSK/tx_bandpass.h, im Live-Pfad nach dem Tongenerator) lässt die 8 ALE-Töne (750–2500 Hz) mit ≤0,5 dB Ripple durch und dämpft Out-of-Band-Anteile (≤150 Hz, ≥3300 Hz) um ≥40 dB. Die Standard-8-FSK-Keying bleibt unverändert: ein gekeyter Symbolstrom dekodiert nach dem Filter (gruppenlaufzeitkompensiert) bit-exakt (BER 0). Entfernt die sub-300-Hz-Keying-Schürze, die im filterlosen Virtual-Cable-Wasserfall sichtbar ist; auf echtem HF erledigt dies das SSB-Audiofilter.",
+      "module": "tests/waveform/unit/test_tx_bandpass.cpp",
+      "verification_hint": "ctest -R TxBandpass — Teile A (Flatness), B (Stopband), C (Decode BER 0) müssen PASS sein.",
+      "status": "open",
+      "verification": ""
+    },
+    {
       "id": "AC-WORD-001-001",
       "feature": "FEAT-WORD-001",
       "requirement": [
