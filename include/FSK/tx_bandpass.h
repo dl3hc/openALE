@@ -31,11 +31,11 @@ namespace ale {
 
 class TxBandpass {
 public:
-    // Defaults: flat across 750–2500 Hz; −6 dB corners ~600 / ~2600 Hz at 8 kHz.
-    // The tight 100 Hz gap above the top tone needs a sharp transition, hence the
-    // high tap count (Blackman transition BW ≈ 5.5·fs/N).
+    // Defaults: flat across 750–2500 Hz; −6 dB corners ~650 / ~2600 Hz at 8 kHz.
+    // The tight 100 Hz gaps either side of the edge tones need a sharp transition,
+    // hence the high tap count (Blackman transition BW ≈ 5.5·fs/N).
     explicit TxBandpass(uint32_t fs = SAMPLE_RATE_HZ,
-                        double f_lo = 600.0, double f_hi = 2600.0,
+                        double f_lo = 650.0, double f_hi = 2600.0,
                         int taps = 321) {
         design(fs, f_lo, f_hi, taps);
         hist_.assign(h_.size(), 0.0f);
