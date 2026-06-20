@@ -191,7 +191,7 @@ bool test_rx_multiword_full_accept_15char()
     uint32_t t = 1000u + 16u * Trw;                  // time of last conclusion word
     sm.update(t + Tdrw + 1);                          // WAIT_CYCLE_END settle → SLOT_WAIT
     sm.update(t + Tdrw + 2);                          // SLOT_WAIT (Tswt=0) → CHANNEL_CHECK
-    sm.update(t + Tdrw + 2 + Trw + 1);                // CHANNEL_CHECK clear → SENDING_RESPONSE
+    sm.update(t + Tdrw + 2 + Tdrw + 1);               // CHANNEL_CHECK (Tdrw=2×Trw LBT) clear → SENDING_RESPONSE
 
     // Response frame (Figure A-30): TO caller × 2 + TIS self.
     bool count_ok = cap.size() == 15;                 // 5 (TO) × 2 + 5 (TIS)
@@ -313,10 +313,10 @@ bool test_await_accept_holds_until_accept_call()
     bool accepted = sm.accept_call();
     std::cout << "  accept_call() returns true: " << (accepted ? "PASS" : "FAIL") << "\n";
 
-    // AWAIT_ACCEPT → SLOT_WAIT (Tswt=0) → CHANNEL_CHECK → (1×Trw LBT) → SENDING_RESPONSE.
+    // AWAIT_ACCEPT → SLOT_WAIT (Tswt=0) → CHANNEL_CHECK → (Tdrw=2×Trw LBT) → SENDING_RESPONSE.
     sm.update(t + 1);
     sm.update(t + 2);
-    sm.update(t + 2 + Trw + 1);
+    sm.update(t + 2 + 2 * Trw + 1);
 
     bool count_ok = cap.size() == 3;   // TO caller ×2 + TIS self, 1 word each
     bool addr_ok  = count_ok && cap.words[0].type == PreambleType::TO
@@ -343,10 +343,10 @@ bool test_await_accept_reject_sends_twas()
     bool rejected = sm.reject_call();
     std::cout << "  reject_call() returns true: " << (rejected ? "PASS" : "FAIL") << "\n";
 
-    // reject_call() resolves the gate immediately → SLOT_WAIT → CHANNEL_CHECK → SENDING_RESPONSE.
+    // reject_call() resolves the gate immediately → SLOT_WAIT → CHANNEL_CHECK (Tdrw LBT) → SENDING_RESPONSE.
     sm.update(t + 1);
     sm.update(t + 2);
-    sm.update(t + 2 + Trw + 1);
+    sm.update(t + 2 + 2 * Trw + 1);
 
     bool twas_ok = cap.size() == 1 && cap.words[0].type == PreambleType::TWAS
                                     && trim_ale_address(cap.words[0].address) == "JOE";
@@ -377,7 +377,7 @@ bool test_await_accept_timeout_aborts_without_response()
     // own call timeout ("no reply").
     sm.update(t + kTimeout + 1);
     sm.update(t + kTimeout + 2);
-    sm.update(t + kTimeout + 2 + Trw + 1);
+    sm.update(t + kTimeout + 2 + 2 * Trw + 1);
 
     bool no_response = cap.empty();
     bool left_handshake = sm.get_state() != ALEState::HANDSHAKE;
@@ -409,6 +409,80 @@ bool test_rx_multiword_caller_address()
               << " (got \"" << sm.get_caller_address() << "\")\n";
 
     return got_concl && caller_ok;
+}
+
+// ============================================================================
+// AC-LINK-002-002 — Response LBT: Tdrw = 2×Trw channel check before responding
+//
+// Verifies (REQ-LINK-006 / A.5.5.3.3 / Table A-XV "Tdrw = 784 ms"):
+//   (1) After the call's conclusion settles, JOE enters CHANNEL_CHECK and must
+//       wait the full Tdrw = 2×Trw = 784 ms before transmitting its response —
+//       it does NOT transmit after only 1×Trw.  The LBT must span the spec's
+//       detect-redundant-word period so a competing transmission is caught.
+//   (2) Once Tdrw elapses with the channel clear, JOE sends its response frame.
+//   (3) Any word received during the CHANNEL_CHECK window means the channel is
+//       busy → JOE aborts the handshake and sends nothing (AC-LINK-019-3).
+// ============================================================================
+bool test_ac_link_002_002_response_lbt_two_trw()
+{
+    std::cout << "\n[AC-LINK-002-002] Response LBT waits Tdrw=2×Trw, aborts on busy channel\n";
+    bool all_ok = true;
+
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;   // 392 ms
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;  // 784 ms = 2×Trw
+
+    // ── Part 1: clear channel — LBT must span the full Tdrw window ───────────
+    {
+        WordCapture cap;
+        ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
+        sm.process_event(ALEEvent::START_SCAN);
+        feed_incoming_call(sm, /*self=*/"JOE", /*caller=*/"SAM");
+
+        const uint32_t t_last = 1000u + 4u * Trw;        // last conclusion word
+        sm.update(t_last + Tdrw + 1);                     // WAIT_CYCLE_END settle → SLOT_WAIT
+        sm.update(t_last + Tdrw + 2);                     // SLOT_WAIT (Tswt=0) → CHANNEL_CHECK
+        const uint32_t lbt0 = t_last + Tdrw + 2;         // CHANNEL_CHECK entry time
+
+        // After only 1×Trw the LBT must NOT be over: still CHANNEL_CHECK, nothing sent.
+        sm.update(lbt0 + Trw);
+        const bool still_checking = sm.get_handshake_phase() == HandshakePhase::CHANNEL_CHECK
+                                 && cap.empty();
+
+        // After the full Tdrw the LBT clears → SENDING_RESPONSE with a frame.
+        sm.update(lbt0 + Tdrw);
+        const bool responded = sm.get_handshake_phase() == HandshakePhase::SENDING_RESPONSE
+                            && !cap.empty();
+
+        all_ok &= still_checking && responded;
+        std::cout << "  no TX after 1×Trw (LBT < Tdrw):   " << (still_checking ? "PASS" : "FAIL") << "\n";
+        std::cout << "  response sent after full Tdrw:     " << (responded ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part 2: busy channel — a word during LBT aborts the response ─────────
+    {
+        WordCapture cap;
+        ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
+        sm.process_event(ALEEvent::START_SCAN);
+        feed_incoming_call(sm, /*self=*/"JOE", /*caller=*/"SAM");
+
+        const uint32_t t_last = 1000u + 4u * Trw;
+        sm.update(t_last + Tdrw + 1);                     // → SLOT_WAIT
+        sm.update(t_last + Tdrw + 2);                     // → CHANNEL_CHECK
+        const uint32_t lbt0 = t_last + Tdrw + 2;
+
+        // A third station's word arrives mid-LBT → channel busy → abort.
+        sm.update(lbt0 + Trw);
+        sm.process_received_word(rx_word(PreambleType::TO, "XYZ"));
+
+        const bool aborted = sm.get_state() != ALEState::HANDSHAKE;  // back to pre-link (SCANNING)
+        const bool no_tx   = cap.empty();
+        all_ok &= aborted && no_tx;
+        std::cout << "  busy channel aborts handshake:     " << (aborted ? "PASS" : "FAIL")
+                  << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+        std::cout << "  no response transmitted when busy: " << (no_tx ? "PASS" : "FAIL") << "\n";
+    }
+
+    return all_ok;
 }
 
 // ============================================================================
@@ -1810,6 +1884,10 @@ int run_all_tests()
         test_rx_multiword_full_accept_15char());
     run("RX-MULTIWORD caller peer not polluted by stale handshake flags",
         test_caller_multiword_peer_not_polluted_by_stale_hs());
+
+    // AC-LINK-002-002 — response LBT (Tdrw=2×Trw) + busy-channel abort
+    run("AC-LINK-002-002 response LBT waits Tdrw=2×Trw, aborts on busy channel",
+        test_ac_link_002_002_response_lbt_two_trw());
 
     // AC-GEN-009-002 — "not already in a link" guard
     run("ALWAYS-ANSWER individual call while LINKED is silently ignored",

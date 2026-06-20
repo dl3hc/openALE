@@ -421,10 +421,10 @@ void ALEStateMachine::handle_calling() {
         //
         //     JOE's turnaround after SAM's conclusion ends (T0):
         //       Tlww (392, post-conclusion wait)
-        //       + Trw  (392, JOE's CHANNEL_CHECK / LBT)
+        //       + Tdrw (784, JOE's CHANNEL_CHECK / LBT — AC-LINK-002-002)
         //       + Trw  (392, JOE transmits its first response word)
-        //       → SAM's pipeline recognises it at  T0 + 1176 + 2×L.
-        //     Twrt_slow (1960) covers the 1176 turnaround with margin; +Tdrw
+        //       → SAM's pipeline recognises it at  T0 + 1568 + 2×L.
+        //     Twrt_slow (1960) covers the 1568 turnaround with margin; +Tdrw
         //     (784) absorbs ~390 ms/direction of WASAPI + virtual-cable latency.
         //     Identical for single- and multi-channel: the per-channel responder
         //     turnaround does not depend on the caller's channel count.
@@ -581,13 +581,14 @@ void ALEStateMachine::handle_handshake() {
         }
 
         // ── CHANNEL_CHECK ─────────────────────────────────────────────────
-        // Listen-Before-Transmit: 1×Trw per A.5.5.3.3 / AC-LINK-019-1.
-        // The calling station just finished TX; channel is clear by protocol.
-        // One Trw window detects any collision from a third station.
+        // Listen-Before-Transmit: Tdrw = 2×Trw = 784 ms (AC-LINK-002-002 /
+        // A.5.5.3.3 / Table A-XV).  The LBT must span the spec's "detect
+        // redundant word period" Tdrw so a competing station's in-progress
+        // redundant word is reliably caught — a single Trw window can miss it.
         // Any word received here signals channel busy → abort (AC-LINK-019-3).
         // process_received_word() handles the busy-detection path.
         case HandshakePhase::CHANNEL_CHECK: {
-            if ((current_time_ms - hs_lbt_start_ms) >= 1u * ALETimingConstants::Trw_ms) {
+            if ((current_time_ms - hs_lbt_start_ms) >= ALETimingConstants::Tdrw_ms) {
                 SM_TRACE("[TRACE] handle_handshake: LBT clear → SENDING_RESPONSE\n");
                 if (rx_enabled_callback) rx_enabled_callback(false);
                 handshake_phase   = HandshakePhase::SENDING_RESPONSE;

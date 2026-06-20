@@ -142,9 +142,9 @@ enum class SoundingPhase {
  *                       └─ decision_timeout elapsed, no decision → SLOT_WAIT (auto-accept
  *                          fallback, so an unattended station never hangs here)
  *   SLOT_WAIT         Tswt: wait assigned slot before LBT (0 ms for Individual Call, T-09)
- *   CHANNEL_CHECK     2×Trw LBT before transmitting response — AC-LINK-019-1, A.5.5.3.3
+ *   CHANNEL_CHECK     Tdrw = 2×Trw LBT before transmitting response — AC-LINK-002-002, A.5.5.3.3
  *                       ├─ any RX activity → channel busy → abort
- *                       └─ 2×Trw clear → SENDING_RESPONSE
+ *                       └─ Tdrw clear → SENDING_RESPONSE
  *   SENDING_RESPONSE  TO caller × 2 + TIS self — response frame (Figure A-30)
  *                       └─ all words sent → WAIT_ACK
  *   WAIT_ACK          Twr: wait for ACK frame from calling station (Figure A-31)
@@ -155,7 +155,7 @@ enum class HandshakePhase {
     WAIT_CYCLE_END,    ///< Twce: listen for SAM's conclusion (A.5.5.3.2)
     AWAIT_ACCEPT,      ///< Operator accept/reject decision gate (manual-accept mode only)
     SLOT_WAIT,         ///< Tswt: warte zugewiesenen Slot vor LBT (0 ms bei Individual Call, T-09)
-    CHANNEL_CHECK,     ///< 1×Trw LBT before response TX (AC-LINK-019-1, A.5.5.3.3)
+    CHANNEL_CHECK,     ///< Tdrw=2×Trw LBT before response TX (AC-LINK-002-002, A.5.5.3.3)
     SENDING_RESPONSE,  ///< TO caller × 2 + TIS self — Figure A-30
     WAIT_ACK,          ///< Twr: wait for SAM's ACK — Figure A-31
 };

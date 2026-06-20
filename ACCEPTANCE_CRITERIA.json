@@ -1158,7 +1158,8 @@
       "description": "Bevor die angerufene Station eine Response sendet, wartet sie mindestens 2 Trw-Slots (784 ms) und prüft den Kanal auf Belegung (LBT).",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe HANDSHAKE-Response-Phase: Vor TX-Beginn muss 2×Trw (784ms) gewartet und LBT durchgeführt werden.",
-      "status": "open"
+      "status": "closed",
+      "verification": "Implementierung korrigiert: CHANNEL_CHECK in ale_state_machine.cpp wartet jetzt ALETimingConstants::Tdrw_ms (= 2×Trw = 784 ms) statt zuvor 1×Trw (392 ms), spec-konform zu A.5.5.3.3 / Table A-XV (detect-redundant-word period Tdrw). test_ac_link_002_002_response_lbt_two_trw() in tests/word/unit/test_ale_calling.cpp verifiziert beide AC-Teile: (1) Nach Conclusion-Settle bleibt JOE nach nur 1×Trw noch in CHANNEL_CHECK ohne TX; erst nach vollem Tdrw → SENDING_RESPONSE mit Frame; (2) ein während des LBT-Fensters empfangenes Wort (CHANNEL_BUSY) bricht den Handshake ab (keine Response, Rückkehr in Pre-Link-State). SAMs LISTENING(a)-Budget (3136 ms) deckt JOEs +392 ms längere Turnaround weiterhin ab. Vollständige Suite via ctest: 35/35 grün, inkl. PCALEInterop (Foreign-Decoder) und FrameC (2026-06-20)."
     },
     {
       "id": "AC-LINK-003-001",
