@@ -486,6 +486,133 @@ bool test_ac_link_002_002_response_lbt_two_trw()
 }
 
 // ============================================================================
+// AC-LINK-003-001 + NOTE 1 — Called station completes the 3-way handshake.
+//
+// Covers the JOE (called) side of A.5.5.3.4 + NOTE 1, which the existing tests
+// did NOT exercise (they only drive SAM's ACK-sending side or inject
+// HANDSHAKE_COMPLETE directly):
+//   (A) After sending its response, JOE waits in WAIT_ACK and enters LINKED
+//       when it reads a valid in-window ACK ("TO JOE" + "TIS SAM").
+//   (B) NOTE 1 ping-pong prevention: JOE does NOT transmit a second response to
+//       SAM's ACK — the ACK is consumed as the handshake's third frame.
+//   (C) NOTE 1 late ACK: if no ACK arrives within JOE's Twr window, JOE aborts
+//       to its pre-link state; a subsequent "TO JOE" is then treated as a NEW
+//       individual call (re-enters HANDSHAKE), not as a continuation.
+//
+// Drives JOE entirely through the real RX/TX path (no HANDSHAKE_COMPLETE
+// injection): feed_incoming_call → settle → SLOT_WAIT → CHANNEL_CHECK (Tdrw)
+// → SENDING_RESPONSE (drained via on_word_complete) → WAIT_ACK.
+// ============================================================================
+
+// Drive a freshly-scanning JOE all the way to WAIT_ACK with its response sent.
+// Returns the SM clock value at WAIT_ACK entry (== hs_ack_start_ms).
+static uint32_t drive_joe_to_wait_ack(ALEStateMachine& sm)
+{
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
+
+    sm.process_event(ALEEvent::START_SCAN);
+    feed_incoming_call(sm, /*self=*/"JOE", /*caller=*/"SAM");   // → HANDSHAKE/WAIT_CYCLE_END
+
+    const uint32_t t_last = 1000u + 4u * Trw;                   // last conclusion word
+    sm.update(t_last + Tdrw + 1);                               // settle → SLOT_WAIT
+    sm.update(t_last + Tdrw + 2);                               // SLOT_WAIT → CHANNEL_CHECK
+    const uint32_t lbt0 = t_last + Tdrw + 2;
+    sm.update(lbt0 + Tdrw);                                     // CHANNEL_CHECK clear → SENDING_RESPONSE
+    for (int i = 0; i < 3; ++i) sm.on_word_complete();         // drain TO SAM ×2 + TIS JOE → WAIT_ACK
+    return lbt0 + Tdrw;                                         // == hs_ack_start_ms
+}
+
+bool test_called_station_ack_to_linked_and_note1()
+{
+    std::cout << "\n[AC-LINK-003-001 / NOTE 1] Called station: WAIT_ACK → LINKED, ping-pong, late ACK\n";
+    bool all_ok = true;
+
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
+
+    // ── Part A+B: valid in-window ACK → LINKED, no second response ───────────
+    {
+        WordCapture cap;
+        ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
+        const uint32_t ack0 = drive_joe_to_wait_ack(sm);
+
+        const bool in_wait_ack = sm.get_handshake_phase() == HandshakePhase::WAIT_ACK;
+        const bool response_sent = cap.size() == 3;   // TO SAM ×2 + TIS JOE
+        cap.clear();                                   // watch for any further (ping-pong) TX
+
+        // SAM's ACK arrives well within JOE's Twr window: "TO JOE" then "TIS SAM".
+        sm.update(ack0 + 100);
+        sm.process_received_word(rx_word(PreambleType::TO,  "JOE"));
+        sm.update(ack0 + 100 + Trw);
+        sm.process_received_word(rx_word(PreambleType::TIS, "SAM"));
+        sm.update(ack0 + 100 + Trw + Tdrw + 1);        // ACK conclusion settle → LINKED
+
+        const bool linked      = sm.get_state() == ALEState::LINKED;
+        const bool no_pingpong = cap.empty();          // JOE sent nothing in response to the ACK
+
+        // "...and set a wait-for-activity timeout Twa." (A.5.5.3.4 / AC-LINK-003-001)
+        // Verify the default Twa, that activity defers termination, and that
+        // sustained inactivity drops the link.
+        const uint32_t t_link    = ack0 + 100 + Trw + Tdrw + 1;  // LINKED-entry clock
+        const bool twa_default   = sm.get_timing_parameters().Twa_ms == 30000u;
+
+        sm.update(t_link + 20000);      // 20 s into the link (< Twa)
+        sm.on_link_activity();          // user-layer traffic resets the Twa timer
+        sm.update(t_link + 40000);      // 40 s since link, but only 20 s since activity
+        const bool kept_on_activity = sm.get_state() == ALEState::LINKED;
+
+        sm.update(t_link + 40000 + 30000 + 1);  // > Twa of silence since the activity
+        const bool dropped_on_idle  = sm.get_state() != ALEState::LINKED;
+
+        all_ok &= in_wait_ack && response_sent && linked && no_pingpong
+               && twa_default && kept_on_activity && dropped_on_idle;
+        std::cout << "  JOE reached WAIT_ACK after sending response: "
+                  << ((in_wait_ack && response_sent) ? "PASS" : "FAIL") << "\n";
+        std::cout << "  valid in-window ACK → LINKED:                "
+                  << (linked ? "PASS" : "FAIL")
+                  << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+        std::cout << "  NOTE 1: no second response to ACK (no ping-pong): "
+                  << (no_pingpong ? "PASS" : "FAIL") << "\n";
+        std::cout << "  Twa default = 30000 ms:                      "
+                  << (twa_default ? "PASS" : "FAIL") << "\n";
+        std::cout << "  activity defers Twa termination:             "
+                  << (kept_on_activity ? "PASS" : "FAIL") << "\n";
+        std::cout << "  Twa inactivity drops the link:               "
+                  << (dropped_on_idle ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part C: no/late ACK → abort to pre-link; late \"TO JOE\" = new call ───
+    {
+        WordCapture cap;
+        ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
+        const uint32_t ack0 = drive_joe_to_wait_ack(sm);
+        cap.clear();
+
+        // No ACK within JOE's Twr window (Twr_slow + Tdrw + (Tdrw−Tlww) = 2091 ms).
+        const uint32_t twr_window = ale::Twr_slow_int
+                                  + static_cast<uint32_t>(ale::Tdrw_ms)
+                                  + (ALETimingConstants::Tdrw_ms - ALETimingConstants::Tlww_ms);
+        sm.update(ack0 + twr_window + 1);              // WAIT_ACK timeout → pre-link (SCANNING)
+        const bool aborted = sm.get_state() != ALEState::HANDSHAKE;
+
+        // A late "TO JOE" (what NOTE 1 calls a late ACK) is now a NEW call.
+        sm.update(ack0 + twr_window + 100);
+        sm.process_received_word(rx_word(PreambleType::TO, "JOE"));
+        const bool new_call = sm.get_state() == ALEState::HANDSHAKE;
+
+        all_ok &= aborted && new_call;
+        std::cout << "  no ACK within Twr → abort to pre-link state: "
+                  << (aborted ? "PASS" : "FAIL")
+                  << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+        std::cout << "  NOTE 1: late \"TO JOE\" treated as a new call: "
+                  << (new_call ? "PASS" : "FAIL") << "\n";
+    }
+
+    return all_ok;
+}
+
+// ============================================================================
 // AC-WORD-003-1 — TO for individual calls
 // REQ-WORD-003: "TO shall be used in individual call protocols for single
 // stations, and in net call protocols for multiple net member stations."
@@ -1888,6 +2015,10 @@ int run_all_tests()
     // AC-LINK-002-002 — response LBT (Tdrw=2×Trw) + busy-channel abort
     run("AC-LINK-002-002 response LBT waits Tdrw=2×Trw, aborts on busy channel",
         test_ac_link_002_002_response_lbt_two_trw());
+
+    // AC-LINK-003-001 + NOTE 1 — called station WAIT_ACK → LINKED, ping-pong, late ACK
+    run("AC-LINK-003-001/NOTE1 called station: WAIT_ACK→LINKED, no ping-pong, late ACK = new call",
+        test_called_station_ack_to_linked_and_note1());
 
     // AC-GEN-009-002 — "not already in a link" guard
     run("ALWAYS-ANSWER individual call while LINKED is silently ignored",

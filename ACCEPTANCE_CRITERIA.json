@@ -854,7 +854,7 @@
       ],
       "title": "Ta max = 1960 ms (5 Wörter × Trw)",
       "description": "Der Address-Abschnitt (Ta) darf maximal 1960 ms dauern (5 Trw-Slots). Dies entspricht maximal 5 Adress-Wörtern.",
-      "module": "Protocol/ale_state_machine bzw. Word/ale_sequence",
+      "module": "Protocol/ale_state_machine bzw. Word/ale_sequence bzw. include/ale_timing.h",
       "verification_hint": "Prüfe Limits in ale_state_machine.cpp oder ale_timing.h: TA_MAX_WORDS=5, entspricht 5×392=1960ms.",
       "status": "open"
     },
@@ -1171,7 +1171,8 @@
       "description": "Nach Link-Herstellung (LinkedPhase::ACTIVE) ist ein Activity-Timer (Twa = 30.000 ms) aktiv. Bei Ablauf ohne Aktivität wird der Link terminiert.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe LINKED-Zustand in ale_state_machine.cpp: twa_timeout_ms oder TWA_MS muss 30000 sein. Timer-Reset bei jeder Aktivität.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_called_station_ack_to_linked_and_note1() in tests/word/unit/test_ale_calling.cpp treibt die GERUFENE Station (JOE) erstmals über den echten RX/TX-Pfad (kein injiziertes HANDSHAKE_COMPLETE) bis LINKED und verifiziert Twa: (1) get_timing_parameters().Twa_ms == 30000 ms; (2) on_link_activity() setzt den Twa-Timer zurück → Link bleibt nach 40 s mit zwischenzeitlicher Aktivität bestehen; (3) >Twa Funkstille → handle_linked() terminiert den Link (verlässt LINKED). Implementierung: handle_linked() nutzt timing_.Twa_ms (Default 30000 via TimingParameters), on_link_activity() reanchort last_word_time_ms. Voller ctest-Lauf 35/35 grün (2026-06-20)."
     },
     {
       "id": "AC-LINK-003-002",
