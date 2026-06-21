@@ -556,6 +556,11 @@ target_link_libraries(test_pcale_interop ale_codec ale_protocol ale_fsk_core ale
 target_include_directories(test_pcale_interop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME PCALEInterop COMMAND test_pcale_interop)
 
+add_executable(test_sync tests/sync/unit/test_sync.cpp)
+target_link_libraries(test_sync ale_link ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_sync PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME Sync COMMAND test_sync)
+
 add_executable(test_decoder_robustness tests/sync/integration/test_decoder_robustness.cpp)
 target_link_libraries(test_decoder_robustness ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_decoder_robustness PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

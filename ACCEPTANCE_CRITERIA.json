@@ -871,7 +871,8 @@
       "description": "first_call_tx_ms wird exakt einmal beim Eintritt in ALEState::CALLING gesetzt (in enter_state(CALLING)). Es wird zu keinem Zeitpunkt während des Call-Zyklus zurückgesetzt oder überschrieben.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Suche alle Schreibzugriffe auf first_call_tx_ms in ale_state_machine.cpp. Es darf nur eine Zuweisung existieren (in enter_state oder handle_calling bei erstem Aufruf).",
-      "status": "open"
+      "status": "closed",
+      "verification": "Code-Analyse: 3 Schreibzugriffe auf first_call_tx_ms in ale_state_machine.cpp — (1) enter_state(CALLING) L222: =0 (Initialisierung/Sentinel), (2) CallingPhase::TUNING L385: =current_time_ms (einmaliges Setzen bei Tune-Complete, DD-006), (3) try_next_calling_channel() L1149: =0 (Reset für neuen Kanal-Hop-Zyklus, AC-LINK-017-8). Während der aktiven TX-Phasen (SCANNING_CALL→LEADING_CALL→CONCLUSION) kein Schreibzugriff. Test test_ac_sync_001_001_first_call_tx_ms_set_once() in tests/sync/unit/test_sync.cpp: before_TUNING==0 ✓, after_LBT==0 ✓, after_TUNING==T_TX(1829) ✓, nach jedem der 5 on_word_complete()-Aufrufe unverändert ✓. test_sync: 1/1 PASS."
     },
     {
       "id": "AC-SYNC-001-002",
