@@ -460,6 +460,58 @@ bool test_sounding_lbt_busy() {
 }
 
 // ============================================================================
+// Test 7c: AC-SOUND-001-002 — Sounding frame nur Conclusion (TIS + Eigenadresse)
+// Prüft dass kein Scanning/Leading (TO-Wörter) gesendet wird — nur TIS + self_address.
+// ============================================================================
+
+bool test_sounding_conclusion_frame_only() {
+    std::cout << "\n[TEST 7c] AC-SOUND-001-002: Sounding Conclusion-Frame — nur TIS + Eigenadresse\n";
+    std::cout << "===============================================================================\n";
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    WordTracker tracker;
+
+    sm.set_transmit_callback([&tracker](const ALEWord& word) {
+        tracker.record(word);
+    });
+
+    // Arrange: start from SCANNING, initiate sounding
+    sm.process_event(ALEEvent::START_SCAN);
+    sm.send_sounding();
+
+    // Act: advance past LBT → TX begins
+    sm.update(ALETimingConstants::Twt_ms + 10);
+
+    // Assert 1: At least 1 word transmitted
+    std::cout << "  Word(s) transmitted after LBT: ";
+    bool words_sent = (tracker.count() >= 1);
+    std::cout << (words_sent ? "PASS" : "FAIL") << " (count=" << tracker.count() << ")\n";
+
+    // Assert 2: No TO words — no Scanning or Leading section (AC-SOUND-001-002)
+    std::cout << "  No TO words (Conclusion section only): ";
+    bool no_to_words = true;
+    for (const auto& w : tracker.words) {
+        if (w.type == PreambleType::TO) { no_to_words = false; break; }
+    }
+    std::cout << (no_to_words ? "PASS" : "FAIL") << "\n";
+
+    // Assert 3: First word is TIS (Conclusion anchor, not a Scanning/Leading preamble)
+    std::cout << "  First word type is TIS: ";
+    bool first_is_tis = words_sent && (tracker.words[0].type == PreambleType::TIS);
+    std::cout << (first_is_tis ? "PASS" : "FAIL") << "\n";
+
+    // Assert 4: TIS word carries the correct self_address
+    std::cout << "  TIS word carries self_address \"SAM\": ";
+    bool address_correct = first_is_tis
+        && (std::string(tracker.words[0].address, 3) == "SAM");
+    std::cout << (address_correct ? "PASS" : "FAIL")
+              << " (got=\"" << std::string(tracker.words[0].address, 3) << "\")\n";
+
+    return words_sent && no_to_words && first_is_tis && address_correct;
+}
+
+// ============================================================================
 // Test 8: Complete Scanning Call Cycle
 // Traces the full SAM-side call sequence per A.5.5.3.1:
 //   LBT → TUNING → SCANNING_CALL → LEADING_CALL → CONCLUSION → LISTENING
@@ -895,6 +947,7 @@ int run_all_tests() {
     if (test_timeouts()) { pass_count++; } else { fail_count++; }
     if (test_sounding()) { pass_count++; } else { fail_count++; }
     if (test_sounding_lbt_busy()) { pass_count++; } else { fail_count++; }
+    if (test_sounding_conclusion_frame_only()) { pass_count++; } else { fail_count++; }
     if (test_full_call_cycle()) { pass_count++; } else { fail_count++; }
     if (test_timing_parameters_isolation()) { pass_count++; } else { fail_count++; }
     if (test_standard_scan_rate_td2()) { pass_count++; } else { fail_count++; }

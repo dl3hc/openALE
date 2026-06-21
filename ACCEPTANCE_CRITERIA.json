@@ -951,7 +951,8 @@
       "description": "Ein Sounding-Frame besteht ausschließlich aus dem Conclusion-Abschnitt: TIS-Wort (Single-Channel Sounding) oder TWAS-Wort mit eigener Stationsadresse.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe SOUNDING-Zustand in ale_state_machine.cpp: Gesendeter Frame muss nur TIS/TWAS + self_address enthalten (kein Scanning/Leading).",
-      "status": "open"
+      "status": "closed",
+      "verification": "handle_sounding() in ale_state_machine.cpp sendet ausschließlich ALESequenceBuilder::conclusion(self_address) → TIS + self_address (kein TO-Prefix, kein Scanning/Leading). Test test_sounding_conclusion_frame_only() (TEST 7c) in tests/link/unit/test_state_machine.cpp prüft: (1) mind. 1 Wort gesendet nach LBT, (2) kein TO-Wort im Frame, (3) erstes Wort ist TIS, (4) TIS-Wort trägt korrekte Eigenadresse 'SAM'. Alle 15 Tests grün (2026-06-21)."
     },
     {
       "id": "AC-SOUND-001-003",
