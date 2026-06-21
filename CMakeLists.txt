@@ -566,6 +566,11 @@ target_link_libraries(test_decoder_robustness ale_modem ale_codec ale_protocol a
 target_include_directories(test_decoder_robustness PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME DecoderRobustness COMMAND test_decoder_robustness)
 
+add_executable(test_sync_criteria tests/sync/unit/test_sync_criteria.cpp)
+target_link_libraries(test_sync_criteria ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_sync_criteria PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME SyncCriteria COMMAND test_sync_criteria)
+
 add_executable(test_word_sync tests/sync/integration/test_word_sync.cpp)
 target_link_libraries(test_word_sync ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_word_sync PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -924,7 +924,8 @@
       "description": "Die Wortsynchronisation verwendet alle 9 Kriterien: unanimous-vote-Zähler, Golay-Decodemodi (3/4, 2/5, 1/6, 0/7), gültiger Preamble, gültige Basic-38-Zeichen, Frame-Struktur.",
       "module": "FSK/ale_waveform",
       "verification_hint": "Prüfe ale_waveform.cpp oder symbol_decoder.cpp auf is_valid_sync()-Funktion, die alle 9 Sync-Kriterien auswertet.",
-      "status": "open"
+      "status": "closed",
+      "verification": "tests/sync/unit/test_sync_criteria.cpp (test_sync_criteria, CMakeLists SyncCriteria) neu erstellt; 26/26 Checks PASS. Implementierung verteilt auf: Kriterium 1 (unanimous-vote-Schwellwert) → ALE2GModem::Demodulator::accept_word_(), set_min_unanimous_votes(); Kriterien 2/3 (Golay A/B-Decode) → ALEFECCodec::deinterleave_word() via ALEDecoder::decode(); Kriterium 4 (akzeptable Präambel, nur Initial-Sync) → is_acquisition_anchor() für TO/TWAS/TIS; Kriterien 5/6/7 (Basic-38-Zeichenvalidierung) → WordParser::parse_from_bits() / decode_ascii(); Kriterium 8 (grid state / min_spacing) → Demodulator::accept_word_() Duplikat-Gate (1 physisches Wort → genau 1 Callback); Kriterium 9 (dreifach-redundante Wortphase) → unanimous-vote-Gate als Phasendiskriminator + on_word_boundary-Check (continuing sync) — cross-referenziert auf AC-SYNC-002-001 (test_word_sync.cpp). Alle 4 Golay-Modi (Mode3_4/Mode2_5/Mode1_6/Mode0_7) und adaptiver Schwellwert (AdaptiveFec) in ALE2GModem verifiziert durch test_decoder_robustness. Alle bestehenden Sync-Tests (test_sync, test_word_sync, test_decoder_robustness) bleiben grün."
     },
     {
       "id": "AC-SOUND-001-001",
