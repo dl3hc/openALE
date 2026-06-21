@@ -910,7 +910,8 @@
       "description": "Der RX-Pfad erkennt die 49-Symbol-Wortgrenzen über einen Sliding-Window-Energiedetektor oder vergleichbare Methode. Sync wird innerhalb der ersten 2 empfangenen Wörter hergestellt.",
       "module": "FSK/ale_waveform, include/Codec/ale_decoder.h",
       "verification_hint": "Prüfe fft_demodulator.cpp oder ale_waveform.cpp auf Wortsynchronisations-Algorithmus. Muss Stride-49-Erkennung implementieren.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_sync_002_001_sync_within_two_words() in tests/sync/integration/test_word_sync.cpp neu erstellt. Implementierung: ALE2GModem::Demodulator (src/Modem/ale2g_modem.cpp) implementiert Stride-49-Erkennung als 'comparable method': gleitender Goertzel-Decode alle DECODE_STEP=16 Samples + unanimous-vote-Gate (>= 33/49) erzwingt korrekte 49-Symbol-Phasenlage — ein um auch nur 1 Symbol versetztes Fenster lässt die drei redundanten Kopien jedes Bits divergieren und kollabiert den unanimous count gegen 0. Test: 16-Sample Vorsilenz + 2 clean TO-'SAM'-Wörter (6288 Samples gesamt) → erster Wort-Callback feuert bei Sample 3136 (Limit 6288 = 2×WORD_SAMPLES). Decoded: TO 'SAM' — Inhalt korrekt → Stride-49-Ausrichtung verifiziert. test_word_sync: PASS."
     },
     {
       "id": "AC-SYNC-003-001",
