@@ -884,7 +884,8 @@
       "description": "Jeder TX-Slot wird berechnet als: next_slot_ms = first_call_tx_ms + call_cycle_count × Trw_ms. Es gibt keine andere Zeitbasis für TX-Slots.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe handle_calling() in ale_state_machine.cpp auf Slot-Berechnung. Nur erste_call_tx_ms + n×Trw darf als Basis verwendet werden.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_sync_001_002_slot_times_relative_to_first_call_tx_ms() in tests/sync/unit/test_sync.cpp ergänzt. Prüft 7 TX-Wörter (scan_ch=2: 4 SC + 2 LC + 1 CC) über vollständige Sequenz: (1) first_call_tx_ms == T_TX (Anker korrekt gesetzt), (2) Slot N = anchor + N × Trw_ms für alle 7 Wörter exakt, (3) call_cycle_count == N vor Wort N und N+1 danach, (4) update() während TX-Phasen verändert call_cycle_count nicht (keine Wanduhr-Abhängigkeit). test_sync: 2/2 PASS."
     },
     {
       "id": "AC-SYNC-001-003",
