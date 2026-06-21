@@ -1,9 +1,9 @@
 /**
- * \file src/Protocol/ale_orderwire_protocols.cpp
+ * \file src/Protocol/Message/ale_orderwire_protocols.cpp
  * \brief ALE orderwire message encoding (MIL-STD-188-141B A.5.7)
  */
 
-#include "Protocol/ale_orderwire_protocols.h"
+#include "Protocol/Message/ale_orderwire_protocols.h"
 #include "Word/ale_word.h"
 #include <algorithm>
 

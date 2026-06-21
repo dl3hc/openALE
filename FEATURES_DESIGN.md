@@ -161,7 +161,7 @@ PLATFORM ADAPTERS (separate Projekte)
 | `include/Protocol/aqc_protocol.h` / `src/Protocol/aqc_protocol.cpp` | AQC-ALE-Protokoll | implementiert | FEAT-GEN-010 |
 | `src/Protocol/aqc_parser.cpp` *(privat)* | AQC-Frame-Parser | implementiert | FEAT-GEN-010 |
 | `include/Protocol/ale_version_caps.h` / `src/Protocol/ale_version_caps.cpp` | Version CMD, Capabilities Query/Report, Capability-Parser | geplant | FEAT-GEN-011, FEAT-GEN-012 |
-| `include/Protocol/ale_orderwire_protocols.h` / `src/Protocol/ale_orderwire_protocols.cpp` | AMD-, DTM- und DBM-Protokolle | geplant | FEAT-GEN-013–016 |
+| `include/Protocol/Message/ale_orderwire_protocols.h` / `src/Protocol/Message/ale_orderwire_protocols.cpp` | AMD-, DTM- und DBM-Protokolle | geplant | FEAT-GEN-013–016 |
 | `include/Word/ale_word.h` / `src/Word/ale_word.cpp` | PreambleType, WordType, ALEWord, WordParser (Basic-38, Expanded-64) | implementiert | FEAT-WORD-001–003 |
 | `include/FEC/ale_fec_codec.h` / `src/FEC/ale_fec_codec.cpp` | FEC-Fassade: Golay + Interleaver + Vote-Verarbeitung | implementiert | FEAT-FEC-003–005 |
 | `include/FEC/golay.h` / `src/FEC/golay.cpp` | Golay(24,12) Encoder/Decoder | implementiert | FEAT-FEC-001, FEAT-FEC-002 |
@@ -189,10 +189,10 @@ PLATFORM ADAPTERS (separate Projekte)
 | FEAT-GEN-010 | AQC-ALE-Protokoll | REQ-GEN-022–025 | `Protocol/aqc_protocol.h/cpp`, `src/Protocol/aqc_parser.cpp` | COULD | geplant |
 | FEAT-GEN-011 | Version CMD (`CMD VERSION`) | MIL-STD-188-141B A.5.6.6.1 | `Protocol/ale_version_caps.h/cpp` | MUST | geplant |
 | FEAT-GEN-012 | Capabilities Query/Report (`CMD CAPABILITIES`) einschließlich Scan Rate, Channels Scanned, Tune Time, LP, ALQA, Scheduling, Orderwire | MIL-STD-188-141B A.5.6.6.2 | `Protocol/ale_version_caps.h/cpp` | MUST | geplant |
-| FEAT-GEN-013 | ALE Message-Protocol Framework | MIL-STD-188-141B A.5.7.1 | `Protocol/ale_orderwire_protocols.h/cpp` | MUST | geplant |
-| FEAT-GEN-014 | Automatic Message Display (AMD) | MIL-STD-188-141B A.5.7.2 | `Protocol/ale_orderwire_protocols.h/cpp`, `Protocol/ale_message.h/cpp` | MUST | geplant |
-| FEAT-GEN-015 | Data Text Message (DTM) | MIL-STD-188-141B A.5.7.3 | `Protocol/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
-| FEAT-GEN-016 | Data Block Message (DBM) | MIL-STD-188-141B A.5.7.4 | `Protocol/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
+| FEAT-GEN-013 | ALE Message-Protocol Framework | MIL-STD-188-141B A.5.7.1 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | MUST | geplant |
+| FEAT-GEN-014 | Automatic Message Display (AMD) | MIL-STD-188-141B A.5.7.2 | `Protocol/Message/ale_orderwire_protocols.h/cpp`, `Protocol/ale_message.h/cpp` | MUST | geplant |
+| FEAT-GEN-015 | Data Text Message (DTM) | MIL-STD-188-141B A.5.7.3 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
+| FEAT-GEN-016 | Data Block Message (DBM) | MIL-STD-188-141B A.5.7.4 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
 | FEAT-WAVEFORM-001 | Tone-Symbol-Mapping & Frequenztabelle | REQ-WAVEFORM-001–003 | `FSK/ale_waveform.h/cpp` | MUST | implementiert |
 | FEAT-WAVEFORM-002 | NCO-Tongenerator mit Phasenkontinuität | REQ-WAVEFORM-004–005 | `FSK/tone_generator.h/cpp` | MUST | implementiert |
 | FEAT-WAVEFORM-003 | Timing-Konstanten & Wortgrenzen | REQ-WAVEFORM-006–010 | `FSK/ale_waveform.h/cpp` | MUST | implementiert |
@@ -236,13 +236,13 @@ PLATFORM ADAPTERS (separate Projekte)
 | FEAT-ADDR-003 | Net-, Group-, AllCall- und AnyCall-Adressen | REQ-ADDR-008–011 | `Stores/address_book.cpp`, `Protocol/ale_state_machine.cpp` | MUST | geplant |
 | FEAT-ADDR-004 | Wildcard-Matching | REQ-ADDR-012 | `Stores/address_book.cpp` | MUST | implementiert |
 | FEAT-ADDR-005 | Self-, Null- und In-Link-Adressen | REQ-ADDR-013–015 | `Stores/address_book.cpp`, `Protocol/ale_state_machine.cpp` | MUST | geplant |
-| FEAT-CMD-001 | CRC-FCS (16-Bit Rahmenprüfsumme) | MIL-STD-188-141B A.5.6.1 | `Protocol/ale_orderwire_protocols.h/cpp` | MUST | geplant |
-| FEAT-CMD-002 | Power Control CMD | MIL-STD-188-141B A.5.6.2 | `Protocol/ale_orderwire_protocols.h/cpp` | COULD | geplant |
-| FEAT-CMD-003 | Channel Related CMD Functions | MIL-STD-188-141B A.5.6.3 | `Protocol/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
-| FEAT-CMD-004 | Time-Related CMDs (Tune&Wait, Schedule, Time Exchange) | MIL-STD-188-141B A.5.6.4 | `Protocol/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
-| FEAT-CMD-005 | Modem Negotiation & Handoff CMD | MIL-STD-188-141B A.5.6.5 | `Protocol/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
-| FEAT-CMD-006 | Do-Not-Respond CMD | MIL-STD-188-141B A.5.6.7 | `Protocol/ale_orderwire_protocols.h/cpp` | MUST | geplant |
-| FEAT-CMD-007 | User Unique Functions (UUF) | MIL-STD-188-141B A.5.6.9 | `Protocol/ale_orderwire_protocols.h/cpp` | COULD | geplant |
+| FEAT-CMD-001 | CRC-FCS (16-Bit Rahmenprüfsumme) | MIL-STD-188-141B A.5.6.1 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | MUST | geplant |
+| FEAT-CMD-002 | Power Control CMD | MIL-STD-188-141B A.5.6.2 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | COULD | geplant |
+| FEAT-CMD-003 | Channel Related CMD Functions | MIL-STD-188-141B A.5.6.3 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
+| FEAT-CMD-004 | Time-Related CMDs (Tune&Wait, Schedule, Time Exchange) | MIL-STD-188-141B A.5.6.4 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
+| FEAT-CMD-005 | Modem Negotiation & Handoff CMD | MIL-STD-188-141B A.5.6.5 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | SHOULD | geplant |
+| FEAT-CMD-006 | Do-Not-Respond CMD | MIL-STD-188-141B A.5.6.7 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | MUST | geplant |
+| FEAT-CMD-007 | User Unique Functions (UUF) | MIL-STD-188-141B A.5.6.9 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | COULD | geplant |
 | FEAT-AQC-001 | AQC Word-Struktur & Packed-Address (Base-40) | MIL-STD-188-141B A.5.8.1.1 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
 | FEAT-AQC-002 | AQC Preamble-Typen (8 AQC-spezifische Preambles) | MIL-STD-188-141B A.5.8.1.2 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
 | FEAT-AQC-003 | AQC Adresscharakteristiken & Call-Typen | MIL-STD-188-141B A.5.8.1.3–A.5.8.1.4 | `Protocol/aqc_protocol.h/cpp` | COULD | geplant |
@@ -1937,7 +1937,7 @@ Die Reportfelder sollen die aktuellen Timing- und Funktionsparameter des Control
 ### FEAT-GEN-013 — ALE Message-Protocol Framework (A.5.7.1)
 
 **Setzt um:** A.5.7.1  
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`  
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`  
 **Design-Entscheidungen:** offen  
 **Status:** geplant
 
@@ -1970,8 +1970,8 @@ struct MessageSession {
 #### Code-Referenz
 | Datei | Symbol | Hinweis |
 |---|---|---|
-| `include/Protocol/ale_orderwire_protocols.h` | `MessageProtocol`, `MessageSession` | neu anzulegen |
-| `src/Protocol/ale_orderwire_protocols.cpp` | `select_message_protocol()` | neu anzulegen |
+| `include/Protocol/Message/ale_orderwire_protocols.h` | `MessageProtocol`, `MessageSession` | neu anzulegen |
+| `src/Protocol/Message/ale_orderwire_protocols.cpp` | `select_message_protocol()` | neu anzulegen |
 
 #### Requirement-Details
 
@@ -1982,7 +1982,7 @@ Die ALE-Systeme sollen Information innerhalb des Orderwire- oder Message-Abschni
 ### FEAT-GEN-014 — Automatic Message Display (AMD) (A.5.7.2)
 
 **Setzt um:** A.5.7.2  
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`, `include/Protocol/ale_message.h`, `src/Protocol/ale_message.cpp`  
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`, `include/Protocol/ale_message.h`, `src/Protocol/ale_message.cpp`  
 **Design-Entscheidungen:** offen  
 **Status:** geplant
 
@@ -2006,8 +2006,8 @@ struct AmdMessage {
 #### Code-Referenz
 | Datei | Symbol | Hinweis |
 |---|---|---|
-| `include/Protocol/ale_orderwire_protocols.h` | `AmdMessage` | neu anzulegen |
-| `src/Protocol/ale_orderwire_protocols.cpp` | `encode_amd()`, `decode_amd()` | neu anzulegen |
+| `include/Protocol/Message/ale_orderwire_protocols.h` | `AmdMessage` | neu anzulegen |
+| `src/Protocol/Message/ale_orderwire_protocols.cpp` | `encode_amd()`, `decode_amd()` | neu anzulegen |
 
 #### Requirement-Details
 
@@ -2018,7 +2018,7 @@ AMD ist der Automatic-Message-Display-Modus. Er dient der Anzeige kurzer Meldung
 ### FEAT-GEN-015 — Data Text Message (DTM) (A.5.7.3)
 
 **Setzt um:** A.5.7.3  
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`  
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`  
 **Design-Entscheidungen:** offen  
 **Status:** geplant
 
@@ -2044,8 +2044,8 @@ struct DtmBlock {
 #### Code-Referenz
 | Datei | Symbol | Hinweis |
 |---|---|---|
-| `include/Protocol/ale_orderwire_protocols.h` | `DtmBlock` | neu anzulegen |
-| `src/Protocol/ale_orderwire_protocols.cpp` | `encode_dtm()`, `decode_dtm()` | neu anzulegen |
+| `include/Protocol/Message/ale_orderwire_protocols.h` | `DtmBlock` | neu anzulegen |
+| `src/Protocol/Message/ale_orderwire_protocols.cpp` | `encode_dtm()`, `decode_dtm()` | neu anzulegen |
 
 #### Requirement-Details
 
@@ -2056,7 +2056,7 @@ DTM ist der Data-Text-Message-Modus. Er verwendet den ALE-CRC dort, wo er vom St
 ### FEAT-GEN-016 — Data Block Message (DBM) (A.5.7.4)
 
 **Setzt um:** A.5.7.4  
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`  
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`  
 **Design-Entscheidungen:** offen  
 **Status:** geplant
 
@@ -2082,8 +2082,8 @@ struct DbmBlock {
 #### Code-Referenz
 | Datei | Symbol | Hinweis |
 |---|---|---|
-| `include/Protocol/ale_orderwire_protocols.h` | `DbmBlock` | neu anzulegen |
-| `src/Protocol/ale_orderwire_protocols.cpp` | `encode_dbm()`, `decode_dbm()` | neu anzulegen |
+| `include/Protocol/Message/ale_orderwire_protocols.h` | `DbmBlock` | neu anzulegen |
+| `src/Protocol/Message/ale_orderwire_protocols.cpp` | `encode_dbm()`, `decode_dbm()` | neu anzulegen |
 
 #### Requirement-Details
 
@@ -6059,7 +6059,7 @@ Die Nachrichtenübertragung wird als Orderwire-Funktion innerhalb der Standard-A
 ### FEAT-GEN-013 — ALE Message-Protocol Framework
 
 **Setzt um:** A.5.7.1
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Technischer Entwurf
@@ -6091,7 +6091,7 @@ Der ALE-Stack muss drei Message-Protokolle für Nutzdaten unterstützen: AMD, DT
 ### FEAT-GEN-014 — Automatic Message Display (AMD)
 
 **Setzt um:** A.5.7.2
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`, `include/Protocol/ale_message.h`, `src/Protocol/ale_message.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`, `include/Protocol/ale_message.h`, `src/Protocol/ale_message.cpp`
 **Status:** geplant
 
 #### Technischer Entwurf
@@ -6153,7 +6153,7 @@ Die Station muss empfangene AMD-Nachrichten direkt an Operator und Controller an
 ### FEAT-GEN-015 — Data Text Message (DTM)
 
 **Setzt um:** A.5.7.3
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Technischer Entwurf
@@ -6212,7 +6212,7 @@ Der Controller muss DTM-Datenverkehr auf die passende DCE-Schnittstelle oder das
 ### FEAT-GEN-016 — Data Block Message (DBM)
 
 **Setzt um:** A.5.7.4
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Technischer Entwurf
@@ -6278,7 +6278,7 @@ Die Datenblöcke werden vollständig gepuffert und sollen für die DTEs transpar
 ### FEAT-CMD-001 — CRC-FCS (16-Bit Rahmenprüfsumme)
 
 **Setzt um:** MIL-STD-188-141B A.5.6.1
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Beschreibung
@@ -6319,7 +6319,7 @@ uint16_t compute_crc16(std::span<const ALEWord> words);
 ### FEAT-CMD-002 — Power Control CMD (optional)
 
 **Setzt um:** MIL-STD-188-141B A.5.6.2
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Beschreibung
@@ -6361,7 +6361,7 @@ struct PowerControlCmd {
 ### FEAT-CMD-003 — Channel Related CMD Functions
 
 **Setzt um:** MIL-STD-188-141B A.5.6.3
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Beschreibung
@@ -6400,7 +6400,7 @@ struct ChannelDesignationCmd {
 ### FEAT-CMD-004 — Time-Related CMDs (Tune & Wait, Schedule, Time Exchange)
 
 **Setzt um:** MIL-STD-188-141B A.5.6.4
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Beschreibung
@@ -6462,7 +6462,7 @@ struct TimeExchangeCmd {
 ### FEAT-CMD-005 — Modem Negotiation & Handoff CMD
 
 **Setzt um:** MIL-STD-188-141B A.5.6.5
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Beschreibung
@@ -6498,7 +6498,7 @@ struct ModemNegotiationCmd {
 ### FEAT-CMD-006 — Do-Not-Respond CMD
 
 **Setzt um:** MIL-STD-188-141B A.5.6.7
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Beschreibung
@@ -6533,7 +6533,7 @@ bool is_do_not_respond_cmd(const ALEWord& word);
 ### FEAT-CMD-007 — User Unique Functions (UUF)
 
 **Setzt um:** MIL-STD-188-141B A.5.6.9
-**Modul:** `include/Protocol/ale_orderwire_protocols.h`, `src/Protocol/ale_orderwire_protocols.cpp`
+**Modul:** `include/Protocol/Message/ale_orderwire_protocols.h`, `src/Protocol/Message/ale_orderwire_protocols.cpp`
 **Status:** geplant
 
 #### Beschreibung
@@ -6894,10 +6894,10 @@ Im LP-Modus (Linking Protection) wird jedes 24-Bit-AQC-Wort nach Appendix B vers
 | FEAT-GEN-010 | REQ-GEN-022–025 | Protocol/aqc_protocol.h/cpp | geplant |
 | FEAT-GEN-011 | A.5.6.6.1 | include/Protocol/ale_version_caps.h, src/Protocol/ale_version_caps.cpp | geplant |
 | FEAT-GEN-012 | A.5.6.6.2 | include/Protocol/ale_version_caps.h, src/Protocol/ale_version_caps.cpp | geplant |
-| FEAT-GEN-013 | A.5.7.1 | include/Protocol/ale_orderwire_protocols.h, src/Protocol/ale_orderwire_protocols.cpp | geplant |
-| FEAT-GEN-014 | A.5.7.2 | include/Protocol/ale_orderwire_protocols.h, src/Protocol/ale_orderwire_protocols.cpp | geplant |
-| FEAT-GEN-015 | A.5.7.3 | include/Protocol/ale_orderwire_protocols.h, src/Protocol/ale_orderwire_protocols.cpp | geplant |
-| FEAT-GEN-016 | A.5.7.4 | include/Protocol/ale_orderwire_protocols.h, src/Protocol/ale_orderwire_protocols.cpp | geplant |
+| FEAT-GEN-013 | A.5.7.1 | include/Protocol/Message/ale_orderwire_protocols.h, src/Protocol/Message/ale_orderwire_protocols.cpp | geplant |
+| FEAT-GEN-014 | A.5.7.2 | include/Protocol/Message/ale_orderwire_protocols.h, src/Protocol/Message/ale_orderwire_protocols.cpp | geplant |
+| FEAT-GEN-015 | A.5.7.3 | include/Protocol/Message/ale_orderwire_protocols.h, src/Protocol/Message/ale_orderwire_protocols.cpp | geplant |
+| FEAT-GEN-016 | A.5.7.4 | include/Protocol/Message/ale_orderwire_protocols.h, src/Protocol/Message/ale_orderwire_protocols.cpp | geplant |
 | FEAT-WAVEFORM-001 | REQ-WAVEFORM-001–003 | include/FSK/ale_waveform.h | implementiert |
 | FEAT-WAVEFORM-002 | REQ-WAVEFORM-004–005 | FSK/tone_generator.cpp | implementiert |
 | FEAT-WAVEFORM-003 | REQ-WAVEFORM-006–010 | FSK/ale_waveform.h, Protocol/ale_state_machine.h | implementiert |
@@ -6941,13 +6941,13 @@ Im LP-Modus (Linking Protection) wird jedes 24-Bit-AQC-Wort nach Appendix B vers
 | FEAT-ADDR-003 | REQ-ADDR-008–011 | Protocol/ale_state_machine.cpp | geplant |
 | FEAT-ADDR-004 | REQ-ADDR-012 | Stores/address_book.cpp | implementiert |
 | FEAT-ADDR-005 | REQ-ADDR-013–015 | Stores/address_book.cpp, Protocol/ale_state_machine.cpp | geplant |
-| FEAT-CMD-001 | A.5.6.1 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
-| FEAT-CMD-002 | A.5.6.2 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
-| FEAT-CMD-003 | A.5.6.3 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
-| FEAT-CMD-004 | A.5.6.4 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
-| FEAT-CMD-005 | A.5.6.5 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
-| FEAT-CMD-006 | A.5.6.7 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
-| FEAT-CMD-007 | A.5.6.9 | `Protocol/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-001 | A.5.6.1 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-002 | A.5.6.2 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-003 | A.5.6.3 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-004 | A.5.6.4 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-005 | A.5.6.5 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-006 | A.5.6.7 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | geplant |
+| FEAT-CMD-007 | A.5.6.9 | `Protocol/Message/ale_orderwire_protocols.h/cpp` | geplant |
 | FEAT-AQC-001 | A.5.8.1.1–A.5.8.1.1.2 | `Protocol/aqc_protocol.h/cpp` | geplant |
 | FEAT-AQC-002 | A.5.8.1.2 | `Protocol/aqc_protocol.h/cpp` | geplant |
 | FEAT-AQC-003 | A.5.8.1.3–A.5.8.1.4 | `Protocol/aqc_protocol.h/cpp` | geplant |
@@ -6968,8 +6968,8 @@ _* implementiert = vorhandene Implementierung; muss gegen neue REQ-LINK-007/008/
 | `src/Protocol/ale_channel_selector.cpp` | ChannelSelector Implementierung | FEAT-CHAN-001–006 |
 | `include/Protocol/ale_version_caps.h` | Version- und Capabilities-Interfaces | FEAT-GEN-011–012 |
 | `src/Protocol/ale_version_caps.cpp` | Version-/Capabilities-Implementierung | FEAT-GEN-011–012 |
-| `include/Protocol/ale_orderwire_protocols.h` | AMD/DTM/DBM-Interfaces | FEAT-GEN-013–016 |
-| `src/Protocol/ale_orderwire_protocols.cpp` | AMD/DTM/DBM-Implementierung | FEAT-GEN-013–016 |
+| `include/Protocol/Message/ale_orderwire_protocols.h` | AMD/DTM/DBM-Interfaces | FEAT-GEN-013–016 |
+| `src/Protocol/Message/ale_orderwire_protocols.cpp` | AMD/DTM/DBM-Implementierung | FEAT-GEN-013–016 |
 | `include/Protocol/aqc_protocol.h` | AQC-ALE Protokoll Interface | FEAT-GEN-010 |
 | `src/Protocol/aqc_protocol.cpp` | AQC-ALE Implementierung | FEAT-GEN-010 |
 | `src/Protocol/aqc_parser.cpp` | AQC-Parser intern | FEAT-GEN-010 |

@@ -56,7 +56,7 @@ add_library(ale_protocol
     src/Word/ale_sequence.cpp
     src/Word/address_encoder.cpp
     src/Protocol/Message/ale_message.cpp
-    src/Protocol/ale_orderwire_protocols.cpp
+    src/Protocol/Message/ale_orderwire_protocols.cpp
 )
 
 target_include_directories(ale_protocol PUBLIC

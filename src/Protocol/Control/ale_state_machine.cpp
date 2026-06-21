@@ -4,7 +4,7 @@
  */
 
 #include "Protocol/Control/ale_state_machine.h"
-#include "Protocol/ale_orderwire_protocols.h"
+#include "Protocol/Message/ale_orderwire_protocols.h"
 #include "Word/ale_sequence.h"
 #include "Word/address_encoder.h"
 #include "LQA/lqa_metrics.h"

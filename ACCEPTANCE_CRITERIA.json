@@ -325,7 +325,7 @@
       ],
       "title": "AMD: Nachricht wird nach Empfang sofort angezeigt",
       "description": "Eine empfangene AMD-Nachricht wird sofort dem Operator/Anwendungs-Layer gemeldet (Callback, Event oder Queue-Eintrag). Kein Pufferung ohne Benachrichtigung.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.cpp oder ale_message.cpp auf AMD-Empfangsverarbeitung und zugehörigen Callback/Event.",
       "status": "closed",
       "verification": "Unit tests in tests/gen/unit/test_amd_callback.cpp (7 tests, all PASS). Verifies: CallTypeDetector::is_amd() detects TO+FROM+DATA as AMD; MessageAssembler assembles AMD messages with correct call_type and data_content; ALEController::on_amd_received callback fires synchronously in on_received_word() when TIS (conclusion) word arrives (code: ale_controller.cpp:664-667); no buffering without notification — callback fires inline, no deferred queue. Registered as CMake test: AMDCallback."
@@ -338,10 +338,10 @@
       ],
       "title": "AMD: Nachricht wird im Orderwire-Abschnitt gesendet",
       "description": "AMD-Nachrichten werden ausschließlich im Message-Abschnitt eines ALE-Frames (nach Conclusion / im LinkedPhase::ORDERWIRE) übertragen.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ob AMD-Transmission nur aus LinkedPhase::ORDERWIRE oder CallingPhase::MESSAGE initiiert wird.",
       "status": "closed",
-      "verification": "Neues Modul include/Protocol/ale_orderwire_protocols.h + src/Protocol/ale_orderwire_protocols.cpp erstellt: encode_amd() ist die einzige AMD-Encoding-Funktion; LinkedPhase-Enum (IDLE/ORDERWIRE) definiert. ale_state_machine.cpp nutzt encode_amd() exklusiv via enqueue_call_sequence_(), das AMD-Wörter nur in message_seq_ ablegt — niemals in scanning_seq_, leading_seq_ oder conclusion_seq_. 8 Tests in tests/gen/unit/test_amd_orderwire_tx.cpp (CMake-Test AMDOrderwireTx): (1-5) encode_amd() Encoding-Korrektheit; (6) TX-Sequenz: CMD-Wörter nur zwischen Leading-Call und Conclusion; (7) ohne AMD wird MESSAGE-Phase übersprungen; (8) Phasenübergang LEADING_CALL→MESSAGE→CONCLUSION. Alle 29 Tests PASS."
+      "verification": "Neues Modul include/Protocol/Message/ale_orderwire_protocols.h + src/Protocol/Message/ale_orderwire_protocols.cpp erstellt: encode_amd() ist die einzige AMD-Encoding-Funktion; LinkedPhase-Enum (IDLE/ORDERWIRE) definiert. ale_state_machine.cpp nutzt encode_amd() exklusiv via enqueue_call_sequence_(), das AMD-Wörter nur in message_seq_ ablegt — niemals in scanning_seq_, leading_seq_ oder conclusion_seq_. 8 Tests in tests/gen/unit/test_amd_orderwire_tx.cpp (CMake-Test AMDOrderwireTx): (1-5) encode_amd() Encoding-Korrektheit; (6) TX-Sequenz: CMD-Wörter nur zwischen Leading-Call und Conclusion; (7) ohne AMD wird MESSAGE-Phase übersprungen; (8) Phasenübergang LEADING_CALL→MESSAGE→CONCLUSION. Alle 29 Tests PASS."
     },
     {
       "id": "AC-GEN-015-001",
@@ -351,7 +351,7 @@
       ],
       "title": "DTM: CMD DTM + DATA/REP Struktur",
       "description": "Data Text Message verwendet CMD DTM gefolgt von DATA/REP-Wortpaaren. Optional wird ein CRC-Wort angehängt.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.h auf DTM-Frame-Typ und zugehörige Konstruktionsmethode.",
       "status": "closed",
       "verification": "encode_dtm() + DtmBlock in ale_orderwire_protocols.h/.cpp implementiert. Frame-Layout: Word 0 = CMD 'DTM' (Basic-38 Identifier), ab Word 1 alternierend DATA/REP mit Expanded-64-Payload, optionales CRC-Word (CRC-16/CCITT, 3 Expanded-64-Zeichen). Kein aufeinanderfolgender gleicher Preamble-Typ. Tests: tests/gen/unit/test_dtm_orderwire_tx.cpp (10 Tests: CMD-Identifier, Struktur, Padding, Max-Länge, Sanitisierung, DTM≠AMD-CMD-Payload, CRC-Anhang, CRC-Preamble-Alternierung). ctest DTMOrderwireTx PASSED. Gesamtsuite 30/30 PASSED."
@@ -364,10 +364,10 @@
       ],
       "title": "DBM: CRC16 und transparenter Datenmodus",
       "description": "Data Block Message verwendet CRC16 zur Integritätssicherung und unterstützt transparente Binärdaten (nicht nur ASCII).",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.h auf DBM-Typ mit CRC16-Feld und binärem Datenmodus.",
       "status": "closed",
-      "verification": "encode_dbm() implementiert in src/Protocol/ale_orderwire_protocols.cpp. DbmBlock-Struct (payload, crc16, buffered) in include/Protocol/ale_orderwire_protocols.h. 10 Unit-Tests in tests/gen/unit/test_dbm_orderwire_tx.cpp: Frame-Aufbau (CMD DBM + DATA/REP), CRC-16/CCITT-Anhang, transparente Binärdaten (0x00-0xFF akzeptiert, MSB bei >0x7F maskiert), keine aufeinanderfolgenden gleichen Präambeln. ctest -C Debug -R DBMOrderwireTx: 1/1 PASSED (2026-06-18)."
+      "verification": "encode_dbm() implementiert in src/Protocol/Message/ale_orderwire_protocols.cpp. DbmBlock-Struct (payload, crc16, buffered) in include/Protocol/Message/ale_orderwire_protocols.h. 10 Unit-Tests in tests/gen/unit/test_dbm_orderwire_tx.cpp: Frame-Aufbau (CMD DBM + DATA/REP), CRC-16/CCITT-Anhang, transparente Binärdaten (0x00-0xFF akzeptiert, MSB bei >0x7F maskiert), keine aufeinanderfolgenden gleichen Präambeln. ctest -C Debug -R DBMOrderwireTx: 1/1 PASSED (2026-06-18)."
     },
     {
       "id": "AC-WAVEFORM-001-001",
@@ -1723,7 +1723,7 @@
       ],
       "title": "CRC-FCS: Polynom 0x1021 (CRC-CCITT / FED-STD-1003)",
       "description": "Die CRC-Berechnung für CMD-FCS-Wörter verwendet das Polynom 0x1021 (CRC-CCITT, konform zu FED-STD-1003). Das 16-Bit-CRC-Ergebnis wird korrekt in das CMD-Wort eingebettet. Testvektoren aus FED-STD-1003 müssen reproduzierbar berechnet werden.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.h/.cpp auf CRC-Berechnungsfunktion. Das verwendete Polynom muss explizit 0x1021 sein. Verifiziere anhand bekannter FED-STD-1003-Testvektoren.",
       "status": "open"
     },
@@ -1735,7 +1735,7 @@
       ],
       "title": "CMD CRC-Wort: Präambel 110, Erstes Zeichen x/y/z/{",
       "description": "Das CMD CRC-Wort (Frame-Check-Sequence) verwendet die Präambel-Bits '110'. Das erste Zeichen im Payload ist eines von 'x' (0x78), 'y' (0x79), 'z' (0x7A) oder '{' (0x7B) gemäß Basic-38-Zeichensatz. Keine anderen Präambel- oder Zeichenwerte sind zulässig.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe CMD-CRC-Wort-Konstruktion in ale_orderwire_protocols.cpp. Präambel-Bits müssen 0b110 sein. Das erste Payload-Zeichen muss im Bereich 0x78–0x7B liegen (Basic-38-kodiert).",
       "status": "open"
     },
@@ -1747,7 +1747,7 @@
       ],
       "title": "CRC deckt alle ALE-Wörter seit letztem CRC-Wort",
       "description": "Der CRC-Wert deckt lückenlos alle ALE-Wörter ab, die seit dem vorherigen CMD-CRC-Wort (oder seit dem Ende des Calling-Cycle) übertragen wurden. Nach Auswertung eines CMD-CRC-Worts wird der Akkumulator zurückgesetzt. Überlappungen oder Lücken im Abdeckungsbereich sind unzulässig.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe CRC-Akkumulationslogik in ale_orderwire_protocols.cpp. Der Akkumulator muss nach jedem CMD-CRC-Wort zurückgesetzt werden und alle zwischenliegenden ALE-Wörter einschließen. Prüfe auch den Grenzfall 'erstes CMD-CRC nach Calling-Cycle-Ende'.",
       "status": "open"
     },
@@ -1759,7 +1759,7 @@
       ],
       "title": "Power-Control CMD: Anforderung und Statusmeldung",
       "description": "Das optionale Power-Control-CMD unterstützt zwei Modi: die Anforderung einer Leistungsanpassung (request) sowie die Meldung des aktuellen Leistungspegels (report). Beide Funktionen müssen im CMD-Wort durch distinkte Kodierungen unterscheidbar sein.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Suche in ale_orderwire_protocols.h nach PowerControlCmd-Struktur oder äquivalentem Enum/Klasse. Prüfe ob Request- und Report-Modus durch separate Werte oder Flags unterschieden werden.",
       "status": "open"
     },
@@ -1771,7 +1771,7 @@
       ],
       "title": "KP1–KP3 Steuerbits für Leistungsanpassungstyp",
       "description": "Die Steuerbits KP1, KP2 und KP3 im Power-Control-CMD definieren den Anpassungstyp gemäß A.5.6.2 (z.B. Erhöhen/Verringern, absolut/relativ). Bitpositionen und Bedeutung müssen exakt dem Standard entsprechen.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.h/.cpp auf KP1-, KP2-, KP3-Bitfelder oder äquivalente Konstanten. Bit-Positionen innerhalb des CMD-Worts müssen mit MIL-STD A.5.6.2 übereinstimmen.",
       "status": "open"
     },
@@ -1783,7 +1783,7 @@
       ],
       "title": "Leistungsdelta in dB: relative und absolute Spezifikation",
       "description": "Das Power-Control-CMD kodiert eine Leistungsänderung in dB sowohl als relativen als auch als absoluten Wert. Kodierung und Dekodierung des dB-Delta-Felds müssen korrekt implementiert sein und den vollen definierten Wertebereich abdecken.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe Encode/Decode-Logik für das dB-Delta-Feld in ale_orderwire_protocols.cpp. Relative und absolute Spezifikation müssen klar unterschieden werden. Grenzwerte des Felds (min./max. dB) müssen implementiert sein.",
       "status": "open"
     },
@@ -1795,7 +1795,7 @@
       ],
       "title": "Kanalbezeichnung: 5-stellige BCD-Zeichenfolge (20 Bit)",
       "description": "CMD A.5.6.3.1 kodiert die Kanalfrequenz als 5-stellige BCD-Zeichenfolge (20 Bit, je 4 Bit pro Dezimalziffer). Alle 5 Stellen müssen korrekt gesetzt, übertragen und dekodiert werden.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ChannelDesignationCmd oder äquivalente Klasse in ale_orderwire_protocols.h. Das BCD-Feld muss genau 20 Bit umfassen und 5 Dezimalziffern repräsentieren. Teste Grenzwerte (00000 und 99999).",
       "status": "open"
     },
@@ -1807,7 +1807,7 @@
       ],
       "title": "Frequenzbezeichnung: 7-Bit-Binärwert (0–127), abs./rel.",
       "description": "CMD A.5.6.3.2 kodiert die Frequenzangabe als 7-Bit-Binärwert im Bereich 0–127. Ein Flag im CMD-Wort unterscheidet zwischen absoluter Frequenz und relativer Verschiebung. Beide Modi müssen korrekt kodiert und interpretiert werden.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe FrequencyDesignationCmd in ale_orderwire_protocols.h. Das Frequenzfeld muss 7 Bit umfassen (Wertebereich 0–127) und ein Absolut/Relativ-Flag enthalten. Wertebereichsüberschreitung muss abgefangen werden.",
       "status": "open"
     },
@@ -1819,7 +1819,7 @@
       ],
       "title": "Vollduplex-Verhandlung (optional, A.5.6.3.3)",
       "description": "Das optionale Full-Duplex-Independent-Link-CMD (A.5.6.3.3) ermöglicht die Aushandlung einer unabhängigen TX/RX-Verbindung. Ist die Funktion nicht implementiert, muss ein empfangenes Full-Duplex-CMD fehlerfrei ignoriert (übersprungen) werden, ohne die State Machine in einen Fehlerzustand zu versetzen.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.h auf FullDuplexCmd oder äquivalenten Typ. Falls nicht implementiert: Verifiziere in ale_orderwire_protocols.cpp, dass der CMD-Parser unbekannte Channel-CMD-Subtypen fehlerfrei überspringt.",
       "status": "open"
     },
@@ -1831,7 +1831,7 @@
       ],
       "title": "Tune-and-Wait CMD: Gegenstation wartet auf Kanal",
       "description": "Der Tune-and-Wait-Befehl (A.5.6.4.1) weist die Gegenstation an, auf den angegebenen Kanal zu wechseln und dort auf weitere Übertragungen zu warten. Nach Empfang dieses CMDs muss die State Machine den angegebenen Kanal abstimmen und in einen definierten Wartezustand wechseln.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Suche in ale_orderwire_protocols.h/.cpp nach TuneAndWaitCmd oder TUNE_WAIT. Prüfe ob nach Empfang ein Kanalwechsel initiiert wird und die Station in einem Warte-Zustand verbleibt (kein Scan-Rückfall).",
       "status": "open"
     },
@@ -1843,7 +1843,7 @@
       ],
       "title": "Scheduling: 4 Zeitauflösungen (1/8s, 1s, 1min, 1h)",
       "description": "Das Scheduling-CMD (A.5.6.4.2) unterstützt vier Zeitauflösungen: Fein=1/8 s (125 ms), Mittel=1 s, Grob=1 min (60 s), Sehr Grob=1 h (3600 s). Auflösungsstufe und Zeitwert müssen korrekt kodiert, übertragen und dekodiert werden.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe SchedulingCmd-Klasse in ale_orderwire_protocols.h auf ein Auflösungs-Enum (FINE/MEDIUM/COARSE/VERY_COARSE) und die Skalierungsfaktoren 125 ms, 1000 ms, 60000 ms, 3600000 ms.",
       "status": "open"
     },
@@ -1857,7 +1857,7 @@
       ],
       "title": "Time Exchange: Time-Is/Request, Coarse-Time, XOR-Auth",
       "description": "Das Time-Exchange-Protokoll (A.5.6.4.3) umfasst Time-Is- und Time-Request-CMDs. Das Coarse-Time-Word (A.5.6.4.4) enthält Datum, Uhrzeit und Qualitätsfeld. Das Authentifizierungswort (A.5.6.4.5) ist das XOR aller 24-Bit-Wörter des Time-Exchange-Austauschs.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.cpp auf TimeExchangeCmd, CoarseTimeWord und TimeAuthWord. XOR-Akkumulation aller 24-Bit-Wörter muss für das Authentication-Word vorhanden sein. Time-Is und Time-Request müssen unterschieden werden.",
       "status": "open"
     },
@@ -1869,7 +1869,7 @@
       ],
       "title": "Zeitqualität 0–7: 6 definierte Zeitfenster (20ms–60s)",
       "description": "Das Zeitqualitätsfeld (A.5.6.4.6) enthält ganzzahlige Werte 0–7 (0=keine Qualität, 7=unbegrenzte Qualität). Sechs Zeitfenster decken den Bereich von 20 ms bis 60 s ab. Werte außerhalb von 0–7 werden als ungültig abgewiesen.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe TimeQuality-Enum oder Konstantendefinitionen in ale_orderwire_protocols.h. Werte 0–7 müssen definiert sein. Die 6 Fenstergrenzen (z.B. 20ms, 200ms, 1s, 10s, 30s, 60s) müssen als Konstanten vorhanden sein. Ungültige Werte (>7) müssen abgefangen werden.",
       "status": "open"
     },
@@ -1881,7 +1881,7 @@
       ],
       "title": "Mode-Control CMD: Zeichenwert 'm' (0x6D)",
       "description": "Der optionale Mode-Control-Befehl (A.5.6.5) verwendet das CMD-Zeichen 'm' (ASCII 0x6D, Basic-38-kodiert). Die Kodierung in das ALE-CMD-Wort muss exakt diesem Zeichenwert entsprechen.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Suche in ale_orderwire_protocols.h/.cpp nach MODE_CONTROL_CHAR oder der Konstante 0x6D resp. 'm'. Prüfe CMD-Wort-Konstruktion: Das erste CMD-Zeichen muss 0x6D (Basic-38) sein.",
       "status": "open"
     },
@@ -1893,7 +1893,7 @@
       ],
       "title": "Modem-Select CMD: Zeichenwert 'n' (0x6E), Modem-Code",
       "description": "Der Modem-Select-Befehl verwendet das CMD-Zeichen 'n' (ASCII 0x6E, Basic-38-kodiert). Die initiierende Station sendet diesen CMD mit dem gewünschten Modem-Code im Payload.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Suche nach MODEM_SELECT_CHAR = 0x6E oder 'n' in ale_orderwire_protocols.h/.cpp. Prüfe ob der Modem-Code als Payload des CMDs korrekt übertragen wird.",
       "status": "open"
     },
@@ -1905,7 +1905,7 @@
       ],
       "title": "Modem-Select: Akzeptanz und Gegenvorschlag",
       "description": "Die antwortende Station kann den vorgeschlagenen Modem akzeptieren (Echo des CMDs mit gleichem Modem-Code) oder einen Gegenvorschlag senden (CMD mit alternativem Modem-Code). Beide Szenarien müssen als distinkte Antwortpfade implementiert sein.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.cpp auf Logik zur Modem-Auswahl-Antwort. Akzeptanz (gleicher Modem-Code) und Counter-Proposal (anderer Modem-Code) müssen als separate Pfade erkennbar sein.",
       "status": "open"
     },
@@ -1917,7 +1917,7 @@
       ],
       "title": "Do-Not-Respond CMD setzt respond_flag = false",
       "description": "Nach Empfang des Do-Not-Respond-CMDs (A.5.6.7) wird respond_flag (oder eine äquivalente Zustandsvariable) auf false gesetzt. Das System antwortet auf nachfolgende Rufe nicht mehr, solange dieses Flag aktiv ist. Es ist kein Drei-Wege-Handshake erforderlich.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Suche in ale_orderwire_protocols.cpp oder ale_state_machine.cpp nach respond_flag_ oder do_not_respond_. Prüfe ob nach Empfang des CMDs das Flag auf false gesetzt wird und nachfolgende Call-Empfänge unterdrückt werden.",
       "status": "open"
     },
@@ -1929,7 +1929,7 @@
       ],
       "title": "Do-Not-Respond: Ausnahmen für LQA-Request und ARQ",
       "description": "Trotz aktivem Do-Not-Respond-Flag darf das System auf LQA-Request-CMDs antworten sowie auf DTM/DBM-Nachrichten mit gesetztem ARQ-Flag reagieren. Diese beiden Ausnahmen müssen explizit in der Antwortlogik implementiert sein.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe Antwortlogik in ale_orderwire_protocols.cpp: LQA-Request-Behandlung und ARQ-Flag-Prüfung bei DTM/DBM müssen die respond_flag-Sperre gezielt umgehen. Beide Ausnahmen müssen als dedizierte Bedingungen erkennbar sein.",
       "status": "open"
     },
@@ -1941,7 +1941,7 @@
       ],
       "title": "UUF: 16.384 Codes über 14-Bit Unique Index (UI)",
       "description": "Das UUF-CMD (A.5.6.9) kodiert bis zu 16.384 eindeutige Funktionscodes über ein 14-Bit-Feld (UI-Wert 0–16383). Alle Werte des vollständigen Bereichs müssen darstellbar, übertragbar und dekodierbar sein.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe UUF-CMD-Struktur in ale_orderwire_protocols.h auf 14-Bit-UI-Feld. Maximaler Wert muss 16383 (0x3FFF) sein. Grenzwerte 0 und 16383 in Kodierungs-/Dekodierungsroutinen testen.",
       "status": "open"
     },
@@ -1953,7 +1953,7 @@
       ],
       "title": "CMD STAY vor UUF spezifiziert Wartezeit",
       "description": "Wenn ein CMD STAY dem UUF-Befehl vorangestellt ist, definiert dieser die Wartezeit vor Ausführung der UUF-Funktion. Die Verknüpfung von CMD STAY und nachfolgendem UUF-CMD muss korrekt erkannt und interpretiert werden.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Suche in ale_orderwire_protocols.cpp nach Verarbeitung von CMD STAY in Kombination mit nachfolgendem UUF. Prüfe ob stay_time_ oder äquivalente Variable in die UUF-Ausführungslogik einfließt.",
       "status": "open"
     },
@@ -1965,7 +1965,7 @@
       ],
       "title": "UUF nur im Message-Abschnitt, außerhalb des Calling-Frames",
       "description": "UUF-Befehle dürfen ausschließlich im Message-Abschnitt eines ALE-Frames übertragen werden und sollen wenn möglich außerhalb des Calling/Response-Frames platziert werden.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.cpp auf den Einfügepunkt von UUF-CMDs. UUF-CMDs dürfen nicht im Calling- oder Response-Abschnitt erscheinen; ihr Auftreten muss auf LinkedPhase::ORDERWIRE oder den MESSAGE-Abschnitt beschränkt sein.",
       "status": "open"
     },
@@ -2074,7 +2074,7 @@
       ],
       "title": "Orderwire-Basisklasse: IAleOrderwireProtocol Interface",
       "description": "Ein gemeinsames Interface oder eine Basisklasse (z.B. IAleOrderwireProtocol oder AleOrderwireBase) ist in ale_orderwire_protocols.h deklariert. Von dieser Basis leiten AMD, DTM und DBM ab. Das Interface definiert mindestens die virtuellen Methoden encode() und decode().",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.h auf abstrakte Basisklasse mit virtuellen encode/decode-Methoden. Prüfe ob AmdProtocol, DtmProtocol und DbmProtocol von dieser Basis ableiten (public-Vererbung).",
       "status": "open"
     },
@@ -2086,7 +2086,7 @@
       ],
       "title": "Orderwire Protocol-Dispatcher: CMD-Payload-Diskriminator",
       "description": "Das Framework unterscheidet AMD, DTM und DBM anhand des CMD-Wort-Payloads beim Empfang. Ein Factory-Mechanismus oder Protocol-Dispatcher leitet eingehende Orderwire-Nachrichten an den korrekten Protocol-Handler weiter.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_orderwire_protocols.cpp auf dispatch_orderwire(), create_protocol() oder OrderwireFactory-Klasse. CMD-Payload-Vergleich muss AMD/DTM/DBM-Typen anhand definierter Konstanten unterscheiden.",
       "status": "open"
     },
@@ -2098,7 +2098,7 @@
       ],
       "title": "Gemeinsamer Sendeweg für AMD, DTM und DBM",
       "description": "Der Sendeweg für alle drei Orderwire-Protokolle ist vereinheitlicht: Alle Protokolle werden über denselben Message-Sektion-Buffer und dieselbe State-Machine-Phase versendet. Kein protokollspezifischer TX-Sonderpfad in der State Machine.",
-      "module": "Protocol/ale_orderwire_protocols",
+      "module": "Protocol/Message/ale_orderwire_protocols",
       "verification_hint": "Prüfe ale_state_machine.cpp: Ein einziger send_orderwire(IAleOrderwireProtocol*) oder queue_orderwire_message()-Aufruf muss für AMD, DTM und DBM gleichermaßen verwendet werden.",
       "status": "open"
     },

@@ -1,5 +1,5 @@
 /**
- * \file Protocol/ale_orderwire_protocols.h
+ * \file Protocol/Message/ale_orderwire_protocols.h
  * \brief ALE orderwire message protocols (MIL-STD-188-141B A.5.7)
  *
  * Encoding for Basic Orderwire message types transmitted in the

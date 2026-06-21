@@ -21,7 +21,7 @@
  *   TEST 10 encode_dbm()   — no consecutive identical preamble types in any frame
  */
 
-#include "Protocol/ale_orderwire_protocols.h"
+#include "Protocol/Message/ale_orderwire_protocols.h"
 #include <cassert>
 #include <cstdint>
 #include <iostream>

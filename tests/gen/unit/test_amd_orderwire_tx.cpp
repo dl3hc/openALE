@@ -16,7 +16,7 @@
  *   TEST 8  Calling phase: transitions LEADING_CALL→MESSAGE→CONCLUSION with AMD
  */
 
-#include "Protocol/ale_orderwire_protocols.h"
+#include "Protocol/Message/ale_orderwire_protocols.h"
 #include "Protocol/Control/ale_state_machine.h"
 #include "Protocol/Control/ale_timing.h"
 #include <cassert>

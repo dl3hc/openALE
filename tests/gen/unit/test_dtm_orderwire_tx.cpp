@@ -20,7 +20,7 @@
  *   TEST 10 encode_dtm()   — no consecutive identical preamble types in sequence
  */
 
-#include "Protocol/ale_orderwire_protocols.h"
+#include "Protocol/Message/ale_orderwire_protocols.h"
 #include <cassert>
 #include <cstring>
 #include <iostream>
