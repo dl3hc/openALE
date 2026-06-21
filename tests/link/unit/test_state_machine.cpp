@@ -551,6 +551,98 @@ bool test_sounding_tss_timing() {
 }
 
 // ============================================================================
+// TEST 7e: AC-SOUND-003-001 — Single-Channel Sounding: kein Calling-Pfad
+//
+// Verifies that during sounding the state machine NEVER enters ALEState::CALLING
+// and the CallingPhase is NEVER SCANNING_CALL or MESSAGE at any point.
+// Sounding uses the dedicated ALEState::SOUNDING with its own SoundingPhase;
+// the calling machinery (SCANNING_CALL, MESSAGE) must remain untouched.
+//
+// Checks:
+//  (1) send_sounding() → state is SOUNDING (not CALLING)
+//  (2) calling_phase is never SCANNING_CALL or MESSAGE throughout sounding
+//  (3) ALEState::CALLING is never visited
+//  (4) No TO word (no destination address) in the sounding frame
+//  (5) Returns to SCANNING after sounding completes
+// ============================================================================
+
+bool test_sounding_no_calling_phase() {
+    std::cout << "\n[TEST 7e] AC-SOUND-003-001: Sounding — kein Calling-Pfad, nur Conclusion\n";
+    std::cout << "===========================================================================\n";
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    WordTracker wt;
+    sm.set_transmit_callback([&wt](const ALEWord& w) { wt.record(w); });
+
+    // Track all state transitions after sounding starts
+    std::vector<ALEState> states_visited;
+    sm.set_state_callback([&](ALEState /*from*/, ALEState to) {
+        states_visited.push_back(to);
+    });
+
+    // Arrange: enter SCANNING, then clear the initial transition log
+    sm.process_event(ALEEvent::START_SCAN);
+    states_visited.clear();
+
+    bool calling_phase_ok = true;   // SCANNING_CALL and MESSAGE must never appear
+    auto check_cp = [&]() {
+        const auto cp = sm.get_calling_phase();
+        if (cp == CallingPhase::SCANNING_CALL || cp == CallingPhase::MESSAGE)
+            calling_phase_ok = false;
+    };
+
+    // Act: initiate sounding
+    bool started = sm.send_sounding();
+    check_cp();  // snapshot 1: right after entry
+
+    // Assert 1: state is SOUNDING (not CALLING)
+    const bool in_sounding = (sm.get_state() == ALEState::SOUNDING);
+    std::cout << "  State after send_sounding() is SOUNDING: "
+              << (in_sounding ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+
+    // Advance through LBT window
+    sm.update(ALETimingConstants::Twt_ms + 10);
+    check_cp();  // snapshot 2: after LBT → TRANSMITTING
+
+    // Advance through TX acknowledgement
+    sm.on_word_complete();
+    check_cp();  // snapshot 3: after TX word complete → LISTENING
+
+    // Advance through LISTENING → SOUNDING_COMPLETE → back to SCANNING
+    sm.update(ALETimingConstants::Twt_ms + 10 + ALETimingConstants::Trw_ms + 50);
+    check_cp();  // snapshot 4: after sounding complete
+
+    // Assert 2: calling_phase was never SCANNING_CALL or MESSAGE
+    std::cout << "  calling_phase never SCANNING_CALL or MESSAGE: "
+              << (calling_phase_ok ? "PASS" : "FAIL") << "\n";
+
+    // Assert 3: ALEState::CALLING was never visited
+    bool calling_not_visited = true;
+    for (auto s : states_visited)
+        if (s == ALEState::CALLING) { calling_not_visited = false; break; }
+    std::cout << "  ALEState::CALLING never entered during sounding: "
+              << (calling_not_visited ? "PASS" : "FAIL") << "\n";
+
+    // Assert 4: No TO word (no destination address) in sounding frame
+    bool no_to_word = true;
+    for (const auto& w : wt.words)
+        if (w.type == PreambleType::TO) { no_to_word = false; break; }
+    std::cout << "  No TO word (no destination address) in frame: "
+              << (no_to_word ? "PASS" : "FAIL") << "\n";
+
+    // Assert 5: returned to SCANNING
+    const bool returned = (sm.get_state() == ALEState::SCANNING);
+    std::cout << "  Returns to SCANNING after sounding: "
+              << (returned ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+
+    return started && in_sounding && calling_phase_ok
+        && calling_not_visited && no_to_word && returned;
+}
+
+// ============================================================================
 // Test 8: Complete Scanning Call Cycle
 // Traces the full SAM-side call sequence per A.5.5.3.1:
 //   LBT → TUNING → SCANNING_CALL → LEADING_CALL → CONCLUSION → LISTENING
@@ -988,6 +1080,7 @@ int run_all_tests() {
     if (test_sounding_lbt_busy()) { pass_count++; } else { fail_count++; }
     if (test_sounding_conclusion_frame_only()) { pass_count++; } else { fail_count++; }
     if (test_sounding_tss_timing()) { pass_count++; } else { fail_count++; }
+    if (test_sounding_no_calling_phase()) { pass_count++; } else { fail_count++; }
     if (test_full_call_cycle()) { pass_count++; } else { fail_count++; }
     if (test_timing_parameters_isolation()) { pass_count++; } else { fail_count++; }
     if (test_standard_scan_rate_td2()) { pass_count++; } else { fail_count++; }

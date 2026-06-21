@@ -978,7 +978,8 @@
       "description": "Ein Single-Channel-Sounding-Frame enthält ausschließlich den Conclusion-Abschnitt (TIS- oder TWAS-Wort mit eigener Stationsadresse). Es gibt keinen Scanning-Call-Abschnitt und keinen Message-Abschnitt. Die State Machine wechselt bei Sounding direkt von SCANNING in den Conclusion-Sendezustand.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe SOUNDING-Zustand in ale_state_machine.cpp: CallingPhase::SCANNING_CALL und CallingPhase::MESSAGE dürfen nicht durchlaufen werden. Direkt TIS/TWAS + self_address senden. Keine Zieladresse in Sounding-Frames.",
-      "status": "open"
+      "status": "closed",
+      "verification": "Test test_sounding_no_calling_phase() (TEST 7e) in tests/link/unit/test_state_machine.cpp prüft den State-Machine-Pfad beim Sounding: (1) send_sounding() → State ist SOUNDING (nicht CALLING); (2) CallingPhase::SCANNING_CALL und CallingPhase::MESSAGE werden an keinem Zeitpunkt gesetzt (4 Snapshots: nach Entry, nach LBT-Ablauf, nach TX-Ack, nach LISTENING); (3) ALEState::CALLING wird zu keiner Zeit betreten; (4) kein TO-Wort (keine Zieladresse) im Sounding-Frame; (5) Rückkehr zu SCANNING nach Abschluss. Sounding nutzt ausschließlich ALEState::SOUNDING + SoundingPhase (LBT→TRANSMITTING→LISTENING); die CallingPhase-Maschinerie (SCANNING_CALL, MESSAGE) bleibt strukturell unberührt. Alle 17 Tests grün (2026-06-21)."
     },
     {
       "id": "AC-SOUND-003-002",
@@ -1090,7 +1091,7 @@
         "REQ-CHAN-034"
       ],
       "title": "LBT: Operator-Override möglich",
-      "description": "Der Operator kann LBT deaktivieren oder die Wartezeit überschreiben. Ein entsprechendes Flag (lbt_override) muss in OperatingParameters existieren.",
+      "description": "Der Operator kann LBT deaktivieren und die Wartezeit konfigurieren. Ein entsprechendes Flag (lbt_override) muss in OperatingParameters existieren.",
       "module": "Protocol/ale_channel_selector",
       "verification_hint": "Prüfe OperatingParameters in ale_data_store.h auf lbt_override oder lbt_enabled-Flag.",
       "status": "open"
