@@ -365,41 +365,93 @@ bool test_timeouts() {
 bool test_sounding() {
     std::cout << "\n[TEST 7] Sounding Transmission\n";
     std::cout << "==============================\n";
-    
+
     ALEStateMachine sm;
+    sm.set_self_address("SAM");
     WordTracker tracker;
-    
+
     sm.set_transmit_callback([&tracker](const ALEWord& word) {
         tracker.record(word);
     });
-    
-    // Send sounding
+
+    // ── Arrange/Act 1: initiate sounding ────────────────────────────────────
     std::cout << "  Initiating sounding: ";
     bool success = sm.send_sounding();
-    
     bool in_sounding = (sm.get_state() == ALEState::SOUNDING);
-    bool word_sent = (tracker.count() >= 1);
-    
-    bool pass = success && in_sounding;
+    bool in_lbt      = (sm.get_sounding_phase() == SoundingPhase::LBT);
+    // AC-SOUND-001-001: no TX yet — LBT must pass first
+    bool no_tx_during_lbt = (tracker.count() == 0);
+
+    bool pass = success && in_sounding && in_lbt && no_tx_during_lbt;
     std::cout << (pass ? "PASS" : "FAIL");
     std::cout << " (state=" << ALEStateMachine::state_name(sm.get_state())
-              << ", words=" << tracker.count() << ")\n";
-    
-    if (word_sent) {
-        std::cout << "  TIS word sent: ";
-        bool is_tis = (tracker.words[0].type == PreambleType::TIS);
-        std::cout << (is_tis ? "PASS" : "FAIL") << "\n";
-        pass = pass && is_tis;
-    }
-    
-    // Simulate sounding complete
-    sm.update(ALETimingConstants::Trw_ms + 100);
-    
-    std::cout << "  Sounding complete: ";
+              << ", phase=LBT, words=" << tracker.count() << ")\n";
+
+    // ── Act 2: advance past Twt → LBT clears, TX begins ────────────────────
+    std::cout << "  LBT clear → TIS word sent: ";
+    sm.update(ALETimingConstants::Twt_ms + 10);
+    bool word_sent = (tracker.count() >= 1);
+    bool is_tis    = word_sent && (tracker.words[0].type == PreambleType::TIS);
+    std::cout << (is_tis ? "PASS" : "FAIL")
+              << " (words=" << tracker.count() << ")\n";
+    pass = pass && is_tis;
+
+    // ── Act 3: simulate all words complete, then LISTENING window expires ───
+    std::cout << "  Sounding complete → SCANNING: ";
+    // on_word_complete() drives TRANSMITTING → LISTENING; then Trw_ms expires.
+    sm.on_word_complete();
+    sm.update(ALETimingConstants::Twt_ms + 10 + ALETimingConstants::Trw_ms + 50);
     bool returned_to_scan = (sm.get_state() == ALEState::SCANNING);
     std::cout << (returned_to_scan ? "PASS" : "FAIL") << "\n";
-    
+
     return pass && returned_to_scan;
+}
+
+// ============================================================================
+// Test 7b: AC-SOUND-001-001 — Sounding aborted when channel is busy during LBT
+// ============================================================================
+
+bool test_sounding_lbt_busy() {
+    std::cout << "\n[TEST 7b] AC-SOUND-001-001: Sounding LBT — busy channel skipped\n";
+    std::cout << "================================================================\n";
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    WordTracker tracker;
+
+    sm.set_transmit_callback([&tracker](const ALEWord& word) {
+        tracker.record(word);
+    });
+
+    // ── Arrange: start sounding, confirm LBT phase is active ────────────────
+    bool success = sm.send_sounding();
+    bool in_lbt  = (sm.get_state() == ALEState::SOUNDING
+                    && sm.get_sounding_phase() == SoundingPhase::LBT);
+
+    std::cout << "  In SOUNDING/LBT after send_sounding(): ";
+    std::cout << (success && in_lbt ? "PASS" : "FAIL") << "\n";
+
+    // ── Act: feed a valid word to simulate channel activity during LBT ───────
+    ALEWord busy_word{};
+    busy_word.valid        = true;
+    busy_word.type         = PreambleType::TO;
+    strncpy(busy_word.address, "OTH", 3);
+    busy_word.fec_errors   = 0;
+    busy_word.timestamp_ms = 10;
+
+    sm.process_received_word(busy_word);
+
+    // ── Assert: channel busy → no TX, returned to SCANNING ──────────────────
+    std::cout << "  No TX after busy channel: ";
+    bool no_tx = (tracker.count() == 0);
+    std::cout << (no_tx ? "PASS" : "FAIL") << " (words=" << tracker.count() << ")\n";
+
+    std::cout << "  Returned to SCANNING after abort: ";
+    bool returned = (sm.get_state() == ALEState::SCANNING);
+    std::cout << (returned ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+
+    return success && in_lbt && no_tx && returned;
 }
 
 // ============================================================================
@@ -837,6 +889,7 @@ int run_all_tests() {
     if (test_lqa()) { pass_count++; } else { fail_count++; }
     if (test_timeouts()) { pass_count++; } else { fail_count++; }
     if (test_sounding()) { pass_count++; } else { fail_count++; }
+    if (test_sounding_lbt_busy()) { pass_count++; } else { fail_count++; }
     if (test_full_call_cycle()) { pass_count++; } else { fail_count++; }
     if (test_timing_parameters_isolation()) { pass_count++; } else { fail_count++; }
     if (test_standard_scan_rate_td2()) { pass_count++; } else { fail_count++; }

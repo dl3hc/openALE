@@ -118,11 +118,13 @@ enum class ScanningPhase {
 
 /**
  * \enum SoundingPhase
- * Sub-states within SOUNDING per A.5.3.4.
+ * Sub-states within SOUNDING per A.5.3.4 / REQ-CHAN-031.
+ *   LBT           — Listen-Before-Transmit: wait Twt_ms before TX
  *   TRANSMITTING  — TIS-Frame wird gerade gesendet
  *   LISTENING     — optionales RX-Fenster für eingehenden Handshake (Trw)
  */
 enum class SoundingPhase {
+    LBT,          ///< Listen-Before-Transmit: wait Twt_ms, abort if channel busy (AC-SOUND-001-001)
     TRANSMITTING,
     LISTENING,
 };
@@ -497,6 +499,7 @@ private:
 
     // ── Sounding sub-state (T-08) ─────────────────────────────────────────
     SoundingPhase sounding_phase_;       ///< Aktuelle Phase innerhalb SOUNDING
+    uint32_t      sounding_lbt_start_ms_; ///< When SOUNDING LBT started; 0 = not active
 
     // ── Target scan channels ──────────────────────────────────────────────
     uint32_t target_scan_channels;       ///< Assumed scan channels of target (for Tsc)

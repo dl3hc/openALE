@@ -938,7 +938,8 @@
       "description": "Sounding wird nur gesendet, wenn der Kanal als unbesetzt gilt (LBT bestanden). Ein besetzter Kanal wird übersprungen.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe SOUNDING-Zustandslogik in ale_state_machine.cpp: LBT-Check muss vor dem Senden des Sounding-Frames erfolgen.",
-      "status": "open"
+      "status": "closed",
+      "verification": "SoundingPhase::LBT in ale_state_machine.h/cpp; enter_state(SOUNDING) startet mit LBT (Twt_ms=784ms, RX an); handle_sounding() wartet Twt_ms vor TX; gültige oder ungültige Wörter während LBT setzen SOUNDING_COMPLETE (kein TX). Tests: test_sounding() prüft kein TX während LBT + TIS nach Twt; test_sounding_lbt_busy() prüft Abbruch bei Kanal-Aktivität → kein TX, Rückkehr zu SCANNING. Alle 14 Tests grün (2026-06-21)."
     },
     {
       "id": "AC-SOUND-001-002",

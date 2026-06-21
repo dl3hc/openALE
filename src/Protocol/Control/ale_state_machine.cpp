@@ -86,7 +86,8 @@ ALEStateMachine::ALEStateMachine()
       await_accept_start_ms_(0),
       accept_decision_timeout_ms_(10000),
       linked_terminating_(false),
-      sounding_phase_(SoundingPhase::TRANSMITTING),
+      sounding_phase_(SoundingPhase::LBT),
+      sounding_lbt_start_ms_(0),
       slot_number_(0),
       tswt_ms_(0),
       slot_wait_start_ms_(0),
@@ -277,11 +278,10 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             break;
 
         case ALEState::SOUNDING:
-            sounding_phase_ = SoundingPhase::TRANSMITTING;
-            if (rx_enabled_callback) rx_enabled_callback(false);
-            if (!address_book.get_self_address().empty())
-                transmit_words(
-                    ALESequenceBuilder::conclusion(address_book.get_self_address()).words());
+            // AC-SOUND-001-001: LBT must clear before any TX (REQ-CHAN-031).
+            sounding_phase_        = SoundingPhase::LBT;
+            sounding_lbt_start_ms_ = current_time_ms;
+            if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
         case ALEState::ERROR:
@@ -696,12 +696,25 @@ void ALEStateMachine::on_link_activity() {
 }
 
 void ALEStateMachine::handle_sounding() {
+    // ── LBT: listen Twt_ms before any TX (AC-SOUND-001-001 / REQ-CHAN-031) ──
+    if (sounding_phase_ == SoundingPhase::LBT) {
+        if ((current_time_ms - sounding_lbt_start_ms_) >= ALETimingConstants::Twt_ms) {
+            sounding_phase_ = SoundingPhase::TRANSMITTING;
+            if (rx_enabled_callback) rx_enabled_callback(false);
+            if (!address_book.get_self_address().empty()) {
+                transmit_words(
+                    ALESequenceBuilder::conclusion(address_book.get_self_address()).words());
+            }
+            // No-address fallback falls through to TRANSMITTING check below.
+        }
+        return;
+    }
+
     // Fallback: wenn alle TX-Wörter durch sind aber on_word_complete() nicht gefeuert
     // hat (z.B. keine Adresse → kein Wort gesendet), Übergang direkt hier auslösen.
-    // state_entry_time_ms wird NICHT überschrieben — der SOUNDING-Eintritts-Zeitpunkt
-    // dient als Fensterbeginn.
     if (sounding_phase_ == SoundingPhase::TRANSMITTING && words_pending == 0) {
-        sounding_phase_ = SoundingPhase::LISTENING;
+        sounding_phase_     = SoundingPhase::LISTENING;
+        state_entry_time_ms = current_time_ms;  // anchor LISTENING from now (after LBT + TX)
         if (rx_enabled_callback) rx_enabled_callback(true);
         // Kein return: LISTENING-Timeout-Check folgt direkt unten
     }
@@ -865,6 +878,12 @@ void ALEStateMachine::emergency_manual_control() {
 
 // ── Fix 6: 3-error tolerance in HANDSHAKE/WAIT_CYCLE_END (A.5.5.3.2) ──
 void ALEStateMachine::handle_invalid_word() {
+    // Any signal (even invalid) during SOUNDING LBT = channel busy → abort (REQ-CHAN-031)
+    if (current_state == ALEState::SOUNDING && sounding_phase_ == SoundingPhase::LBT) {
+        SM_TRACE("[TRACE] handle_invalid_word: signal during SOUNDING LBT → SOUNDING_COMPLETE\n");
+        process_event(ALEEvent::SOUNDING_COMPLETE);
+        return;
+    }
     if (current_state != ALEState::HANDSHAKE) return;
     if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
         if (++contiguous_errors > ALETimingConstants::MAX_SCANNING_CALL_ERRORS) {
@@ -1030,8 +1049,8 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
     update_link_quality(lq);
 
     const bool lbt_active =
-        current_state == ALEState::HANDSHAKE
-        && handshake_phase == HandshakePhase::CHANNEL_CHECK;
+        (current_state == ALEState::HANDSHAKE && handshake_phase == HandshakePhase::CHANNEL_CHECK)
+        || (current_state == ALEState::SOUNDING && sounding_phase_ == SoundingPhase::LBT);
 
     // Collecting/expected_caller are STATE-SCOPED: collecting_remote_conclusion
     // belongs to CALLING, hs_*_rcvd to HANDSHAKE. ORing them across states leaks
@@ -1065,9 +1084,14 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                 process_event(ALEEvent::LINK_TERMINATED);
             break;
         case ALEState::SOUNDING:
-            // T-08: im LISTENING-Fenster kann eine Station sofort zurückrufen (A.5.3.4)
-            if (sounding_phase_ == SoundingPhase::LISTENING)
+            if (ev.type == WordEvent::Type::CHANNEL_BUSY) {
+                // Valid word during LBT → channel busy → abort (AC-SOUND-001-001, REQ-CHAN-031)
+                SM_TRACE("[TRACE] react_sounding: channel busy during LBT → SOUNDING_COMPLETE\n");
+                process_event(ALEEvent::SOUNDING_COMPLETE);
+            } else if (sounding_phase_ == SoundingPhase::LISTENING) {
+                // T-08: im LISTENING-Fenster kann eine Station sofort zurückrufen (A.5.3.4)
                 react_scanning(ev);  // TO_SELF → CALL_DETECTED → HANDSHAKE
+            }
             break;
         default: break;
     }
