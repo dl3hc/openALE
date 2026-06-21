@@ -187,6 +187,102 @@ bool test_ac_sync_001_002_slot_times_relative_to_first_call_tx_ms()
 }
 
 // ============================================================================
+// AC-SYNC-001-003 — call_cycle_count läuft phasenübergreifend durch
+//
+// Verifies: call_cycle_count is NEVER reset at phase boundaries.
+//           call_cycles_in_phase IS reset to 0 at every phase boundary.
+//
+// Arrange: SAM calls BOB with scan_ch=2.
+//   TX sequence:
+//     SCANNING_CALL:  4 words  (2 × scan_ch)
+//     LEADING_CALL:   2 words  (1 word-per-address × 2)
+//     CONCLUSION:     1 word   (TIS SAM)
+//   Total: 7 words → call_cycle_count ends at 7.
+//
+// Assert per word N (N=1..7):
+//   (1) call_cycle_count == N after word N (no reset anywhere)
+//   (2) At phase boundaries: call_cycles_in_phase == 0 after transition
+//   (3) call_cycles_in_phase == 0 at SCANNING_CALL→LEADING_CALL (after word 4)
+//   (4) call_cycles_in_phase == 0 at LEADING_CALL→CONCLUSION  (after word 6)
+//   (5) call_cycles_in_phase == 0 at CONCLUSION→LISTENING      (after word 7)
+//   (6) calling_phase transitions in correct order
+// ============================================================================
+
+bool test_ac_sync_001_003_call_cycle_count_continuous_across_phases()
+{
+    std::cout << "\n[AC-SYNC-001-003] call_cycle_count continuous, call_cycles_in_phase resets only at phase boundary\n";
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    sm.set_target_scan_channels(2);
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_rx_enabled_callback([](bool){});
+    sm.set_transmit_callback([](const ALEWord&){});
+
+    const uint32_t Twt  = ALETimingConstants::Twt_ms;
+    const uint32_t Tt   = ALETimingConstants::Tt_ms;
+    const uint32_t T_TX = Twt + Tt;
+
+    sm.initiate_call("BOB");
+    sm.update(Twt);   // LBT → TUNING
+    sm.update(T_TX);  // TUNING complete → SCANNING_CALL
+
+    // scan_ch=2: tsc_slots = 4; leading_seq_ = 2 words; conclusion = 1 word
+    // Phase boundaries: after word 4 (→LEADING_CALL), word 6 (→CONCLUSION), word 7 (→LISTENING)
+    struct Checkpoint {
+        uint32_t      after_word;          // 1-based word index triggering the check
+        uint32_t      expected_ccc;        // call_cycle_count after this word
+        uint32_t      expected_cip;        // call_cycles_in_phase after this word
+        CallingPhase  expected_phase;      // calling_phase after this word
+        const char*   label;
+    };
+
+    // Non-boundary words: cip keeps incrementing (1, 2, 3 in SC; 1 in LC)
+    // Boundary words: cip is reset to 0 after the increment
+    const Checkpoint checkpoints[] = {
+        // SCANNING_CALL interior words
+        { 1, 1, 1, CallingPhase::SCANNING_CALL, "SC word 1 (interior)" },
+        { 2, 2, 2, CallingPhase::SCANNING_CALL, "SC word 2 (interior)" },
+        { 3, 3, 3, CallingPhase::SCANNING_CALL, "SC word 3 (interior)" },
+        // SCANNING_CALL boundary → LEADING_CALL
+        { 4, 4, 0, CallingPhase::LEADING_CALL,  "SC word 4 (boundary → LC), cip reset" },
+        // LEADING_CALL interior
+        { 5, 5, 1, CallingPhase::LEADING_CALL,  "LC word 5 (interior)" },
+        // LEADING_CALL boundary → CONCLUSION
+        { 6, 6, 0, CallingPhase::CONCLUSION,    "LC word 6 (boundary → CONC), cip reset" },
+        // CONCLUSION boundary → LISTENING
+        { 7, 7, 0, CallingPhase::LISTENING,     "CONC word 7 (boundary → LISTENING), cip reset" },
+    };
+
+    bool all_ok = true;
+
+    for (const auto& cp : checkpoints) {
+        sm.on_word_complete();
+
+        const uint32_t    ccc   = sm.get_call_cycle_count();
+        const uint32_t    cip   = sm.get_call_cycles_in_phase();
+        const CallingPhase phase = sm.get_calling_phase();
+
+        bool ccc_ok   = (ccc   == cp.expected_ccc);
+        bool cip_ok   = (cip   == cp.expected_cip);
+        bool phase_ok = (phase == cp.expected_phase);
+
+        all_ok &= (ccc_ok && cip_ok && phase_ok);
+
+        std::cout << "  word " << cp.after_word << " [" << cp.label << "]\n"
+                  << "    call_cycle_count==" << cp.expected_ccc << ": "
+                  << (ccc_ok   ? "PASS" : "FAIL") << " (got " << ccc << ")\n"
+                  << "    call_cycles_in_phase==" << cp.expected_cip << ": "
+                  << (cip_ok   ? "PASS" : "FAIL") << " (got " << cip << ")\n"
+                  << "    phase correct: "
+                  << (phase_ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    std::cout << "  => AC-SYNC-001-003: " << (all_ok ? "PASS" : "FAIL") << "\n";
+    return all_ok;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -216,6 +312,9 @@ int run_all_tests()
 
     run("AC-SYNC-001-002  All TX slot times = first_call_tx_ms + call_cycle_count × Trw_ms",
         test_ac_sync_001_002_slot_times_relative_to_first_call_tx_ms());
+
+    run("AC-SYNC-001-003  call_cycle_count continuous across phases, call_cycles_in_phase resets only at boundary",
+        test_ac_sync_001_003_call_cycle_count_continuous_across_phases());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

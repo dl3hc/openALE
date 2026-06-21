@@ -897,7 +897,8 @@
       "description": "call_cycle_count wird beim Phasenwechsel (SCANNING_CALL → LEADING_CALL → CONCLUSION) nicht zurückgesetzt. Nur call_cycles_in_phase wird beim Phasenwechsel auf 0 zurückgesetzt.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe Phasenwechsel-Logik in on_word_complete(): call_cycle_count++ immer, call_cycles_in_phase=0 nur bei Phasenwechsel.",
-      "status": "open"
+      "status": "closed",
+      "verification": "test_ac_sync_001_003_call_cycle_count_continuous_across_phases() in tests/sync/unit/test_sync.cpp ergänzt. Prüft 7 TX-Wörter (scan_ch=2: 4 SC + 2 LC + 1 CC) über vollständige Sequenz: (1) call_cycle_count == N nach Wort N für alle 7 Wörter (kein Reset), (2) call_cycles_in_phase == 0 nach jedem Phasenwechsel (SC→LC nach Wort 4, LC→CONC nach Wort 6, CONC→LISTENING nach Wort 7), (3) Phasenwechsel erfolgen in korrekter Reihenfolge. Implementierung in on_word_complete() war bereits korrekt: ++call_cycle_count immer, call_cycles_in_phase=0 nur bei Phasenwechsel. test_sync: 3/3 PASS."
     },
     {
       "id": "AC-SYNC-002-001",
