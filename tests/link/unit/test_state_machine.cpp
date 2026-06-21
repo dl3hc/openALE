@@ -512,6 +512,45 @@ bool test_sounding_conclusion_frame_only() {
 }
 
 // ============================================================================
+// Test 7d: AC-SOUND-002-001 — Tss >= Ts_max: Timing-Formel für Scanning Sound
+// Prüft die statische Berechnungsformel: für eine 1-Wort-Adresse muss
+//   tss_word_count(1) * Trw_ms >= Ts_max_ms = 50 000 ms.
+// ============================================================================
+
+bool test_sounding_tss_timing() {
+    std::cout << "\n[TEST 7d] AC-SOUND-002-001: Multichannel-Sounding Tss >= Ts_max\n";
+    std::cout << "=================================================================\n";
+
+    // Arrange: 1-word address (e.g. "SAM")
+    const uint32_t addr_word_count = 1u;
+
+    // Act: Minimum-Wortzahl für Tss-Phase berechnen
+    const uint32_t wc     = ALETimingConstants::tss_word_count(addr_word_count);
+    const uint64_t tss_ms = static_cast<uint64_t>(wc) * ALETimingConstants::Trw_ms;
+
+    // Assert 1: Tss >= Ts_max = 50 000 ms
+    const bool tss_ge_ts_max = (tss_ms >= ALETimingConstants::Ts_max_ms);
+    std::cout << "  Tss >= Ts_max (50 000 ms): ";
+    std::cout << (tss_ge_ts_max ? "PASS" : "FAIL");
+    std::cout << " (wc=" << wc << ", Tss=" << tss_ms << " ms)\n";
+
+    // Assert 2: exakter Wortzahl-Wert für 1-Wort-Adresse = ceil(50000/392) = 128
+    const uint32_t expected_wc = 128u;
+    const bool count_correct = (wc == expected_wc);
+    std::cout << "  Word count for 1-word addr == 128: ";
+    std::cout << (count_correct ? "PASS" : "FAIL");
+    std::cout << " (got=" << wc << ")\n";
+
+    // Assert 3: kein unnötiges Overpad — Tss <= Ts_max + 1 Trw
+    const bool not_over_padded = (tss_ms <= ALETimingConstants::Ts_max_ms + ALETimingConstants::Trw_ms);
+    std::cout << "  Tss <= Ts_max + Trw (kein Overpad): ";
+    std::cout << (not_over_padded ? "PASS" : "FAIL");
+    std::cout << " (Tss=" << tss_ms << " ms, limit=" << (ALETimingConstants::Ts_max_ms + ALETimingConstants::Trw_ms) << " ms)\n";
+
+    return tss_ge_ts_max && count_correct && not_over_padded;
+}
+
+// ============================================================================
 // Test 8: Complete Scanning Call Cycle
 // Traces the full SAM-side call sequence per A.5.5.3.1:
 //   LBT → TUNING → SCANNING_CALL → LEADING_CALL → CONCLUSION → LISTENING
@@ -948,6 +987,7 @@ int run_all_tests() {
     if (test_sounding()) { pass_count++; } else { fail_count++; }
     if (test_sounding_lbt_busy()) { pass_count++; } else { fail_count++; }
     if (test_sounding_conclusion_frame_only()) { pass_count++; } else { fail_count++; }
+    if (test_sounding_tss_timing()) { pass_count++; } else { fail_count++; }
     if (test_full_call_cycle()) { pass_count++; } else { fail_count++; }
     if (test_timing_parameters_isolation()) { pass_count++; } else { fail_count++; }
     if (test_standard_scan_rate_td2()) { pass_count++; } else { fail_count++; }

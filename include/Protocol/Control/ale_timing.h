@@ -300,6 +300,23 @@ namespace ALETimingConstants {
     // Used as the AllCall-Pause timeout in SCANNING (T-10).
     constexpr uint32_t Tcc_max_ms = 22u * Trw_ms;  // 8624 ms
 
+    // ── Scanning sounding timing (A.5.3.3 / AC-SOUND-002-001) ───────────
+    // Ts_max: maximum scan period across all receivers = 50 000 ms.
+    // Tss >= Ts_max ensures every scanning receiver catches at least one
+    // complete self-address word on each sounded channel.
+    constexpr uint32_t Ts_max_ms = static_cast<uint32_t>(ale::Ts_max_ms);  // 50 000 ms
+
+    // Minimum self-address words for the Tss scanning phase.
+    // Returns the smallest multiple of addr_word_count such that
+    //   result × Trw_ms >= Ts_max_ms.
+    // Example (1-word addr "SAM"): ceil(50000/392) = 128 words → 50 176 ms.
+    constexpr uint32_t tss_word_count(uint32_t addr_word_count) {
+        if (addr_word_count == 0u) return 0u;
+        const uint32_t block_ms    = addr_word_count * Trw_ms;
+        const uint32_t repetitions = (Ts_max_ms + block_ms - 1u) / block_ms;
+        return repetitions * addr_word_count;
+    }
+
     // ── Protocol count constants (spec-defined, non-timing) ──────────────
     // Ta max = 5 × Trw = 1960 ms (Table A-XII / A.5.2.4.2): maximum words in
     // one individual/net address section.  AddressEncoder::chunk() enforces this

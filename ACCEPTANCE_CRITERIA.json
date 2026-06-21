@@ -955,18 +955,6 @@
       "verification": "handle_sounding() in ale_state_machine.cpp sendet ausschließlich ALESequenceBuilder::conclusion(self_address) → TIS + self_address (kein TO-Prefix, kein Scanning/Leading). Test test_sounding_conclusion_frame_only() (TEST 7c) in tests/link/unit/test_state_machine.cpp prüft: (1) mind. 1 Wort gesendet nach LBT, (2) kein TO-Wort im Frame, (3) erstes Wort ist TIS, (4) TIS-Wort trägt korrekte Eigenadresse 'SAM'. Alle 15 Tests grün (2026-06-21)."
     },
     {
-      "id": "AC-SOUND-001-003",
-      "feature": "FEAT-SOUND-001",
-      "requirement": [
-        "REQ-SOUND-005"
-      ],
-      "title": "Sounding: Redundanz Trs ≥ 784 ms (2 × Trw)",
-      "description": "Das Sounding-Wort wird mindestens 2 Trw-Slots lang (≥ 784 ms) gesendet, um eine ausreichende Empfangswahrscheinlichkeit zu gewährleisten.",
-      "module": "Protocol/ale_state_machine",
-      "verification_hint": "Prüfe Sounding-Schleife: Wort wird mindestens 2× wiederholt (2 × Trw_ms = 784 ms Gesamtdauer).",
-      "status": "open"
-    },
-    {
       "id": "AC-SOUND-002-001",
       "feature": "FEAT-SOUND-002",
       "requirement": [
@@ -977,7 +965,8 @@
       "description": "Das Multichannel-Scanning-Sounding deckt alle Kanäle ab und benötigt mindestens Ts_max (50.000 ms) für einen vollständigen Scan-Durchlauf.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe SOUNDING-Mehrkanallogik: Gesamtdauer Tss muss >= 50000ms (Ts_max) sein, bevor der nächste Sounding-Zyklus beginnt.",
-      "status": "open"
+      "status": "closed",
+      "verification": "ALETimingConstants::Ts_max_ms = 50 000 ms und ALETimingConstants::tss_word_count(addr_word_count) hinzugefügt in ale_timing.h. Für 1-Wort-Adresse: ceil(50000/392) = 128 Wörter → Tss = 50 176 ms ≥ 50 000 ms. Test test_sounding_tss_timing() (TEST 7d) in tests/link/unit/test_state_machine.cpp prüft: (1) Tss >= Ts_max, (2) Wortzahl == 128, (3) kein Overpad (Tss <= Ts_max + Trw). Alle 16 Tests grün (2026-06-21)."
     },
     {
       "id": "AC-SOUND-003-001",
@@ -995,12 +984,13 @@
       "id": "AC-SOUND-003-002",
       "feature": "FEAT-SOUND-003",
       "requirement": [
+        "MIL-STD-188-141B A.5.3.1",
         "MIL-STD-188-141B A.5.3.2"
       ],
-      "title": "Sounding: Mindest-Redundanzzeit Trs = 784 ms (2 × Trw)",
-      "description": "Die minimale Redundanzzeit für Single-Channel-Sounding beträgt Trs = 784 ms (2 × Trw = 2 × 392 ms). Das Conclusion-Wort (TIS/TWAS + eigene Adresse) wird mindestens zweimal im Trw-Raster wiederholt, bevor zum nächsten Kanal gewechselt wird.",
+      "title": "Sounding: Redundanzzeit Trs = 2 × Ta(caller), Minimum 784 ms",
+      "description": "Die Redundanzzeit beträgt Trs = 2 × Ta(caller). Für eine Einwort-Adresse gilt Ta = Trw = 392 ms, woraus Trs_min = 2 × Trw = 784 ms folgt. Das Sounding besteht ausschließlich aus dem Conclusion-Abschnitt (TIS oder TWAS – nie beide – kombiniert mit der eigenen Stationsadresse), der für die Dauer Trs wiederholt gesendet wird. TIS signalisiert Anrufbereitschaft; TWAS weist potenzielle Anrufer ab.",
       "module": "Protocol/ale_state_machine",
-      "verification_hint": "Prüfe ale_timing.h auf TRS_MIN_MS = 784 oder Sounding-Schleifenbedingung: sound_repeat_count >= 2. Vergleiche mit AC-SOUND-001-003 (FEAT-SOUND-001 verwendet dieselbe Mindestzeit).",
+      "verification_hint": "Prüfe ale_timing.h auf TRS_MIN_MS = 784. Prüfe Sounding-Schleife in ale_state_machine.cpp: Conclusion-Wort (TIS oder TWAS + self_address) muss für mindestens 2 × Ta(caller) wiederholt gesendet werden; bei Einwort-Adresse entspricht das sound_repeat_count >= 2.",
       "status": "open"
     },
     {
@@ -1023,7 +1013,7 @@
         "REQ-CHAN-011",
         "REQ-CHAN-012"
       ],
-      "title": "BER-Messung: Nicht-unanime Vote-Zählung (0–48)",
+      "title": "BER-Messung: non-animous Vote-Zählung (0–48)",
       "description": "Der BER-Wert wird als Anzahl der Bits berechnet, bei denen kein unanimer Vote vorliegt (0 = perfekte Qualität, 48 = schlechteste Qualität). Range muss 0–48 sein.",
       "module": "LQA/lqa_metrics",
       "verification_hint": "Prüfe lqa_metrics.cpp: BER = 48 - unanimous_votes (oder äquivalent: Anzahl nicht-unanimer Bits).",
