@@ -1338,6 +1338,122 @@ bool test_ac_frame_006_001_thru_rep_alternation_rule()
 }
 
 // ============================================================================
+// AC-FRAME-006-002 — Ta max = 1960 ms (5 Wörter × Trw)
+//
+// REQ-FRAME-013 / FEAT-FRAME-006 / Table A-XII / A.5.2.4.2
+//
+// Der Address-Abschnitt (Ta) darf maximal 5 Wörter (= 5 × Trw = 1960 ms)
+// lang sein. Enforcement via:
+//   (a) ALETimingConstants::TA_MAX_WORDS = 5
+//   (b) AddressEncoder::chunk() — truncation auf 15 Zeichen (5 × 3-char chunks)
+//   (c) FrameValidator::address_section_word_count_valid() — prüft empfangene Sequenzen
+// ============================================================================
+
+bool test_ac_frame_006_002_ta_max_5_words()
+{
+    std::cout << "\n[AC-FRAME-006-002] Ta max = 5 × Trw = 1960 ms\n";
+
+    bool all_ok = true;
+
+    // ── (a) Konstante: TA_MAX_WORDS × Trw_ms = 1960 ms ──────────────────────
+    const bool const_ok = (ALETimingConstants::TA_MAX_WORDS == 5u)
+                       && (ALETimingConstants::TA_MAX_WORDS * ALETimingConstants::Trw_ms == 1960u);
+    std::cout << "  TA_MAX_WORDS=5, 5×Trw_ms=1960 ms:           " << (const_ok ? "PASS" : "FAIL") << "\n";
+    all_ok &= const_ok;
+
+    // ── (b) AddressEncoder: 15-char address → 5 words ──────────────────────
+    const auto enc15 = AddressEncoder::encode("VERYLONGCALLSIG", PreambleType::TO);
+    const bool enc15_ok = (enc15.size() == 5);
+    std::cout << "  encode(15-char) → 5 words:                   " << (enc15_ok ? "PASS" : "FAIL") << "\n";
+    all_ok &= enc15_ok;
+
+    // (b2) 18-char address → capped at 5 words (chunk() truncates to 15 chars)
+    const auto enc18 = AddressEncoder::encode("VERYLONGCALLSIGNX", PreambleType::TO);
+    const bool enc18_ok = (enc18.size() == 5);
+    std::cout << "  encode(>15-char) truncates to 5 words:        " << (enc18_ok ? "PASS" : "FAIL") << "\n";
+    all_ok &= enc18_ok;
+
+    // ── (c) FrameValidator: address_section_word_count_valid() ──────────────
+    const char adr[3] = {'A', 'B', 'C'};
+
+    // 1-word address: [TO:ABC] → valid
+    {
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TO,   adr),
+        };
+        const bool ok = FrameValidator::address_section_word_count_valid(seq);
+        std::cout << "  [TO] (1 word) valid:                         " << (ok ? "PASS" : "FAIL") << "\n";
+        all_ok &= ok;
+    }
+
+    // 5-word address: [TO, DATA, REP, DATA, REP] → valid (boundary)
+    {
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TO,   adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+            WordParser::make_word(PreambleType::REP,  adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+            WordParser::make_word(PreambleType::REP,  adr),
+        };
+        const bool ok = FrameValidator::address_section_word_count_valid(seq);
+        std::cout << "  [TO,DATA,REP,DATA,REP] (5 words) valid:     " << (ok ? "PASS" : "FAIL") << "\n";
+        all_ok &= ok;
+    }
+
+    // 6-word address: [TO, DATA, REP, DATA, REP, DATA] → invalid (exceeds Ta max)
+    {
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TO,   adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+            WordParser::make_word(PreambleType::REP,  adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+            WordParser::make_word(PreambleType::REP,  adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+        };
+        const bool ok = !FrameValidator::address_section_word_count_valid(seq);
+        std::cout << "  [TO,DATA,REP,DATA,REP,DATA] (6 words) rejected: " << (ok ? "PASS" : "FAIL") << "\n";
+        all_ok &= ok;
+    }
+
+    // Full frame with two valid 2-word addresses (leading call doubled):
+    // [TO,DATA, TO,DATA, TIS,DATA] — each address sequence ≤ 5 → valid
+    {
+        std::vector<ALEWord> seq = {
+            WordParser::make_word(PreambleType::TO,   adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+            WordParser::make_word(PreambleType::TO,   adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+            WordParser::make_word(PreambleType::TIS,  adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+        };
+        const bool ok = FrameValidator::address_section_word_count_valid(seq);
+        std::cout << "  Full frame [TO+DATA]×2 + [TIS+DATA] (≤5 each) valid: " << (ok ? "PASS" : "FAIL") << "\n";
+        all_ok &= ok;
+    }
+
+    // Full frame where the SECOND address exceeds 5 words → invalid
+    {
+        std::vector<ALEWord> seq = {
+            // First address (2 words — valid)
+            WordParser::make_word(PreambleType::TO,   adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+            // Second address (6 words — invalid)
+            WordParser::make_word(PreambleType::TO,   adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+            WordParser::make_word(PreambleType::REP,  adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+            WordParser::make_word(PreambleType::REP,  adr),
+            WordParser::make_word(PreambleType::DATA, adr),
+        };
+        const bool ok = !FrameValidator::address_section_word_count_valid(seq);
+        std::cout << "  Frame with 6-word second address rejected:   " << (ok ? "PASS" : "FAIL") << "\n";
+        all_ok &= ok;
+    }
+
+    return all_ok;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1409,6 +1525,9 @@ int run_all_tests()
 
     run("AC-FRAME-006-001      THRU/REP alternation: kein THRU-THRU, kein REP-REP",
         test_ac_frame_006_001_thru_rep_alternation_rule());
+
+    run("AC-FRAME-006-002      Ta max = 5 words × Trw = 1960 ms (TA_MAX_WORDS + FrameValidator)",
+        test_ac_frame_006_002_ta_max_5_words());
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

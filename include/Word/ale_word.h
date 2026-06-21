@@ -311,6 +311,22 @@ public:
      */
     static bool rep_not_used_in_multiple_sender_situation(const std::vector<ALEWord>& words);
 
+    // ── REQ-FRAME-013 (address section size) ───────────────────────────
+
+    /**
+     * AC-FRAME-006-002: Each individual/net address section must not exceed
+     * 5 words (Ta max = 5 × Trw = 1960 ms, Table A-XII / A.5.2.4.2).
+     *
+     * An address sequence begins on any anchor word (TO, TIS, TWAS, FROM, THRU)
+     * and extends through any immediately following DATA / REP extension words.
+     * The validator checks every such sequence within the word list and returns
+     * false if any single sequence exceeds TA_MAX_WORDS = 5.
+     *
+     * \param words  Complete word sequence of the ALE frame.
+     * \return true if every address sequence in the frame contains ≤ 5 words.
+     */
+    static bool address_section_word_count_valid(const std::vector<ALEWord>& words);
+
     // ── Address reconstruction ──────────────────────────────────
 
     /**

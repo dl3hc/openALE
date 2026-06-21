@@ -301,6 +301,11 @@ namespace ALETimingConstants {
     constexpr uint32_t Tcc_max_ms = 22u * Trw_ms;  // 8624 ms
 
     // ── Protocol count constants (spec-defined, non-timing) ──────────────
+    // Ta max = 5 × Trw = 1960 ms (Table A-XII / A.5.2.4.2): maximum words in
+    // one individual/net address section.  AddressEncoder::chunk() enforces this
+    // at encoding time (max 15 chars = 5 × 3-char words); FrameValidator checks
+    // received sequences via address_section_word_count_valid().
+    constexpr uint32_t TA_MAX_WORDS             = 5u;
     // A.5.5.3.2: max contiguous FEC-uncorrectable words before frame rejection.
     constexpr uint32_t MAX_SCANNING_CALL_ERRORS = 3u;
     // Max words in one contiguous TX sequence handed to the modem.

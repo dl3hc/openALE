@@ -857,7 +857,8 @@
       "description": "Der Address-Abschnitt (Ta) darf maximal 1960 ms dauern (5 Trw-Slots). Dies entspricht maximal 5 Adress-Wörtern.",
       "module": "Protocol/ale_state_machine bzw. Word/ale_sequence bzw. include/ale_timing.h",
       "verification_hint": "Prüfe Limits in ale_state_machine.cpp oder ale_timing.h: TA_MAX_WORDS=5, entspricht 5×392=1960ms.",
-      "status": "open"
+      "status": "closed",
+      "verification": "ALETimingConstants::TA_MAX_WORDS=5u in ale_timing.h ergänzt (5×Trw_ms=1960ms). FrameValidator::address_section_word_count_valid() in ale_word.h/.cpp implementiert — prüft jede Adresssequenz (Anker+DATA/REP-Erweiterungen) auf ≤5 Wörter. AddressEncoder::chunk() enforced das Limit bereits bei der Kodierung (max 15 Chars). Dedizierter Test test_ac_frame_006_002_ta_max_5_words() in tests/frame/unit/test_frame.cpp: Konstanten-Check (TA_MAX_WORDS×Trw=1960ms), encode(15-char)→5 words, encode(>15-char)→truncated to 5, FrameValidator akzeptiert 1-5 Wörter, lehnt 6 Wörter ab, Frame mit 6-Wort-Zweitadresse abgelehnt. test_frame: 18/18 PASS."
     },
     {
       "id": "AC-SYNC-001-001",
