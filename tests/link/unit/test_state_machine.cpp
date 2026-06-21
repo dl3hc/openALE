@@ -374,7 +374,10 @@ bool test_sounding() {
         tracker.record(word);
     });
 
-    // ── Arrange/Act 1: initiate sounding ────────────────────────────────────
+    // ── Arrange: start from SCANNING (typical caller context) ───────────────
+    sm.process_event(ALEEvent::START_SCAN);
+
+    // ── Act 1: initiate sounding ─────────────────────────────────────────────
     std::cout << "  Initiating sounding: ";
     bool success = sm.send_sounding();
     bool in_sounding = (sm.get_state() == ALEState::SOUNDING);
@@ -387,7 +390,7 @@ bool test_sounding() {
     std::cout << " (state=" << ALEStateMachine::state_name(sm.get_state())
               << ", phase=LBT, words=" << tracker.count() << ")\n";
 
-    // ── Act 2: advance past Twt → LBT clears, TX begins ────────────────────
+    // ── Act 2: advance past Twt → LBT clears, TX begins ─────────────────────
     std::cout << "  LBT clear → TIS word sent: ";
     sm.update(ALETimingConstants::Twt_ms + 10);
     bool word_sent = (tracker.count() >= 1);
@@ -396,11 +399,12 @@ bool test_sounding() {
               << " (words=" << tracker.count() << ")\n";
     pass = pass && is_tis;
 
-    // ── Act 3: simulate all words complete, then LISTENING window expires ───
-    std::cout << "  Sounding complete → SCANNING: ";
+    // ── Act 3: simulate all words complete, then LISTENING window expires ────
+    std::cout << "  Sounding complete → back to SCANNING: ";
     // on_word_complete() drives TRANSMITTING → LISTENING; then Trw_ms expires.
     sm.on_word_complete();
     sm.update(ALETimingConstants::Twt_ms + 10 + ALETimingConstants::Trw_ms + 50);
+    // Returns to pre_link_state_ (SCANNING — the state SOUNDING was entered from).
     bool returned_to_scan = (sm.get_state() == ALEState::SCANNING);
     std::cout << (returned_to_scan ? "PASS" : "FAIL") << "\n";
 
@@ -423,7 +427,8 @@ bool test_sounding_lbt_busy() {
         tracker.record(word);
     });
 
-    // ── Arrange: start sounding, confirm LBT phase is active ────────────────
+    // ── Arrange: start from SCANNING, then enter sounding ───────────────────
+    sm.process_event(ALEEvent::START_SCAN);
     bool success = sm.send_sounding();
     bool in_lbt  = (sm.get_state() == ALEState::SOUNDING
                     && sm.get_sounding_phase() == SoundingPhase::LBT);
@@ -441,12 +446,12 @@ bool test_sounding_lbt_busy() {
 
     sm.process_received_word(busy_word);
 
-    // ── Assert: channel busy → no TX, returned to SCANNING ──────────────────
+    // ── Assert: channel busy → no TX, returned to pre_link_state_ (SCANNING) ─
     std::cout << "  No TX after busy channel: ";
     bool no_tx = (tracker.count() == 0);
     std::cout << (no_tx ? "PASS" : "FAIL") << " (words=" << tracker.count() << ")\n";
 
-    std::cout << "  Returned to SCANNING after abort: ";
+    std::cout << "  Returned to SCANNING (previous_state) after abort: ";
     bool returned = (sm.get_state() == ALEState::SCANNING);
     std::cout << (returned ? "PASS" : "FAIL")
               << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";

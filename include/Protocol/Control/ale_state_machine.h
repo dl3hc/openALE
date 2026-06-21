@@ -498,7 +498,7 @@ private:
     uint32_t      allcall_pause_start_ms_;   ///< Startzeit der AllCall-Pause (T-10)
 
     // ── Sounding sub-state (T-08) ─────────────────────────────────────────
-    SoundingPhase sounding_phase_;       ///< Aktuelle Phase innerhalb SOUNDING
+    SoundingPhase sounding_phase_;        ///< Aktuelle Phase innerhalb SOUNDING
     uint32_t      sounding_lbt_start_ms_; ///< When SOUNDING LBT started; 0 = not active
 
     // ── Target scan channels ──────────────────────────────────────────────

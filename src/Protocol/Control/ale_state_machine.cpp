@@ -145,7 +145,7 @@ bool ALEStateMachine::process_event(ALEEvent event) {
             break;
 
         case ALEState::SOUNDING:
-            if (event == ALEEvent::SOUNDING_COMPLETE)  return transition_to(ALEState::SCANNING);
+            if (event == ALEEvent::SOUNDING_COMPLETE)  return transition_to(previous_state);  // previous_state = IDLE|SCANNING, set by transition_to() on SOUNDING entry
             if (event == ALEEvent::CALL_DETECTED)      return transition_to(ALEState::HANDSHAKE);  // T-08
             break;
 
@@ -278,7 +278,6 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             break;
 
         case ALEState::SOUNDING:
-            // AC-SOUND-001-001: LBT must clear before any TX (REQ-CHAN-031).
             sounding_phase_        = SoundingPhase::LBT;
             sounding_lbt_start_ms_ = current_time_ms;
             if (rx_enabled_callback) rx_enabled_callback(true);
