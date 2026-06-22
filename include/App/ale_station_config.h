@@ -48,6 +48,12 @@ struct ALEStationConfig {
     /// Maximale Tuning-Zeit Tt (ms); Standard = 1045 ms (Blindabstimmung).
     uint32_t  max_tune_time_ms       = 1045;
 
+    // ── LQA-Austausch ─────────────────────────────────────────────────────
+    /// true = CMD LQA / CMD NOISE / LQA Report aktiv senden und auswerten.
+    /// false = kein aktiver LQA-Austausch (EMCON / Debug); FROM-Messungen
+    ///         (Sounding-Empfang, Kanalqualität) laufen weiter.
+    bool      lqa_exchange_enabled   = true;
+
     // ── Diagnose ──────────────────────────────────────────────────────────
     /// RX-Diagnose-Ausgabe via on_status_changed (Peak-Level + jedes Wort).
     bool      debug_rx               = false;

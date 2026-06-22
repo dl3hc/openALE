@@ -273,12 +273,33 @@ public:
     std::vector<LQAEntry> get_entries_for_channel(uint32_t frequency_hz) const;
     
     /**
-     * @brief Get all LQA entries for a specific station (across all channels)
-     * 
-     * @param remote_station Remote station address
-     * @return Vector of all entries for this station
+     * @brief Get all LQA entries for a specific station (across all channels).
+     *
+     * @param remote_station  Remote station address
+     * @param max_age_hours   Exclude entries whose last_activity_ms is older than
+     *                        this many hours (0 = no age filter, return all).
+     * @return Vector of entries sorted by frequency_hz ascending.
      */
-    std::vector<LQAEntry> get_entries_for_station(const std::string& remote_station) const;
+    std::vector<LQAEntry> get_entries_for_station(const std::string& remote_station,
+                                                   float max_age_hours = 0.0f) const;
+
+    /**
+     * @brief Store remote noise-floor broadcast received via CMD 'n' (AC-CHAN-004-002).
+     *
+     * Updates the noise_floor_dbm field of the sounding entry (remote_station="")
+     * for @p frequency_hz.  Creates a stub entry if none exists.
+     * The max_db / mean_db values are in the 0–126 dBm scale used by CMD NOISE;
+     * 127 = no report (silently ignored).
+     *
+     * @param frequency_hz   Channel frequency in Hz
+     * @param max_db         Max noise floor (7-bit, 127 = no report)
+     * @param mean_db        Mean noise floor (7-bit, 127 = no report)
+     * @param timestamp_ms   Measurement timestamp (0 = current time)
+     */
+    void update_noise_floor(uint32_t frequency_hz,
+                            uint8_t  max_db,
+                            uint8_t  mean_db,
+                            uint32_t timestamp_ms = 0);
     
     /**
      * @brief Get all LQA entries in database

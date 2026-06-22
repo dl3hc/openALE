@@ -3,9 +3,11 @@
  */
 
 #include "App/ale_controller.h"
+#include "LQA/lqa_metrics.h"
 #include "PAL/radio.h"
 #include "Word/ale_word.h"
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -452,6 +454,25 @@ void ALEController::apply_target_scan_channels_for(const std::string& target_add
     emit_status("Scanning call: C=" + std::to_string(n) + " channel(s)");
 }
 
+LQACmdPayload ALEController::compute_lqa_payload(uint32_t freq_hz) const {
+    LQACmdPayload p{};  // sentinels: sinad=31, ber=31, mp=7
+    const auto e = lqa_database_.get_entry(freq_hz, "");
+    if (!e) return p;
+    if (e->sinad_db > 0.0f) {
+        // sinad_db is already stored as a float SINAD code (0-30) via update_entry_extended
+        const float s = e->sinad_db;
+        p.sinad = (s <= 0.0f) ? 0u : (s >= 30.0f) ? 30u : static_cast<uint8_t>(s + 0.5f);
+    }
+    if (e->ber > 0.0f) {
+        const auto ber_score = static_cast<uint8_t>(std::min(48.0f, e->ber * 50.0f));
+        p.ber = ber_score_to_lqa_code(ber_score);
+    }
+    if (e->multipath_score > 0.0f) {
+        p.mp = multipath_delay_to_lqa_code(e->multipath_score * 6.0f);
+    }
+    return p;
+}
+
 bool ALEController::initiate_call(const std::string& target_addr)
 {
     if (!is_valid_ale_address(target_addr)) {
@@ -462,7 +483,7 @@ bool ALEController::initiate_call(const std::string& target_addr)
 
     // Reorder calling channels by LQA history for this station (best first).
     // Falls back silently to the user-configured order when no LQA data exist.
-    if (!calling_channels_.empty()) {
+    if (!calling_channels_.empty() && config_.lqa_exchange_enabled) {
         auto ranked = lqa_analyzer_.rank_channels_for_station(target_addr);
         if (!ranked.empty()) {
             auto score_for = [&ranked](uint32_t freq) -> float {
@@ -482,6 +503,21 @@ bool ALEController::initiate_call(const std::string& target_addr)
     }
 
     apply_target_scan_channels_for(target_addr);
+
+    // Block A4 — Queue CMD LQA (KA1=1) for the calling station's frame.
+    // Use the first (best-ranked) channel's frequency for the measurement.
+    sent_ka1_ = false;
+    last_call_target_.clear();
+    last_call_freq_hz_ = 0;
+    if (!calling_channels_.empty() && config_.lqa_exchange_enabled) {
+        const uint32_t freq = calling_channels_.front().rx_frequency_hz;
+        LQACmdPayload p = compute_lqa_payload(freq);
+        p.ka1 = true;
+        sm_.set_pending_lqa_cmd(encode_lqa_cmd(p));
+        sent_ka1_          = true;
+        last_call_target_  = target_addr;
+        last_call_freq_hz_ = freq;
+    }
 
     emit_status("Initiating call to " + target_addr);
     return sm_.initiate_call(target_addr);
@@ -583,6 +619,53 @@ void ALEController::maybe_emit_call_alert()
     call_alert_fired_ = true;
     const std::string caller = sm_.get_caller_address();
 
+    // Block A4 (responder) — queue CMD LQA (KA1=0) for the response frame.
+    // Done here (once, at alert time) so it's set for both auto-accept and manual-accept.
+    if (config_.lqa_exchange_enabled) {
+        if (const Channel* ch = sm_.get_current_channel()) {
+            LQACmdPayload resp_p = compute_lqa_payload(ch->rx_frequency_hz);
+            resp_p.ka1 = false;
+            sm_.set_pending_lqa_cmd(encode_lqa_cmd(resp_p));
+        }
+    }
+
+    // Block A5 — store bilateral SINAD/BER/MP received from caller's CMD 'a'.
+    if (config_.lqa_exchange_enabled && pending_bilateral_valid_) {
+        if (!caller.empty()) {
+            const auto& bp = pending_bilateral_payload_;
+            lqa_database_.update_bilateral(pending_bilateral_freq_hz_, caller,
+                                            bp.sinad, bp.ber, bp.mp, 0u);
+            emit_status("LQA bilateral RX: " + caller
+                        + " SINAD=" + std::to_string(bp.sinad));
+
+            // Block C5 TX — if caller set KA1=1, generate and queue LQA Report.
+            if (bp.ka1) {
+                const auto entries = lqa_database_.get_entries_for_station(caller, 25.0f);
+                if (!entries.empty()) {
+                    const uint32_t now = lqa_database_.get_current_time_ms();
+                    std::vector<LQAReport> reports;
+                    for (const auto& e : entries) {
+                        LQAReport r;
+                        r.frequency_hz = e.frequency_hz;
+                        r.age   = lqa_age_code(e.last_contact_ms, now);
+                        r.sinad = (e.sinad_db > 0.0f)
+                            ? static_cast<uint8_t>(std::min(30.0f, e.sinad_db)) : kSinadLqaNoValue;
+                        r.ber   = (e.ber > 0.0f)
+                            ? ber_score_to_lqa_code(
+                                  static_cast<uint8_t>(std::min(48.0f, e.ber * 50.0f)))
+                            : kBerLqaNoValue;
+                        r.mp    = multipath_delay_to_lqa_code(e.multipath_score * 6.0f);
+                        reports.push_back(r);
+                    }
+                    sm_.set_pending_lqa_report_seq(ALESequenceBuilder::lqa_report(reports));
+                    emit_status("LQA Report queued for " + caller + " ("
+                                + std::to_string(reports.size()) + " channels)");
+                }
+            }
+        }
+        pending_bilateral_valid_ = false;
+    }
+
     if (!amd_text_acc_.empty() && on_amd_received) {
         const auto p = amd_text_acc_.find_last_not_of(" @");
         if (p != std::string::npos)
@@ -635,7 +718,8 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     // Reset caller tracking when leaving HANDSHAKE
     if (from == ALEState::HANDSHAKE) {
         last_caller_.clear();
-        call_alert_fired_ = false;
+        call_alert_fired_           = false;
+        pending_bilateral_valid_    = false;  // Block A5 — stale data from previous handshake
     }
 
     // Initialise AMD orderwire tracking when entering HANDSHAKE.
@@ -659,6 +743,27 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
             const float snr = existing ? existing->snr_db : 0.0f;
             const float ber = existing ? existing->ber    : 0.0f;
             lqa_database_.update_entry(ch->rx_frequency_hz, "", snr, ber, 0, 1);
+
+            // Block B3 — attach CMD NOISE to this sounding cycle.
+            if (config_.lqa_exchange_enabled) {
+                const auto stats = lqa_metrics_.get_noise_floor_stats(now_ms_);
+                // Convert dBm to 7-bit CMD NOISE scale (0–126 dBm; 127=no report).
+                // Clamp: values below -120 or above 6 dBm (relative 0.1µV offset) → 127.
+                auto to_noise_code = [](float dbm) -> uint8_t {
+                    if (dbm <= -120.0f) return 127u;
+                    const int v = static_cast<int>(dbm + 120.0f);  // shift to 0-based
+                    return (v < 0 || v > 126) ? 127u : static_cast<uint8_t>(v);
+                };
+                const uint8_t max_code  = to_noise_code(stats.max_dbm);
+                const uint8_t mean_code = to_noise_code(stats.mean_dbm);
+                if (max_code != 127u || mean_code != 127u) {
+                    // noise_seq.words().front().raw_payload is the 21-bit payload;
+                    // SM's handle_sounding() masks with 0x1FFFFF so pass as-is.
+                    const auto noise_seq = ALESequenceBuilder::noise_cmd(max_code, mean_code);
+                    if (!noise_seq.empty())
+                        sm_.set_pending_noise_cmd(noise_seq.words().front().raw_payload);
+                }
+            }
         }
     }
 
@@ -676,6 +781,25 @@ void ALEController::on_operator_event(OperatorEvent ev)
     switch (ev) {
         case OperatorEvent::LINK_ESTABLISHED:
         {
+            // Block A5 — SAM side: if JOE sent CMD 'a' in the response frame, store it.
+            if (config_.lqa_exchange_enabled && pending_bilateral_valid_) {
+                const std::string peer = sm_.get_to_address();
+                if (!peer.empty()) {
+                    const auto& bp = pending_bilateral_payload_;
+                    lqa_database_.update_bilateral(pending_bilateral_freq_hz_, peer,
+                                                   bp.sinad, bp.ber, bp.mp, 0u);
+                    emit_status("LQA bilateral RX: " + peer
+                                + " SINAD=" + std::to_string(bp.sinad));
+                }
+            }
+            pending_bilateral_valid_ = false;
+
+            // Block A6 — successful call: bilateral data was (or wasn't) received.
+            // mark_bilateral_attempted if we sent KA1 but received no CMD 'a' back.
+            if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
+                lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
+            sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
+
             // SAM side: to_address holds the responding station.
             // JOE side: caller_address holds the calling station.
             const std::string& peer = !sm_.get_to_address().empty()
@@ -688,11 +812,19 @@ void ALEController::on_operator_event(OperatorEvent ev)
             break;
         }
         case OperatorEvent::CALL_REJECTED:
+            // Block A6 — mark bilateral attempted (no CMD LQA received back)
+            if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
+                lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
+            sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
             emit_status("Call rejected by remote station (TWAS)");
             if (on_link_terminated) on_link_terminated("Call rejected");
             emit_event(pal::EventType::ALE_LINK_TERMINATED, "Call rejected");
             break;
         case OperatorEvent::NO_CHANNELS_LEFT:
+            // Block A6 — mark bilateral attempted (no CMD LQA received back)
+            if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
+                lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
+            sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
             emit_status("No reply — all calling channels exhausted");
             if (on_link_terminated) on_link_terminated("No reply");
             emit_event(pal::EventType::ALE_LINK_TERMINATED, "No reply");
@@ -774,6 +906,58 @@ void ALEController::on_received_word(const ALEWord& word)
             char exp64[4];
             if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64))
                 amd_text_acc_ += std::string(exp64, 3);
+        }
+    }
+
+    if (config_.lqa_exchange_enabled) {
+        // ── Block A5 — CMD LQA (char 'a') bilateral RX ───────────────────────
+        // Captures in HANDSHAKE/WAIT_CYCLE_END (JOE receiving SAM's CMD 'a')
+        // and in CALLING/LISTENING (SAM receiving JOE's CMD 'a' in the response).
+        {
+            const ALEState  cur_st = sm_.get_state();
+            const bool in_hs_wce  = (cur_st == ALEState::HANDSHAKE
+                                      && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END);
+            const bool in_ca_lst  = (cur_st == ALEState::CALLING
+                                      && sm_.get_calling_phase() == CallingPhase::LISTENING);
+            if (word.type == PreambleType::CMD && word.address[0] == 'a'
+                    && (in_hs_wce || in_ca_lst)) {
+                if (const Channel* ch = sm_.get_current_channel()) {
+                    pending_bilateral_payload_  = decode_lqa_cmd(word.raw_payload);
+                    pending_bilateral_valid_    = true;
+                    pending_bilateral_freq_hz_  = ch->rx_frequency_hz;
+                }
+            }
+        }
+
+        // ── Block B4 — CMD NOISE (char 'n') RX ───────────────────────────────
+        if (word.type == PreambleType::CMD && word.address[0] == 'n') {
+            if (const Channel* ch = sm_.get_current_channel()) {
+                const uint8_t max_db  = (word.raw_payload >> 7) & 0x7Fu;
+                const uint8_t mean_db =  word.raw_payload       & 0x7Fu;
+                lqa_database_.update_noise_floor(ch->rx_frequency_hz, max_db, mean_db,
+                                                  word.timestamp_ms);
+            }
+        }
+
+        // ── Block C5 RX — LQA Report (CMD 'r' header + DATA payloads) ────────
+        if (word.type == PreambleType::CMD && word.address[0] == 'r') {
+            lqa_report_decoder_.start(word.raw_payload);
+        }
+        if (lqa_report_decoder_.active() && word.type == PreambleType::DATA) {
+            if (lqa_report_decoder_.feed(word.raw_payload)) {
+                // Determine sender: SAM→JOE (CALLING/LISTENING) or JOE→SAM (HANDSHAKE/WAIT_CYCLE_END)
+                const std::string sender = !sm_.get_to_address().empty()
+                    ? sm_.get_to_address()
+                    : sm_.get_caller_address();
+                if (!sender.empty()) {
+                    for (const auto& r : lqa_report_decoder_.reports())
+                        lqa_database_.update_bilateral(r.frequency_hz, sender,
+                                                       r.sinad, r.ber, r.mp, 0u);
+                    emit_status("LQA Report RX from " + sender + ": "
+                                + std::to_string(lqa_report_decoder_.reports().size()) + " channels");
+                }
+                lqa_report_decoder_.reset();
+            }
         }
     }
 

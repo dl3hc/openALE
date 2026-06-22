@@ -98,26 +98,37 @@ struct MetricsConfig {
 
 /**
  * @brief LQA Metrics Collector
- * 
+ *
  * Collects quality metrics from FSK demodulator and FEC decoder,
  * computes derived metrics (SINAD, multipath score), and feeds
  * LQA database.
- * 
+ *
  * Usage:
  * @code
  * LQAMetrics metrics(&lqa_database);
- * 
+ *
  * // During word reception:
  * MetricsSample sample;
  * sample.snr_db = demodulator.get_snr();
  * sample.fec_errors_corrected = decoder.get_error_count();
  * metrics.add_sample(sample, frequency, station);
- * 
+ *
  * // Metrics automatically update LQA database
  * @endcode
  */
 class LQAMetrics {
 public:
+    /**
+     * @brief Rolling 60-minute noise-floor statistics (AC-CHAN-004-001).
+     *
+     * Derived from noise_power_dbm samples collected over the last 3600 s.
+     * Both fields default to -120.0f when no samples are available.
+     */
+    struct NoiseFloorStats {
+        float max_dbm  = -120.0f;  ///< Rolling maximum over 60 min (dBm)
+        float mean_dbm = -120.0f;  ///< Rolling mean over 60 min (dBm)
+    };
+
     /**
      * @brief Construct metrics collector
      * @param database LQA database to update (can be nullptr for standalone)
@@ -237,12 +248,22 @@ public:
      * @brief Clear averaging window
      */
     void reset();
-    
+
     /**
      * @brief Get number of samples in current window
      * @return Sample count
      */
     size_t get_sample_count() const;
+
+    /**
+     * @brief Get rolling 60-minute noise-floor statistics (AC-CHAN-004-001).
+     *
+     * Samples older than 3600 s are excluded.  Returns default stats
+     * (max/mean = -120 dBm) when no samples are available.
+     *
+     * @param now_ms Current monotonic time in milliseconds
+     */
+    NoiseFloorStats get_noise_floor_stats(uint32_t now_ms = 0) const;
 
 private:
     /**
@@ -262,7 +283,11 @@ private:
     LQADatabase* database_;                  ///< LQA database to update
     MetricsConfig config_;                   ///< Configuration
     std::vector<MetricsSample> samples_;     ///< Averaging window
-    
+
+    // Rolling 60-min noise floor window (AC-CHAN-004-001)
+    struct NoiseFloorSample { uint32_t timestamp_ms; float noise_dbm; };
+    std::vector<NoiseFloorSample> noise_window_;  ///< Up to 3600 s of samples
+
     // Accumulated metrics (for database update)
     struct AccumulatedMetrics {
         uint32_t frequency_hz;
@@ -336,5 +361,46 @@ uint32_t encode_lqa_cmd(const LQACmdPayload& p);
  * @return Decoded payload fields
  */
 LQACmdPayload decode_lqa_cmd(uint32_t word24);
+
+/**
+ * @brief Elapsed time → 3-bit age code per Table VI (§5.4.4 MIL-STD-187-721D).
+ *
+ * Code | Elapsed time
+ * -----|------------------
+ *  0   | 0 – 15 min
+ *  1   | 15 – 30 min
+ *  2   | 30 – 60 min
+ *  3   | 1 – 4 h
+ *  4   | 4 – 8 h
+ *  5   | 8 – 16 h
+ *  6   | 16 – 25 h
+ *  7   | >25 h or unknown
+ *
+ * When now_ms < last_contact_ms (wrap / stale), code 7 is returned.
+ *
+ * @param last_contact_ms  Timestamp of last contact (ms, same clock as now_ms)
+ * @param now_ms           Current time (ms)
+ * @return 3-bit age code [0-7]
+ */
+uint8_t lqa_age_code(uint32_t last_contact_ms, uint32_t now_ms);
+
+/**
+ * @brief Multipath delay → 3-bit LQA code per MIL-STD-188-141B A.5.4.1.
+ *
+ * delay_ms | code
+ * ---------|------
+ *  < 0     |  0  (treated as 0 ms)
+ *  0–1 ms  |  0–1
+ *  …       |  …
+ *  6 ms    |  6
+ *  > 6 ms  |  7  (saturation)
+ *
+ * Codes 0–6 reflect the floored integer millisecond value.
+ * Code 7 = "> 6 ms" per spec.
+ *
+ * @param delay_ms  Estimated multipath delay in milliseconds (≥ 0)
+ * @return 3-bit code [0-7]
+ */
+uint8_t multipath_delay_to_lqa_code(float delay_ms);
 
 } // namespace ale

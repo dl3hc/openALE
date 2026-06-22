@@ -30,6 +30,7 @@
 #pragma once
 
 #include "Word/ale_word.h"
+#include "LQA/lqa_report.h"
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -196,6 +197,34 @@ public:
      */
     static ALESequence termination(const std::string& peer_addr,
                                    const std::string& self_addr);
+
+    /**
+     * CMD LQA word (Table A-XIV, char 'a') — 1-word sequence.
+     *
+     * raw_payload24 is the full 24-bit encoded word from encode_lqa_cmd().
+     * The top 3 preamble bits are stripped before storage in ALEWord.raw_payload.
+     */
+    static ALESequence lqa_cmd(uint32_t raw_payload24);
+
+    /**
+     * CMD NOISE word (Figure A-26, char 'n') — 1-word sequence.
+     *
+     * Broadcasts local noise floor so receivers can estimate bilateral quality
+     * without a handshake (AC-CHAN-004-002).
+     *
+     * @param max_db   Rolling-maximum noise floor (7-bit, 0–126 dBm; 127 = no report)
+     * @param mean_db  Rolling-mean noise floor   (7-bit, 0–126 dBm; 127 = no report)
+     */
+    static ALESequence noise_cmd(uint8_t max_db, uint8_t mean_db);
+
+    /**
+     * CMD 'r' + DATA-word LQA report sequence (§5.4.4 MIL-STD-187-721D).
+     *
+     * Packs up to N reports as a CMD 'r' header word followed by DATA words
+     * carrying the bit-packed measurements.
+     * Returns an empty sequence when @p reports is empty.
+     */
+    static ALESequence lqa_report(const std::vector<LQAReport>& reports);
 };
 
 } // namespace ale

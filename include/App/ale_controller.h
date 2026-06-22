@@ -40,6 +40,8 @@
 #include "PAL/events.h"
 #include "LQA/lqa_database.h"
 #include "LQA/lqa_analyzer.h"
+#include "LQA/lqa_metrics.h"
+#include "LQA/lqa_report.h"
 #include "Stores/ale_data_store.h"
 #include <functional>
 #include <string>
@@ -703,8 +705,20 @@ private:
     // LQA
     LQADatabase              lqa_database_;
     LQAAnalyzer              lqa_analyzer_;
+    LQAMetrics               lqa_metrics_;        // standalone noise-floor tracking (no DB)
     std::vector<Channel>     calling_channels_;  // cached here so initiate_call() can reorder
     std::string              channel_file_;       // auto-save path (empty = no auto-save)
+
+    // Bilateral LQA exchange (Block A — CMD LQA char 'a')
+    LQACmdPayload            pending_bilateral_payload_{};
+    bool                     pending_bilateral_valid_    = false;
+    uint32_t                 pending_bilateral_freq_hz_  = 0;
+    bool                     sent_ka1_                   = false;
+    std::string              last_call_target_;
+    uint32_t                 last_call_freq_hz_          = 0;
+
+    // LQA Report decoder (Block C — CMD 'r' + DATA)
+    LQAReportDecoder         lqa_report_decoder_;
 
     // Net / Contact / Self-address tables (GUI-facing address book + scanning-call sizing)
     NetStore                 net_store_;
@@ -741,6 +755,10 @@ private:
     void wire_callbacks();
     void on_sm_state_change(ALEState from, ALEState to);
     void on_operator_event(OperatorEvent ev);
+
+    // Returns a CMD LQA payload populated from the LQA DB entry for freq_hz.
+    // Fields default to "no-value" sentinels when no entry exists.
+    LQACmdPayload compute_lqa_payload(uint32_t freq_hz) const;
 
     /**
      * If target_addr is a registered Contact with a net membership that

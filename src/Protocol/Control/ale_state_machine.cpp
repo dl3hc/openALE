@@ -707,6 +707,21 @@ void ALEStateMachine::handle_sounding() {
                 const auto& cw = conclusion_seq.words();
                 std::vector<ALEWord> tx(cw);
                 tx.insert(tx.end(), cw.begin(), cw.end());
+                // Append CMD NOISE when pending (AC-CHAN-004-002 / Block B3)
+                if (pending_noise_cmd_set_) {
+                    const auto noise_seq = ALESequenceBuilder::lqa_cmd(pending_noise_cmd_raw_);
+                    // Actually noise uses noise_cmd encoding; lqa_cmd strips preamble but
+                    // the raw word was built by noise_cmd so the address field differs.
+                    // Re-build via noise_cmd word directly from pending raw payload.
+                    ALEWord nw{};
+                    nw.type        = PreambleType::CMD;
+                    nw.raw_payload = pending_noise_cmd_raw_ & 0x1FFFFFu;
+                    nw.address[0]  = 'n'; nw.address[1] = ' ';
+                    nw.address[2]  = ' '; nw.address[3]  = '\0';
+                    nw.valid       = true;
+                    tx.push_back(nw);
+                    pending_noise_cmd_set_ = false;
+                }
                 transmit_words(tx);
             }
             // No-address fallback falls through to TRANSMITTING check below.
@@ -774,6 +789,15 @@ bool ALEStateMachine::initiate_call(const std::string& target) {
     // the next message immediately.  active_message_ persists across channel retries.
     active_message_  = pending_message;
     pending_message  = PendingMessage{};
+
+    // Snapshot CMD LQA and LQA report; both survive channel retries like active_message_.
+    active_lqa_cmd_seq_ = pending_lqa_cmd_set_
+        ? ALESequenceBuilder::lqa_cmd(pending_lqa_cmd_raw_) : ALESequence{};
+    pending_lqa_cmd_set_ = false;
+
+    active_lqa_report_seq_ = pending_lqa_report_set_
+        ? pending_lqa_report_seq_ : ALESequence{};
+    pending_lqa_report_set_ = false;
 
     return process_event(ALEEvent::CALL_REQUEST);
 }
@@ -1220,14 +1244,21 @@ void ALEStateMachine::enqueue_call_sequence_() {
     // All words enqueued back-to-back; Trw grid emerges from the audio stream
     // (49 symbols × 8 ms per word).  on_word_complete() advances phase counters
     // against exactly these word counts.
-    if (active_message_.type == PendingMessage::Type::AMD
-            && !active_message_.content.empty()) {
-        message_seq_ = ALESequence(encode_amd(active_message_.content));
-    } else {
-        message_seq_ = ALESequence{};
+    // Build the message section: CMD LQA (char 'a') + LQA Report (CMD 'r' + DATA) + AMD.
+    // Ordering per plan §Block C4: [CMD 'a'] [CMD 'r' + DATA...] [AMD DATA/REP...]
+    {
+        std::vector<ALEWord> msg;
+        for (const auto& w : active_lqa_cmd_seq_.words())    msg.push_back(w);
+        for (const auto& w : active_lqa_report_seq_.words()) msg.push_back(w);
+        if (active_message_.type == PendingMessage::Type::AMD
+                && !active_message_.content.empty()) {
+            const auto amd = encode_amd(active_message_.content);
+            msg.insert(msg.end(), amd.begin(), amd.end());
+        }
+        message_seq_ = ALESequence(std::move(msg));
     }
-    // active_message_ is NOT cleared here — it survives across channel retries
-    // so that AMD text is re-transmitted on each channel attempt.
+    // active_message_ / active_lqa_cmd_seq_ / active_lqa_report_seq_ are NOT
+    // cleared here — they survive across channel retries.
 
     transmit_words(scanning_seq_.words());
     transmit_words(leading_seq_.words());
@@ -1249,8 +1280,38 @@ void ALEStateMachine::build_response_words() {
     // Reject:  TWAS [self] (FEAT-FRAME-005 / AC-FRAME-010-1).
     // caller_address is set during WAIT_CYCLE_END (process_received_word),
     // so it is encoded here at send time, not pre-computed.
-    transmit_words(ALESequenceBuilder::response(
-        caller_address, address_book.get_self_address(), pending_reject_).words());
+    //
+    // When a CMD LQA word (char 'a') is pending, insert it between the
+    // TO×2 prefix and the TIS conclusion (plan §Block A2).
+    ALESequence lqa_seq{};
+    if (pending_lqa_cmd_set_) {
+        lqa_seq = ALESequenceBuilder::lqa_cmd(pending_lqa_cmd_raw_);
+        pending_lqa_cmd_set_ = false;
+    }
+
+    // Consume LQA report sequence if pending (set via set_pending_lqa_report_seq()).
+    ALESequence report_seq{};
+    if (pending_lqa_report_set_) {
+        report_seq = pending_lqa_report_seq_;
+        pending_lqa_report_set_ = false;
+    }
+
+    if (pending_reject_ || (lqa_seq.empty() && report_seq.empty())) {
+        transmit_words(ALESequenceBuilder::response(
+            caller_address, address_book.get_self_address(), pending_reject_).words());
+    } else {
+        // TO caller×2 + [CMD 'a'] + [CMD 'r' + DATA...] + TIS self
+        const auto base = ALESequenceBuilder::response(
+            caller_address, address_book.get_self_address(), false);
+        const auto& bw = base.words();
+        std::vector<ALEWord> words;
+        // All but the last word (TIS) — then insert CMD LQA + report — then TIS
+        for (size_t i = 0; i + 1 < bw.size(); ++i) words.push_back(bw[i]);
+        for (const auto& w : lqa_seq.words())    words.push_back(w);
+        for (const auto& w : report_seq.words()) words.push_back(w);
+        words.push_back(bw.back());
+        transmit_words(words);
+    }
 }
 
 void ALEStateMachine::transmit_word(const ALEWord& word) {

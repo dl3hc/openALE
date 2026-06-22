@@ -7,6 +7,7 @@
 
 #include "Word/ale_sequence.h"
 #include "Word/address_encoder.h"
+#include "LQA/lqa_report.h"
 #include <algorithm>
 
 namespace ale {
@@ -141,6 +142,56 @@ ALESequence ALESequenceBuilder::termination(const std::string& peer_addr,
     // §A.5.5.3.5 / T-07: TO peer (×2) + TWAS self.
     return addressed_then_conclusion(peer_addr, PreambleType::TO,
                                      self_addr, PreambleType::TWAS);
+}
+
+ALESequence ALESequenceBuilder::lqa_cmd(uint32_t raw_payload24) {
+    // Strip the top 3 preamble bits — they live in w.type, not raw_payload.
+    ALEWord w{};
+    w.type        = PreambleType::CMD;
+    w.raw_payload = raw_payload24 & 0x1FFFFFu;
+    w.address[0]  = 'a'; w.address[1] = ' '; w.address[2] = ' '; w.address[3] = '\0';
+    w.valid       = true;
+    return ALESequence({w});
+}
+
+ALESequence ALESequenceBuilder::noise_cmd(uint8_t max_db, uint8_t mean_db) {
+    // 21-bit payload: [20:14]='n'(0x6E) | [13:7]=max_db | [6:0]=mean_db
+    // Preamble 110 lives in w.type = PreambleType::CMD (not in raw_payload).
+    const uint32_t raw = (0x6Eu << 14)
+                       | ((max_db  & 0x7Fu) << 7)
+                       |  (mean_db & 0x7Fu);
+    ALEWord w{};
+    w.type        = PreambleType::CMD;
+    w.raw_payload = raw;
+    w.address[0]  = 'n'; w.address[1] = ' '; w.address[2] = ' '; w.address[3] = '\0';
+    w.valid       = true;
+    return ALESequence({w});
+}
+
+ALESequence ALESequenceBuilder::lqa_report(const std::vector<LQAReport>& reports) {
+    if (reports.empty()) return ALESequence{};
+
+    std::vector<ALEWord> words;
+    // CMD 'r' header word
+    const uint32_t cmd_raw = LQAReportEncoder::encode_report_cmd(
+        static_cast<uint8_t>(reports.size()));
+    ALEWord cmd_w{};
+    cmd_w.type        = PreambleType::CMD;
+    cmd_w.raw_payload = cmd_raw;
+    cmd_w.address[0]  = 'r'; cmd_w.address[1] = ' ';
+    cmd_w.address[2]  = ' '; cmd_w.address[3]  = '\0';
+    cmd_w.valid       = true;
+    words.push_back(cmd_w);
+
+    // DATA words carrying bit-packed reports
+    for (uint32_t payload : LQAReportEncoder::pack_reports(reports)) {
+        ALEWord dw{};
+        dw.type        = PreambleType::DATA;
+        dw.raw_payload = payload;
+        dw.valid       = true;
+        words.push_back(dw);
+    }
+    return ALESequence(std::move(words));
 }
 
 } // namespace ale

@@ -57,6 +57,7 @@ add_library(ale_protocol
     src/Word/address_encoder.cpp
     src/Protocol/Message/ale_message.cpp
     src/Protocol/Message/ale_orderwire_protocols.cpp
+    src/LQA/lqa_report.cpp
 )
 
 target_include_directories(ale_protocol PUBLIC
@@ -501,6 +502,31 @@ add_executable(test_lqa_analyzer tests/chan/unit/test_lqa_analyzer.cpp)
 target_link_libraries(test_lqa_analyzer ale_lqa ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_analyzer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME LQAAnalyzer COMMAND test_lqa_analyzer)
+
+add_executable(test_lqa_report tests/lqa/unit/test_lqa_report.cpp)
+target_link_libraries(test_lqa_report ale_lqa ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_lqa_report PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME LQAReport COMMAND test_lqa_report)
+
+add_executable(test_lqa_noise_cmd tests/chan/unit/test_lqa_noise_cmd.cpp)
+target_link_libraries(test_lqa_noise_cmd ale_lqa ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_lqa_noise_cmd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME LQANoiseCmd COMMAND test_lqa_noise_cmd)
+
+add_executable(test_lqa_bilateral_tx tests/chan/unit/test_lqa_bilateral_tx.cpp)
+target_link_libraries(test_lqa_bilateral_tx ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_lqa_bilateral_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME LQABilateralTx COMMAND test_lqa_bilateral_tx)
+
+add_executable(test_lqa_bilateral_rx tests/chan/unit/test_lqa_bilateral_rx.cpp)
+target_link_libraries(test_lqa_bilateral_rx ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_lqa_bilateral_rx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME LQABilateralRx COMMAND test_lqa_bilateral_rx)
+
+add_executable(test_bilateral_lqa tests/link/integration/test_bilateral_lqa.cpp)
+target_link_libraries(test_bilateral_lqa ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_bilateral_lqa PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME BilateralLQA COMMAND test_bilateral_lqa)
 
 add_executable(test_address_encoder tests/addr/unit/test_address_encoder.cpp)
 target_link_libraries(test_address_encoder ale_protocol ale_fsk_core ale_fec)

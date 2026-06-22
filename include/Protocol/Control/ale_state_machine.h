@@ -304,6 +304,35 @@ public:
     void clear_pending_message()                        { pending_message = PendingMessage(); }
 
     /**
+     * Queue a CMD LQA word (char 'a', Table A-XIV) to be inserted in the
+     * MESSAGE section of the next call frame (caller) or response (responder).
+     * raw24 is the full 24-bit encoded word from encode_lqa_cmd().
+     */
+    void set_pending_lqa_cmd(uint32_t raw24) {
+        pending_lqa_cmd_raw_ = raw24; pending_lqa_cmd_set_ = true;
+    }
+    void clear_pending_lqa_cmd() { pending_lqa_cmd_set_ = false; }
+
+    /**
+     * Queue a pre-built LQA report sequence (CMD 'r' + DATA words) to be
+     * inserted in the MESSAGE section of the next call frame.
+     */
+    void set_pending_lqa_report_seq(const ALESequence& seq) {
+        pending_lqa_report_seq_ = seq; pending_lqa_report_set_ = true;
+    }
+    void clear_pending_lqa_report_seq() { pending_lqa_report_set_ = false; }
+
+    /**
+     * Queue a CMD NOISE word (char 'n', Figure A-26) to be appended after
+     * the TIS frame in the next sounding cycle.
+     * raw24 is the 24-bit word from ALESequenceBuilder::noise_cmd() encoding.
+     */
+    void set_pending_noise_cmd(uint32_t raw24) {
+        pending_noise_cmd_raw_ = raw24; pending_noise_cmd_set_ = true;
+    }
+    void clear_pending_noise_cmd() { pending_noise_cmd_set_ = false; }
+
+    /**
      * Emergency manual override per REQ-LINK-007 / A.5.5.1.
      * Immediately aborts any ongoing ALE operation and transitions to IDLE,
      * allowing the operator to take direct control of the radio.
@@ -492,6 +521,20 @@ private:
     // ── Orderwire message state ───────────────────────────────────────────
     PendingMessage pending_message;   ///< set via set_pending_message(); consumed by initiate_call()
     PendingMessage active_message_;   ///< snapshot taken at initiate_call() time; survives channel retries
+
+    // ── CMD LQA (char 'a', Table A-XIV) ──────────────────────────────────
+    uint32_t    pending_lqa_cmd_raw_ = 0;
+    bool        pending_lqa_cmd_set_ = false;
+    ALESequence active_lqa_cmd_seq_;  ///< Snapshot at initiate_call(); survives channel retries
+
+    // ── LQA Report sequence (CMD 'r' + DATA) ─────────────────────────────
+    ALESequence pending_lqa_report_seq_;
+    bool        pending_lqa_report_set_ = false;
+    ALESequence active_lqa_report_seq_; ///< Snapshot at initiate_call(); survives channel retries
+
+    // ── CMD NOISE (char 'n', Figure A-26) ────────────────────────────────
+    uint32_t    pending_noise_cmd_raw_ = 0;
+    bool        pending_noise_cmd_set_ = false;
 
     // ── Scanning sub-state (T-10) ────────────────────────────────────────
     ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING

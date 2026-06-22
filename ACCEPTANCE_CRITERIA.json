@@ -1066,6 +1066,20 @@
       "verification": "LQACmdPayload-Struct, encode_lqa_cmd() und decode_lqa_cmd() in lqa_metrics.h/.cpp implementiert. Bit-Layout nach Table A-XIV (MIL-STD-188-141B): bit[23:21]=CMD-Preamble 110, bit[20:14]='a'=1100001, bit[13]=KA1, bit[12:10]=MP[2:0], bit[9:5]=SINAD[4:0], bit[4:0]=BER[4:0]. Zusätzlich ber_score_to_lqa_code() nach Table A-XIII (votes 0-48 → 5-bit code 0-30, Sättigung bei ≥30). Sentinel-Konstanten kBerLqaNoValue=31, kSinadLqaNoValue=31, kMpLqaNotMeasured=7. 13 neue Unit-Tests verifizieren: direkte Abbildung 0-29, Sättigung, Preamble/Zeichenfeld, Bit-Positionen jedes Feldes, No-Value-Sentinels, exhaustiver Roundtrip für alle 4096 Feldkombinationen. Alle Tests: 46/46 PASS."
     },
     {
+      "id": "AC-CHAN-003-002",
+      "feature": "FEAT-CHAN-003",
+      "requirement": [
+        "MIL-STD-188-141B A.5.4.4",
+        "MIL-STD-188-141B Table A-XIV"
+      ],
+      "title": "CMD LQA Bilateral Exchange: TX in Rufer-Nachrichten-Sektion und RX in Antwort",
+      "description": "Der Rufer (SAM) sendet ein CMD-LQA-Wort mit KA1=1 in der Message-Sektion seines Rufes. Der Angerufene (JOE) antwortet mit CMD-LQA (KA1=0) in seiner Response-Message-Sektion. Beide Seiten speichern die empfangenen bilateralen SINAD/BER/MP-Werte in der LQA-Datenbank.",
+      "module": "Protocol/Control/ale_state_machine",
+      "verification_hint": "Prüfe set_pending_lqa_cmd() und active_lqa_cmd_seq_ in ale_state_machine.h. Prüfe enqueue_call_sequence_() in ale_state_machine.cpp: CMD 'a' muss in Message-Sektion vor TIS erscheinen. Prüfe build_response_words() auf CMD 'a' in JOE-Antwort. Prüfe ALEController::initiate_call() und maybe_emit_call_alert() auf set_pending_lqa_cmd()-Aufrufe.",
+      "status": "closed",
+      "verification": "set_pending_lqa_cmd(raw24) / clear_pending_lqa_cmd() / active_lqa_cmd_seq_ in ale_state_machine.h implementiert. initiate_call() snapshoted pending → active (überlebt Channel-Retries wie active_message_). enqueue_call_sequence_() baut Message-Sektion: [CMD 'a'] + [CMD 'r' + DATA] + [AMD]. build_response_words() fügt CMD 'a' (KA1=0) + optionalen Report in JOE-Antwort ein. ALEController::initiate_call() setzt set_pending_lqa_cmd() mit KA1=1, maybe_emit_call_alert() setzt CMD LQA für Responder (KA1=0). RX-Pfad: on_received_word() CMD 'a' in HANDSHAKE/CALLING → speichert pending_bilateral_payload_; on_operator_event(LINK_ESTABLISHED) → update_bilateral() / mark_bilateral_attempted(). Freie Funktion multipath_delay_to_lqa_code(float delay_ms) für MP-Code-Konvertierung. Tests: test_lqa_bilateral_tx (LQABilateralTx PASS — 5 Tests inkl. KA1=1 im TX, no-CMD ohne pending, einmalig, vor TIS, Round-Trip), test_lqa_bilateral_rx (LQABilateralRx PASS — 8 Tests inkl. Decode, Sentinels, update_bilateral, mark_bilateral_attempted, SM-Robustheit), test_bilateral_lqa (BilateralLQA PASS — Integration: SAM→JOE CMD 'a' KA1=1, JOE→SAM CMD 'a' KA1=0, LQA Report bei KA1=1, DB Round-Trip)."
+    },
+    {
       "id": "AC-CHAN-006-001",
       "feature": "FEAT-CHAN-006",
       "requirement": [
@@ -1179,20 +1193,6 @@
       "verification_hint": "Prüfe LINKED-Zustand in ale_state_machine.cpp: twa_timeout_ms oder TWA_MS muss 30000 sein. Timer-Reset bei jeder Aktivität.",
       "status": "closed",
       "verification": "test_called_station_ack_to_linked_and_note1() in tests/word/unit/test_ale_calling.cpp treibt die GERUFENE Station (JOE) erstmals über den echten RX/TX-Pfad (kein injiziertes HANDSHAKE_COMPLETE) bis LINKED und verifiziert Twa: (1) get_timing_parameters().Twa_ms == 30000 ms; (2) on_link_activity() setzt den Twa-Timer zurück → Link bleibt nach 40 s mit zwischenzeitlicher Aktivität bestehen; (3) >Twa Funkstille → handle_linked() terminiert den Link (verlässt LINKED). Implementierung: handle_linked() nutzt timing_.Twa_ms (Default 30000 via TimingParameters), on_link_activity() reanchort last_word_time_ms. Voller ctest-Lauf 35/35 grün (2026-06-20)."
-    },
-    {
-      "id": "AC-LINK-003-002",
-      "feature": "FEAT-LINK-003",
-      "requirement": [
-        "REQ-LINK-021",
-        "REQ-LINK-022",
-        "REQ-LINK-023"
-      ],
-      "title": "Link-Termination mit TWAS",
-      "description": "Ein Link wird durch Senden eines TWAS-Frames terminiert. Die State Machine wechselt von LINKED::TERMINATING zurück nach SCANNING.",
-      "module": "Protocol/ale_state_machine",
-      "verification_hint": "Prüfe LinkedPhase::TERMINATING in ale_state_machine.cpp: TWAS mit self_address wird gesendet, danach Übergang nach SCANNING.",
-      "status": "open"
     },
     {
       "id": "AC-LINK-004-001",
@@ -2114,9 +2114,10 @@
       ],
       "title": "Rauschpegel-Messung: Mittelwert & Maximum über 60 Minuten",
       "description": "Der Channel-Selektor erfasst kontinuierlich den Rauschpegel auf dem aktuellen Kanal und berechnet Mittelwert und Maximum über ein gleitendes Fenster von 60 Minuten (3600 s). Beide Werte werden in dB relativ zur Referenz 0,1 µV/3 kHz kodiert.",
-      "module": "Protocol/ale_channel_selector",
-      "verification_hint": "Prüfe ale_channel_selector.cpp auf noise_window_s = 3600 oder NOISE_WINDOW_MINUTES = 60. Prüfe ob rolling-average und rolling-max Algorithmus für Rauschpegel implementiert sind.",
-      "status": "open"
+      "module": "LQA/lqa_metrics",
+      "verification_hint": "Prüfe LQAMetrics::NoiseFloorStats, get_noise_floor_stats() und noise_window_ in lqa_metrics.h/.cpp auf 3600s-Rolling-Window mit max/mean.",
+      "status": "closed",
+      "verification": "LQAMetrics um NoiseFloorStats { float max_dbm; float mean_dbm; } und get_noise_floor_stats(now_ms) ergänzt. noise_window_ (std::vector<NoiseFloorSample>) speichert bis zu 3600 s Messungen; add_sample() füllt das Fenster, ältere Einträge werden on-demand durch now_ms-Schnitt verworfen. ALEController liest get_noise_floor_stats() im SOUNDING-Zustand aus und konvertiert dBm → 7-bit Code (v = int(dbm + 120), 127 = kein Messwert). LQAMetrics-Tests: test_lqa_metrics (LQAMetrics PASS)."
     },
     {
       "id": "AC-CHAN-004-002",
@@ -2126,9 +2127,23 @@
       ],
       "title": "CMD NOISE: Kodierung und Broadcast-Übertragung",
       "description": "Das CMD-NOISE-Wort wird mit Mittelwert- und Maximalrauschpegel aufgebaut. Es wird im Message-Abschnitt als Broadcast an alle Netzstationen übertragen. Die Kodierung erfolgt als dB-Wert relativ zur Referenz 0,1 µV/3 kHz.",
-      "module": "Protocol/ale_channel_selector",
-      "verification_hint": "Prüfe ale_channel_selector.cpp oder ale_orderwire_protocols.cpp auf encode_noise_cmd() oder build_noise_report()-Funktion. Prüfe ob das erzeugte CMD-Wort den Typ NOISE trägt und Mittelwert + Maximum enthält.",
-      "status": "open"
+      "module": "Word/ale_sequence",
+      "verification_hint": "Prüfe ALESequenceBuilder::noise_cmd() in ale_sequence.cpp: 21-bit Payload [20:14]='n'(0x6E) | [13:7]=max_db | [6:0]=mean_db. Prüfe handle_sounding() in ale_state_machine.cpp auf CMD-NOISE-Anhang nach TIS.",
+      "status": "closed",
+      "verification": "ALESequenceBuilder::noise_cmd(max_db, mean_db) in ale_sequence.cpp implementiert: 21-bit Payload [20:14]='n'(0x6E=0b1101110) | [13:7]=max_db(7-bit) | [6:0]=mean_db(7-bit), type=CMD, address[0]='n'. ALEStateMachine::handle_sounding() hängt CMD-NOISE-Wort nach TIS-Frame an wenn pending_noise_cmd_set_. ALEController setzt set_pending_noise_cmd() bei SOUNDING-Eintritt aus lqa_metrics_.get_noise_floor_stats(). RX-Pfad: on_received_word() CMD 'n' → lqa_database_.update_noise_floor(). 127/127 = kein Messwert (wird ignoriert). Sentinel-Test: update_noise_floor(127,127) erzeugt keinen Eintrag. Test: test_lqa_noise_cmd (LQANoiseCmd PASS)."
+    },
+    {
+      "id": "AC-CHAN-004-003",
+      "feature": "FEAT-CHAN-004",
+      "requirement": [
+        "MIL-STD-187-721D §5.4.4"
+      ],
+      "title": "LQA Report Protokoll: CMD 'r' + DATA Bulk-Austausch",
+      "description": "LQA-Reports werden per CMD 'r' (Char 0x72) + DATA-Wörtern ausgetauscht. Header-Wort: [20:14]='r' | [13:12]=00(type) | [10:8]=101(abs. Freq) | [7:0]=Anzahl. Jeder Report: 36 Bit (20 Bit Freq/100Hz + 3 Bit Age + 3 Bit MP + 5 Bit SINAD + 5 Bit BER). Bit-Packing: N×36 Bits in ceil(N*36/21) DATA-Wörter (21 Bit/Wort, MSB-first). KA1=1 im CMD-LQA-Wort des Rufers fordert Report vom Angerufenen an.",
+      "module": "LQA/lqa_report",
+      "verification_hint": "Prüfe LQAReportEncoder::pack_reports() und LQAReportDecoder in lqa_report.cpp. Prüfe ALESequenceBuilder::lqa_report() in ale_sequence.cpp. Prüfe set_pending_lqa_report_seq() in ale_state_machine.h. Prüfe maybe_emit_call_alert() in ale_controller.cpp auf KA1-Erkennung und Report-Zusammenstellung.",
+      "status": "closed",
+      "verification": "LQAReport-Struct (frequency_hz, age, mp, sinad, ber) + LQAReportEncoder::pack_reports() + LQAReportDecoder (stateful feed()/reports()) in include/LQA/lqa_report.h + src/LQA/lqa_report.cpp implementiert (lqa_report.cpp in ale_protocol-Library, nicht ale_lqa — verhindert Zirkelabhängigkeit). ALESequenceBuilder::lqa_report() baut CMD 'r' Header + DATA-Sequenz. ALEStateMachine speichert pending_lqa_report_seq_ → active_lqa_report_seq_ (Snapshot in initiate_call()), wird in enqueue_call_sequence_() nach CMD 'a' eingefügt. Responder-Pfad: maybe_emit_call_alert() in ale_controller.cpp erkennt KA1=1, holt get_entries_for_station(caller, 25h), baut LQAReport-Vektor, setzt set_pending_lqa_report_seq(). RX-Pfad: on_received_word() CMD 'r' → lqa_report_decoder_.start(); DATA → lqa_report_decoder_.feed() → update_bilateral() für alle empfangenen Kanäle. Round-Trip-Test: 1+5 Reports, Sentinel-Felder, Age-Codes, Header-Bits. Tests: test_lqa_report (LQAReport PASS), test_bilateral_lqa (BilateralLQA PASS)."
     },
     {
       "id": "AC-CHAN-005-001",

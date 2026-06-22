@@ -32,19 +32,33 @@ void LQAMetrics::set_database(LQADatabase* database) {
 void LQAMetrics::add_sample(const MetricsSample& sample,
                            uint32_t frequency_hz,
                            const std::string& remote_station) {
+    // Rolling 60-min noise window (AC-CHAN-004-001)
+    if (sample.noise_power_dbm > -120.0f) {
+        const uint32_t now_ms = (sample.timestamp_ms != 0) ? sample.timestamp_ms : 0u;
+        noise_window_.push_back({now_ms, sample.noise_power_dbm});
+        // Prune entries older than 3600 s when now_ms is known and non-zero
+        if (now_ms > 3600000u) {
+            const uint32_t cutoff = now_ms - 3600000u;
+            noise_window_.erase(
+                std::remove_if(noise_window_.begin(), noise_window_.end(),
+                    [cutoff](const NoiseFloorSample& s){ return s.timestamp_ms < cutoff; }),
+                noise_window_.end());
+        }
+    }
+
     // Add to averaging window
     samples_.push_back(sample);
-    
+
     // Store context for database update
     accumulated_.frequency_hz = frequency_hz;
     accumulated_.remote_station = remote_station;
     accumulated_.total_fec_errors += sample.fec_errors_corrected;
     accumulated_.total_words++;
-    
+
     // When window is full, compute averages and update database
     if (samples_.size() >= config_.averaging_window) {
         update_database(frequency_hz, remote_station);
-        
+
         // Keep last sample for continuity
         MetricsSample last = samples_.back();
         samples_.clear();
@@ -243,6 +257,27 @@ size_t LQAMetrics::get_sample_count() const {
     return samples_.size();
 }
 
+LQAMetrics::NoiseFloorStats LQAMetrics::get_noise_floor_stats(uint32_t now_ms) const {
+    NoiseFloorStats stats;
+    if (noise_window_.empty()) return stats;
+
+    // Filter to last 3600 s when now_ms is provided and non-zero
+    float sum = 0.0f;
+    float max_val = -120.0f;
+    size_t count = 0;
+    const uint32_t cutoff = (now_ms > 3600000u) ? (now_ms - 3600000u) : 0u;
+    for (const auto& s : noise_window_) {
+        if (now_ms != 0 && s.timestamp_ms < cutoff) continue;
+        if (s.noise_dbm > max_val) max_val = s.noise_dbm;
+        sum += s.noise_dbm;
+        ++count;
+    }
+    if (count == 0) return stats;
+    stats.max_dbm  = max_val;
+    stats.mean_dbm = sum / static_cast<float>(count);
+    return stats;
+}
+
 // ─── Table A-XIII / A-XIV free functions ─────────────────────────────────────
 
 uint8_t ber_score_to_lqa_code(uint8_t ber_score) {
@@ -275,6 +310,25 @@ LQACmdPayload decode_lqa_cmd(uint32_t word24) {
     p.sinad =  (word24 >>  5) & 0x1Fu;
     p.ber   =   word24        & 0x1Fu;
     return p;
+}
+
+uint8_t lqa_age_code(uint32_t last_contact_ms, uint32_t now_ms) {
+    if (last_contact_ms == 0 || now_ms < last_contact_ms) return 7u;
+    const uint32_t elapsed = now_ms - last_contact_ms;
+    if (elapsed <   900000u) return 0u;  //  0–15 min
+    if (elapsed <  1800000u) return 1u;  // 15–30 min
+    if (elapsed <  3600000u) return 2u;  // 30–60 min
+    if (elapsed < 14400000u) return 3u;  //  1–4 h
+    if (elapsed < 28800000u) return 4u;  //  4–8 h
+    if (elapsed < 57600000u) return 5u;  //  8–16 h
+    if (elapsed < 90000000u) return 6u;  // 16–25 h
+    return 7u;                            // >25 h or unknown
+}
+
+uint8_t multipath_delay_to_lqa_code(float delay_ms) {
+    if (delay_ms < 0.0f) return 0u;
+    if (delay_ms > 6.0f) return 7u;              // "> 6 ms" saturation
+    return static_cast<uint8_t>(delay_ms);        // floor to code 0–6
 }
 
 } // namespace ale

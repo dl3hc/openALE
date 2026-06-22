@@ -254,14 +254,44 @@ std::vector<LQAEntry> LQADatabase::get_entries_for_channel(uint32_t frequency_hz
     return result;
 }
 
-std::vector<LQAEntry> LQADatabase::get_entries_for_station(const std::string& remote_station) const {
+std::vector<LQAEntry> LQADatabase::get_entries_for_station(
+        const std::string& remote_station, float max_age_hours) const {
+    const uint32_t now = get_current_time_ms();
+    const uint32_t max_age_ms = (max_age_hours > 0.0f)
+        ? static_cast<uint32_t>(max_age_hours * 3600000.0f) : 0u;
     std::vector<LQAEntry> result;
     for (const auto& pair : entries_) {
-        if (pair.first.remote_station == remote_station) {
-            result.push_back(pair.second);
-        }
+        if (pair.first.remote_station != remote_station) continue;
+        if (max_age_ms > 0u && (now - pair.second.last_activity_ms()) > max_age_ms) continue;
+        result.push_back(pair.second);
     }
+    std::sort(result.begin(), result.end(),
+              [](const LQAEntry& a, const LQAEntry& b){ return a.frequency_hz < b.frequency_hz; });
     return result;
+}
+
+void LQADatabase::update_noise_floor(uint32_t frequency_hz,
+                                      uint8_t  max_db,
+                                      uint8_t  mean_db,
+                                      uint32_t timestamp_ms) {
+    if (max_db == 127u && mean_db == 127u) return;  // no-report sentinels
+    EntryKey key{frequency_hz, ""};
+    uint32_t now = (timestamp_ms == 0) ? get_current_time_ms() : timestamp_ms;
+    auto it = entries_.find(key);
+    if (it == entries_.end()) {
+        evict_oldest_if_full();
+        LQAEntry entry;
+        entry.frequency_hz   = frequency_hz;
+        entry.last_sounding_ms = now;
+        entries_[key] = entry;
+        it = entries_.find(key);
+    }
+    // Store noise floor: use mean_db for the noise_floor_dbm field.
+    // The noise_floor_dbm field is in dBm; CMD NOISE uses a 7-bit scale
+    // (dB rel. 0.1 µV/3kHz), so we store it as a float directly for now.
+    if (mean_db < 127u)
+        it->second.noise_floor_dbm = static_cast<float>(mean_db) - 120.0f;
+    it->second.last_sounding_ms = now;
 }
 
 std::vector<LQAEntry> LQADatabase::get_all_entries() const {
