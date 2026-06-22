@@ -1006,7 +1006,8 @@
       "description": "Der ChannelSelector wählt automatisch aus einer vordefinierten Kanalliste (channel_set) den besten Kanal basierend auf LQA-Daten aus. Es gibt keine zufällige Kanalauswahl ohne LQA-Grundlage.",
       "module": "Protocol/ale_channel_selector",
       "verification_hint": "Prüfe ale_channel_selector.cpp auf select_best_channel()-Funktion, die LQA-Scores aus lqa_database verwendet.",
-      "status": "open"
+      "status": "closed",
+      "verification": "ChannelSelector::select_best_lqa() in ale_channel_selector.cpp ruft LQAStore::best_channel() auf, das LQA-Scores aus LQADatabase auswertet. 7 Unit-Tests in tests/chan/unit/test_channel_selector.cpp verifizieren: LQA-Score-basierte Kanalauswahl, Determiniertheit (kein Zufall), Fallback auf ersten aktivierten Kanal ohne LQA-Daten, Übersprung deaktivierter Kanäle, FIXED- und ROUND_ROBIN-Policy. Alle Tests: 7/7 PASS."
     },
     {
       "id": "AC-CHAN-002-001",
@@ -1015,7 +1016,7 @@
         "REQ-CHAN-011",
         "REQ-CHAN-012"
       ],
-      "title": "BER-Messung: non-animous Vote-Zählung (0–48)",
+      "title": "BER-Messung: unanimous Vote-Zählung (0–48)",
       "description": "Der BER-Wert wird als Anzahl der Bits berechnet, bei denen kein unanimer Vote vorliegt (0 = perfekte Qualität, 48 = schlechteste Qualität). Range muss 0–48 sein.",
       "module": "LQA/lqa_metrics",
       "verification_hint": "Prüfe lqa_metrics.cpp: BER = 48 - unanimous_votes (oder äquivalent: Anzahl nicht-unanimer Bits).",

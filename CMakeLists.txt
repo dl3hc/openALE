@@ -537,6 +537,11 @@ target_link_libraries(test_channel_net_store ale_app_core ale_link ale_modem ale
 target_include_directories(test_channel_net_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ChannelNetStore COMMAND test_channel_net_store)
 
+add_executable(test_channel_selector tests/chan/unit/test_channel_selector.cpp)
+target_link_libraries(test_channel_selector ale_channel ale_stores ale_lqa ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_channel_selector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ChannelSelector COMMAND test_channel_selector)
+
 add_executable(test_ws_bridge_utils tests/gen/unit/test_ws_bridge_utils.cpp)
 target_include_directories(test_ws_bridge_utils PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/apps)
 add_test(NAME WsBridgeUtils COMMAND test_ws_bridge_utils)
