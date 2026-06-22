@@ -25,7 +25,6 @@
 
 #include "Word/ale_word.h"
 #include "FEC/ale_fec_codec.h"
-#include "Protocol/Control/ale_timing.h"
 #include <cstring>
 #include <cctype>
 #include <algorithm>
@@ -405,8 +404,8 @@ bool FrameValidator::address_section_word_count_valid(const std::vector<ALEWord>
     // AC-FRAME-006-002 / REQ-FRAME-013: Ta max = 5 words = 5 × Trw = 1960 ms (Table A-XII).
     // An address sequence begins on an anchor word (TO/TIS/TWAS/FROM/THRU) and continues
     // through immediately following DATA / REP extension words.  Every such sequence in
-    // the frame must contain at most TA_MAX_WORDS = 5 words.
-    constexpr size_t MAX = ALETimingConstants::TA_MAX_WORDS;
+    // the frame must contain at most 5 words (= 15-char address / 3 chars per word).
+    constexpr size_t MAX = 5u;
     size_t current = 0;
     for (const auto& w : words) {
         switch (w.type) {

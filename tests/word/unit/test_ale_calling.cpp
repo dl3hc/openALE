@@ -1814,24 +1814,30 @@ bool test_sounding_listen_window_opens_on_last_word()
     ALEStateMachine sm = make_sm(cap, "SAM", /*scan_ch=*/0);
     sm.set_rx_enabled_callback([&rx_open](bool on){ rx_open = on; });
 
-    sm.send_sounding();  // IDLE → SOUNDING (TRANSMITTING); enqueues TIS SAM (1 word)
+    sm.send_sounding();  // IDLE → SOUNDING (LBT phase; AC-SOUND-001-001)
+    // Advance past LBT (Twt_ms) so SM transitions to TRANSMITTING and enqueues words.
+    // Trs = 2×Ta(caller): conclusion "TIS SAM" sent twice → 2 words (AC-SOUND-003-002).
+    sm.update(ALETimingConstants::Twt_ms + 1);
 
-    bool transmitting = (sm.get_sounding_phase() == SoundingPhase::TRANSMITTING);
-    bool one_word     = (sm.get_words_pending() == 1);
-    std::cout << "  TX phase, 1 word enqueued: "
-              << ((transmitting && one_word) ? "PASS" : "FAIL")
-              << " (words=" << sm.get_words_pending() << ")\n";
+    bool transmitting  = (sm.get_sounding_phase() == SoundingPhase::TRANSMITTING);
+    uint32_t n_words   = sm.get_words_pending();
+    bool words_queued  = (n_words > 0);
+    std::cout << "  TX phase, " << n_words << " word(s) enqueued: "
+              << ((transmitting && words_queued) ? "PASS" : "FAIL")
+              << " (words=" << n_words << ")\n";
 
-    // The LAST sent word must open the RX window via on_word_complete() itself,
-    // without relying on a later update() tick.
-    sm.on_word_complete();
+    // The LAST on_word_complete() must switch TRANSMITTING → LISTENING without
+    // relying on a later update() tick.  Drain all but the last word first.
+    for (uint32_t i = 1; i < n_words; ++i)
+        sm.on_word_complete();
+    sm.on_word_complete();  // last word → LISTENING
 
     bool listening = (sm.get_sounding_phase() == SoundingPhase::LISTENING);
     std::cout << "  on_word_complete → LISTENING (no update() needed): "
               << (listening ? "PASS" : "FAIL") << "\n";
     std::cout << "  RX window opened: " << (rx_open ? "PASS" : "FAIL") << "\n";
 
-    return transmitting && one_word && listening && rx_open;
+    return transmitting && words_queued && listening && rx_open;
 }
 
 // ============================================================================
