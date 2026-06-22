@@ -1059,7 +1059,7 @@
         "REQ-CHAN-019"
       ],
       "title": "CMD-LQA-Word: Bit-Layout BER/SINAD/MP/KA1",
-      "description": "Das CMD-LQA-Wort hat folgendes Bit-Layout im 21-Bit-Payload: Bits 20–16 = BER (5 Bit), Bits 15–11 = SINAD (5 Bit), Bits 10–8 = Multipath (3 Bit), Bit 7 = KA1 (LQA-Request-Flag).",
+      "description": "Das CMD-LQA-Wort (24 Bit, Bit 23 = MSB) hat folgendes Bit-Layout nach Table A-XIV MIL-STD-188-141B: Bits 23–21 = CMD-Preamble 110, Bits 20–14 = Zeichen 'a' (1100001), Bit 13 = KA1, Bits 12–10 = MP[2:0] (3 Bit, 0–6 ms), Bits 9–5 = SINAD[4:0] (5 Bit, 0–30 dB), Bits 4–0 = BER[4:0] (5 Bit, 0–30, Tabelle A-XIII).",
       "module": "LQA/lqa_metrics",
       "verification_hint": "Prüfe encode_lqa_cmd() in lqa_metrics.cpp oder ale_channel_selector.cpp. Bit-Maske und Shift-Operationen müssen obigem Layout entsprechen.",
       "status": "closed",

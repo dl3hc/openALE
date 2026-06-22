@@ -4353,20 +4353,23 @@ uint8_t sinad_to_lqa_code(float sinad_db);  // 0..30, clamp, round
 
 #### CMD LQA Bit-Layout
 
-```
-CMD LQA Word (21 Bit Payload nach 3-Bit Preamble CMD=6):
-Bit 20..16 = BER   (5 Bit, 0-30, Tabelle A-XIII)
-Bit 15..11 = SINAD (5 Bit, 0-30 dB; 11111 = kein Wert)
-Bit 10..8  = MP    (3 Bit, 0-6 ms; 111 = nicht gemessen)
-Bit 7      = KA1   (1 Bit: 1 = LQA-Report anfordern)
-Bit 6..0   = reserviert / 0
+24-Bit-ALE-Word (Bit 23 = MSB, Bit 0 = LSB) — nach Table A-XIV MIL-STD-188-141B:
 
+```
+Bit 23..21 = CMD-Preamble   110  (W1–W3)
+Bit 20..14 = Zeichen 'a'    1100001  (W4–W10)
+Bit 13     = KA1            (W11;  1 = LQA-Report anfordern)
+Bit 12..10 = MP[2:0]        (W12–W14; 0–6 ms; 111 = nicht gemessen)
+Bit  9.. 5 = SINAD[4:0]     (W15–W19; 0–30 dB; 11111 = kein Wert)
+Bit  4.. 0 = BER[4:0]       (W20–W24; 0–30, Tabelle A-XIII; 11111 = kein Wert)
+```
+
+```cpp
 struct LQACmdPayload {
-    uint8_t ber   : 5;   // 0-30 (Tabelle A-XIII)
-    uint8_t sinad : 5;   // 0-30 dB, 31=unbekannt
-    uint8_t mp    : 3;   // 0-6 ms, 7=nicht gemessen
-    uint8_t ka1   : 1;   // LQA-Polling-Anfrage
-    uint8_t rsvd  : 7;
+    uint8_t ber   = 31;  // 5-Bit BER-Code 0-30 (Tabelle A-XIII); 31 = kein Wert
+    uint8_t sinad = 31;  // 5-Bit SINAD-Code 0-30 dB; 31 = kein Wert
+    uint8_t mp    =  7;  // 3-Bit MP-Code 0-6 ms; 7 = nicht gemessen
+    bool    ka1   = false;
 };
 uint32_t encode_lqa_cmd(const LQACmdPayload& p);
 LQACmdPayload decode_lqa_cmd(uint32_t word24);
