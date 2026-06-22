@@ -88,7 +88,29 @@ function syncAllFromBridge() {
 // either operator-driven from this same GUI, or — for PTT during a call —
 // fast-changing enough that polling beats adding a new event type for now).
 // Light poll only while connected.
-setInterval(() => { if (bridgeConnected) { syncVfoFromBridge(); pollRigStatus(); } }, 2000);
+setInterval(() => { if (bridgeConnected) { syncVfoFromBridge(); pollRigStatus(); pollSignalQuality(); } }, 2000);
+
+// Poll SIGNAL_QUALITY and wire SINAD into the header display and call-panel quality widget.
+// sinad_db is stored as an integer [0,30] in the LQA database (sinad_to_lqa_code).
+function pollSignalQuality() {
+  bridgeSend('SIGNAL_QUALITY', {}, (r) => {
+    if (!r.ok) return;
+    const sinad = Math.max(0, Math.min(30, Math.round(r.sinad_db)));
+
+    // Header SINAD readout
+    document.getElementById('snrVal').textContent = (sinad >= 0 ? '+' : '') + sinad;
+
+    // Quality label in the active-link panel
+    const qtext = sinad >= 24 ? 'Excellent' : sinad >= 17 ? 'Good' : sinad >= 10 ? 'Fair' : 'Poor';
+    const lbl = document.getElementById('qualityLbl');
+    if (lbl) lbl.textContent = qtext + ' · +' + sinad + ' dB';
+
+    // Quality bars: 5 bars, one per 6 dB (0 bars below 6, 5 bars at 30)
+    const activeBars = sinad >= 30 ? 5 : Math.floor(sinad / 6);
+    const bars = document.querySelectorAll('#qbars .qbar');
+    bars.forEach((b, i) => b.classList.toggle('inactive', i >= activeBars));
+  });
+}
 
 function applyStatusReply(r) {
   if (!r.ok) return;

@@ -521,7 +521,8 @@
     .qbar { width: 5px; border-radius: 2px; background: var(--s-linked); }
     .qbar:nth-child(1){height:7px} .qbar:nth-child(2){height:11px}
     .qbar:nth-child(3){height:15px} .qbar:nth-child(4){height:20px}
-    .qbar:nth-child(5){height:24px;opacity:0.3}
+    .qbar:nth-child(5){height:24px}
+    .qbar.inactive { opacity: 0.15; }
     .qlabel { font-family: var(--mono); font-size: 11px; color: var(--s-linked); }
 
     .btn-end {

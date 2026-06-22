@@ -65,9 +65,9 @@ void LQAMetrics::update_database(uint32_t frequency_hz,
     float ber = estimate_ber(accumulated_.total_fec_errors, 
                             accumulated_.total_words);
     
-    // Calculate SINAD (assume -30 dB distortion as typical)
-    float sinad = calculate_sinad(avg.snr_db, -30.0f);
-    
+    // Calculate SINAD, clamp to LQA code [0,30] before storing (REQ-CHAN-013)
+    float sinad_code = static_cast<float>(sinad_to_lqa_code(calculate_sinad(avg.snr_db, -30.0f)));
+
     // Detect multipath if enabled
     float multipath_score = 0.0f;
     if (config_.enable_multipath) {
@@ -91,7 +91,7 @@ void LQAMetrics::update_database(uint32_t frequency_hz,
         remote_station,
         avg.snr_db,
         ber,
-        sinad,
+        sinad_code,
         multipath_score,
         noise_floor,
         accumulated_.total_fec_errors,
