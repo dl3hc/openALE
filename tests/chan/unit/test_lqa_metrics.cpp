@@ -379,6 +379,78 @@ void test_ber_accumulator_reset() {
     std::cout << "  PASS" << std::endl;
 }
 
+// --- AC-CHAN-002-002: sinad_to_lqa_code range [0, 30] (REQ-CHAN-013) ---
+
+// Negative SINAD → code 0
+void test_sinad_code_negative_clamped_to_zero() {
+    std::cout << "Test: sinad_to_lqa_code - negative dB clamped to 0..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.sinad_to_lqa_code(-5.0f) == 0);
+    assert(metrics.sinad_to_lqa_code(-100.0f) == 0);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// 0 dB → code 0
+void test_sinad_code_zero_db() {
+    std::cout << "Test: sinad_to_lqa_code - 0 dB -> code 0..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.sinad_to_lqa_code(0.0f) == 0);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// 30 dB → code 30
+void test_sinad_code_thirty_db() {
+    std::cout << "Test: sinad_to_lqa_code - 30 dB -> code 30..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.sinad_to_lqa_code(30.0f) == 30);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Above 30 dB → code 30
+void test_sinad_code_above_max_clamped_to_thirty() {
+    std::cout << "Test: sinad_to_lqa_code - values >30 dB clamped to 30..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.sinad_to_lqa_code(35.0f) == 30);
+    assert(metrics.sinad_to_lqa_code(100.0f) == 30);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Intermediate values are rounded correctly
+void test_sinad_code_rounding() {
+    std::cout << "Test: sinad_to_lqa_code - intermediate values rounded to nearest integer..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.sinad_to_lqa_code(15.0f) == 15);
+    assert(metrics.sinad_to_lqa_code(15.4f) == 15);   // rounds down
+    assert(metrics.sinad_to_lqa_code(15.5f) == 16);   // rounds up
+    assert(metrics.sinad_to_lqa_code(15.7f) == 16);   // rounds up
+    assert(metrics.sinad_to_lqa_code(1.0f)  == 1);
+    assert(metrics.sinad_to_lqa_code(29.9f) == 30);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Exhaustive sweep: no code ever outside [0, 30]
+void test_sinad_code_range_never_outside_bounds() {
+    std::cout << "Test: sinad_to_lqa_code - no code outside [0,30] for any input..." << std::endl;
+
+    LQAMetrics metrics;
+    // Sweep from -10 to +40 in 0.1 steps
+    for (float db = -10.0f; db <= 40.0f; db += 0.1f) {
+        assert(metrics.sinad_to_lqa_code(db) <= 30);
+    }
+
+    std::cout << "  PASS" << std::endl;
+}
+
 // AC-CHAN-002-001: MetricsSample carries non_unanimous_count and golay_uncorrectable fields
 void test_metrics_sample_ber_fields() {
     std::cout << "Test: MetricsSample has non_unanimous_count and golay_uncorrectable fields..." << std::endl;
@@ -420,6 +492,14 @@ int main() {
     test_ber_accumulator_range_clamped();
     test_ber_accumulator_reset();
     test_metrics_sample_ber_fields();
+
+    // AC-CHAN-002-002 sinad_to_lqa_code tests
+    test_sinad_code_negative_clamped_to_zero();
+    test_sinad_code_zero_db();
+    test_sinad_code_thirty_db();
+    test_sinad_code_above_max_clamped_to_thirty();
+    test_sinad_code_rounding();
+    test_sinad_code_range_never_outside_bounds();
 
     std::cout << "\n=== All LQA Metrics Tests Passed ===" << std::endl;
     return 0;

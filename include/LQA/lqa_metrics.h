@@ -158,14 +158,28 @@ public:
     
     /**
      * @brief Calculate SINAD from SNR and distortion
-     * 
+     *
      * SINAD = Signal + Noise + Distortion / Noise + Distortion
-     * 
+     *
      * @param snr_db Signal-to-Noise Ratio (dB)
      * @param distortion_db Distortion level (dB below signal)
-     * @return SINAD in dB
+     * @return SINAD in dB (raw, unclamped)
      */
     float calculate_sinad(float snr_db, float distortion_db) const;
+
+    /**
+     * @brief Convert raw SINAD dB to LQA code in range [0, 30] (REQ-CHAN-013)
+     *
+     * Maps any float SINAD value onto the integer scale defined by
+     * MIL-STD-188-141B A.5.4.1.2:
+     *   <= 0 dB  → code 0
+     *   >= 30 dB → code 30
+     *   else     → round(sinad_db) ∈ [1, 29]
+     *
+     * @param sinad_db Raw SINAD in dB
+     * @return LQA code 0–30 (no value outside this range)
+     */
+    uint8_t sinad_to_lqa_code(float sinad_db) const;
     
     /**
      * @brief Estimate BER from FEC error count

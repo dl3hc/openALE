@@ -1033,7 +1033,8 @@
       "description": "Der SINAD-Messwert wird auf der Skala 0 (0 dB) bis 30 (30+ dB) dargestellt. Kein Wert außerhalb dieses Bereichs.",
       "module": "LQA/lqa_metrics",
       "verification_hint": "Prüfe lqa_metrics.cpp: SINAD-Wert wird auf [0,30] geclampt oder gemappt.",
-      "status": "open"
+      "status": "closed",
+      "verification": "LQAMetrics::sinad_to_lqa_code(float sinad_db) in lqa_metrics.cpp/.h implementiert: Werte <=0 dB → Code 0, >=30 dB → Code 30, sonst round(sinad_db) ∈ [1,29]. Kein Rückgabewert außerhalb [0,30] möglich. 6 Unit-Tests in tests/chan/unit/test_lqa_metrics.cpp verifizieren: Negativwerte → 0, 0 dB → 0, 30 dB → 30, >30 dB → 30, Rundung bei Zwischenwerten, exhaustiver Sweep -10..+40 dB → stets <=30. Alle Tests: 25/25 PASS."
     },
     {
       "id": "AC-CHAN-002-003",
