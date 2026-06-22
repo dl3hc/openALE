@@ -401,7 +401,8 @@ bool test_sounding() {
 
     // ── Act 3: simulate all words complete, then LISTENING window expires ────
     std::cout << "  Sounding complete → back to SCANNING: ";
-    // on_word_complete() drives TRANSMITTING → LISTENING; then Trw_ms expires.
+    // Trs = 2×Trw: two words sent for "SAM" (1-word addr); drain both before LISTENING.
+    sm.on_word_complete();
     sm.on_word_complete();
     sm.update(ALETimingConstants::Twt_ms + 10 + ALETimingConstants::Trw_ms + 50);
     // Returns to pre_link_state_ (SCANNING — the state SOUNDING was entered from).
@@ -606,9 +607,10 @@ bool test_sounding_no_calling_phase() {
     sm.update(ALETimingConstants::Twt_ms + 10);
     check_cp();  // snapshot 2: after LBT → TRANSMITTING
 
-    // Advance through TX acknowledgement
+    // Advance through TX acknowledgement (Trs=2×Trw: two words for "SAM")
     sm.on_word_complete();
-    check_cp();  // snapshot 3: after TX word complete → LISTENING
+    sm.on_word_complete();
+    check_cp();  // snapshot 3: after both TX words complete → LISTENING
 
     // Advance through LISTENING → SOUNDING_COMPLETE → back to SCANNING
     sm.update(ALETimingConstants::Twt_ms + 10 + ALETimingConstants::Trw_ms + 50);
@@ -640,6 +642,74 @@ bool test_sounding_no_calling_phase() {
 
     return started && in_sounding && calling_phase_ok
         && calling_not_visited && no_to_word && returned;
+}
+
+// ============================================================================
+// TEST 7f: AC-SOUND-003-002 — Sounding Redundanzzeit Trs = 2 × Ta(caller)
+//
+// Prüft:
+//  (1) ALETimingConstants::Trs_min_ms == 784 ms (= 2 × Trw)
+//  (2) trs_word_count(1) == 2  (1-Wort-Adresse → 2 Conclusion-Wörter)
+//  (3) State Machine sendet >= 2 Conclusion-Wörter für "SAM"
+//  (4) Alle gesendeten Wörter sind TIS (kein TO, kein TWAS)
+//  (5) Jedes TIS-Wort trägt die korrekte Eigenadresse
+// ============================================================================
+
+bool test_sounding_trs_timing() {
+    std::cout << "\n[TEST 7f] AC-SOUND-003-002: Sounding Redundanzzeit Trs = 2×Ta(caller)\n";
+    std::cout << "=========================================================================\n";
+
+    // ── Assert 1: Trs_min_ms konstante ist 784 ms ────────────────────────────
+    constexpr uint32_t expected_trs_min = 784u;
+    const bool trs_const_ok = (ALETimingConstants::Trs_min_ms == expected_trs_min);
+    std::cout << "  Trs_min_ms == 784 ms: "
+              << (trs_const_ok ? "PASS" : "FAIL")
+              << " (got=" << ALETimingConstants::Trs_min_ms << ")\n";
+
+    // ── Assert 2: trs_word_count(1) == 2 ─────────────────────────────────────
+    const uint32_t wc = ALETimingConstants::trs_word_count(1u);
+    const bool wc_ok = (wc == 2u);
+    std::cout << "  trs_word_count(1) == 2: "
+              << (wc_ok ? "PASS" : "FAIL")
+              << " (got=" << wc << ")\n";
+
+    // ── Assert 3–5: State Machine sendet 2 TIS-Wörter für "SAM" ─────────────
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    WordTracker tracker;
+    sm.set_transmit_callback([&tracker](const ALEWord& word) {
+        tracker.record(word);
+    });
+
+    sm.process_event(ALEEvent::START_SCAN);
+    sm.send_sounding();
+    sm.update(ALETimingConstants::Twt_ms + 10);  // advance past LBT → TX begins
+
+    const uint32_t tx_count = static_cast<uint32_t>(tracker.count());
+    const bool count_ge_2 = (tx_count >= 2u);
+    std::cout << "  >= 2 Conclusion-Wörter gesendet (sound_repeat_count >= 2): "
+              << (count_ge_2 ? "PASS" : "FAIL")
+              << " (count=" << tx_count << ")\n";
+
+    bool all_tis = true;
+    bool all_addr_correct = true;
+    for (const auto& w : tracker.words) {
+        if (w.type != PreambleType::TIS) { all_tis = false; }
+        if (std::string(w.address, 3) != "SAM") { all_addr_correct = false; }
+    }
+    std::cout << "  Alle gesendeten Wörter sind TIS (kein TO/TWAS): "
+              << (all_tis ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Alle TIS-Wörter tragen Eigenadresse \"SAM\": "
+              << (all_addr_correct ? "PASS" : "FAIL") << "\n";
+
+    // ── Assert: Trs-Dauer == count × Trw >= Trs_min_ms ──────────────────────
+    const uint64_t trs_ms = static_cast<uint64_t>(tx_count) * ALETimingConstants::Trw_ms;
+    const bool trs_ge_min = (trs_ms >= ALETimingConstants::Trs_min_ms);
+    std::cout << "  Trs (count×Trw) >= Trs_min_ms (784 ms): "
+              << (trs_ge_min ? "PASS" : "FAIL")
+              << " (Trs=" << trs_ms << " ms)\n";
+
+    return trs_const_ok && wc_ok && count_ge_2 && all_tis && all_addr_correct && trs_ge_min;
 }
 
 // ============================================================================
@@ -1081,6 +1151,7 @@ int run_all_tests() {
     if (test_sounding_conclusion_frame_only()) { pass_count++; } else { fail_count++; }
     if (test_sounding_tss_timing()) { pass_count++; } else { fail_count++; }
     if (test_sounding_no_calling_phase()) { pass_count++; } else { fail_count++; }
+    if (test_sounding_trs_timing()) { pass_count++; } else { fail_count++; }
     if (test_full_call_cycle()) { pass_count++; } else { fail_count++; }
     if (test_timing_parameters_isolation()) { pass_count++; } else { fail_count++; }
     if (test_standard_scan_rate_td2()) { pass_count++; } else { fail_count++; }

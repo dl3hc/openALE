@@ -701,8 +701,13 @@ void ALEStateMachine::handle_sounding() {
             sounding_phase_ = SoundingPhase::TRANSMITTING;
             if (rx_enabled_callback) rx_enabled_callback(false);
             if (!address_book.get_self_address().empty()) {
-                transmit_words(
-                    ALESequenceBuilder::conclusion(address_book.get_self_address()).words());
+                // Trs = 2 × Ta(caller): repeat conclusion twice for minimum redundancy (§A.5.3.1)
+                const ALESequence conclusion_seq =
+                    ALESequenceBuilder::conclusion(address_book.get_self_address());
+                const auto& cw = conclusion_seq.words();
+                std::vector<ALEWord> tx(cw);
+                tx.insert(tx.end(), cw.begin(), cw.end());
+                transmit_words(tx);
             }
             // No-address fallback falls through to TRANSMITTING check below.
         }

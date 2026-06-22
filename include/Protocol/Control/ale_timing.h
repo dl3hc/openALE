@@ -317,6 +317,18 @@ namespace ALETimingConstants {
         return repetitions * addr_word_count;
     }
 
+    // ── Sounding redundancy time (A.5.3.1/A.5.3.2 / AC-SOUND-003-002) ──
+    // Trs = 2 × Ta(caller) = 2 × addr_word_count × Trw_ms.
+    // For a 1-word address: Trs_min = 2 × Trw = 784 ms.
+    constexpr uint32_t Trs_min_ms = 2u * Trw_ms;  // 784 ms
+
+    // Minimum conclusion words for the sounding Trs phase.
+    // Returns 2 × addr_word_count so that the on-air duration equals
+    // 2 × addr_word_count × Trw_ms = 2 × Ta(caller) ≥ Trs_min.
+    constexpr uint32_t trs_word_count(uint32_t addr_word_count) {
+        return 2u * addr_word_count;
+    }
+
     // ── Protocol count constants (spec-defined, non-timing) ──────────────
     // Ta max = 5 × Trw = 1960 ms (Table A-XII / A.5.2.4.2): maximum words in
     // one individual/net address section.  AddressEncoder::chunk() enforces this
