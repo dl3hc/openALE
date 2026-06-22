@@ -451,6 +451,106 @@ void test_sinad_code_range_never_outside_bounds() {
     std::cout << "  PASS" << std::endl;
 }
 
+// --- AC-CHAN-002-003: multipath_delay_to_lqa_code 3-bit mapping (REQ-CHAN-014) ---
+
+// Negative delay is clamped to code 0
+void test_multipath_code_negative_clamped_to_zero() {
+    std::cout << "Test: multipath_delay_to_lqa_code - negative ms -> code 0..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.multipath_delay_to_lqa_code(-1.0f) == 0);
+    assert(metrics.multipath_delay_to_lqa_code(-100.0f) == 0);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// 0 ms -> code 0
+void test_multipath_code_zero_ms() {
+    std::cout << "Test: multipath_delay_to_lqa_code - 0 ms -> code 0..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.multipath_delay_to_lqa_code(0.0f) == 0);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Integer ms values 1..6 map exactly to codes 1..6
+void test_multipath_code_integer_values() {
+    std::cout << "Test: multipath_delay_to_lqa_code - integer ms 1..6 -> codes 1..6..." << std::endl;
+
+    LQAMetrics metrics;
+    for (int ms = 1; ms <= 6; ++ms) {
+        uint8_t code = metrics.multipath_delay_to_lqa_code(static_cast<float>(ms));
+        assert(code == static_cast<uint8_t>(ms));
+    }
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Fractional values are floored (not rounded)
+void test_multipath_code_fractional_floor() {
+    std::cout << "Test: multipath_delay_to_lqa_code - fractional ms is floored..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.multipath_delay_to_lqa_code(3.0f) == 3);
+    assert(metrics.multipath_delay_to_lqa_code(3.1f) == 3);
+    assert(metrics.multipath_delay_to_lqa_code(3.9f) == 3);   // floor, not round
+    assert(metrics.multipath_delay_to_lqa_code(0.9f) == 0);   // floor
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Exactly 6.0 ms -> code 6 (boundary)
+void test_multipath_code_boundary_six_ms() {
+    std::cout << "Test: multipath_delay_to_lqa_code - 6.0 ms -> code 6 (boundary)..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.multipath_delay_to_lqa_code(6.0f) == 6);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// > 6 ms -> code 7 ("6+ ms" saturation)
+void test_multipath_code_above_six_saturation() {
+    std::cout << "Test: multipath_delay_to_lqa_code - >6 ms -> code 7 (saturation)..." << std::endl;
+
+    LQAMetrics metrics;
+    assert(metrics.multipath_delay_to_lqa_code(6.001f) == 7);
+    assert(metrics.multipath_delay_to_lqa_code(6.5f)   == 7);
+    assert(metrics.multipath_delay_to_lqa_code(100.0f) == 7);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Exhaustive: no code ever outside [0, 7]
+void test_multipath_code_range_never_outside_bounds() {
+    std::cout << "Test: multipath_delay_to_lqa_code - no code outside [0,7] for any input..." << std::endl;
+
+    LQAMetrics metrics;
+    // Sweep -2 ms to +20 ms in 0.1 ms steps
+    for (float ms = -2.0f; ms <= 20.0f; ms += 0.1f) {
+        uint8_t code = metrics.multipath_delay_to_lqa_code(ms);
+        assert(code <= 7);
+    }
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// All 8 codes 0..7 are reachable
+void test_multipath_code_all_codes_reachable() {
+    std::cout << "Test: multipath_delay_to_lqa_code - all codes 0..7 are reachable..." << std::endl;
+
+    LQAMetrics metrics;
+    // Each code 0..6 is produced by its exact ms value
+    for (int ms = 0; ms <= 6; ++ms) {
+        assert(metrics.multipath_delay_to_lqa_code(static_cast<float>(ms)) == static_cast<uint8_t>(ms));
+    }
+    // Code 7 via saturation
+    assert(metrics.multipath_delay_to_lqa_code(7.0f) == 7);
+
+    std::cout << "  PASS" << std::endl;
+}
+
 // AC-CHAN-002-001: MetricsSample carries non_unanimous_count and golay_uncorrectable fields
 void test_metrics_sample_ber_fields() {
     std::cout << "Test: MetricsSample has non_unanimous_count and golay_uncorrectable fields..." << std::endl;
@@ -500,6 +600,16 @@ int main() {
     test_sinad_code_above_max_clamped_to_thirty();
     test_sinad_code_rounding();
     test_sinad_code_range_never_outside_bounds();
+
+    // AC-CHAN-002-003 multipath_delay_to_lqa_code tests
+    test_multipath_code_negative_clamped_to_zero();
+    test_multipath_code_zero_ms();
+    test_multipath_code_integer_values();
+    test_multipath_code_fractional_floor();
+    test_multipath_code_boundary_six_ms();
+    test_multipath_code_above_six_saturation();
+    test_multipath_code_range_never_outside_bounds();
+    test_multipath_code_all_codes_reachable();
 
     std::cout << "\n=== All LQA Metrics Tests Passed ===" << std::endl;
     return 0;

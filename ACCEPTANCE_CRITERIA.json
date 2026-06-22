@@ -1046,7 +1046,8 @@
       "description": "Die Multipath-Verzögerung wird im Bereich 0–6 ms (optional) gemessen und als 3-Bit-Wert (0–7, wobei 7 = 6+ ms) dargestellt.",
       "module": "LQA/lqa_metrics",
       "verification_hint": "Prüfe lqa_metrics.cpp auf Multipath-Feld (multipath_delay_ms). Wert 0..6 ms → 3-Bit (0..7).",
-      "status": "open"
+      "status": "closed",
+      "verification": "LQAMetrics::multipath_delay_to_lqa_code(float delay_ms) in lqa_metrics.cpp/.h implementiert: delay < 0 → 0 (Clamp), delay 0..6 ms → Code 0..6 (floor auf Integer-ms), delay > 6 ms → Code 7 ('6+ ms'-Sättigung). 8 Unit-Tests in tests/chan/unit/test_lqa_metrics.cpp verifizieren: Negativwerte → 0, 0 ms → 0, Integer-ms 1..6 → exakte Codes, Bruchwerte werden gefloort (3.9 ms → 3), Grenzwert 6.0 ms → 6, >6 ms → 7 (6.001/6.5/100 ms), exhaustiver Sweep -2..+20 ms → stets ≤7, alle 8 Codes 0..7 erreichbar. Alle Tests: 33/33 PASS (inkl. 25 vorhandene)."
     },
     {
       "id": "AC-CHAN-003-001",

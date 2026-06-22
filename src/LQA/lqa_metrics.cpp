@@ -162,6 +162,12 @@ uint8_t LQAMetrics::sinad_to_lqa_code(float sinad_db) const {
     return static_cast<uint8_t>(std::round(sinad_db));
 }
 
+uint8_t LQAMetrics::multipath_delay_to_lqa_code(float delay_ms) const {
+    if (delay_ms < 0.0f) return 0u;
+    if (delay_ms > 6.0f) return 7u;                      // "6+ ms" → saturation code 7
+    return static_cast<uint8_t>(delay_ms);                // floor to 0..6
+}
+
 float LQAMetrics::estimate_ber(int errors_corrected, int total_words) const {
     if (total_words == 0) {
         return 0.0f;

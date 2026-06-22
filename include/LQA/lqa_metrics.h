@@ -193,10 +193,24 @@ public:
     float estimate_ber(int errors_corrected, int total_words) const;
     
     /**
+     * @brief Convert measured multipath delay (ms) to 3-bit LQA code (AC-CHAN-002-003)
+     *
+     * Maps multipath delay onto the 3-bit CMD LQA MP field
+     * (MIL-STD-188-141B A.5.4.2, Table A-XIII):
+     *   < 0 ms   → code 0 (negative clamped)
+     *   0..6 ms  → code 0..6 (floor to integer ms)
+     *   > 6 ms   → code 7  ("6+ ms" saturation / out-of-range)
+     *
+     * @param delay_ms Measured multipath delay in milliseconds
+     * @return 3-bit code 0–7 (7 = 6+ ms or not measured)
+     */
+    uint8_t multipath_delay_to_lqa_code(float delay_ms) const;
+
+    /**
      * @brief Detect and score multipath
-     * 
+     *
      * Analyzes signal characteristics to detect multipath propagation.
-     * 
+     *
      * @param samples Recent signal samples
      * @return Multipath score (0.0 = none, 1.0 = severe)
      */
