@@ -340,10 +340,6 @@ if(WIN32)
     target_link_libraries(ale_audio_device ole32 uuid)
 endif()
 
-# ── ALE CLI executable ────────────────────────────────────────────────────────
-
-add_executable(ale_cli apps/ale_cli.cpp)
-
 # ── Mock Radio Server (rigctld-kompatibel, kein Hamlib nötig) ─────────────────
 
 add_executable(radio_mock apps/radio_mock.cpp)
@@ -355,12 +351,6 @@ target_include_directories(radio_mock PRIVATE
 if(WIN32)
     target_link_libraries(radio_mock ws2_32)
 endif()
-
-target_include_directories(ale_cli PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-
-target_link_libraries(ale_cli ale_app_core ale_audio_device ale_stores ale_pal)
 
 # ── WebSocket bridge (GUI↔Core) ────────────────────────────────────────────────
 
@@ -377,14 +367,14 @@ if(WIN32)
     target_link_libraries(ale_bridge ws2_32)
 endif()
 
-# DLL-Build: libhamlib-4.dll + Runtime-DLLs neben ale_cli.exe kopieren
+# DLL-Build: libhamlib-4.dll + Runtime-DLLs neben ale_bridge.exe kopieren
 # (muss nach add_executable stehen)
 if(HAMLIB_FOUND AND DEFINED _hamlib_bin)
     file(GLOB _hamlib_dlls "${_hamlib_bin}/*.dll")
     foreach(_dll ${_hamlib_dlls})
-        add_custom_command(TARGET ale_cli POST_BUILD
+        add_custom_command(TARGET ale_bridge POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_dll}" "$<TARGET_FILE_DIR:ale_cli>"
+                "${_dll}" "$<TARGET_FILE_DIR:ale_bridge>"
         )
     endforeach()
 endif()
