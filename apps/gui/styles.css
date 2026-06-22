@@ -1392,8 +1392,8 @@
     .bridge-overlay-icon::after {
       content: '';
       position: absolute;
-      inset: 5px;
-      border: 2px solid rgba(255,255,255,0.08);
+      inset: 7px;
+      background: rgba(220, 50, 50, 0.85);
       border-radius: 50%;
     }
     .bridge-overlay-title {

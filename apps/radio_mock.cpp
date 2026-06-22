@@ -10,15 +10,15 @@
  *
  * Verwendung (zwei Terminals):
  *
- *   Terminal 1 — Mock-TRX starten:
- *     radio_mock.exe
+ *   Terminal 1 — Mock-TRX starten (--port ist Pflichtfeld):
+ *     radio_mock.exe --port 4532
  *
  *   Terminal 2 — ALE-CLI verbinden (Hamlib model 2 = NET_RIGCTL):
  *     ale_cli --self SAM --radio hamlib:2:tcp://127.0.0.1:4532
  *
- *   Oder mit anderem Port:
- *     radio_mock.exe 4533
- *     ale_cli --self SAM --radio hamlib:2:tcp://127.0.0.1:4533
+ *   Mehrere Instanzen auf unterschiedlichen Ports:
+ *     radio_mock.exe --port 4532
+ *     radio_mock.exe --port 4533
  *
  * Implementiertes rigctld-Protokoll (Hamlib 4.x, Subset):
  *   \chk_vfo            → RPRT -1     (einfacher Modus, kein VFO-Präfix)
@@ -234,9 +234,34 @@ static void serve(sock_t client)
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
+static void print_usage(const char* prog)
+{
+    std::fprintf(stderr,
+        "Mock Radio — rigctld-kompatibler Test-TRX\n"
+        "\n"
+        "Usage:\n"
+        "  %s --port N\n"
+        "\n"
+        "Options:\n"
+        "  --port N   TCP-Port des rigctld-Listeners (Pflichtfeld)\n",
+        prog);
+}
+
 int main(int argc, char* argv[])
 {
-    const int port = (argc > 1) ? std::atoi(argv[1]) : 4532;
+    int port = 0;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc)
+            port = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]); return 0;
+        }
+    }
+    if (port <= 0) {
+        std::fprintf(stderr, "ERROR: --port <N> ist Pflichtfeld.\n\n");
+        print_usage(argv[0]);
+        return 1;
+    }
 
 #ifdef _WIN32
     WSADATA wsa;
