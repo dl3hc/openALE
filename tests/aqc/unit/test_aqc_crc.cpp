@@ -21,6 +21,7 @@ void test_crc8_calculation() {
     // CRC should be deterministic
     uint8_t crc1_repeat = AQCCRC::calculate_crc8(data1, sizeof(data1));
     assert(crc1 == crc1_repeat);
+    (void)crc1_repeat;
     
     // Different data should give different CRC (usually)
     const uint8_t data2[] = { 0x57, 0x4F, 0x52, 0x4C, 0x44 };  // "WORLD"
@@ -43,6 +44,7 @@ void test_crc16_calculation() {
     // CRC should be deterministic
     uint16_t crc1_repeat = AQCCRC::calculate_crc16(data1, sizeof(data1));
     assert(crc1 == crc1_repeat);
+    (void)crc1_repeat;
     
     // Different data should give different CRC
     const uint8_t data2[] = { 0x57, 0x4F, 0x52, 0x4C, 0x44 };  // "WORLD"
@@ -68,6 +70,7 @@ void test_crc8_validation_valid() {
     // Validate
     bool valid = AQCCRC::validate_crc8(message, 4);
     assert(valid == true);
+    (void)valid;
     
     std::cout << "  ✓ Message: 'ABC'\n";
     std::cout << "  ✓ CRC: 0x" << std::hex << static_cast<int>(crc) << std::dec << "\n";
@@ -92,6 +95,7 @@ void test_crc8_validation_corrupted() {
     // Validate should fail
     bool valid = AQCCRC::validate_crc8(message, 4);
     assert(valid == false);
+    (void)valid;
     
     std::cout << "  ✓ Message corrupted: 'A' + (B^0x01) + 'C'\n";
     std::cout << "  ✓ Validation: FAILED (as expected)\n";
@@ -114,6 +118,7 @@ void test_crc16_validation_valid() {
     // Validate
     bool valid = AQCCRC::validate_crc16(message, 9);
     assert(valid == true);
+    (void)valid;
     
     std::cout << "  ✓ Message: 'TESTING'\n";
     std::cout << "  ✓ CRC: 0x" << std::hex << crc << std::dec << "\n";
@@ -140,6 +145,7 @@ void test_crc16_validation_corrupted() {
     // Validate should fail
     bool valid = AQCCRC::validate_crc16(message, 9);
     assert(valid == false);
+    (void)valid;
     
     std::cout << "  ✓ Message corrupted (byte 3 flipped)\n";
     std::cout << "  ✓ Validation: FAILED (as expected)\n";

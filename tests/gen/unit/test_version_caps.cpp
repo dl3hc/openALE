@@ -260,6 +260,7 @@ void test_capabilities_report_cmd_word()
     assert(c0 == 'c');
     assert(c1 == '/');
     assert(c2 == 'r');
+    (void)c0; (void)c1; (void)c2;
 
     assert(frame[0].address[0] == 'c');
     assert(frame[0].address[1] == '/');

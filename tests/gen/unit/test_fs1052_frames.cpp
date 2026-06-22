@@ -21,6 +21,7 @@ void test_crc32_calculation() {
     // CRC should be deterministic
     uint32_t crc1_repeat = FrameFormatter::calculate_crc32(data1, strlen((const char*)data1));
     assert(crc1 == crc1_repeat);
+    (void)crc1_repeat;
     
     // Different data should give different CRC
     const uint8_t data2[] = "DIFFERENT DATA";
@@ -139,6 +140,7 @@ void test_control_frame_roundtrip() {
     ControlFrame parsed;
     bool success = FrameParser::parse_control_frame(buffer, length, parsed);
     assert(success);
+    (void)success;
     
     // Verify
     assert(parsed.protocol_version == original.protocol_version);
@@ -181,6 +183,7 @@ void test_data_frame_roundtrip() {
     DataFrame parsed;
     bool success = FrameParser::parse_data_frame(buffer, length, parsed);
     assert(success);
+    (void)success;
     
     // Verify
     assert(parsed.data_rate_format == original.data_rate_format);
@@ -221,6 +224,7 @@ void test_crc_corruption_detection() {
     DataFrame parsed2;
     bool corrupted_parse = FrameParser::parse_data_frame(buffer, length, parsed2);
     assert(!corrupted_parse);
+    (void)corrupted_parse;
     
     std::cout << "  ✓ Valid frame parses successfully\n";
     std::cout << "  ✓ Corrupted frame rejected\n";
@@ -236,10 +240,11 @@ void test_frame_type_detection() {
     uint8_t ctrl_buffer[256];
     FrameFormatter::format_control_frame(ctrl_frame, ctrl_buffer, sizeof(ctrl_buffer));
     FrameType ctrl_type = FrameParser::detect_frame_type(ctrl_buffer);
-    assert(ctrl_type == FrameType::T1_CONTROL || 
+    assert(ctrl_type == FrameType::T1_CONTROL ||
            ctrl_type == FrameType::T2_CONTROL ||
            ctrl_type == FrameType::T3_CONTROL ||
            ctrl_type == FrameType::T4_CONTROL);
+    (void)ctrl_type;
     
     // Data frame
     DataFrame data_frame;
@@ -249,6 +254,7 @@ void test_frame_type_detection() {
     FrameFormatter::format_data_frame(data_frame, data_buffer, sizeof(data_buffer));
     FrameType data_type = FrameParser::detect_frame_type(data_buffer);
     assert(data_type == FrameType::DATA);
+    (void)data_type;
     
     std::cout << "  ✓ Control frame detected\n";
     std::cout << "  ✓ Data frame detected\n";
@@ -297,7 +303,8 @@ void test_sequence_wrapping() {
         
         uint8_t buffer[1200];
         int length = FrameFormatter::format_data_frame(frame, buffer, sizeof(buffer));
-        
+        (void)length;
+
         DataFrame parsed;
         assert(FrameParser::parse_data_frame(buffer, length, parsed));
         assert(parsed.sequence_number == (seq & 0xFF));

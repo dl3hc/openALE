@@ -55,15 +55,16 @@ void test_time_weighted_averaging() {
     
     auto entry1 = db.get_entry(7073000, "REMOTE");
     float snr1 = entry1->snr_db;
-    
+
     // Second update (should average with first)
     db.update_entry(7073000, "REMOTE", 25.0f, 0.005f, 1, 10);
-    
+
     auto entry2 = db.get_entry(7073000, "REMOTE");
     float snr2 = entry2->snr_db;
-    
+
     // SNR should be weighted average (closer to second value due to decay)
     assert(snr2 > snr1);
+    (void)snr1; (void)snr2;
     assert(snr2 < 25.0f);  // But not fully 25 due to averaging
     
     // Errors and words should accumulate
@@ -189,6 +190,7 @@ void test_prune_stale_entries() {
     // Prune
     int removed = db.prune_stale_entries();
     assert(removed == 1);
+    (void)removed;
     assert(db.get_entry_count() == 0);
     
     std::cout << "  PASS" << std::endl;
@@ -370,6 +372,7 @@ void test_lqa_database_min_capacity_4000() {
     uint32_t last_freq = static_cast<uint32_t>(1000000 + over - 1);
     std::string last_station = "ST" + std::to_string(over - 1);
     assert(db.get_entry(last_freq, last_station) != nullptr);
+    (void)last_freq;
 
     std::cout << "  kCapacity=" << LQADatabase::kCapacity
               << " entry_count=" << db.get_entry_count() << std::endl;

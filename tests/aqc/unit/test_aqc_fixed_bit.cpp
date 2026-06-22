@@ -247,6 +247,7 @@ void test_base_ale_backward_compat() {
     AQCCallProbe probe;
     bool parsed = parser.parse_call_probe(words, 2, probe);
     assert(parsed == true);
+    (void)parsed;
     assert(probe.to_address[0] != '\0');    // some address decoded
     assert(probe.term_address[0] != '\0');
 

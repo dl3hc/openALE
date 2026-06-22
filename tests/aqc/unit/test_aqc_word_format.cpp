@@ -122,6 +122,7 @@ void test_aqc32_charset() {
         uint8_t code = AQCWord::char_to_aqc32(ch);
         assert(code == static_cast<uint8_t>(i));
         assert(AQCWord::aqc32_to_char(code) == ch);
+        (void)code;
     }
 
     // '0'-'5' → codes 26-31
@@ -130,6 +131,7 @@ void test_aqc32_charset() {
         uint8_t code = AQCWord::char_to_aqc32(ch);
         assert(code == static_cast<uint8_t>(26 + i));
         assert(AQCWord::aqc32_to_char(code) == ch);
+        (void)code;
     }
 
     // Exactly 32 valid codes (0-31)
@@ -154,6 +156,7 @@ void test_from_chars_to_chars() {
     char d1, d2, d3;
     bool decoded = w.to_chars(d1, d2, d3);
     assert(decoded);
+    (void)decoded;
     assert(d1 == 'A');
     assert(d2 == 'B');
     assert(d3 == 'C');
@@ -165,6 +168,7 @@ void test_from_chars_to_chars() {
     assert(ok);
     bool dc = wc.to_chars(d1, d2, d3);
     assert(dc);
+    (void)dc;
     assert(d1 == 'Z' && d2 == '0' && d3 == '5');
     assert(wc.type_flag() == true);
 

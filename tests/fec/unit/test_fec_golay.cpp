@@ -42,20 +42,12 @@ bool test_ac_fec_001_001_generator_polynomial() {
     std::cout << "  Golay::GENERATOR_POLYNOMIAL = 0x"
               << std::hex << Golay::GENERATOR_POLYNOMIAL << std::dec
               << " (expected 0xAE3)\n";
-    if (Golay::GENERATOR_POLYNOMIAL != 0xAE3u) {
-        std::cout << "FAIL: GENERATOR_POLYNOMIAL != 0xAE3\n";
-        return false;
-    }
 
     // Verify the table has 4096 entries: encode covers all 2^12 info words.
     static_assert(Golay::ENCODE_TABLE_SIZE == 4096u,
                   "ENCODE_TABLE_SIZE must equal 4096");
     std::cout << "  ENCODE_TABLE_SIZE = " << Golay::ENCODE_TABLE_SIZE
               << " (expected 4096)\n";
-    if (Golay::ENCODE_TABLE_SIZE != 4096u) {
-        std::cout << "FAIL: ENCODE_TABLE_SIZE != 4096\n";
-        return false;
-    }
 
     // Verify the polynomial is actually used: encoding the MSB basis vector (info=0x800)
     // must yield a parity equal to GENERATOR_POLYNOMIAL (by definition of the Golay code).

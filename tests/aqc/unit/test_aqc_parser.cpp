@@ -38,8 +38,8 @@ void test_extract_data_elements() {
     
     DataElements de;
     bool result = AQCParser::extract_data_elements(payload, de);
-    
     assert(result == true);
+    (void)result;
     assert(de.de2 == 5);
     assert(de.de3 == DE3_TrafficClass::PSK_MSG);
     assert(de.de4 == 20);
@@ -104,8 +104,8 @@ void test_parse_call_probe() {
     AQCParser parser;
     AQCCallProbe probe;
     bool result = parser.parse_call_probe(words, 2, probe);
-    
     assert(result == true);
+    (void)result;
     assert(probe.to_address == "ABC");
     assert(probe.term_address == "XYZ");
     assert(probe.timestamp_ms == 1000);
@@ -146,8 +146,8 @@ void test_parse_call_handshake() {
     AQCParser parser;
     AQCCallHandshake handshake;
     bool result = parser.parse_call_handshake(words, 2, handshake);
-    
     assert(result == true);
+    (void)result;
     assert(handshake.to_address == "ABC");
     assert(handshake.from_address == "XYZ");
     
@@ -188,8 +188,8 @@ void test_parse_inlink() {
     AQCParser parser;
     AQCInlink inlink;
     bool result = parser.parse_inlink(words, 2, inlink);
-    
     assert(result == true);
+    (void)result;
     assert(inlink.to_address == "NET");
     assert(inlink.term_address == "STA");
     assert(inlink.net_address_flag == true);
@@ -229,8 +229,8 @@ void test_parse_orderwire() {
     AQCParser parser;
     AQCOrderwire orderwire;
     bool result = parser.parse_orderwire(words, 3, orderwire);
-    
     assert(result == true);
+    (void)result;
     assert(orderwire.message == "HELLO");
     assert(orderwire.calculated_crc == 0xABCD);
     
@@ -246,7 +246,8 @@ void test_slot_assignment() {
     // Test consistent slot assignment
     uint8_t slot1 = SlotManager::assign_slot("ABC");
     uint8_t slot2 = SlotManager::assign_slot("ABC");
-    assert(slot1 == slot2);  // Same address gets same slot
+    assert(slot1 == slot2);
+    (void)slot2;  // Same address gets same slot
     
     // Test slot range
     uint8_t slot3 = SlotManager::assign_slot("XYZ123");
@@ -263,8 +264,8 @@ void test_slot_timing() {
     
     uint32_t base_time = 1000;
     uint32_t slot_duration = SlotManager::get_slot_duration_ms();
-    
-    assert(slot_duration == 200);  // 200ms per slot
+    assert(slot_duration == 200);
+    (void)slot_duration;  // 200ms per slot
     
     uint32_t time_slot0 = SlotManager::calculate_slot_time(0, base_time);
     uint32_t time_slot3 = SlotManager::calculate_slot_time(3, base_time);

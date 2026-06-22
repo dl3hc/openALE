@@ -187,11 +187,15 @@ void test_no_amd_skips_message_phase()
     // Expected: scanning(2) + leading(2) + conclusion(1) = 5 words, no CMD/DATA/REP
     assert(sent.size() == 5 && "without AMD: scanning(2)+leading(2)+conclusion(1) = 5 words");
 
-    for (const auto& w : sent)
+    for (const auto& w : sent) {
         assert(w.type != PreambleType::CMD  && "no CMD without AMD");
+        (void)w;
+    }
 
-    for (const auto& w : sent)
+    for (const auto& w : sent) {
         assert(w.type != PreambleType::DATA && "no DATA without AMD");
+        (void)w;
+    }
 
     assert(sent.back().type == PreambleType::TIS && "last word must be TIS (conclusion)");
 

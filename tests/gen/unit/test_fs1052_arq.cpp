@@ -48,7 +48,8 @@ void test_initial_state() {
     const auto& stats = arq.get_stats();
     assert(stats.blocks_sent == 0);
     assert(stats.blocks_received == 0);
-    
+    (void)stats;
+
     std::cout << "  ✓ Initial state is IDLE\n";
     std::cout << "  ✓ Transfer complete flag set\n";
     std::cout << "  ✓ Statistics zeroed\n";
@@ -101,6 +102,7 @@ void test_simple_transmission() {
     const char* msg = "Test message";
     bool started = arq.start_transmission((const uint8_t*)msg, static_cast<uint32_t>(strlen(msg)));
     assert(started);
+    (void)started;
     
     // Should have sent at least one data frame
     assert(!harness.sent_frames.empty());
@@ -110,11 +112,13 @@ void test_simple_transmission() {
         const auto& frame = harness.sent_frames[0];
         FrameType type = FrameParser::detect_frame_type(frame.data());
         assert(type == FrameType::DATA);
-        
+        (void)type;
+
         // Parse and verify
         DataFrame df;
         bool parsed = FrameParser::parse_data_frame(frame.data(), frame.size(), df);
         assert(parsed);
+        (void)parsed;
         assert(df.sequence_number == 0);
         assert(df.data_length == strlen(msg));
     }
@@ -161,6 +165,7 @@ void test_multi_block_transmission() {
             df
         );
         assert(parsed);
+        (void)parsed;
         assert(df.sequence_number == i);
     }
     
@@ -205,7 +210,8 @@ void test_ack_processing() {
     // Verify state changed
     const auto& stats = arq.get_stats();
     assert(stats.acks_received == 1);
-    
+    (void)stats;
+
     std::cout << "  ✓ ACK frame processed\n";
     std::cout << "  ✓ Statistics updated\n";
     std::cout << "  PASSED\n\n";
@@ -236,7 +242,8 @@ void test_timeout_handling() {
     // Should have triggered retransmission
     const auto& stats = arq.get_stats();
     assert(stats.timeouts >= 1 || harness.last_state == ARQState::RETRANSMIT);
-    
+    (void)stats;
+
     std::cout << "  ✓ Timeout detected\n";
     std::cout << "  ✓ State changed appropriately\n";
     std::cout << "  PASSED\n\n";
@@ -275,7 +282,8 @@ void test_data_reception() {
     
     const auto& stats = arq.get_stats();
     assert(stats.blocks_received == 1);
-    
+    (void)stats;
+
     std::cout << "  ✓ RX mode activated\n";
     std::cout << "  ✓ Data frame received\n";
     std::cout << "  ✓ Statistics updated\n";

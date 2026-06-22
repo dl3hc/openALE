@@ -53,6 +53,7 @@ void test_amd_detected_with_data()
 
     bool result = CallTypeDetector::is_amd(words);
     assert(result && "TO+FROM+DATA must be detected as AMD");
+    (void)result;
     std::cout << "  is_amd(TO,FROM,DATA) = true  PASSED\n\n";
 }
 
@@ -67,6 +68,7 @@ void test_no_amd_without_data()
 
     bool result = CallTypeDetector::is_amd(words);
     assert(!result && "TO+FROM without DATA must NOT be AMD");
+    (void)result;
     std::cout << "  is_amd(TO,FROM) = false  PASSED\n\n";
 }
 
@@ -82,6 +84,7 @@ void test_detect_prefers_amd_over_individual()
 
     CallType ct = CallTypeDetector::detect(words);
     assert(ct == CallType::AMD && "detect() must return AMD when TO+FROM+DATA present");
+    (void)ct;
     std::cout << "  detect(TO,FROM,DATA) = AMD  PASSED\n\n";
 }
 
@@ -103,7 +106,9 @@ void test_assembler_amd_call_type()
     bool got = asm_.get_message(msg);
 
     assert(complete && "Assembler must signal completion at TO+FROM");
+    (void)complete;
     assert(got      && "get_message must return true after completion");
+    (void)got;
     assert(msg.complete && "message.complete must be true");
     assert(msg.call_type == CallType::AMD && "call_type must be AMD");
     std::cout << "  call_type = AMD  PASSED\n\n";
@@ -167,6 +172,7 @@ void test_no_crash_without_callback()
     ALEMessage msg;
     bool ok = asm_.get_message(msg);
     assert(ok && "AMD message assembled without crash");
+    (void)ok;
     assert(msg.call_type == CallType::AMD);
     std::cout << "  No crash, call_type = AMD  PASSED\n\n";
 }

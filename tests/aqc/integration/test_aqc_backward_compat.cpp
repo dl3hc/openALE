@@ -136,6 +136,7 @@ void test_call_probe_variable_dwell() {
         AQCCallProbe probe;
         bool ok = parser.parse_call_probe(words, 2, probe);
         assert(ok == true);
+        (void)ok;
         assert(probe.to_address == "ABC");
         assert(probe.term_address == "XYZ");
         std::cout << "  ✓ TD5-rate probe parsed: TO=" << probe.to_address
@@ -160,6 +161,7 @@ void test_call_probe_variable_dwell() {
         AQCCallProbe probe;
         bool ok = parser.parse_call_probe(words, 2, probe);
         assert(ok == true);
+        (void)ok;
         assert(probe.to_address == "DEF");
         assert(probe.term_address == "GHI");
         std::cout << "  ✓ TD2-rate probe parsed: TO=" << probe.to_address
@@ -202,6 +204,7 @@ void test_handshake_variable_dwell() {
         uint32_t t2 = SlotManager::calculate_slot_time(s, base, SlotManager::DWELL_TD2_MS);
         assert(t5 == base + s * SlotManager::DWELL_TD5_MS);
         assert(t2 == base + s * SlotManager::DWELL_TD2_MS);
+        (void)t5; (void)t2;
     }
     std::cout << "  ✓ All 8 slots: t_tdN == base + slot*dwellN for both TD5 and TD2\n";
 
@@ -224,6 +227,7 @@ void test_handshake_variable_dwell() {
     AQCCallHandshake hs;
     bool ok = parser.parse_call_handshake(words, 2, hs);
     assert(ok == true);
+    (void)ok;
     assert(hs.to_address == "ABC");
     assert(hs.from_address == "XYZ");
 
