@@ -1020,7 +1020,8 @@
       "description": "Der BER-Wert wird als Anzahl der Bits berechnet, bei denen kein unanimer Vote vorliegt (0 = perfekte Qualität, 48 = schlechteste Qualität). Range muss 0–48 sein.",
       "module": "LQA/lqa_metrics",
       "verification_hint": "Prüfe lqa_metrics.cpp: BER = 48 - unanimous_votes (oder äquivalent: Anzahl nicht-unanimer Bits).",
-      "status": "open"
+      "status": "closed",
+      "verification": "BerAccumulator in include/LQA/lqa_metrics.h implementiert: add_word(non_unanimous_count, golay_uncorrectable) akkumuliert running_sum (48 bei uncorrectable, sonst non_unanimous_count 0–48) und word_count. ber_score() = running_sum/word_count (uint8_t, 0–48). MetricsSample um non_unanimous_count (uint8_t) und golay_uncorrectable (bool) erweitert. 7 neue Unit-Tests in tests/chan/unit/test_lqa_metrics.cpp: BER=0 bei perfektem Empfang, BER=48 bei Worst-Case, Golay-Penalty 48 bei uncorrectable, linearer Durchschnitt (72/3=24), Range-Clamp, Reset, MetricsSample-Felder. Alle 19 Tests (12 bestehend + 7 neu): 19/19 PASS."
     },
     {
       "id": "AC-CHAN-002-002",
@@ -1031,7 +1032,7 @@
       "title": "SINAD-Messung: Skala 0–30 dB",
       "description": "Der SINAD-Messwert wird auf der Skala 0 (0 dB) bis 30 (30+ dB) dargestellt. Kein Wert außerhalb dieses Bereichs.",
       "module": "LQA/lqa_metrics",
-      "verification_hint": "Prüfe lqa_metrics.cpp: SINAD-Wert wird auf [0,30] geclämpt oder gemappt.",
+      "verification_hint": "Prüfe lqa_metrics.cpp: SINAD-Wert wird auf [0,30] geclampt oder gemappt.",
       "status": "open"
     },
     {

@@ -23,7 +23,7 @@ namespace ale {
 
 /**
  * @brief Real-time metrics sample from demodulator/decoder
- * 
+ *
  * Captured during word reception for immediate LQA updates.
  */
 struct MetricsSample {
@@ -34,11 +34,56 @@ struct MetricsSample {
     bool decode_success;       ///< Word decoded successfully
     float multipath_delay_ms;  ///< Estimated multipath delay (ms)
     uint32_t timestamp_ms;     ///< Sample timestamp
-    
+
+    // BER unanimous-vote fields (REQ-CHAN-011, REQ-CHAN-012)
+    uint8_t non_unanimous_count; ///< Non-unanimous majority-vote bits this word (0–48)
+    bool golay_uncorrectable;    ///< True if Golay reported uncorrectable errors in either half
+
     MetricsSample()
         : snr_db(0.0f), signal_power_dbm(-120.0f), noise_power_dbm(-120.0f),
-          fec_errors_corrected(0), decode_success(false), 
-          multipath_delay_ms(0.0f), timestamp_ms(0) {}
+          fec_errors_corrected(0), decode_success(false),
+          multipath_delay_ms(0.0f), timestamp_ms(0),
+          non_unanimous_count(0), golay_uncorrectable(false) {}
+};
+
+/**
+ * @brief BER accumulator for unanimous-vote-based BER measurement (REQ-CHAN-011, REQ-CHAN-012)
+ *
+ * After word-sync is established, feed one entry per received ALE word.
+ * At frame end call ber_score() for the averaged BER code (0–48).
+ *
+ * Algorithm (MIL-STD-188-141B A.5.4.1.1):
+ *   - Golay uncorrectable in either half → add 48 to running_sum
+ *   - Otherwise                          → add non_unanimous_count (0–48)
+ *   BER = running_sum / word_count       (integer, range 0–48)
+ */
+class BerAccumulator {
+public:
+    BerAccumulator() : running_sum_(0), word_count_(0) {}
+
+    /** Feed one decoded ALE word into the accumulator. */
+    void add_word(uint8_t non_unanimous_count, bool golay_uncorrectable) {
+        running_sum_ += golay_uncorrectable ? 48u : non_unanimous_count;
+        ++word_count_;
+    }
+
+    /**
+     * Compute the averaged BER score.
+     * @return 0–48 (0 = perfect, 48 = worst); returns 0 when no words fed.
+     */
+    uint8_t ber_score() const {
+        if (word_count_ == 0) return 0;
+        uint32_t score = running_sum_ / word_count_;
+        return static_cast<uint8_t>(score > 48u ? 48u : score);
+    }
+
+    void reset() { running_sum_ = 0; word_count_ = 0; }
+
+    uint32_t word_count() const { return word_count_; }
+
+private:
+    uint32_t running_sum_;
+    uint32_t word_count_;
 };
 
 /**

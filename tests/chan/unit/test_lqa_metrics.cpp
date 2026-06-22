@@ -261,29 +261,144 @@ void test_multiple_frequencies() {
 
 void test_configuration() {
     std::cout << "Test: Configuration..." << std::endl;
-    
+
     LQAMetrics metrics;
-    
+
     MetricsConfig config;
     config.enable_sinad = false;
     config.enable_multipath = false;
     config.averaging_window = 20;
     config.multipath_threshold_db = 5.0f;
-    
+
     metrics.set_config(config);
-    
+
     auto retrieved = metrics.get_config();
     assert(retrieved.enable_sinad == false);
     assert(retrieved.enable_multipath == false);
     assert(retrieved.averaging_window == 20);
     assert(std::abs(retrieved.multipath_threshold_db - 5.0f) < 0.1f);
-    
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// --- AC-CHAN-002-001: BerAccumulator tests (REQ-CHAN-011, REQ-CHAN-012) ---
+
+// AC-CHAN-002-001 / REQ-CHAN-011: BER=0 when all votes are unanimous and no Golay errors
+void test_ber_accumulator_perfect_reception() {
+    std::cout << "Test: BerAccumulator - perfect reception (all unanimous) -> BER=0..." << std::endl;
+
+    BerAccumulator acc;
+    // 5 words, each with 0 non-unanimous bits and no uncorrectable errors
+    for (int i = 0; i < 5; ++i) {
+        acc.add_word(0, false);
+    }
+
+    uint8_t ber = acc.ber_score();
+    assert(ber == 0);
+    assert(acc.word_count() == 5);
+
+    std::cout << "  BER=" << (int)ber << "  PASS" << std::endl;
+}
+
+// AC-CHAN-002-001 / REQ-CHAN-011: BER=48 when all 48 bits are non-unanimous (worst case)
+void test_ber_accumulator_worst_case() {
+    std::cout << "Test: BerAccumulator - worst case (48 non-unanimous per word) -> BER=48..." << std::endl;
+
+    BerAccumulator acc;
+    for (int i = 0; i < 4; ++i) {
+        acc.add_word(48, false);
+    }
+
+    uint8_t ber = acc.ber_score();
+    assert(ber == 48);
+
+    std::cout << "  BER=" << (int)ber << "  PASS" << std::endl;
+}
+
+// AC-CHAN-002-001 / REQ-CHAN-012: Golay uncorrectable -> penalty of 48 regardless of non_unanimous
+void test_ber_accumulator_golay_uncorrectable_penalty() {
+    std::cout << "Test: BerAccumulator - Golay uncorrectable adds 48 penalty (REQ-CHAN-012)..." << std::endl;
+
+    BerAccumulator acc;
+    // Word with uncorrectable errors: non_unanimous ignored, 48 is added
+    acc.add_word(5, true);   // non_unanimous=5 is discarded; 48 is added
+
+    uint8_t ber = acc.ber_score();
+    assert(ber == 48);
+
+    std::cout << "  BER=" << (int)ber << "  PASS" << std::endl;
+}
+
+// AC-CHAN-002-001 / REQ-CHAN-012: Linear average over mixed words
+void test_ber_accumulator_averaging() {
+    std::cout << "Test: BerAccumulator - linear average over frame (REQ-CHAN-012)..." << std::endl;
+
+    BerAccumulator acc;
+    // Word 1: 0 non-unanimous, no uncorrectable -> contributes 0
+    acc.add_word(0, false);
+    // Word 2: 24 non-unanimous, no uncorrectable -> contributes 24
+    acc.add_word(24, false);
+    // Word 3: uncorrectable -> contributes 48
+    acc.add_word(0, true);
+    // running_sum = 0+24+48 = 72, word_count = 3, ber = 72/3 = 24
+    uint8_t ber = acc.ber_score();
+    assert(ber == 24);
+
+    std::cout << "  BER=" << (int)ber << " (expected 24)  PASS" << std::endl;
+}
+
+// AC-CHAN-002-001 / REQ-CHAN-011: BER range is always 0-48
+void test_ber_accumulator_range_clamped() {
+    std::cout << "Test: BerAccumulator - score clamped to 0-48..." << std::endl;
+
+    BerAccumulator acc;
+    // Saturate with max-penalty words
+    for (int i = 0; i < 10; ++i) {
+        acc.add_word(48, false);
+    }
+    uint8_t ber = acc.ber_score();
+    assert(ber <= 48);
+    assert(ber == 48);
+
+    std::cout << "  BER=" << (int)ber << "  PASS" << std::endl;
+}
+
+// AC-CHAN-002-001: Reset clears accumulator state
+void test_ber_accumulator_reset() {
+    std::cout << "Test: BerAccumulator - reset clears state..." << std::endl;
+
+    BerAccumulator acc;
+    acc.add_word(10, false);
+    acc.add_word(20, false);
+    assert(acc.word_count() == 2);
+
+    acc.reset();
+    assert(acc.word_count() == 0);
+    assert(acc.ber_score() == 0);  // no words -> 0
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// AC-CHAN-002-001: MetricsSample carries non_unanimous_count and golay_uncorrectable fields
+void test_metrics_sample_ber_fields() {
+    std::cout << "Test: MetricsSample has non_unanimous_count and golay_uncorrectable fields..." << std::endl;
+
+    MetricsSample s;
+    // Default values
+    assert(s.non_unanimous_count == 0);
+    assert(s.golay_uncorrectable == false);
+
+    s.non_unanimous_count = 12;
+    s.golay_uncorrectable = true;
+    assert(s.non_unanimous_count == 12);
+    assert(s.golay_uncorrectable == true);
+
     std::cout << "  PASS" << std::endl;
 }
 
 int main() {
     std::cout << "=== LQA Metrics Tests ===" << std::endl;
-    
+
     test_metrics_creation();
     test_add_sample();
     test_averaging_window();
@@ -296,7 +411,16 @@ int main() {
     test_reset();
     test_multiple_frequencies();
     test_configuration();
-    
+
+    // AC-CHAN-002-001 BerAccumulator tests
+    test_ber_accumulator_perfect_reception();
+    test_ber_accumulator_worst_case();
+    test_ber_accumulator_golay_uncorrectable_penalty();
+    test_ber_accumulator_averaging();
+    test_ber_accumulator_range_clamped();
+    test_ber_accumulator_reset();
+    test_metrics_sample_ber_fields();
+
     std::cout << "\n=== All LQA Metrics Tests Passed ===" << std::endl;
     return 0;
 }
