@@ -1,10 +1,8 @@
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    BRIDGE CONNECTION  (apps/ale_bridge.cpp — WebSocket ↔ ALEController)
 
-   When connected, every list/mutation below talks to a real station via
-   bridgeSend(); when not (bridge not running), each call site falls back
-   to the original local-only demo behaviour, so apps/gui/ still works
-   standalone for UI work. apps/gui-demo/ is the frozen, always-mock copy.
+   Every action in this file requires an active bridge connection.
+   The UI is locked behind an overlay while the bridge is offline.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 let bridgeWs            = null;
 let bridgeConnected     = false;
@@ -15,6 +13,15 @@ let latestSpectrum   = null;        // Float32Array(257) from the last binary fr
 
 function bridgeWsUrl() {
   return 'ws://localhost:' + window.location.port;
+}
+
+function setBridgeOverlay(show) {
+  const el = document.getElementById('bridgeOverlay');
+  el.classList.toggle('hidden', !show);
+  if (show) {
+    const port = window.location.port || '…';
+    document.getElementById('bridgeOverlayCmd').textContent = 'ale_bridge --port ' + port;
+  }
 }
 
 // Send {"id":N,"cmd":cmd,...args}; onReply(replyObj) fires when a message
@@ -41,6 +48,7 @@ function connectBridge() {
 
   ws.onopen = () => {
     bridgeConnected = true;
+    setBridgeOverlay(false);
     pushLog([['data', 'Bridge connected — syncing live station state']], '');
     syncAllFromBridge();
   };
@@ -60,11 +68,12 @@ function connectBridge() {
   ws.onerror = () => {};  // onclose always follows; let it handle cleanup + retry
 
   ws.onclose = () => {
-    if (bridgeConnected) pushLog([['data', 'Bridge disconnected — back to local demo mode']], '');
+    if (bridgeConnected) pushLog([['data', 'Bridge disconnected']], '');
     bridgeConnected = false;
     bridgeWs = null;
     bridgePending.clear();
-    applyRigState(false);  // no bridge → demo mode: radio controls live again (mock)
+    applyRigState(false);
+    setBridgeOverlay(true);
     if (!bridgeReconnectTimer) {
       bridgeReconnectTimer = setTimeout(() => { bridgeReconnectTimer = null; connectBridge(); }, 1000);
     }
@@ -213,10 +222,7 @@ const AXIS_MAJOR = [0, 1000, 2000, 3000, 4000];  // labelled gridlines (Hz)
 const AXIS_MINOR = [500, 1500, 2500, 3500];      // unlabelled gridlines (Hz)
 
 let rows = [];
-let wfState  = 'scanning';  // drives signal simulation
-let toneTick = 0;
-let toneIdx  = 0;
-let frameCnt = 0;
+let wfState  = 'scanning';
 
 function resizeCanvas() {
   const el = canvas.parentElement;
@@ -332,33 +338,9 @@ function genRowFromSpectrum(spec) {
   return row;
 }
 
-// Generate one row of ALE FSK energy — FSK tones + noise floor (demo mode)
 function genRow() {
-  if (bridgeConnected && latestSpectrum) return genRowFromSpectrum(latestSpectrum);
-
-  const W   = canvas.width || 1;
-  const row = new Float32Array(W);
-  for (let i = 0; i < W; i++)
-    row[i] = Math.random() * 0.055 + 0.015;
-
-  const active = wfState === 'scanning' || wfState === 'calling' || wfState === 'linked';
-  if (active) {
-    frameCnt++;
-    if (frameCnt >= 7) {           // symbol period ≈ 7 animation frames
-      frameCnt = 0;
-      toneIdx = Math.floor(Math.random() * TONES.length);
-    }
-    const hz  = TONES[toneIdx];
-    const pos = (hz - BW_LO) / (BW_HI - BW_LO);
-    const cx  = Math.round(pos * (W - 1));
-    const amp = wfState === 'linked' ? 0.88 : 0.65;
-    const sp  = W * 0.020;
-    for (let x = 0; x < W; x++) {
-      const d = x - cx;
-      row[x] = Math.max(row[x], amp * Math.exp(-d * d / (2 * sp * sp)) + Math.random() * 0.04);
-    }
-  }
-  return row;
+  if (latestSpectrum) return genRowFromSpectrum(latestSpectrum);
+  return new Float32Array(canvas.width || 1);
 }
 
 // Map energy 0-1 → RGB using the classic SDR rainbow:
@@ -412,12 +394,7 @@ drawWaterfall();
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    PROTOCOL LOG
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-const logEntries = [
-  { t:'14:21:05', w:[['to','TO:W1A'],['data','DATA:BC@'],['tis','TIS:SAM']], r:'linked'  },
-  { t:'14:20:51', w:[['to','TO:W1A'],['data','DATA:BC@']],                   r:'miss'    },
-  { t:'14:19:33', w:[['tis','TIS:K2X'],['data','DATA:YZ@']],                 r:'miss'    },
-  { t:'14:18:10', w:[['to','TO:BOB'],['tis','TIS:W4G'],['data','DATA:HI@']], r:'linked'  },
-];
+const logEntries = [];
 
 function renderLog() {
   const el = document.getElementById('protoLog');
@@ -490,7 +467,7 @@ function stopTimer() {
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   DEMO STATE MACHINE
+   STATE HELPERS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 function goIdle() {
   stopTimer();
@@ -506,41 +483,12 @@ function goScanning() {
   showCallPanel(false);
 }
 
-function goIncoming() {
-  stopTimer();
-  setStatus('Incoming', 'incoming');
-  document.getElementById('incCs').textContent   = 'W1ABC';
-  document.getElementById('incName').textContent = 'Net Control Station';
-  showInc(true);
-  showCallPanel(false);
-  pushLog([['to','TO:SAM'],['data','DATA:@@'],['tis','TIS:W1A']], 'calling');
-}
-
-function goLinked() {
-  stopTimer();
-  const cs = selectedContact?.cs || 'W1ABC';
-  setStatus('Linked', 'linked');
-  document.getElementById('callCs').textContent = cs;
-  showInc(false);
-  showCallPanel(true);
-  callStart = Date.now();
-  timerId   = setInterval(tickTimer, 1000);
-  tickTimer();
-  pushLog([['to','TO:'+cs.slice(0,3)],['data','DATA:'+cs.slice(3,5)+'@'],['tis','TIS:'+primarySelfAddr().slice(0,3)]], 'linked');
-}
-
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    CONTACTS / ADDRESS BOOK  (OtherAddr* — A.4.3.4)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 // chans: comma-separated Core channel ids ("C-1,C-2") or "ALL" — matches
 // ALEController::add_contact()'s valid_channels format.
-let contacts = [
-  { cs:'W1ABC', name:'Net Control',        fav:true,  status:'enabled',  net:'NET1', chans:'ALL' },
-  { cs:'K2XYZ', name:'Mike — Region 4',    fav:false, status:'enabled',  net:'',     chans:'C-1,C-2' },
-  { cs:'N3DEF', name:'Base Station West',  fav:false, status:'enabled',  net:'',     chans:'ALL' },
-  { cs:'W4GHI', name:'Dave — Mobile',      fav:false, status:'enabled',  net:'',     chans:'ALL' },
-  { cs:'K5JKL', name:'Steve — Tech Lead',  fav:true,  status:'disabled', net:'NET1', chans:'C-1'   },
-];
+let contacts = [];
 let selectedContact  = contacts[0];
 let editingContactIdx = -1;
 
@@ -652,14 +600,9 @@ function deleteContact() {
 }
 
 function startCall() {
-  if (!selectedContact) return;
-  if (bridgeConnected) {
-    setStatus('Calling…', 'calling');   // cosmetic; real transition comes from CALLING/link_established
-    bridgeSend('CALL', { addr: selectedContact.cs });
-    return;
-  }
-  setStatus('Calling…', 'calling');
-  setTimeout(goLinked, 2200);
+  if (!selectedContact || !bridgeConnected) return;
+  setStatus('Calling…', 'calling');   // cosmetic; real transition comes from CALLING/link_established
+  bridgeSend('CALL', { addr: selectedContact.cs });
 }
 
 // ACCEPT/REJECT resolve the manual-accept gate (AWAIT_ACCEPT). The GUI defaults
@@ -668,8 +611,7 @@ function startCall() {
 // With Auto-Accept on the SM links automatically and ACCEPT is just a dismiss.
 function answerCall() {
   showInc(false);
-  if (bridgeConnected) { bridgeSend('ACCEPT', {}); return; }
-  goLinked();
+  if (bridgeConnected) bridgeSend('ACCEPT', {});
 }
 function declineCall() {
   showInc(false);
@@ -713,12 +655,10 @@ function updateRigFields() {
   document.getElementById('rigFieldsSerial').style.display = val === 'serial'    ? '' : 'none';
 }
 
-// Populate the RX/TX device dropdowns. Connected: real WASAPI devices from the
-// bridge's AUDIO_DEVICES (the option value is the bare name the bridge's
-// AudioDevice::open() substring-matches — "IN: "/"OUT: " prefix stripped).
-// Not connected: WebAudio enumeration as a demo placeholder.
-// Remember the operator's device choice so reopening Settings (which rebuilds
-// the <option> lists from scratch) doesn't reset it to the first entry.
+// Populate the RX/TX device dropdowns with real WASAPI devices from the bridge's
+// AUDIO_DEVICES reply (option value is the bare name AudioDevice::open() matches —
+// "IN: "/"OUT: " prefix stripped). Remembers the operator's device choice so
+// reopening Settings does not reset it to the first entry.
 let audioInSelected  = '';
 let audioOutSelected = '';
 
@@ -791,25 +731,16 @@ function openAudioDevice() {
   });
 }
 
-// Level meter: real RMS from the bridge (AUDIO_LEVEL) when connected, else a
-// demo sine. Toggle on/off.
+// Level meter: polls AUDIO_LEVEL from the bridge at 120 ms. Toggle on/off.
 let levelTimer = null;
 function testAudio() {
   if (levelTimer) { clearInterval(levelTimer); levelTimer = null; return; }
-  if (bridgeConnected) {
-    levelTimer = setInterval(() => {
-      bridgeSend('AUDIO_LEVEL', {}, (r) => {
-        if (r.ok) document.getElementById('levelBarIn').style.width = Math.round(Math.min(1, r.level) * 100) + '%';
-      });
-    }, 120);
-    return;
-  }
-  let phase = 0;
+  if (!bridgeConnected) return;
   levelTimer = setInterval(() => {
-    phase += 0.18;
-    const pct = Math.max(5, Math.round(45 + 38 * Math.sin(phase) + Math.random() * 10));
-    document.getElementById('levelBarIn').style.width = pct + '%';
-  }, 60);
+    bridgeSend('AUDIO_LEVEL', {}, (r) => {
+      if (r.ok) document.getElementById('levelBarIn').style.width = Math.round(Math.min(1, r.level) * 100) + '%';
+    });
+  }, 120);
 }
 
 // TX volume label sync
@@ -882,8 +813,7 @@ function connectRig() {
 }
 
 // Central rig-state apply: reflects on the Connect button and (de)activates all
-// radio-control UI. Controls stay live in pure demo mode (no bridge) so the
-// standalone mock keeps working; once bridged, they require a real link.
+// radio-control UI. Requires a live bridge connection.
 function applyRigState(connected) {
   rigConnected = connected;
   const btn = document.getElementById('rigConnectBtn');
@@ -1247,15 +1177,6 @@ function manualSound() {
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   DEMO PANEL COLLAPSE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-function toggleDemo() {
-  const p = document.getElementById('demoPanel');
-  const collapsed = p.classList.toggle('collapsed');
-  document.getElementById('demoToggle').textContent = collapsed ? 'DEV ▸' : 'DEV ▾';
-}
-
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    MANUAL RADIO CONTROL  (VFO · channel step · PTT)
    Front-end mock — wire to pal::IRadio (set_channel / set_ptt) later.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -1317,7 +1238,7 @@ document.addEventListener('click', e => {
 // Pull real freq/mode/tune-step/PTT from the bridge (ALEController::
 // get_current_channel/frequency/mode/get_tune_step/get_ptt_state, all real
 // IRadio passthrough — see Core/include/App/ale_controller.h) and reflect
-// them onto the same display fields the demo VFO uses.
+// them onto the same display fields as the manual VFO controls.
 function syncVfoFromBridge() {
   bridgeSend('VFO_GET', {}, (r) => {
     if (!r.ok) return;
@@ -1396,12 +1317,7 @@ function radioNudge(dir) {
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    MESSAGES  (AMD orderwire — receive, send, delete)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-let messages = [
-  { from:'W1ABC', time:'14:21Z', text:'500 GALLONS WATER 1000 MRE TO SHELTER 5', own:false },
-  { from:'K2XYZ', time:'14:19Z', text:'CHECK IN COMPLETE ALL STATIONS NOMINAL',  own:false },
-  { from:'N3DEF', time:'13:45Z', text:'NET CONTROL CHANGE AT 1500Z',             own:false },
-  { from:'W4GHI', time:'13:32Z', text:'ROGER STANDING BY ON PRIMARY',            own:false },
-];
+let messages = [];
 function renderMessages() {
   const el = document.getElementById('msgList');
   if (!messages.length) { el.innerHTML = '<div class="msg-empty">No messages</div>'; return; }
@@ -1410,9 +1326,9 @@ function renderMessages() {
       <button class="msg-del" title="Delete" onclick="deleteMessage(${i})">✕</button>
       <div class="msg-hdr">
         <span class="msg-from">${m.from}${m.own?' →':''}</span>
-        <span class="msg-time">${m.time}</span>
       </div>
       <div class="msg-text">${escapeHtml(m.text)}</div>
+      <span class="msg-time">${m.time}</span>
     </div>`).join('') + '</div>';
 }
 function deleteMessage(i) { messages.splice(i, 1); renderMessages(); }
@@ -1575,6 +1491,8 @@ goIdle();              // boot idle (Scan off); real state arrives via syncAllFr
 updateScanBtn();       // reflect channel count on the Scan button (>=2 channels required)
 updateSelfHeader();
 updateAutoAcceptUi();  // reflect auto-accept checkbox state on the decision-window field
+// Show overlay immediately; it is hidden as soon as the WebSocket handshake succeeds.
+setBridgeOverlay(true);
 // Small delay before first connect: the bridge serves CSS/JS sequentially on the same
 // thread as WebSocket upgrades.  On a cold cache load, static resources are still
 // in-flight when this code runs; 200 ms lets the browser finish requesting them so

@@ -9,6 +9,20 @@
 <body>
 <div class="app">
 
+  <!-- ══════ BRIDGE OFFLINE OVERLAY ══════ -->
+  <div id="bridgeOverlay" class="bridge-overlay">
+    <div class="bridge-overlay-box">
+      <div class="bridge-overlay-icon"></div>
+      <div class="bridge-overlay-title">Bridge Offline</div>
+      <div class="bridge-overlay-msg">
+        <code>ale_bridge</code> is not running.<br>
+        Start it on the same port this page was served from:
+      </div>
+      <div class="bridge-overlay-cmd" id="bridgeOverlayCmd">ale_bridge --port …</div>
+      <div class="bridge-overlay-status">Retrying connection…</div>
+    </div>
+  </div>
+
   <!-- ══════ HEADER ══════ -->
   <header class="header">
     <div class="logo">
@@ -20,16 +34,6 @@
       </div>
     </div>
 
-    <!-- Demo state switcher (DEV — inline, collapsed by default) -->
-    <div class="demo collapsed" id="demoPanel">
-      <button class="demo-toggle" id="demoToggle" onclick="toggleDemo()" title="Demo states (DEV)">DEV ▸</button>
-      <div class="demo-btns">
-        <button class="demo-btn" onclick="goIdle()">Idle</button>
-        <button class="demo-btn" onclick="goScanning()">Scan</button>
-        <button class="demo-btn" onclick="goIncoming()">Incoming</button>
-        <button class="demo-btn" onclick="goLinked()">Linked</button>
-      </div>
-    </div>
 
     <div class="hdr-right">
       <!-- Channel steppers flanking the Scan toggle -->
@@ -55,7 +59,7 @@
 
       <button class="hdr-btn" id="pttBtn" onclick="togglePtt()" title="Push to talk (PTT)">🎙 PTT</button>
 
-      <!-- Manual radio control — VFO dropdown (opens downward like DEV) -->
+      <!-- Manual radio control — VFO dropdown -->
       <div class="radio-wrap" id="radioWrap">
         <button class="hdr-btn" id="radioToggle" onclick="toggleRadioPanel()" title="Manually control radio assets">📻 Radio ▸</button>
         <div class="radio-panel" id="radioPanel">
