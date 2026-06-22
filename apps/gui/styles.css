@@ -156,6 +156,10 @@
     .dot.incoming { background: var(--s-incoming); animation: blink 0.38s infinite; }
 
     @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }
+    @keyframes pulse-red {
+      0%,100% { background: rgba(100,100,110,0.25); }
+      50%     { background: rgba(220,50,50,0.85); }
+    }
 
     .status-text {
       font-family: var(--mono);
@@ -1393,8 +1397,8 @@
       content: '';
       position: absolute;
       inset: 7px;
-      background: rgba(220, 50, 50, 0.85);
       border-radius: 50%;
+      animation: pulse-red 2s ease-in-out infinite;
     }
     .bridge-overlay-title {
       font-family: var(--mono);
