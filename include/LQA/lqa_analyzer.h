@@ -221,13 +221,33 @@ public:
 private:
     /**
      * @brief Compute aggregate score for a channel
-     * 
+     *
      * Averages LQA scores from all stations heard on this channel.
-     * 
+     *
      * @param frequency_hz Channel frequency
      * @return Aggregate score
      */
     float compute_channel_aggregate_score(uint32_t frequency_hz) const;
+
+    /**
+     * @brief Bilateral channel score for a single entry (MIL-STD-188-141B A.5.4.5)
+     *
+     * When bilateral SINAD is available (bilateral_sinad <= 30):
+     *   - FROM quality = 30 - sinad_code_from  (derived from entry.sinad_db when > 0)
+     *   - TO quality   = 30 - entry.bilateral_sinad
+     *   - Returns min(from_quality, to_quality)  — worst direction determines ranking
+     *
+     * When bilateral SINAD is not available:
+     *   - Falls back to entry.score (composite LQA score)
+     *
+     * SINAD and LQA Score are distinct: SINAD is a single physical measurement;
+     * LQA Score is a composite (SNR + BER + recency).  This function uses SINAD codes
+     * exclusively for bilateral comparison and score only as a fallback.
+     *
+     * @param entry  LQA database entry for one (station, channel) pair
+     * @return Score in [0, 30] (higher = better quality)
+     */
+    float bilateral_channel_score(const LQAEntry& entry) const;
     
     /**
      * @brief Get current timestamp in milliseconds

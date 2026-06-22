@@ -91,25 +91,27 @@ std::shared_ptr<ChannelRank> LQAAnalyzer::get_best_channel_for_station(
     if (entries.empty()) {
         return nullptr;
     }
-    
-    // Find entry with highest score
-    auto best = std::max_element(entries.begin(), entries.end(),
-        [](const LQAEntry& a, const LQAEntry& b) {
-            return a.score < b.score;
-        });
-    
-    // Check if score meets minimum threshold
-    if (best->score < config_.min_acceptable_score) {
+
+    // Find entry with highest bilateral channel score (A.5.4.5)
+    float best_score = -1.0f;
+    const LQAEntry* best_entry = nullptr;
+    for (const auto& e : entries) {
+        float s = bilateral_channel_score(e);
+        if (s > best_score) {
+            best_score = s;
+            best_entry = &e;
+        }
+    }
+
+    if (!best_entry || best_score < config_.min_acceptable_score) {
         return nullptr;
     }
 
-    uint32_t last_update = best->last_activity_ms();
-
     return std::make_shared<ChannelRank>(
-        best->frequency_hz,
-        best->score,
+        best_entry->frequency_hz,
+        best_score,
         station,
-        last_update
+        best_entry->last_activity_ms()
     );
 }
 
@@ -204,17 +206,39 @@ std::vector<ChannelRank> LQAAnalyzer::rank_channels_for_station(
     auto entries = database_->get_entries_for_station(station);
     
     for (const auto& entry : entries) {
-        ranks.emplace_back(entry.frequency_hz, entry.score, station,
+        float score = bilateral_channel_score(entry);
+        ranks.emplace_back(entry.frequency_hz, score, station,
                            entry.last_activity_ms());
     }
-    
+
     // Sort by score (highest first)
     std::sort(ranks.begin(), ranks.end(),
         [](const ChannelRank& a, const ChannelRank& b) {
             return a.score > b.score;
         });
-    
+
     return ranks;
+}
+
+float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry) const {
+    if (entry.bilateral_sinad > 30u) {
+        return entry.score;  // No bilateral SINAD data — fall back to composite score
+    }
+    // TO direction: bilateral SINAD code (spec: lower=better) → internal higher=better
+    float to_quality = 30.0f - static_cast<float>(entry.bilateral_sinad);
+
+    // FROM direction: use the SINAD code stored in sinad_db when available (> 0),
+    // otherwise fall back to the composite score.
+    // sinad_db stores the SINAD LQA code [0-30] as a float (see lqa_metrics.cpp).
+    float from_quality;
+    if (entry.sinad_db > 0.0f) {
+        from_quality = 30.0f - std::min(30.0f, entry.sinad_db);
+    } else {
+        from_quality = entry.score;
+    }
+
+    // Bilateral minimization per A.5.4.5: worst direction determines link quality
+    return std::min(from_quality, to_quality);
 }
 
 float LQAAnalyzer::compute_channel_aggregate_score(uint32_t frequency_hz) const {

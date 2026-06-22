@@ -2140,7 +2140,8 @@
       "description": "Die automatische Kanalauswahl basiert auf der Minimierung des bilateralen Scores: Für jeden Kanal wird ein kombinierter Wert aus lokal gemessenem SINAD und empfangenem bilateralem SINAD der Zielstation berechnet. Der Kanal mit dem besten kombinierten Score wird gewählt.",
       "module": "Protocol/ale_channel_selector",
       "verification_hint": "Prüfe select_best_channel() in ale_channel_selector.cpp: Score-Berechnung muss local_sinad und bilateral_sinad kombinieren. Prüfe lqa_database.h auf bilateral_sinad-Feld im LQA-Eintrag.",
-      "status": "open"
+      "status": "closed",
+      "verification": "LQAEntry in lqa_database.h um bilateral_sinad (uint8_t, [0-30], 31=kein Wert), bilateral_ber, bilateral_mp und bilateral_handshake_tried (bool) erweitert. LQADatabase::update_bilateral() und mark_bilateral_attempted() in lqa_database.cpp implementiert. LQAAnalyzer::bilateral_channel_score() in lqa_analyzer.cpp implementiert: FROM-Qualität aus sinad_db (SINAD-Code, falls > 0), TO-Qualität aus bilateral_sinad; bilateral_score = min(from_quality, to_quality) nach A.5.4.5 — schlechteste Richtung bestimmt das Ranking. LQAAnalyzer::get_best_channel_for_station() und rank_channels_for_station() nutzen bilateral_channel_score(). Achtung: LQA Score ≠ SINAD — SINAD ist eine physikalische Messgröße, LQA Score ein Composite. Bilaterale Berechnung verwendet ausschließlich SINAD-Codes; Composite-Score nur als Fallback wenn kein SINAD-Code vorliegt. 6+3 neue Unit-Tests: Database 20/20 PASS, Analyzer 17/17 PASS."
     },
     {
       "id": "AC-CHAN-005-002",
@@ -2152,7 +2153,8 @@
       "description": "Bei der Single-Station-Selektion basiert die Kanalauswahl ausschließlich auf den lokal gemessenen LQA-Daten und den bilateral empfangenen LQA-Reports der Zielstation. Keine externe Koordination mit anderen Stationen.",
       "module": "Protocol/ale_channel_selector",
       "verification_hint": "Prüfe ale_channel_selector.cpp auf select_single_station_channel() oder äquivalente Methode. Rückfall auf Kanal mit bestem bilateral bekanntem SINAD-Score, wenn kein lokaler Messwert vorliegt.",
-      "status": "open"
+      "status": "closed",
+      "verification": "rank_channels_for_station() und get_best_channel_for_station() in lqa_analyzer.cpp verwenden bilateral_channel_score() statt rohem entry.score. Ohne bilaterale Daten (bilateral_sinad=31): Fallback auf Composite-Score (kein Verhaltensunterschied zu vorher). Mit bilateralen Daten: min(from_quality, to_quality) — Kanal mit ausgeglichenen Richtungen bevorzugt. Keine externe Koordination: Auswahl basiert ausschließlich auf lokalem LQA-Eintrag der Zielstation. Tests: test_bilateral_ranking_penalises_bad_to_direction (C2 mit SINAD-Code 15/10 schlägt C1 mit 5/25), test_bilateral_minimization_worst_direction_wins (moderate-balanced schlägt excellent-but-one-sided). 17/17 PASS."
     },
     {
       "id": "AC-CHAN-005-003",

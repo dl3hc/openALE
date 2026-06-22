@@ -376,9 +376,147 @@ void test_lqa_database_min_capacity_4000() {
     std::cout << "  PASS" << std::endl;
 }
 
+// ── Bilateral tests (AC-GEN-017-3, Figure A-27) ──────────────────────────────
+
+// New entry must have bilateral fields at "no-data" sentinels (bilateral_sinad=31,
+// bilateral_ber=31, bilateral_mp=7) and handshake_tried=false ("-" state).
+void test_bilateral_defaults() {
+    std::cout << "Test: Bilateral fields default to no-data sentinels (\"-\" state)..." << std::endl;
+
+    LQADatabase db;
+    db.update_entry(7073000, "ALFA", 20.0f, 0.01f, 0, 10);
+
+    auto e = db.get_entry(7073000, "ALFA");
+    assert(e != nullptr);
+    assert(e->bilateral_sinad == 31u);
+    assert(e->bilateral_ber   == 31u);
+    assert(e->bilateral_mp    ==  7u);
+    assert(e->bilateral_handshake_tried == false);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// update_bilateral() stores all three codes and sets handshake_tried=true.
+void test_update_bilateral() {
+    std::cout << "Test: update_bilateral() stores SINAD/BER/MP codes (AC-GEN-017-3)..." << std::endl;
+
+    LQADatabase db;
+    db.update_entry(7073000, "ALFA", 20.0f, 0.01f, 0, 10);
+    db.update_bilateral(7073000, "ALFA", 12u, 5u, 3u);
+
+    auto e = db.get_entry(7073000, "ALFA");
+    assert(e != nullptr);
+    assert(e->bilateral_sinad == 12u);
+    assert(e->bilateral_ber   ==  5u);
+    assert(e->bilateral_mp    ==  3u);
+    assert(e->bilateral_handshake_tried == true);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// update_bilateral() creates a stub entry when none exists yet.
+void test_update_bilateral_creates_entry() {
+    std::cout << "Test: update_bilateral() creates stub entry when no FROM data exists..." << std::endl;
+
+    LQADatabase db;
+    assert(db.get_entry_count() == 0);
+    db.update_bilateral(7073000, "BRAVO", 20u, 8u, 2u);
+
+    assert(db.get_entry_count() == 1);
+    auto e = db.get_entry(7073000, "BRAVO");
+    assert(e != nullptr);
+    assert(e->bilateral_sinad == 20u);
+    assert(e->bilateral_handshake_tried == true);
+    // FROM fields remain at defaults
+    assert(e->snr_db == 0.0f);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// mark_bilateral_attempted() sets flag but leaves codes at sentinels ("X" state).
+void test_mark_bilateral_attempted() {
+    std::cout << "Test: mark_bilateral_attempted() → \"X\" state (tried, no data)..." << std::endl;
+
+    LQADatabase db;
+    db.update_entry(7073000, "ALFA", 20.0f, 0.01f, 0, 10);
+    db.mark_bilateral_attempted(7073000, "ALFA");
+
+    auto e = db.get_entry(7073000, "ALFA");
+    assert(e != nullptr);
+    assert(e->bilateral_handshake_tried == true);   // "X"
+    assert(e->bilateral_sinad == 31u);              // still no data
+    assert(e->bilateral_ber   == 31u);
+    assert(e->bilateral_mp    ==  7u);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Figure A-27: three distinct states per cell
+void test_bilateral_x_vs_dash() {
+    std::cout << "Test: bilateral states \"-\" / \"X\" / value correctly distinguished..." << std::endl;
+
+    LQADatabase db;
+
+    // "-": never tried
+    db.update_entry(7073000, "S1", 20.0f, 0.01f, 0, 10);
+    auto dash = db.get_entry(7073000, "S1");
+    assert(!dash->bilateral_handshake_tried && dash->bilateral_sinad == 31u);
+
+    // "X": tried but no CMD LQA received
+    db.update_entry(7073000, "S2", 20.0f, 0.01f, 0, 10);
+    db.mark_bilateral_attempted(7073000, "S2");
+    auto x = db.get_entry(7073000, "S2");
+    assert(x->bilateral_handshake_tried && x->bilateral_sinad == 31u);
+
+    // valid value: received CMD LQA
+    db.update_entry(7073000, "S3", 20.0f, 0.01f, 0, 10);
+    db.update_bilateral(7073000, "S3", 15u, 8u, 2u);
+    auto val = db.get_entry(7073000, "S3");
+    assert(val->bilateral_handshake_tried && val->bilateral_sinad == 15u);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Bilateral fields survive save/load round-trip (format v2).
+void test_bilateral_save_load() {
+    std::cout << "Test: bilateral fields survive save/load (format v2)..." << std::endl;
+
+    const std::string filepath = "test_lqa_bilateral.db";
+
+    {
+        LQADatabase db;
+        db.update_entry(7073000, "ALFA", 20.0f, 0.01f, 0, 10);
+        db.update_bilateral(7073000, "ALFA", 18u, 6u, 3u);
+        db.update_entry(10142000, "BRAVO", 22.0f, 0.005f, 0, 10);
+        db.mark_bilateral_attempted(10142000, "BRAVO");  // "X" state
+        assert(db.save_to_file(filepath));
+    }
+
+    {
+        LQADatabase db;
+        assert(db.load_from_file(filepath));
+        assert(db.get_entry_count() == 2);
+
+        auto alfa = db.get_entry(7073000, "ALFA");
+        assert(alfa != nullptr);
+        assert(alfa->bilateral_sinad == 18u);
+        assert(alfa->bilateral_ber   ==  6u);
+        assert(alfa->bilateral_mp    ==  3u);
+        assert(alfa->bilateral_handshake_tried == true);
+
+        auto bravo = db.get_entry(10142000, "BRAVO");
+        assert(bravo != nullptr);
+        assert(bravo->bilateral_handshake_tried == true);
+        assert(bravo->bilateral_sinad == 31u);  // "X": tried but no data
+    }
+
+    std::remove(filepath.c_str());
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== LQA Database Tests ===" << std::endl;
-    
+
     test_database_creation();
     test_basic_entry_update();
     test_time_weighted_averaging();
@@ -393,6 +531,12 @@ int main() {
     test_configuration();
     test_lqa_database_min_capacity_4000();
     test_lqa_one_hour_retention_ac_gen_006_003();
+    test_bilateral_defaults();
+    test_update_bilateral();
+    test_update_bilateral_creates_entry();
+    test_mark_bilateral_attempted();
+    test_bilateral_x_vs_dash();
+    test_bilateral_save_load();
 
     std::cout << "\n=== All LQA Database Tests Passed ===" << std::endl;
     return 0;

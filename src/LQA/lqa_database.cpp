@@ -190,6 +190,50 @@ void LQADatabase::update_entry_extended(uint32_t frequency_hz,
     }
 }
 
+void LQADatabase::update_bilateral(uint32_t frequency_hz,
+                                    const std::string& remote_station,
+                                    uint8_t sinad_code,
+                                    uint8_t ber_code,
+                                    uint8_t mp_code,
+                                    uint32_t timestamp_ms) {
+    EntryKey key{frequency_hz, remote_station};
+    uint32_t now = (timestamp_ms == 0) ? get_current_time_ms() : timestamp_ms;
+
+    auto it = entries_.find(key);
+    if (it == entries_.end()) {
+        LQAEntry entry;
+        entry.frequency_hz    = frequency_hz;
+        entry.remote_station  = remote_station;
+        entry.last_contact_ms = now;
+        evict_oldest_if_full();
+        entries_[key] = entry;
+        it = entries_.find(key);
+    }
+
+    LQAEntry& entry           = it->second;
+    entry.bilateral_sinad     = sinad_code;
+    entry.bilateral_ber       = ber_code;
+    entry.bilateral_mp        = mp_code;
+    entry.bilateral_handshake_tried = true;
+    entry.last_contact_ms     = now;
+}
+
+void LQADatabase::mark_bilateral_attempted(uint32_t frequency_hz,
+                                            const std::string& remote_station) {
+    EntryKey key{frequency_hz, remote_station};
+    auto it = entries_.find(key);
+    if (it == entries_.end()) {
+        LQAEntry entry;
+        entry.frequency_hz    = frequency_hz;
+        entry.remote_station  = remote_station;
+        entry.last_contact_ms = get_current_time_ms();
+        evict_oldest_if_full();
+        entries_[key] = entry;
+        it = entries_.find(key);
+    }
+    it->second.bilateral_handshake_tried = true;
+}
+
 std::shared_ptr<LQAEntry> LQADatabase::get_entry(uint32_t frequency_hz,
                                                  const std::string& remote_station) const {
     EntryKey key{frequency_hz, remote_station};
@@ -298,8 +342,8 @@ bool LQADatabase::save_to_file(const std::string& filepath) const {
     // Write header
     const char magic[] = "PCALE_LQA";
     file.write(magic, sizeof(magic));
-    
-    uint32_t version = 1;
+
+    uint32_t version = 2;   // v2 adds bilateral_sinad/ber/mp/handshake_tried
     file.write(reinterpret_cast<const char*>(&version), sizeof(version));
     
     // Write config
@@ -337,10 +381,20 @@ bool LQADatabase::save_to_file(const std::string& filepath) const {
         file.write(reinterpret_cast<const char*>(&entry.last_contact_ms), 
                   sizeof(entry.last_contact_ms));
         file.write(reinterpret_cast<const char*>(&entry.score), sizeof(entry.score));
-        file.write(reinterpret_cast<const char*>(&entry.sample_count), 
+        file.write(reinterpret_cast<const char*>(&entry.sample_count),
                   sizeof(entry.sample_count));
+
+        // v2: bilateral (TO direction) fields
+        file.write(reinterpret_cast<const char*>(&entry.bilateral_sinad),
+                  sizeof(entry.bilateral_sinad));
+        file.write(reinterpret_cast<const char*>(&entry.bilateral_ber),
+                  sizeof(entry.bilateral_ber));
+        file.write(reinterpret_cast<const char*>(&entry.bilateral_mp),
+                  sizeof(entry.bilateral_mp));
+        uint8_t tried = entry.bilateral_handshake_tried ? 1u : 0u;
+        file.write(reinterpret_cast<const char*>(&tried), sizeof(tried));
     }
-    
+
     file.close();
     return true;
 }
@@ -360,8 +414,8 @@ bool LQADatabase::load_from_file(const std::string& filepath) {
     
     uint32_t version;
     file.read(reinterpret_cast<char*>(&version), sizeof(version));
-    if (version != 1) {
-        return false;  // Unknown version
+    if (version != 2) {
+        return false;  // v1 files lack bilateral fields; require v2
     }
     
     // Read config
@@ -404,8 +458,18 @@ bool LQADatabase::load_from_file(const std::string& filepath) {
                  sizeof(entry.last_contact_ms));
         file.read(reinterpret_cast<char*>(&entry.score), sizeof(entry.score));
         file.read(reinterpret_cast<char*>(&entry.sample_count), sizeof(entry.sample_count));
-        
-        // Store entry
+
+        // v2: bilateral (TO direction) fields
+        file.read(reinterpret_cast<char*>(&entry.bilateral_sinad),
+                 sizeof(entry.bilateral_sinad));
+        file.read(reinterpret_cast<char*>(&entry.bilateral_ber),
+                 sizeof(entry.bilateral_ber));
+        file.read(reinterpret_cast<char*>(&entry.bilateral_mp),
+                 sizeof(entry.bilateral_mp));
+        uint8_t tried = 0u;
+        file.read(reinterpret_cast<char*>(&tried), sizeof(tried));
+        entry.bilateral_handshake_tried = (tried != 0u);
+
         EntryKey key{entry.frequency_hz, entry.remote_station};
         entries_[key] = entry;
     }
@@ -421,9 +485,10 @@ bool LQADatabase::export_to_csv(const std::string& filepath) const {
     }
     
     // Write CSV header
-    file << "Frequency(Hz),Station,SNR(dB),BER,SINAD(dB),FEC_Errors,Total_Words,"
-         << "Multipath,Noise_Floor(dBm),Last_Sounding_ms,Last_Contact_ms,Score,Samples\n";
-    
+    file << "Frequency(Hz),Station,SNR(dB),BER,SINAD_Code,FEC_Errors,Total_Words,"
+         << "Multipath,Noise_Floor(dBm),Last_Sounding_ms,Last_Contact_ms,Score,Samples,"
+         << "Bilateral_SINAD,Bilateral_BER,Bilateral_MP,Bilateral_Tried\n";
+
     // Write each entry
     for (const auto& pair : entries_) {
         const LQAEntry& entry = pair.second;
@@ -439,7 +504,11 @@ bool LQADatabase::export_to_csv(const std::string& filepath) const {
              << entry.last_sounding_ms << ","
              << entry.last_contact_ms << ","
              << entry.score << ","
-             << entry.sample_count << "\n";
+             << entry.sample_count << ","
+             << static_cast<int>(entry.bilateral_sinad) << ","
+             << static_cast<int>(entry.bilateral_ber) << ","
+             << static_cast<int>(entry.bilateral_mp) << ","
+             << (entry.bilateral_handshake_tried ? "X" : "-") << "\n";
     }
     
     file.close();

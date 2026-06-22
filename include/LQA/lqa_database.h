@@ -57,16 +57,28 @@ struct LQAEntry {
     uint32_t last_contact_ms;        ///< Timestamp of last contact (ms since epoch)
     float score;                     ///< Computed composite quality score (0=worst .. 30=best)
     uint32_t sample_count;           ///< Number of samples in this entry
-    
+
+    // ── Bilateral (TO direction) — populated from CMD LQA words sent by remote ──
+    // SINAD, BER, and MP are independent measurements; 31/7 are "no-data" sentinels.
+    // LQA Score and SINAD are separate concepts: score is a composite; SINAD is
+    // a single physical measurement (Signal+Noise+Distortion / Noise+Distortion).
+    uint8_t bilateral_sinad;  ///< SINAD code [0-30] as reported by remote; 31 = no data
+    uint8_t bilateral_ber;    ///< BER code   [0-30] as reported by remote; 31 = no data
+    uint8_t bilateral_mp;     ///< MP code    [0-7]  as reported by remote;  7 = not measured
+    bool    bilateral_handshake_tried; ///< true = call attempted, no CMD LQA received ("X" in Figure A-27)
+                                       ///<        false = never tried ("-" in Figure A-27)
+
     /**
-     * @brief Default constructor
+     * @brief Default constructor — bilateral fields initialised to "no data" sentinels.
      */
     LQAEntry()
         : frequency_hz(0), remote_station(""), snr_db(0.0f), ber(0.0f),
           sinad_db(0.0f), fec_errors(0), total_words(0),
           multipath_score(0.0f), noise_floor_dbm(-120.0f),
           last_sounding_ms(0), last_contact_ms(0), score(0.0f),
-          sample_count(0) {}
+          sample_count(0),
+          bilateral_sinad(31u), bilateral_ber(31u), bilateral_mp(7u),
+          bilateral_handshake_tried(false) {}
 
     /**
      * @brief Timestamp of the most recent activity on this channel/station.
@@ -211,8 +223,40 @@ public:
                               uint32_t timestamp_ms = 0);
     
     /**
+     * @brief Store bilateral (TO direction) SINAD, BER, and MP codes for a channel/station.
+     *
+     * Called when a CMD LQA word is received from @p remote_station reporting the
+     * quality of our transmitted signal.  Sets bilateral_handshake_tried = true.
+     * Creates a stub entry (FROM fields at defaults) when none exists yet.
+     *
+     * @param frequency_hz      Channel frequency in Hz
+     * @param remote_station    Station that sent the CMD LQA report
+     * @param sinad_code        SINAD code [0-30] (spec: 0=best, 30=worst); 31 = no value
+     * @param ber_code          BER code   [0-30]; 31 = no value
+     * @param mp_code           MP code    [0-7]; 7 = not measured
+     * @param timestamp_ms      Measurement timestamp (0 = current time)
+     */
+    void update_bilateral(uint32_t frequency_hz,
+                          const std::string& remote_station,
+                          uint8_t sinad_code,
+                          uint8_t ber_code,
+                          uint8_t mp_code,
+                          uint32_t timestamp_ms = 0);
+
+    /**
+     * @brief Record that a call to @p remote_station on @p frequency_hz was attempted
+     *        but no CMD LQA word was received back.
+     *
+     * This sets bilateral_handshake_tried = true while leaving the bilateral SINAD/BER/MP
+     * at their "no data" sentinels, producing the "X" state in Figure A-27.
+     * Creates a stub entry when none exists.
+     */
+    void mark_bilateral_attempted(uint32_t frequency_hz,
+                                  const std::string& remote_station);
+
+    /**
      * @brief Get LQA entry for specific channel/station
-     * 
+     *
      * @param frequency_hz Channel frequency in Hz
      * @param remote_station Remote station address (empty for sounding)
      * @return Pointer to entry if found, nullptr otherwise
