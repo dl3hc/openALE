@@ -8,8 +8,7 @@
  * speaking a small JSON protocol (apps/bridge/minijson.h).
  *
  * Usage:
- *   ale_bridge --self SAM [--port 8765] [--in-device NAME] [--out-device NAME]
- *              [--radio SPEC] [--channels FILE] [--list-devices]
+ *   ale_bridge --port N [--remote] [--webroot DIR]
  *
  * Without --in-device/--out-device, the controller runs in the existing
  * "offline" mode (no AudioDevice attached) — useful for protocol-level GUI
@@ -543,13 +542,17 @@ static void print_usage(const char* prog) {
         "\n"
         "Starts bare and waits for a GUI to connect; everything (self address,\n"
         "channels, audio device, radio, …) is configured from apps/gui/ over the\n"
-        "WebSocket. The only option is the listen port.\n"
+        "WebSocket.\n"
         "\n"
         "Usage:\n"
-        "  %s [--port N]\n"
+        "  %s --port N [--remote] [--webroot DIR]\n"
         "\n"
         "Options:\n"
-        "  --port N   WebSocket listen port (default 8765)\n",
+        "  --port N     WebSocket listen port (required; multiple instances may use\n"
+        "               different ports simultaneously)\n"
+        "  --remote     Bind to 0.0.0.0 instead of 127.0.0.1 (LAN-reachable)\n"
+        "               Without this flag the server is localhost-only.\n"
+        "  --webroot D  Serve static files from DIR instead of auto-detected apps/gui/\n",
         prog);
 }
 
@@ -560,18 +563,27 @@ int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
-    uint16_t port = 8765;
-    std::string web_root;   // empty → auto-resolve below
+    uint16_t    port        = 0;     // 0 = not set; --port is required
+    bool        bind_remote = false;
+    std::string web_root;            // empty → auto-resolve below
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<uint16_t>(std::atoi(argv[++i]));
+        } else if (std::strcmp(argv[i], "--remote") == 0) {
+            bind_remote = true;
         } else if (std::strcmp(argv[i], "--webroot") == 0 && i + 1 < argc) {
             web_root = argv[++i];
         } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
         }
+    }
+
+    if (port == 0) {
+        std::fprintf(stderr, "ERROR: --port <N> is required.\n\n");
+        print_usage(argv[0]);
+        return 1;
     }
 
     if (web_root.empty()) web_root = resolve_web_root();
@@ -589,7 +601,7 @@ int main(int argc, char* argv[]) {
     // ── WebSocket server ─────────────────────────────────────────────────
     bridge::WsServer ws;
     ws.set_web_root(web_root);   // serve apps/gui/ over HTTP on the same port
-    if (!ws.start(port)) {
+    if (!ws.start(port, bind_remote)) {
         std::fprintf(stderr, "ERROR: Failed to start WebSocket server on port %u.\n", port);
         return 1;
     }
@@ -637,7 +649,8 @@ int main(int argc, char* argv[]) {
         ws.send_binary(bins, n * sizeof(float));
     });
 
-    std::printf("[ale_bridge] listening on port %u — waiting for GUI to configure\n", port);
+    std::printf("[ale_bridge] listening on %s:%u — waiting for GUI to configure\n",
+                bind_remote ? "0.0.0.0" : "127.0.0.1", port);
     if (web_root.empty())
         std::printf("[ale_bridge] (no apps/gui/ found — open the GUI via file:// or pass --webroot)\n");
     else

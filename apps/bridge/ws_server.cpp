@@ -89,6 +89,43 @@ std::string request_path(const std::string& req) {
     return path.empty() ? "/" : path;
 }
 
+// Extract the trimmed value of a named HTTP header (case-insensitive).
+// Returns "" if the header is absent.
+std::string extract_header(const std::string& req, const std::string& name) {
+    const std::string lower = to_lower(req);
+    const std::string key   = to_lower(name) + ":";
+    const size_t pos = lower.find(key);
+    if (pos == std::string::npos) return "";
+    size_t s = pos + key.size();
+    while (s < req.size() && (req[s] == ' ' || req[s] == '\t')) ++s;
+    const size_t e = req.find("\r\n", s);
+    return req.substr(s, (e == std::string::npos ? req.size() : e) - s);
+}
+
+// True if a Host header value (may include ":port") refers to loopback.
+bool is_loopback_host(const std::string& val) {
+    std::string h = val;
+    // Strip port — but only if there is exactly one colon (avoids IPv6 literals).
+    const size_t c = h.rfind(':');
+    if (c != std::string::npos && h.find(':') == c) h = h.substr(0, c);
+    const std::string lh = to_lower(h);
+    return lh == "localhost" || lh == "127.0.0.1";
+}
+
+// True if the Origin header value is safe for localhost-only mode:
+//   - absent ("") → native / non-browser client, allow
+//   - "null"       → file:// or sandboxed iframe, allow
+//   - http(s)://localhost[…] or http(s)://127.0.0.1[…] → allow
+bool origin_is_local(const std::string& origin) {
+    if (origin.empty() || origin == "null") return true;
+    std::string h = origin;
+    const size_t ss = h.find("://");
+    if (ss != std::string::npos) h = h.substr(ss + 3);
+    const size_t slash = h.find('/');
+    if (slash != std::string::npos) h = h.substr(0, slash);
+    return is_loopback_host(h);
+}
+
 const char* mime_for(const std::string& path) {
     auto ends_with = [&](const char* ext) {
         const size_t n = std::strlen(ext);
@@ -172,7 +209,7 @@ bool ioth_send_frame(raw_sock_t s, uint8_t opcode, const uint8_t* data, size_t l
 
 WsServer::~WsServer() { stop(); }
 
-bool WsServer::start(uint16_t port) {
+bool WsServer::start(uint16_t port, bool bind_remote) {
 #ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
@@ -192,7 +229,8 @@ bool WsServer::start(uint16_t port) {
     sockaddr_in addr{};
     addr.sin_family      = AF_INET;
     addr.sin_port        = htons(port);
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_addr.s_addr = bind_remote ? INADDR_ANY : htonl(INADDR_LOOPBACK);
+    bind_remote_ = bind_remote;
 
     if (bind(server, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::fprintf(stderr, "[ws_server] bind() on port %u failed\n", port);
@@ -336,6 +374,23 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
 
             const std::string& req = pending_http_[i].buf;
             const raw_sock_t   fd  = to_raw(pending_http_[i].fd);
+
+            // Localhost-only guard (active when !bind_remote_):
+            //   Reject connections whose Host or Origin header does not refer to
+            //   loopback.  This stops DNS-rebinding attacks: a browser tab on a
+            //   malicious page that rebinds evil.com→127.0.0.1 would still send
+            //   "Host: evil.com", which we reject here before any data is processed.
+            if (!bind_remote_) {
+                const std::string host   = extract_header(req, "Host");
+                const std::string origin = extract_header(req, "Origin");
+                if ((!host.empty() && !is_loopback_host(host)) || !origin_is_local(origin)) {
+                    send_http(fd, "403 Forbidden", "text/plain", "Forbidden");
+                    close_sock(fd);
+                    pending_http_[i].fd = kInvalid;
+                    pending_http_[i].buf.clear();
+                    continue;
+                }
+            }
 
             if (is_ws_upgrade(req)) {
                 const std::string key = extract_ws_key(req);

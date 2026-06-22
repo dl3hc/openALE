@@ -37,8 +37,12 @@ public:
     WsServer(const WsServer&) = delete;
     WsServer& operator=(const WsServer&) = delete;
 
-    /** Start listening on \p port and spawn the I/O thread. */
-    bool start(uint16_t port);
+    /**
+     * Start listening on \p port and spawn the I/O thread.
+     * \p bind_remote — false (default): bind to 127.0.0.1 (localhost only);
+     *                  true: bind to 0.0.0.0 (all interfaces, LAN-reachable).
+     */
+    bool start(uint16_t port, bool bind_remote = false);
 
     /**
      * Directory the I/O thread serves static files from for plain HTTP GETs.
@@ -80,6 +84,7 @@ private:
     bool parse_ws_frames_(SocketHandle ws_handle);  // I/O thread only
 
     std::string               web_root_;
+    bool                      bind_remote_ = false;
     SocketHandle              listen_sock_ = kInvalid;
     std::atomic<SocketHandle> client_{kInvalid};   // kInvalid = not connected
     std::thread               io_thread_;

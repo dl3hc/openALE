@@ -567,9 +567,6 @@
       padding: 0 18px;
       border-right: 1px solid var(--border);
     }
-    .sync-chip { display: flex; align-items: center; gap: 5px; }
-    .sync-dot { width: 7px; height: 7px; border-radius: 50%; }
-    .sync-lbl { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.1em; }
 
     /* Waterfall */
     .strip-wf {
@@ -585,7 +582,7 @@
       justify-content: space-between;
       font-family: var(--mono);
       font-size: 8px;
-      color: var(--accent);            /* match the "14.109" stat colour */
+      color: rgba(255,255,255,0.75);
       letter-spacing: 0.1em;
       pointer-events: none;
       z-index: 2;
@@ -615,8 +612,8 @@
       font-size: 8px;
       font-weight: 700;
       letter-spacing: 0.12em;
-      color: var(--accent);
-      text-shadow: 0 0 5px rgba(0,220,140,0.5);
+      color: rgba(255,255,255,0.75);
+      text-shadow: 0 0 5px rgba(255,255,255,0.35);
       pointer-events: none;
       z-index: 2;
       white-space: nowrap;
@@ -625,9 +622,9 @@
     .wf-band-region {
       position: absolute;
       top: 0; bottom: 14px;   /* leave the tick strip clear */
-      background: rgba(0,220,140,0.06);
-      border-left:  1px dashed rgba(0,220,140,0.20);
-      border-right: 1px dashed rgba(0,220,140,0.20);
+      background: rgba(255,255,255,0.04);
+      border-left:  1px dashed rgba(255,255,255,0.20);
+      border-right: 1px dashed rgba(255,255,255,0.20);
       pointer-events: none;
       z-index: 1;
     }
@@ -645,15 +642,15 @@
       position: absolute;
       bottom: 3px;
       width: 1px; height: 5px;
-      background: rgba(0,220,140,0.22);
+      background: rgba(255,255,255,0.22);
     }
-    .wf-tick.minor { height: 3px; background: rgba(0,220,140,0.11); }
+    .wf-tick.minor { height: 3px; background: rgba(255,255,255,0.11); }
     .wf-tick-lbl {
       position: absolute;
       bottom: 0;
       font-family: var(--mono);
       font-size: 7px;
-      color: var(--accent);            /* match the "14.109" stat colour */
+      color: rgba(255,255,255,0.75);
       transform: translateX(-50%);
     }
 

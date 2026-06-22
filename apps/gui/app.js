@@ -14,8 +14,7 @@ const bridgePending  = new Map();   // id -> callback(reply)
 let latestSpectrum   = null;        // Float32Array(257) from the last binary frame, or null
 
 function bridgeWsUrl() {
-  const port = document.getElementById('cfgWsPort')?.value || '8765';
-  return 'ws://localhost:' + port;
+  return 'ws://localhost:' + window.location.port;
 }
 
 // Send {"id":N,"cmd":cmd,...args}; onReply(replyObj) fires when a message
@@ -127,6 +126,7 @@ function applyBridgeState(state) {
   else if (state === 'SCANNING') goScanning();
   else if (state === 'CALLING') setStatus('Calling…', 'calling');
   else if (state === 'HANDSHAKE') setStatus('Handshake…', 'handshake');
+  else if (state === 'LINKED') setStatus('Linked', 'linked');
 }
 
 function onBridgeEvent(e) {
@@ -150,7 +150,6 @@ function onBridgeEvent(e) {
       callStart = Date.now();
       timerId   = setInterval(tickTimer, 1000);
       tickTimer();
-      setSyncChip(true);
       break;
     case 'link_terminated':
       pushLog([['data', 'Link terminated: ' + e.reason]], '');
@@ -483,13 +482,6 @@ function showCallPanel(show) {
   document.getElementById('callZone').classList.toggle('hidden',   show);
 }
 
-function setSyncChip(locked) {
-  const dot = document.getElementById('syncDot');
-  const lbl = document.getElementById('syncLbl');
-  dot.style.background = locked ? 'var(--s-linked)' : 'var(--s-idle)';
-  lbl.style.color      = locked ? 'var(--s-linked)' : 'var(--s-idle)';
-  lbl.textContent      = locked ? 'LOCK' : 'SCAN';
-}
 
 function stopTimer() {
   if (timerId) clearInterval(timerId);
@@ -505,7 +497,6 @@ function goIdle() {
   setStatus('Idle', 'idle');
   showInc(false);
   showCallPanel(false);
-  setSyncChip(false);
 }
 
 function goScanning() {
@@ -513,7 +504,6 @@ function goScanning() {
   setStatus('Scanning', 'scanning');
   showInc(false);
   showCallPanel(false);
-  setSyncChip(true);
 }
 
 function goIncoming() {
@@ -536,7 +526,6 @@ function goLinked() {
   callStart = Date.now();
   timerId   = setInterval(tickTimer, 1000);
   tickTimer();
-  setSyncChip(true);
   pushLog([['to','TO:'+cs.slice(0,3)],['data','DATA:'+cs.slice(3,5)+'@'],['tis','TIS:'+primarySelfAddr().slice(0,3)]], 'linked');
 }
 
