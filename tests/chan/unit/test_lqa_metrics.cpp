@@ -479,10 +479,8 @@ void test_multipath_code_integer_values() {
     std::cout << "Test: multipath_delay_to_lqa_code - integer ms 1..6 -> codes 1..6..." << std::endl;
 
     LQAMetrics metrics;
-    for (int ms = 1; ms <= 6; ++ms) {
-        uint8_t code = metrics.multipath_delay_to_lqa_code(static_cast<float>(ms));
-        assert(code == static_cast<uint8_t>(ms));
-    }
+    for (int ms = 1; ms <= 6; ++ms)
+        assert(metrics.multipath_delay_to_lqa_code(static_cast<float>(ms)) == static_cast<uint8_t>(ms));
 
     std::cout << "  PASS" << std::endl;
 }
@@ -528,10 +526,8 @@ void test_multipath_code_range_never_outside_bounds() {
 
     LQAMetrics metrics;
     // Sweep -2 ms to +20 ms in 0.1 ms steps
-    for (float ms = -2.0f; ms <= 20.0f; ms += 0.1f) {
-        uint8_t code = metrics.multipath_delay_to_lqa_code(ms);
-        assert(code <= 7);
-    }
+    for (float ms = -2.0f; ms <= 20.0f; ms += 0.1f)
+        assert(metrics.multipath_delay_to_lqa_code(ms) <= 7);
 
     std::cout << "  PASS" << std::endl;
 }
@@ -548,6 +544,153 @@ void test_multipath_code_all_codes_reachable() {
     // Code 7 via saturation
     assert(metrics.multipath_delay_to_lqa_code(7.0f) == 7);
 
+    std::cout << "  PASS" << std::endl;
+}
+
+// --- Table A-XIII: ber_score_to_lqa_code (votes 0..48 -> 5-bit code 0..30) ---
+
+// Perfect quality (0 votes) -> code 0
+void test_ber_score_to_lqa_code_zero() {
+    std::cout << "Test: ber_score_to_lqa_code - 0 votes -> code 0..." << std::endl;
+    assert(ber_score_to_lqa_code(0) == 0);
+    std::cout << "  PASS" << std::endl;
+}
+
+// Votes 1..29 map directly to codes 1..29 (Table A-XIII direct mapping)
+void test_ber_score_to_lqa_code_direct_map() {
+    std::cout << "Test: ber_score_to_lqa_code - votes 1..29 map directly to codes 1..29..." << std::endl;
+    for (uint8_t v = 1; v <= 29; ++v)
+        assert(ber_score_to_lqa_code(v) == v);
+    std::cout << "  PASS" << std::endl;
+}
+
+// Vote count 30 -> code 30 (11110 = "0.3 or more" BER)
+void test_ber_score_to_lqa_code_thirty() {
+    std::cout << "Test: ber_score_to_lqa_code - 30 votes -> code 30..." << std::endl;
+    assert(ber_score_to_lqa_code(30) == 30);
+    std::cout << "  PASS" << std::endl;
+}
+
+// Vote counts > 30 (incl. BerAccumulator max 48) all saturate to code 30
+void test_ber_score_to_lqa_code_saturation() {
+    std::cout << "Test: ber_score_to_lqa_code - votes >30 saturate to code 30..." << std::endl;
+    assert(ber_score_to_lqa_code(31) == 30);
+    assert(ber_score_to_lqa_code(48) == 30);
+    std::cout << "  PASS" << std::endl;
+}
+
+// No output outside [0, 30]
+void test_ber_score_to_lqa_code_range() {
+    std::cout << "Test: ber_score_to_lqa_code - no code outside [0,30] for any vote 0..48..." << std::endl;
+    for (uint8_t v = 0; v <= 48; ++v)
+        assert(ber_score_to_lqa_code(v) <= 30);
+    std::cout << "  PASS" << std::endl;
+}
+
+// --- Table A-XIV: encode_lqa_cmd / decode_lqa_cmd ---
+
+// Preamble and 'a' character are always correct in encoded word
+void test_encode_lqa_cmd_preamble_and_char() {
+    std::cout << "Test: encode_lqa_cmd - preamble=110 and 'a'=1100001 always set..." << std::endl;
+    LQACmdPayload p;
+    p.ber = 0; p.sinad = 0; p.mp = 0; p.ka1 = false;
+    uint32_t w = encode_lqa_cmd(p);
+    assert(((w >> 21) & 0x7u)  == 0b110u);       // CMD preamble
+    assert(((w >> 14) & 0x7Fu) == 0b1100001u);   // 'a'
+    (void)w;
+    std::cout << "  PASS" << std::endl;
+}
+
+// BER field occupies bits [4:0]
+void test_encode_lqa_cmd_ber_field() {
+    std::cout << "Test: encode_lqa_cmd - BER at bits [4:0]..." << std::endl;
+    LQACmdPayload p;
+    p.ber = 15; p.sinad = 0; p.mp = 0; p.ka1 = false;
+    uint32_t w = encode_lqa_cmd(p);
+    assert((w & 0x1Fu)         == 15u);   // BER=15
+    assert(((w >> 5)  & 0x1Fu) ==  0u);   // SINAD=0
+    assert(((w >> 10) & 0x7u)  ==  0u);   // MP=0
+    (void)w;
+    std::cout << "  PASS" << std::endl;
+}
+
+// SINAD field occupies bits [9:5]
+void test_encode_lqa_cmd_sinad_field() {
+    std::cout << "Test: encode_lqa_cmd - SINAD at bits [9:5]..." << std::endl;
+    LQACmdPayload p;
+    p.ber = 0; p.sinad = 24; p.mp = 0; p.ka1 = false;
+    uint32_t w = encode_lqa_cmd(p);
+    assert(((w >> 5)  & 0x1Fu) == 24u);   // SINAD=24
+    assert((w & 0x1Fu)         ==  0u);   // BER=0
+    assert(((w >> 10) & 0x7u)  ==  0u);   // MP=0
+    (void)w;
+    std::cout << "  PASS" << std::endl;
+}
+
+// MP field occupies bits [12:10]
+void test_encode_lqa_cmd_mp_field() {
+    std::cout << "Test: encode_lqa_cmd - MP at bits [12:10]..." << std::endl;
+    LQACmdPayload p;
+    p.ber = 0; p.sinad = 0; p.mp = 5; p.ka1 = false;
+    uint32_t w = encode_lqa_cmd(p);
+    assert(((w >> 10) & 0x7u) == 5u);
+    (void)w;
+    std::cout << "  PASS" << std::endl;
+}
+
+// KA1 flag occupies bit [13]
+void test_encode_lqa_cmd_ka1_flag() {
+    std::cout << "Test: encode_lqa_cmd - KA1 at bit [13]..." << std::endl;
+    LQACmdPayload off, on;
+    off.ka1 = false; on.ka1 = true;
+    assert(((encode_lqa_cmd(off) >> 13) & 1u) == 0u);
+    assert(((encode_lqa_cmd(on)  >> 13) & 1u) == 1u);
+    std::cout << "  PASS" << std::endl;
+}
+
+// "No value" sentinel values encode correctly
+void test_encode_lqa_cmd_no_value_sentinels() {
+    std::cout << "Test: encode_lqa_cmd - no-value sentinels (BER=31, SINAD=31, MP=7)..." << std::endl;
+    LQACmdPayload p;                        // defaults: ber=31, sinad=31, mp=7, ka1=false
+    uint32_t w = encode_lqa_cmd(p);
+    assert((w & 0x1Fu)         == 31u);    // BER = 11111
+    assert(((w >> 5)  & 0x1Fu) == 31u);   // SINAD = 11111
+    assert(((w >> 10) & 0x7u)  ==  7u);   // MP = 111
+    (void)w;
+    std::cout << "  PASS" << std::endl;
+}
+
+// Round-trip: decode(encode(p)) == p
+void test_lqa_cmd_round_trip() {
+    std::cout << "Test: decode_lqa_cmd(encode_lqa_cmd(p)) round-trips correctly..." << std::endl;
+    LQACmdPayload p;
+    p.ber = 15; p.sinad = 24; p.mp = 3; p.ka1 = true;
+    LQACmdPayload q = decode_lqa_cmd(encode_lqa_cmd(p));
+    assert(q.ber   == p.ber);
+    assert(q.sinad == p.sinad);
+    assert(q.mp    == p.mp);
+    assert(q.ka1   == p.ka1);
+    std::cout << "  PASS" << std::endl;
+}
+
+// Exhaustive round-trip: all valid field combinations
+void test_lqa_cmd_round_trip_exhaustive() {
+    std::cout << "Test: encode/decode round-trip for all valid field values..." << std::endl;
+    for (uint8_t ber = 0; ber <= 31; ++ber) {
+        for (uint8_t sinad = 0; sinad <= 31; ++sinad) {
+            for (uint8_t mp = 0; mp <= 7; ++mp) {
+                for (int ka1 = 0; ka1 <= 1; ++ka1) {
+                    LQACmdPayload p;
+                    p.ber = ber; p.sinad = sinad; p.mp = mp; p.ka1 = (ka1 != 0);
+                    LQACmdPayload q = decode_lqa_cmd(encode_lqa_cmd(p));
+                    assert(q.ber   == ber);
+                    assert(q.sinad == sinad);
+                    assert(q.mp    == mp);
+                    assert(q.ka1   == (ka1 != 0));
+                }
+            }
+        }
+    }
     std::cout << "  PASS" << std::endl;
 }
 
@@ -610,6 +753,23 @@ int main() {
     test_multipath_code_above_six_saturation();
     test_multipath_code_range_never_outside_bounds();
     test_multipath_code_all_codes_reachable();
+
+    // Table A-XIII: ber_score_to_lqa_code
+    test_ber_score_to_lqa_code_zero();
+    test_ber_score_to_lqa_code_direct_map();
+    test_ber_score_to_lqa_code_thirty();
+    test_ber_score_to_lqa_code_saturation();
+    test_ber_score_to_lqa_code_range();
+
+    // Table A-XIV / AC-CHAN-003-001: encode_lqa_cmd / decode_lqa_cmd
+    test_encode_lqa_cmd_preamble_and_char();
+    test_encode_lqa_cmd_ber_field();
+    test_encode_lqa_cmd_sinad_field();
+    test_encode_lqa_cmd_mp_field();
+    test_encode_lqa_cmd_ka1_flag();
+    test_encode_lqa_cmd_no_value_sentinels();
+    test_lqa_cmd_round_trip();
+    test_lqa_cmd_round_trip_exhaustive();
 
     std::cout << "\n=== All LQA Metrics Tests Passed ===" << std::endl;
     return 0;

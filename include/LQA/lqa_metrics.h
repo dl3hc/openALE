@@ -278,4 +278,63 @@ private:
     AccumulatedMetrics accumulated_;
 };
 
+// ─── Table A-XIII / A-XIV : CMD LQA Word encoding ───────────────────────────
+
+/// 5-bit BER code sent when no measurement is available (BE=11111).
+static constexpr uint8_t kBerLqaNoValue    = 31u;
+/// 5-bit SINAD code sent when no measurement is available (SN=11111).
+static constexpr uint8_t kSinadLqaNoValue  = 31u;
+/// 3-bit MP code sent when multipath is not measured (MP=111).
+static constexpr uint8_t kMpLqaNotMeasured =  7u;
+
+/**
+ * @brief Map BerAccumulator score [0–48] to Table A-XIII 5-bit code [0–30]
+ *
+ * MIL-STD-188-141B Table A-XIII: average 2/3-vote counts 0–29 map directly
+ * to codes 0–29; any count ≥ 30 → code 30 (11110 = "0.3 or more" BER).
+ * Code 31 (11111 = "no value") is NOT returned here — the caller must set
+ * kBerLqaNoValue when the BerAccumulator has no words (word_count() == 0).
+ *
+ * @param ber_score BerAccumulator::ber_score() result (0–48)
+ * @return 5-bit code 0–30
+ */
+uint8_t ber_score_to_lqa_code(uint8_t ber_score);
+
+/**
+ * @brief Packed fields for a CMD LQA word (MIL-STD-188-141B Table A-XIV)
+ */
+struct LQACmdPayload {
+    uint8_t ber   = kBerLqaNoValue;    ///< 5-bit BER code 0–30; 31 = no value
+    uint8_t sinad = kSinadLqaNoValue;  ///< 5-bit SINAD code 0–30 dB; 31 = no value
+    uint8_t mp    = kMpLqaNotMeasured; ///< 3-bit MP code 0–6 ms; 7 = not measured
+    bool    ka1   = false;             ///< true → request LQA report from called station
+};
+
+/**
+ * @brief Encode a CMD LQA payload into a 24-bit ALE word (Table A-XIV)
+ *
+ * Bit layout (bit 23 = MSB, bit 0 = LSB):
+ *   [23:21]  CMD preamble  = 110
+ *   [20:14]  'a' character = 1100001 (ALE "analysis")
+ *   [13]     KA1
+ *   [12:10]  MP[2:0]
+ *   [9:5]    SINAD[4:0]
+ *   [4:0]    BER[4:0]
+ *
+ * @param p Payload fields
+ * @return 24-bit ALE word
+ */
+uint32_t encode_lqa_cmd(const LQACmdPayload& p);
+
+/**
+ * @brief Decode a 24-bit ALE word into a CMD LQA payload (Table A-XIV)
+ *
+ * Does NOT verify the CMD preamble or 'a' character — the caller is
+ * responsible for word-type checking before calling.
+ *
+ * @param word24 24-bit received ALE word
+ * @return Decoded payload fields
+ */
+LQACmdPayload decode_lqa_cmd(uint32_t word24);
+
 } // namespace ale

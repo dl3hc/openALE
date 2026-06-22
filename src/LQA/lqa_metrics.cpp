@@ -243,4 +243,38 @@ size_t LQAMetrics::get_sample_count() const {
     return samples_.size();
 }
 
+// ─── Table A-XIII / A-XIV free functions ─────────────────────────────────────
+
+uint8_t ber_score_to_lqa_code(uint8_t ber_score) {
+    // Table A-XIII: votes 0–29 → code 0–29; votes ≥ 30 → code 30 (11110).
+    return ber_score >= 30u ? 30u : ber_score;
+}
+
+uint32_t encode_lqa_cmd(const LQACmdPayload& p) {
+    // Table A-XIV bit layout (bit 23 = MSB):
+    //   [23:21] CMD preamble 110
+    //   [20:14] 'a' = 1100001 (0x61)
+    //   [13]    KA1
+    //   [12:10] MP[2:0]
+    //   [9:5]   SINAD[4:0]
+    //   [4:0]   BER[4:0]
+    constexpr uint32_t kCmdPreamble = 0b110u;
+    constexpr uint32_t kLqaChar     = 0b1100001u;   // ASCII 'a'
+    return (kCmdPreamble                   << 21)
+         | (kLqaChar                       << 14)
+         | ((p.ka1 ? 1u : 0u)             << 13)
+         | (static_cast<uint32_t>(p.mp    & 0x07u) << 10)
+         | (static_cast<uint32_t>(p.sinad & 0x1Fu) <<  5)
+         |  static_cast<uint32_t>(p.ber   & 0x1Fu);
+}
+
+LQACmdPayload decode_lqa_cmd(uint32_t word24) {
+    LQACmdPayload p;
+    p.ka1   = ((word24 >> 13) & 0x01u) != 0;
+    p.mp    =  (word24 >> 10) & 0x07u;
+    p.sinad =  (word24 >>  5) & 0x1Fu;
+    p.ber   =   word24        & 0x1Fu;
+    return p;
+}
+
 } // namespace ale

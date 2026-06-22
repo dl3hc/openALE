@@ -1062,7 +1062,8 @@
       "description": "Das CMD-LQA-Wort hat folgendes Bit-Layout im 21-Bit-Payload: Bits 20–16 = BER (5 Bit), Bits 15–11 = SINAD (5 Bit), Bits 10–8 = Multipath (3 Bit), Bit 7 = KA1 (LQA-Request-Flag).",
       "module": "LQA/lqa_metrics",
       "verification_hint": "Prüfe encode_lqa_cmd() in lqa_metrics.cpp oder ale_channel_selector.cpp. Bit-Maske und Shift-Operationen müssen obigem Layout entsprechen.",
-      "status": "open"
+      "status": "closed",
+      "verification": "LQACmdPayload-Struct, encode_lqa_cmd() und decode_lqa_cmd() in lqa_metrics.h/.cpp implementiert. Bit-Layout nach Table A-XIV (MIL-STD-188-141B): bit[23:21]=CMD-Preamble 110, bit[20:14]='a'=1100001, bit[13]=KA1, bit[12:10]=MP[2:0], bit[9:5]=SINAD[4:0], bit[4:0]=BER[4:0]. Zusätzlich ber_score_to_lqa_code() nach Table A-XIII (votes 0-48 → 5-bit code 0-30, Sättigung bei ≥30). Sentinel-Konstanten kBerLqaNoValue=31, kSinadLqaNoValue=31, kMpLqaNotMeasured=7. 13 neue Unit-Tests verifizieren: direkte Abbildung 0-29, Sättigung, Preamble/Zeichenfeld, Bit-Positionen jedes Feldes, No-Value-Sentinels, exhaustiver Roundtrip für alle 4096 Feldkombinationen. Alle Tests: 46/46 PASS."
     },
     {
       "id": "AC-CHAN-006-001",
@@ -1173,7 +1174,7 @@
         "REQ-LINK-020"
       ],
       "title": "Link hergestellt: Twa-Activity-Timer = 30 s",
-      "description": "Nach Link-Herstellung (LinkedPhase::ACTIVE) ist ein Activity-Timer (Twa = 30.000 ms) aktiv. Bei Ablauf ohne Aktivität wird der Link terminiert.",
+      "description": "Nach Link-Herstellung (LinkedPhase::ACTIVE) ist ein Activity-Timer (Twa = 30.000 ms) aktiv. Bei Ablauf ohne Aktivität wird der Link terminiert. Bei Analog Voice Operation nach Link-Aufbau, gilt der Link solange als hergestellt, bis etweder A; eine Station den Link manuell beendet oder B; vom ALEController keine Aktivität im Analog Voice Zustand mehr erkannt wird. Zustände wie, AnalogVoice, DigitalVoice oder DATA müssen erst noch implementiert werden.",
       "module": "Protocol/ale_state_machine",
       "verification_hint": "Prüfe LINKED-Zustand in ale_state_machine.cpp: twa_timeout_ms oder TWA_MS muss 30000 sein. Timer-Reset bei jeder Aktivität.",
       "status": "closed",
