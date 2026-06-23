@@ -601,6 +601,11 @@ add_executable(test_architecture tests/gen/integration/test_layering.cpp)
 target_compile_definitions(test_architecture PRIVATE PROJECT_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME Architecture COMMAND test_architecture)
 
+add_executable(test_message_assembler tests/monitor/unit/test_message_assembler.cpp)
+target_link_libraries(test_message_assembler ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_message_assembler PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME MessageAssembler COMMAND test_message_assembler)
+
 # ── Examples ──────────────────────────────────────────────────────────────────
 
 option(BUILD_EXAMPLES "Build example programs" ON)

@@ -148,13 +148,18 @@ static mj::Value self_addr_line_to_json(const std::string& line) {
     return v;
 }
 
-// "freq|station|snr|ber|sinad|score|age_ms" -> object (see ALEController::get_all_lqa_entries())
+// "freq|station|snr|ber|sinad|score|age_ms|bilat_sinad|bilat_ber|bilat_mp|display_score"
+// -> object (see ALEController::get_all_lqa_entries()). The bilateral_* fields are
+// the peer-reported CMD-LQA metrics (A.5.4.2): SINAD code [0-30] dB higher=better
+// (31 = no measurement), BER code [0-30] 2/3-vote count lower=better (31 = no
+// value), MP code [0-6] ms (7 = not measured). Shipped so the GUI can display a
+// real measurement when no local FROM-direction snr/sinad exists.
 static mj::Value lqa_line_to_json(const std::string& line) {
     std::vector<std::string> f;
     std::stringstream ss(line);
     std::string tok;
     while (std::getline(ss, tok, '|')) f.push_back(tok);
-    f.resize(7);
+    f.resize(11);
     mj::Value v = mj::obj();
     v.set("freq_hz", mj::Value::number(std::atof(f[0].c_str())));
     v.set("station", mj::Value::string(f[1]));
@@ -163,6 +168,10 @@ static mj::Value lqa_line_to_json(const std::string& line) {
     v.set("sinad_db", mj::Value::number(std::atof(f[4].c_str())));
     v.set("score", mj::Value::number(std::atof(f[5].c_str())));
     v.set("age_ms", mj::Value::number(std::atof(f[6].c_str())));
+    v.set("bilateral_sinad_db", mj::Value::number(std::atof(f[7].c_str())));
+    v.set("bilateral_ber", mj::Value::number(std::atof(f[8].c_str())));
+    v.set("bilateral_mp", mj::Value::number(std::atof(f[9].c_str())));
+    v.set("display_score", mj::Value::number(std::atof(f[10].c_str())));
     return v;
 }
 
@@ -205,8 +214,21 @@ static mj::Value make_event(const std::string& name) {
 static std::string build_radio_spec(const mj::Value& msg) {
     const std::string backend = msg.get_string("backend", "netrigctl");
     if (backend == "none") return "";
-    if (backend == "serial")
-        return "hamlib:" + msg.get_string("model", "1") + ":" + msg.get_string("serial");
+    if (backend == "serial") {
+        const std::string model = msg.get_string("model", "1");
+        const std::string port  = msg.get_string("serial");
+        const int baud  = static_cast<int>(msg.get_number("baud", 0));
+        // Line-state policy: defaults ON/ON/200 wenn nicht gesetzt
+        const std::string dtr = msg.get_string("dtr", "on");
+        const std::string rts = msg.get_string("rts", "on");
+        const int stab = static_cast<int>(msg.get_number("stab", 200));
+        // Format: "hamlib:model:port,baud,dtr=on,rts=on,stab=200"
+        return "hamlib:" + model + ":" + port
+             + "," + (baud > 0 ? std::to_string(baud) : "0")
+             + ",dtr=" + dtr
+             + ",rts=" + rts
+             + ",stab=" + std::to_string(stab);
+    }
     // netrigctl (TCP rigctld) — hamlib model 2 = NET_RIGCTL
     return "hamlib:2:tcp://" + msg.get_string("host", "127.0.0.1")
          + ":" + msg.get_string("port", "4532");
@@ -257,9 +279,36 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     }
     if (cmd == "AVAILABLE") { ctrl.start_available();  return mj::dump(make_reply(msg, true)); }
     if (cmd == "SOUND")     { return mj::dump(make_reply(msg, ctrl.send_sounding())); }
+    if (cmd == "SOUND_SWEEP") {  // one-shot multi-channel sounding on a net's channels
+        const std::string net = msg.get_string("net");
+        bool ok = false;
+        if (!net.empty()) {
+            // Resolve the net's channels here via the controller's helper-less path:
+            // ALEController exposes the channel list + nets; build the sweep list.
+            std::vector<Channel> sweep;
+            for (const auto& n : ctrl.nets())
+                if (n.name == net) {
+                    for (const auto& id : n.channel_ids)
+                        for (const auto& c : ctrl.channels())
+                            if (c.id == id && c.enabled) { sweep.push_back(c); break; }
+                    break;
+                }
+            ok = !sweep.empty() && ctrl.send_sounding_sweep(sweep);
+        }
+        return mj::dump(make_reply(msg, ok));
+    }
+    if (cmd == "SOUND_AUTO") {  // periodic multi-channel sounding on a net
+        ctrl.set_automatic_sounding(msg.get_bool("on"),
+            static_cast<uint32_t>(msg.get_number("interval_sec", 300)),
+            msg.get_string("net"));
+        return mj::dump(make_reply(msg, true));
+    }
 
     if (cmd == "CALL") {
-        const bool ok = ctrl.initiate_call(msg.get_string("addr"));
+        const bool single = msg.get_bool("single_channel", false);
+        const bool ok = single
+            ? ctrl.initiate_single_channel_call(msg.get_string("addr"))
+            : ctrl.initiate_call(msg.get_string("addr"));
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "GROUP_CALL") {
@@ -271,6 +320,10 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "REJECT")          { ctrl.reject_call();     return mj::dump(make_reply(msg, true)); }
     if (cmd == "TERMINATE")       { ctrl.terminate_link();  return mj::dump(make_reply(msg, true)); }
     if (cmd == "EMERGENCY_STOP")  { ctrl.emergency_stop();  return mj::dump(make_reply(msg, true)); }
+    if (cmd == "SET_PTT") {
+        ctrl.set_manual_ptt(msg.get_bool("on", false));
+        return mj::dump(make_reply(msg, true));
+    }
 
     if (cmd == "AMD") {
         const std::string resp = ctrl.process_command("CMD:AMD " + msg.get_string("text"));
@@ -409,6 +462,8 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("sounding_interval_sec"))  ctrl.set_sounding_interval_sec(static_cast<uint32_t>(msg.get_number("sounding_interval_sec")));
         if (msg.has("link_idle_timeout_sec"))  ctrl.set_link_idle_timeout_sec(static_cast<uint32_t>(msg.get_number("link_idle_timeout_sec")));
         if (msg.has("max_tune_time_ms"))       ctrl.set_max_tune_time_ms(static_cast<uint32_t>(msg.get_number("max_tune_time_ms")));
+        if (msg.has("ptt_lead_ms"))            ctrl.set_ptt_lead_ms(static_cast<uint32_t>(msg.get_number("ptt_lead_ms")));
+        if (msg.has("ptt_tail_ms"))            ctrl.set_ptt_tail_ms(static_cast<uint32_t>(msg.get_number("ptt_tail_ms")));
         return mj::dump(make_reply(msg, true));
     }
 
@@ -639,6 +694,36 @@ int main(int argc, char* argv[]) {
         mj::Value e = make_event("amd_received");
         e.set("from", mj::Value::string(from));
         e.set("text", mj::Value::string(text));
+        ws.send_text(mj::dump(e));
+    };
+    // ── Passive channel monitor ──────────────────────────────────────────
+    // word_decoded: fires for every successfully decoded ALE word, regardless
+    // of whether it is locally relevant. frame_id groups words into frames.
+    ctrl.on_word_decoded = [&](const ALEWord& w, uint32_t fid) {
+        mj::Value e = make_event("word_decoded");
+        e.set("frame_id", mj::Value::number(fid));
+        e.set("preamble", mj::Value::string(WordParser::word_type_name(w.type)));
+        e.set("addr",     mj::Value::string(std::string(w.address)));
+        e.set("votes",    mj::Value::number(w.unanimous_votes));
+        e.set("fec",      mj::Value::number(w.fec_errors));
+        e.set("ts_ms",    mj::Value::number(w.timestamp_ms));
+        e.set("freq_hz",  mj::Value::number(ctrl.get_current_channel().rx_frequency_hz));
+        ws.send_text(mj::dump(e));
+    };
+    // frame_decoded: fires once per assembled ALE frame with semantic summary.
+    ctrl.on_frame_decoded = [&](const ALEMessage& frame, uint32_t fid) {
+        mj::Value e = make_event("frame_decoded");
+        e.set("frame_id",    mj::Value::number(fid));
+        e.set("call_type",   mj::Value::string(CallTypeDetector::call_type_name(frame.call_type)));
+        e.set("from",        mj::Value::string(frame.from_address));
+        e.set("word_count",  mj::Value::number(static_cast<double>(frame.words.size())));
+        e.set("start_ms",    mj::Value::number(frame.start_time_ms));
+        e.set("duration_ms", mj::Value::number(frame.duration_ms));
+        e.set("freq_hz",     mj::Value::number(ctrl.get_current_channel().rx_frequency_hz));
+        mj::Value to_arr = mj::arr();
+        for (const auto& a : frame.to_addresses)
+            to_arr.push_back(mj::Value::string(a));
+        e.set("to", std::move(to_arr));
         ws.send_text(mj::dump(e));
     };
     // Fires inline from ctrl.feed_audio() below — i.e. on THIS main-loop thread,

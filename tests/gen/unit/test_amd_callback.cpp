@@ -6,13 +6,19 @@
  * immediately reported to the operator layer — no buffering without
  * notification.
  *
+ * AMD frame wire format (encode_amd / ale_orderwire_protocols.cpp):
+ *   [TO dest × N] [CMD msg_1-3] [DATA msg_4-6]? [REP msg_7-9]? ... [TIS/FROM src]
+ *
+ * The CMD preamble word is mandatory and distinguishes AMD from individual
+ * calls that carry DATA words only for address extension (long callsigns).
+ *
  * Verifies:
- *   TEST 1  CallTypeDetector::is_amd() — TO+FROM+DATA detected as AMD
- *   TEST 2  CallTypeDetector::is_amd() — TO+FROM (no DATA) is NOT AMD
- *   TEST 3  CallTypeDetector::detect() — AMD wins over INDIVIDUAL when DATA present
+ *   TEST 1  CallTypeDetector::is_amd() — TO+FROM+CMD detected as AMD
+ *   TEST 2  CallTypeDetector::is_amd() — TO+FROM (no CMD) is NOT AMD
+ *   TEST 3  CallTypeDetector::detect() — AMD wins over INDIVIDUAL when CMD present
  *   TEST 4  MessageAssembler — AMD message assembled with call_type=AMD
  *   TEST 5  MessageAssembler — AMD data content extracted into data_content
- *   TEST 6  MessageAssembler — AMD multi-word data (DATA+REP) assembled correctly
+ *   TEST 6  MessageAssembler — AMD multi-word data (CMD+DATA) assembled correctly
  *   TEST 7  MessageAssembler — no AMD fired without on_amd_received set (no crash)
  */
 
@@ -32,7 +38,6 @@ static ALEWord make_word(PreambleType type, const char* addr, uint32_t ts = 0)
     w.type        = type;
     w.valid       = true;
     w.timestamp_ms = ts;
-    // safe copy: address is a fixed-size char array inside ALEWord
     for (int i = 0; i < 3; ++i) w.address[i] = addr[i] ? addr[i] : '\0';
     w.address[3] = '\0';
     w.raw_payload  = 0;
@@ -42,32 +47,32 @@ static ALEWord make_word(PreambleType type, const char* addr, uint32_t ts = 0)
 }
 
 // ── TEST 1 ───────────────────────────────────────────────────────────────────
-void test_amd_detected_with_data()
+void test_amd_detected_with_cmd()
 {
-    std::cout << "[TEST 1] is_amd() — TO+FROM+DATA detected as AMD\n";
+    std::cout << "[TEST 1] is_amd() — TO+FROM+CMD detected as AMD\n";
 
     std::vector<ALEWord> words;
     words.push_back(make_word(PreambleType::TO,   "BOB"));
     words.push_back(make_word(PreambleType::FROM, "SAM"));
-    words.push_back(make_word(PreambleType::DATA, "HEL"));
+    words.push_back(make_word(PreambleType::CMD,  "HEL"));
 
     bool result = CallTypeDetector::is_amd(words);
-    assert(result && "TO+FROM+DATA must be detected as AMD");
+    assert(result && "TO+FROM+CMD must be detected as AMD");
     (void)result;
-    std::cout << "  is_amd(TO,FROM,DATA) = true  PASSED\n\n";
+    std::cout << "  is_amd(TO,FROM,CMD) = true  PASSED\n\n";
 }
 
 // ── TEST 2 ───────────────────────────────────────────────────────────────────
-void test_no_amd_without_data()
+void test_no_amd_without_cmd()
 {
-    std::cout << "[TEST 2] is_amd() — TO+FROM (no DATA) is NOT AMD\n";
+    std::cout << "[TEST 2] is_amd() — TO+FROM (no CMD) is NOT AMD\n";
 
     std::vector<ALEWord> words;
     words.push_back(make_word(PreambleType::TO,   "BOB"));
     words.push_back(make_word(PreambleType::FROM, "SAM"));
 
     bool result = CallTypeDetector::is_amd(words);
-    assert(!result && "TO+FROM without DATA must NOT be AMD");
+    assert(!result && "TO+FROM without CMD must NOT be AMD");
     (void)result;
     std::cout << "  is_amd(TO,FROM) = false  PASSED\n\n";
 }
@@ -75,17 +80,17 @@ void test_no_amd_without_data()
 // ── TEST 3 ───────────────────────────────────────────────────────────────────
 void test_detect_prefers_amd_over_individual()
 {
-    std::cout << "[TEST 3] detect() — AMD takes precedence over INDIVIDUAL when DATA present\n";
+    std::cout << "[TEST 3] detect() — AMD takes precedence over INDIVIDUAL when CMD present\n";
 
     std::vector<ALEWord> words;
     words.push_back(make_word(PreambleType::TO,   "BOB"));
     words.push_back(make_word(PreambleType::FROM, "SAM"));
-    words.push_back(make_word(PreambleType::DATA, "HI!"));
+    words.push_back(make_word(PreambleType::CMD,  "HI!"));
 
     CallType ct = CallTypeDetector::detect(words);
-    assert(ct == CallType::AMD && "detect() must return AMD when TO+FROM+DATA present");
+    assert(ct == CallType::AMD && "detect() must return AMD when TO+FROM+CMD present");
     (void)ct;
-    std::cout << "  detect(TO,FROM,DATA) = AMD  PASSED\n\n";
+    std::cout << "  detect(TO,FROM,CMD) = AMD  PASSED\n\n";
 }
 
 // ── TEST 4 ───────────────────────────────────────────────────────────────────
@@ -95,13 +100,12 @@ void test_assembler_amd_call_type()
 
     MessageAssembler asm_;
 
-    // Arrange — inject AMD frame: TO + FROM (triggers completion) + DATA was already present
-    // MessageAssembler completes on TO+FROM; we need to inject DATA before FROM
+    // AMD frame: TO dest + CMD message-start + FROM conclusion
+    // (FROM triggers completion via has_to && has_from)
     asm_.add_word(make_word(PreambleType::TO,   "BOB", 100));
-    asm_.add_word(make_word(PreambleType::DATA, "HEL", 110));
+    asm_.add_word(make_word(PreambleType::CMD,  "HEL", 110));
     bool complete = asm_.add_word(make_word(PreambleType::FROM, "SAM", 120));
 
-    // Act
     ALEMessage msg;
     bool got = asm_.get_message(msg);
 
@@ -117,38 +121,37 @@ void test_assembler_amd_call_type()
 // ── TEST 5 ───────────────────────────────────────────────────────────────────
 void test_assembler_amd_data_content()
 {
-    std::cout << "[TEST 5] MessageAssembler — AMD data content extracted\n";
+    std::cout << "[TEST 5] MessageAssembler — AMD data content extracted from CMD word\n";
 
     MessageAssembler asm_;
     asm_.add_word(make_word(PreambleType::TO,   "BOB", 100));
-    asm_.add_word(make_word(PreambleType::DATA, "HEL", 110));
+    asm_.add_word(make_word(PreambleType::CMD,  "HEL", 110));
     asm_.add_word(make_word(PreambleType::FROM, "SAM", 120));
 
     ALEMessage msg;
     asm_.get_message(msg);
 
     assert(!msg.data_content.empty() && "AMD data_content must not be empty");
-    assert(msg.data_content[0] == "HEL" && "first data word must be 'HEL'");
+    assert(msg.data_content[0] == "HEL" && "first data word must be 'HEL' (from CMD)");
     std::cout << "  data_content[0] = \"" << msg.data_content[0] << "\"  PASSED\n\n";
 }
 
 // ── TEST 6 ───────────────────────────────────────────────────────────────────
 void test_assembler_amd_multi_word_data()
 {
-    std::cout << "[TEST 6] MessageAssembler — AMD multi-word message (DATA+REP)\n";
+    std::cout << "[TEST 6] MessageAssembler — AMD multi-word message (CMD+DATA)\n";
 
     MessageAssembler asm_;
     asm_.add_word(make_word(PreambleType::TO,   "BOB", 100));
-    asm_.add_word(make_word(PreambleType::DATA, "HEL", 110));
-    asm_.add_word(make_word(PreambleType::REP,  "LO@", 120));  // '@' = padding
+    asm_.add_word(make_word(PreambleType::CMD,  "HEL", 110));  // first AMD word
+    asm_.add_word(make_word(PreambleType::DATA, "LO@", 120));  // continuation
     asm_.add_word(make_word(PreambleType::FROM, "SAM", 130));
 
     ALEMessage msg;
     asm_.get_message(msg);
 
     assert(msg.call_type == CallType::AMD && "multi-word AMD still detected as AMD");
-    // REP word is not DATA, so data_content only contains DATA-preamble words
-    assert(!msg.data_content.empty() && "data_content must contain at least one item");
+    assert(msg.data_content.size() >= 2 && "data_content must contain CMD + DATA words");
     std::cout << "  call_type = AMD, data_content.size() = " << msg.data_content.size()
               << "  PASSED\n\n";
 }
@@ -166,7 +169,7 @@ void test_no_crash_without_callback()
 
     MessageAssembler asm_;
     asm_.add_word(make_word(PreambleType::TO,   "BOB", 0));
-    asm_.add_word(make_word(PreambleType::DATA, "HI!", 1));
+    asm_.add_word(make_word(PreambleType::CMD,  "HI!", 1));
     asm_.add_word(make_word(PreambleType::FROM, "SAM", 2));
 
     ALEMessage msg;
@@ -184,8 +187,8 @@ int main()
     std::cout << "AC-GEN-014-001 — AMD immediate callback\n";
     std::cout << "========================================\n\n";
 
-    test_amd_detected_with_data();
-    test_no_amd_without_data();
+    test_amd_detected_with_cmd();
+    test_no_amd_without_cmd();
     test_detect_prefers_amd_over_individual();
     test_assembler_amd_call_type();
     test_assembler_amd_data_content();

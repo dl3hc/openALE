@@ -218,7 +218,6 @@ public:
     std::string get_station_quality_summary(const std::string& station,
                                             uint32_t frequency_hz) const;
 
-private:
     /**
      * @brief Compute aggregate score for a channel
      *
@@ -229,6 +228,7 @@ private:
      */
     float compute_channel_aggregate_score(uint32_t frequency_hz) const;
 
+private:
     /**
      * @brief Bilateral channel score for a single entry (MIL-STD-188-141B A.5.4.5)
      *

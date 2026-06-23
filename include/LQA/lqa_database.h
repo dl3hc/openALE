@@ -376,6 +376,22 @@ public:
      */
     float compute_score(const LQAEntry& entry) const;
 
+    /**
+     * @brief Bilateral (TO-direction) quality score from a peer's CMD LQA report.
+     *
+     * Unlike compute_score (which uses the FROM-direction snr_db/ber measured
+     * locally), this derives a 0-30 quality from the bilateral_* fields a remote
+     * station reported about our signal. Per MIL-STD-188-141B A.5.4.1/A.5.4.2:
+     *   - SINAD code is dB directly, higher = better (31 = no measurement);
+     *   - BER  code is the 2/3-vote count, lower = better (31 = no value).
+     * So SINAD contributes positively and BER negatively (no SINAD inversion).
+     * Returns 0.0 when neither bilateral field carries a measurement.
+     *
+     * @param entry Entry with bilateral_* fields populated by update_bilateral()
+     * @return Bilateral quality in [0, 30]
+     */
+    float bilateral_quality_score(const LQAEntry& entry) const;
+
 private:
     /**
      * @brief Internal key for database map

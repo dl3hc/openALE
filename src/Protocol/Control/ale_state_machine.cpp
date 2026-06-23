@@ -145,8 +145,39 @@ bool ALEStateMachine::process_event(ALEEvent event) {
             break;
 
         case ALEState::SOUNDING:
-            if (event == ALEEvent::SOUNDING_COMPLETE)  return transition_to(previous_state);  // previous_state = IDLE|SCANNING, set by transition_to() on SOUNDING entry
-            if (event == ALEEvent::CALL_DETECTED)      return transition_to(ALEState::HANDSHAKE);  // T-08
+            if (event == ALEEvent::SOUNDING_COMPLETE) {
+                // Multi-channel sweep: advance to the next channel instead of
+                // returning to the previous state, until the list is exhausted.
+                if (sounding_sweep_active_) {
+                    ++sounding_sweep_idx_;
+                    if (sounding_sweep_idx_ < sounding_sweep_chs_.size()) {
+                        channel_manager_.set_override(sounding_sweep_chs_[sounding_sweep_idx_]);
+                        // Re-arm SOUNDING on the next channel (transition_to(SOUNDING)
+                        // from SOUNDING is a no-op, so re-arm the LBT phase directly).
+                        sounding_phase_        = SoundingPhase::LBT;
+                        sounding_lbt_start_ms_ = current_time_ms;
+                        if (rx_enabled_callback) rx_enabled_callback(true);
+                        return true;
+                    }
+                    // Sweep exhausted — drop out of sweep mode and return.
+                    sounding_sweep_active_ = false;
+                    sounding_sweep_chs_.clear();
+                    sounding_sweep_idx_    = 0;
+                    // The override is cleared by enter_state(IDLE/SCANNING) below.
+                }
+                return transition_to(previous_state);  // previous_state = IDLE|SCANNING
+            }
+            if (event == ALEEvent::CALL_DETECTED) {
+                // T-08: a return call during a sounding LISTENING window links on
+                // the current (sweep) channel. Stop the sweep (it won't resume
+                // after the link); keep the channel override so the handshake +
+                // LQA recording use the correct channel — it is cleared on the
+                // eventual return to IDLE/SCANNING.
+                sounding_sweep_active_ = false;
+                sounding_sweep_chs_.clear();
+                sounding_sweep_idx_    = 0;
+                return transition_to(ALEState::HANDSHAKE);
+            }
             break;
 
         case ALEState::ERROR:
@@ -205,12 +236,14 @@ void ALEStateMachine::enter_state(ALEState new_state) {
     switch (new_state) {
         case ALEState::IDLE:
             // Available state: RX on, fixed channel, wait for incoming calls.
+            channel_manager_.clear_override();  // end any sounding-sweep pin
             if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
         case ALEState::SCANNING:
             scanning_phase_          = ScanningPhase::HOPPING;
             allcall_pause_start_ms_  = 0;
+            channel_manager_.clear_override();  // end any sounding-sweep pin
             channel_manager_.start(current_time_ms);
             if (rx_enabled_callback) rx_enabled_callback(true);
             break;
@@ -530,43 +563,31 @@ void ALEStateMachine::handle_handshake() {
             // the extension was appended, truncating the caller address.
             if (hs_conclusion_rcvd && hs_tlww_start_ms > 0 &&
                 (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tdrw_ms) {
-                if (require_explicit_accept_) {
-                    SM_TRACE("[TRACE] handle_handshake: conclusion settle → AWAIT_ACCEPT\n");
-                    handshake_phase        = HandshakePhase::AWAIT_ACCEPT;
-                    accept_decided_        = false;
-                    await_accept_start_ms_ = current_time_ms;
-                } else {
-                    SM_TRACE("[TRACE] handle_handshake: conclusion settle → SLOT_WAIT\n");
-                    handshake_phase     = HandshakePhase::SLOT_WAIT;
-                    slot_wait_start_ms_ = current_time_ms;
-                }
-                // RX bleibt offen während Slot-Wait / AWAIT_ACCEPT
+                // Manual accept no longer gates the handshake: the responder
+                // always auto-advances to SLOT_WAIT and completes the 3-way
+                // handshake within Twr/Twrt (MIL-STD-188-141B interoperability —
+                // the caller's response-wait window is only ~3 s, far shorter
+                // than practical operator reaction time). Operator approval is
+                // applied POST-link by ALEController (LINKED_PENDING_OPERATOR),
+                // not here. require_explicit_accept_ is retained as a stored
+                // flag but no longer pauses the protocol; see docs/GUI_BRIDGE_GAPS.md.
+                SM_TRACE("[TRACE] handle_handshake: conclusion settle → SLOT_WAIT\n");
+                handshake_phase     = HandshakePhase::SLOT_WAIT;
+                slot_wait_start_ms_ = current_time_ms;
+                // RX bleibt offen während Slot-Wait
             }
             break;
         }
 
-        // ── AWAIT_ACCEPT ──────────────────────────────────────────────────
-        // Operator decision gate (only entered when manual-accept mode is on).
-        // Holds here until accept_call()/reject_call() resolves accept_decided_.
-        // If the operator does NOT decide within accept_decision_timeout_ms_, the
-        // call is dropped (no response is sent) so the caller runs into its own
-        // call timeout ("no reply"). Manual accept means manual: an unanswered
-        // call must not silently auto-link.
-        case HandshakePhase::AWAIT_ACCEPT: {
-            const bool timed_out =
-                (current_time_ms - await_accept_start_ms_) >= accept_decision_timeout_ms_;
-            if (!accept_decided_ && timed_out) {
-                SM_TRACE("[TRACE] handle_handshake: AWAIT_ACCEPT timeout → no answer, abort\n");
-                process_event(ALEEvent::LINK_TIMEOUT);
-                return;
-            }
-            if (accept_decided_) {
-                SM_TRACE("[TRACE] handle_handshake: AWAIT_ACCEPT resolved → SLOT_WAIT\n");
-                handshake_phase     = HandshakePhase::SLOT_WAIT;
-                slot_wait_start_ms_ = current_time_ms;
-            }
+        // ── AWAIT_ACCEPT (legacy, no longer entered) ──────────────────────
+        // Retained as a dead phase so the HandshakePhase enum stays stable for
+        // tests/serialization, but the settle above never transitions here now.
+        // accept_call()/reject_call() on the SM are no-ops; the operator decision
+        // is handled post-link by ALEController.
+        case HandshakePhase::AWAIT_ACCEPT:
+            handshake_phase     = HandshakePhase::SLOT_WAIT;
+            slot_wait_start_ms_ = current_time_ms;
             break;
-        }
 
         // ── SLOT_WAIT ─────────────────────────────────────────────────────
         // T-09: warte tswt_ms_ (0 bei Individual Call) bevor LBT beginnt.
@@ -852,27 +873,40 @@ bool ALEStateMachine::respond_to_call() {
 }
 
 bool ALEStateMachine::reject_call() {
-    if (current_state != ALEState::HANDSHAKE) return false;
-    pending_reject_ = true;
-    accept_decided_ = true;  // resolves AWAIT_ACCEPT, if active (decline is final)
-    return true;
+    // Manual accept no longer gates the handshake (the responder auto-completes
+    // the 3-way handshake within Twr/Twrt). Operator reject is a POST-link
+    // action handled by ALEController::reject_call() → terminate_link() (sends
+    // TWAS and returns to AVAILABLE). This SM method is now a no-op.
+    return false;
 }
 
 bool ALEStateMachine::accept_call() {
-    if (current_state != ALEState::HANDSHAKE || handshake_phase != HandshakePhase::AWAIT_ACCEPT)
-        return false;
-    accept_decided_ = true;
-    return true;
+    // See reject_call(): the operator accept/reject decision is applied post-link
+    // by ALEController. This SM method is now a no-op.
+    return false;
 }
 
-void ALEStateMachine::set_require_explicit_accept(bool on, uint32_t decision_timeout_ms) {
-    require_explicit_accept_    = on;
-    accept_decision_timeout_ms_ = decision_timeout_ms;
+void ALEStateMachine::set_require_explicit_accept(bool /*on*/, uint32_t /*decision_timeout_ms*/) {
+    // Retained as a no-op for API/CLI + config-persistence compatibility. Manual
+    // accept no longer pauses the protocol; the flag is intentionally ignored
+    // here (see docs/GUI_BRIDGE_GAPS.md and the handle_handshake settle comment).
 }
 
 bool ALEStateMachine::send_sounding() {
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
         return false;
+    return process_event(ALEEvent::SOUNDING_REQUEST);
+}
+
+bool ALEStateMachine::send_sounding_sweep(const std::vector<Channel>& channels) {
+    if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
+        return false;
+    if (channels.empty()) return false;
+    sounding_sweep_chs_    = channels;
+    sounding_sweep_idx_    = 0;
+    sounding_sweep_active_ = true;
+    // Pin current() to the first sweep channel and tune the radio to it.
+    channel_manager_.set_override(channels[0]);
     return process_event(ALEEvent::SOUNDING_REQUEST);
 }
 
@@ -1124,7 +1158,11 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
         default: break;
     }
 
-    message_assembler.add_word(word);
+    if (message_assembler.add_word(word) && frame_assembled_cb_) {
+        ALEMessage assembled;
+        if (message_assembler.get_message(assembled))
+            frame_assembled_cb_(assembled);
+    }
 }
 
 void ALEStateMachine::update_link_quality(const LinkQuality& lq) {

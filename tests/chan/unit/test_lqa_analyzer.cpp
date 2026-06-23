@@ -349,29 +349,32 @@ void test_bilateral_ranking_fallback_no_bilateral_data() {
     std::cout << "  PASS" << std::endl;
 }
 
-// Bilateral minimization: a channel with a bad TO direction (high bilateral_sinad code)
+// Bilateral minimization (A.5.4.5): a channel whose worst direction is poor
 // ranks below a channel with moderate-but-balanced bidirectional quality.
+// Per A.5.4.2 the bilateral SINAD code is dB (higher = better) and the BER code
+// is a 2/3-vote count (lower = better) — bilateral_channel_score uses SINAD
+// positively and BER negatively (no SINAD inversion).
 void test_bilateral_ranking_penalises_bad_to_direction() {
     std::cout << "Test: bilateral_channel_score() penalises poor TO direction (AC-CHAN-005-001)..." << std::endl;
 
     LQADatabase db;
     LQAAnalyzer analyzer(&db);
 
-    // C1: FROM SINAD code=5 (good FROM), bilateral_sinad=25 (very poor TO)
-    //   → from_quality=25, to_quality=5, bilateral_score=5
+    // C1: FROM SINAD=5 dB (poor FROM), bilateral SINAD=25 dB but BER=10 (poor TO)
+    //   → from_quality=5, to_quality=min(25, 30-10=20)=20, bilateral_score=min(5,20)=5
     db.update_entry_extended(7073000, "REMOTE", 20.0f, 0.001f,
                              5.0f, 0.0f, -100.0f, 0, 10);  // sinad_db=5
     db.update_bilateral(7073000, "REMOTE", 25u, 10u, 0u);
 
-    // C2: FROM SINAD code=15 (moderate FROM), bilateral_sinad=10 (moderate TO)
-    //   → from_quality=15, to_quality=20, bilateral_score=15
+    // C2: FROM SINAD=15 dB (moderate FROM), bilateral SINAD=10 dB, BER=8 (moderate TO)
+    //   → from_quality=15, to_quality=min(10, 30-8=22)=10, bilateral_score=min(15,10)=10
     db.update_entry_extended(10142000, "REMOTE", 15.0f, 0.01f,
                              15.0f, 0.0f, -100.0f, 0, 10);  // sinad_db=15
     db.update_bilateral(10142000, "REMOTE", 10u, 8u, 0u);
 
     auto ranked = analyzer.rank_channels_for_station("REMOTE");
     assert(ranked.size() == 2);
-    // C2 (bilateral_score=15) must rank above C1 (bilateral_score=5)
+    // C2 (bilateral_score=10) must rank above C1 (bilateral_score=5)
     assert(ranked[0].frequency_hz == 10142000);
     assert(ranked[1].frequency_hz == 7073000);
     assert(ranked[0].score > ranked[1].score);
@@ -383,26 +386,27 @@ void test_bilateral_ranking_penalises_bad_to_direction() {
     std::cout << "  PASS" << std::endl;
 }
 
-// Worst direction always wins: excellent FROM + terrible TO → low bilateral score.
+// Worst direction always wins: terrible FROM + excellent TO → low bilateral score.
 void test_bilateral_minimization_worst_direction_wins() {
     std::cout << "Test: bilateral minimization — worst direction determines ranking (A.5.4.5)..." << std::endl;
 
     LQADatabase db;
     LQAAnalyzer analyzer(&db);
 
-    // Excellent FROM (code=2 → from_quality=28), terrible TO (code=30 → to_quality=0)
+    // Terrible FROM (SINAD=2 dB → from_quality=2), excellent TO (SINAD=30 dB, BER=0)
+    //   → to_quality=min(30, 30-0=30)=30, bilateral_score=min(2,30)=2
     db.update_entry_extended(7073000, "REMOTE", 28.0f, 0.0f,
                              2.0f, 0.0f, -100.0f, 0, 10);
     db.update_bilateral(7073000, "REMOTE", 30u, 0u, 0u);
 
-    // Moderate both directions (code=15 each → both quality=15)
+    // Moderate both directions (SINAD=15 dB each → both quality=15)
     db.update_entry_extended(10142000, "REMOTE", 15.0f, 0.01f,
                              15.0f, 0.0f, -100.0f, 0, 10);
     db.update_bilateral(10142000, "REMOTE", 15u, 5u, 0u);
 
     auto best = analyzer.get_best_channel_for_station("REMOTE");
     assert(best != nullptr);
-    // Moderate-balanced channel must win over excellent-but-one-sided channel
+    // Moderate-balanced channel must win over one-sided (terrible-FROM) channel
     assert(best->frequency_hz == 10142000);
 
     std::cout << "  best=" << best->frequency_hz << " score=" << best->score << std::endl;

@@ -273,8 +273,9 @@ uint8_t Demodulator::symbol_from_block(const int16_t* block)
 // A MIL-STD-188-141B transmission always begins with a TO, TWAS, or TIS word;
 // these are the only word types a receiver acquires INITIAL word-sync on (cf.
 // A.5.2.6.3 "acceptable preamble", and the reference WordSync()/PreambleOK()).
-// DATA / REP / CMD / FROM / THRU occur only mid-frame and are read once the grid
-// is locked.
+// A.5.2.6.3 criterion 4: only TO/TWAS/TIS words trigger initial grid-lock
+// acquisition.  DATA / REP / CMD / FROM / THRU occur only mid-frame and are
+// read freely once the grid is locked — not a decoder limitation, spec intent.
 static bool is_acquisition_anchor(PreambleType t)
 {
     return t == PreambleType::TO || t == PreambleType::TWAS || t == PreambleType::TIS;

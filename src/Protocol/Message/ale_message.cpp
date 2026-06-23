@@ -85,12 +85,11 @@ bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
         return false;
     }
 
-    // Minimum complete sequence: TIS (sounding) or TO+FROM (individual call).
-    // Scan the words once and remember which key preamble types appeared.
-    bool has_to = false;
+    // Scan once for key preamble types.
+    bool has_to   = false;
     bool has_from = false;
-    bool has_tis = false;
-    
+    bool has_tis  = false;
+
     for (const auto& word : words) {
         switch (word.type) {
             case PreambleType::TO:
@@ -107,45 +106,105 @@ bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
                 break;
         }
     }
-    
-    // Sounding is complete with just TIS
-    if (has_tis) {
-        return true;
-    }
-    
-    // Individual/net call is complete with TO + FROM
-    if (has_to && has_from) {
-        return true;
-    }
-    
-    // Otherwise, wait for more words
+
+    // TIS concludes any frame (sounding = TIS-only; call/response = TO+TIS).
+    if (has_tis) return true;
+
+    // Older FROM-based conclusion (some implementations use FROM instead of TIS).
+    if (has_to && has_from) return true;
+    if (has_from && !has_to) return true;  // FROM-only sounding
+
     return false;
 }
 
 void MessageAssembler::extract_addresses(const std::vector<ALEWord>& words, ALEMessage& msg) {
+    // ALE 2G multi-word addresses: a preamble word (TO/TIS/etc.) carries the
+    // first 3 chars; consecutive DATA/REP words carry chars 4-6, 7-9, etc.
+    // Sounding exception: DATA suffix words appear BEFORE the TIS prefix word,
+    // so we buffer them as "orphan_data" and prepend once TIS arrives.
+    // AMD exception: after CMD the DATA/REP words are message content, not
+    // address extension — the past_any_preamble flag prevents them from
+    // contaminating orphan_data.
+    enum class Ctx { NONE, DEST, SRC } ctx = Ctx::NONE;
+    std::string current_addr;
+    std::string orphan_data;    // DATA/REP before first preamble (sounding suffix)
+    bool past_any_preamble = false;
+
+    auto add_dest = [&](const std::string& a) {
+        if (a.empty()) return;
+        for (auto& ex : msg.to_addresses) {
+            if (ex.size() <= a.size() && a.substr(0, ex.size()) == ex) {
+                ex = a;   // Replace shorter prefix-only entry with full address
+                return;
+            }
+            if (a.size() < ex.size() && ex.substr(0, a.size()) == a)
+                return;   // New entry is a prefix of an existing longer entry — skip
+        }
+        msg.to_addresses.push_back(a);
+    };
+
+    auto finalize_current = [&]() {
+        if (ctx == Ctx::DEST)
+            add_dest(current_addr);
+        else if (ctx == Ctx::SRC && !current_addr.empty())
+            msg.from_address = current_addr;
+        current_addr.clear();
+    };
+
     for (const auto& word : words) {
-        if (word.type == PreambleType::TO || word.type == PreambleType::TWAS) {
-            std::string addr = trim_ale_address(word.address);
-            if (!addr.empty()) {
-                msg.to_addresses.push_back(addr);
-            }
-        } else if (word.type == PreambleType::FROM || word.type == PreambleType::TIS) {
-            std::string addr = trim_ale_address(word.address);
-            if (!addr.empty()) {
-                msg.from_address = addr;
-            }
+        switch (word.type) {
+            case PreambleType::TO:
+            case PreambleType::TWAS:
+                finalize_current();
+                current_addr = trim_ale_address(word.address);
+                ctx = Ctx::DEST;
+                past_any_preamble = true;
+                break;
+            case PreambleType::FROM:
+            case PreambleType::TIS:
+                finalize_current();
+                // Prepend orphaned DATA only if we haven't seen a dest preamble
+                // (sounding sends DATA suffix before TIS; AMD sends DATA after CMD)
+                current_addr = trim_ale_address(word.address) + orphan_data;
+                orphan_data.clear();
+                ctx = Ctx::SRC;
+                past_any_preamble = true;
+                break;
+            case PreambleType::DATA:
+            case PreambleType::REP:
+                if (ctx == Ctx::NONE && !past_any_preamble)
+                    orphan_data += trim_ale_address(word.address);  // sounding suffix
+                else if (ctx != Ctx::NONE)
+                    current_addr += trim_ale_address(word.address); // address extension
+                // ctx==NONE && past_any_preamble: AMD/LQA content, not an address
+                break;
+            case PreambleType::CMD:
+                finalize_current();
+                ctx = Ctx::NONE;  // DATA after CMD = message content, not address
+                break;
+            default:
+                break;
         }
     }
+    finalize_current();
 }
 
 void MessageAssembler::extract_data(const std::vector<ALEWord>& words, ALEMessage& msg) {
+    // Collect orderwire message content: CMD starts the message section;
+    // subsequent DATA/REP words continue it. DATA/REP before any CMD are
+    // address extensions and must not be included.
+    bool collecting = false;
     for (const auto& word : words) {
-        if (word.type == PreambleType::DATA) {
+        if (word.type == PreambleType::CMD) {
+            collecting = true;
             std::string data(word.address, 3);
             data.erase(data.find_last_not_of(' ') + 1);
-            if (!data.empty()) {
-                msg.data_content.push_back(data);
-            }
+            if (!data.empty()) msg.data_content.push_back(data);
+        } else if ((word.type == PreambleType::DATA || word.type == PreambleType::REP)
+                   && collecting) {
+            std::string data(word.address, 3);
+            data.erase(data.find_last_not_of(' ') + 1);
+            if (!data.empty()) msg.data_content.push_back(data);
         }
     }
 }
@@ -187,50 +246,70 @@ CallType CallTypeDetector::detect(const std::vector<ALEWord>& words) {
 }
 
 bool CallTypeDetector::is_individual_call(const std::vector<ALEWord>& words) {
-    bool has_to = false;
+    bool has_to  = false;
+    bool has_tis = false;
     bool has_from = false;
-    
+    bool has_twas = false;
+
     for (const auto& word : words) {
-        if (word.type == PreambleType::TO) has_to = true;
+        if (word.type == PreambleType::TO)   has_to   = true;
+        if (word.type == PreambleType::TIS)  has_tis  = true;
         if (word.type == PreambleType::FROM) has_from = true;
+        if (word.type == PreambleType::TWAS) has_twas = true;
     }
-    
-    return has_to && has_from;
+
+    // TO + TIS (or TO + FROM): individual call, response, or ACK — wire-identical.
+    return has_to && (has_tis || has_from) && !has_twas;
 }
 
 bool CallTypeDetector::is_net_call(const std::vector<ALEWord>& words) {
     bool has_twas = false;
+    bool has_tis  = false;
     bool has_from = false;
-    
+
     for (const auto& word : words) {
         if (word.type == PreambleType::TWAS) has_twas = true;
+        if (word.type == PreambleType::TIS)  has_tis  = true;
         if (word.type == PreambleType::FROM) has_from = true;
     }
-    
-    return has_twas && has_from;
+
+    return has_twas && (has_tis || has_from);
 }
 
 bool CallTypeDetector::is_sounding(const std::vector<ALEWord>& words) {
+    bool has_tis  = false;
+    bool has_to   = false;
+    bool has_from = false;
+    bool has_twas = false;
+
     for (const auto& word : words) {
-        if (word.type == PreambleType::TIS) {
-            return true;
-        }
+        if (word.type == PreambleType::TIS)  has_tis  = true;
+        if (word.type == PreambleType::TO)   has_to   = true;
+        if (word.type == PreambleType::FROM) has_from = true;
+        if (word.type == PreambleType::TWAS) has_twas = true;
     }
-    return false;
+
+    // Sounding = self-ID only: TIS present with no destination (no TO/TWAS/FROM).
+    return has_tis && !has_to && !has_from && !has_twas;
 }
 
 bool CallTypeDetector::is_amd(const std::vector<ALEWord>& words) {
-    bool has_to = false;
+    bool has_to   = false;
+    bool has_tis  = false;
     bool has_from = false;
-    bool has_data = false;
-    
+    bool has_cmd  = false;
+
     for (const auto& word : words) {
-        if (word.type == PreambleType::TO) has_to = true;
+        if (word.type == PreambleType::TO)   has_to   = true;
+        if (word.type == PreambleType::TIS)  has_tis  = true;
         if (word.type == PreambleType::FROM) has_from = true;
-        if (word.type == PreambleType::DATA) has_data = true;
+        if (word.type == PreambleType::CMD)  has_cmd  = true;
     }
-    
-    return has_to && has_from && has_data;
+
+    // AMD = addressed call (TO) with source (TIS or FROM) and a CMD orderwire word.
+    // Individual calls with long callsigns also carry DATA words (address continuation)
+    // but never CMD — using has_cmd prevents misclassifying them as AMD.
+    return has_to && (has_tis || has_from) && has_cmd;
 }
 
 const char* CallTypeDetector::call_type_name(CallType type) {

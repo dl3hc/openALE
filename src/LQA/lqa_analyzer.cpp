@@ -224,15 +224,21 @@ float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry) const {
     if (entry.bilateral_sinad > 30u) {
         return entry.score;  // No bilateral SINAD data — fall back to composite score
     }
-    // TO direction: bilateral SINAD code (spec: lower=better) → internal higher=better
-    float to_quality = 30.0f - static_cast<float>(entry.bilateral_sinad);
+    // TO direction: bilateral SINAD code is dB directly, higher = better
+    // (A.5.4.2.2: 0 = ≤0 dB, 30 = 30 dB, 31 = no measurement). No inversion.
+    float to_quality = static_cast<float>(entry.bilateral_sinad);
+    if (entry.bilateral_ber <= 30u) {
+        // BER code is the 2/3-vote count, lower = better (A.5.4.2.1 / Table A-XIII).
+        const float ber_q = 30.0f - static_cast<float>(entry.bilateral_ber);
+        to_quality = std::min(to_quality, ber_q);
+    }
 
-    // FROM direction: use the SINAD code stored in sinad_db when available (> 0),
-    // otherwise fall back to the composite score.
-    // sinad_db stores the SINAD LQA code [0-30] as a float (see lqa_metrics.cpp).
+    // FROM direction: sinad_db is SINAD in dB, higher = better (see lqa_database.h
+    // — populated via update_entry_extended / process_sounding_extended). Fall
+    // back to the composite score when no local SINAD measurement exists.
     float from_quality;
     if (entry.sinad_db > 0.0f) {
-        from_quality = 30.0f - std::min(30.0f, entry.sinad_db);
+        from_quality = std::min(30.0f, entry.sinad_db);
     } else {
         from_quality = entry.score;
     }

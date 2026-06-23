@@ -268,52 +268,50 @@ bool test_caller_multiword_peer_not_polluted_by_stale_hs()
 }
 
 // ============================================================================
-// MANUAL ACCEPT GATE — set_require_explicit_accept() / accept_call()
+// MANUAL ACCEPT — post-link operator gate (LINKED_PENDING_OPERATOR)
 // ============================================================================
+// Manual accept no longer pauses the ALE handshake: the responder always
+// auto-completes the 3-way handshake within Twr/Twrt and links, then the
+// operator Accept/Reject decision is applied to the *already-established* link
+// by ALEController (the SM's accept_call()/reject_call() are no-ops). These
+// tests verify the SM side of that contract.
 
-// Drive a 3-char "JOE" through WAIT_CYCLE_END's conclusion settle with
-// manual-accept mode on, landing in AWAIT_ACCEPT. Returns the timestamp of
-// the settle-triggering update() call so callers can keep advancing time
-// from there (mirrors the timing technique in test_rx_multiword_full_accept_15char).
-static uint32_t drive_to_await_accept(ALEStateMachine& sm, const std::string& self,
-                                       const std::string& caller, uint32_t timeout_ms)
+// Drive a 3-char caller through WAIT_CYCLE_END's conclusion settle. With manual
+// accept now non-gating, the settle advances to SLOT_WAIT (not AWAIT_ACCEPT).
+static uint32_t drive_to_conclusion_settle(ALEStateMachine& sm, const std::string& self,
+                                           const std::string& caller)
 {
     const uint32_t Trw  = ALETimingConstants::Trw_ms;
     const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
 
-    sm.set_require_explicit_accept(true, timeout_ms);
+    sm.set_require_explicit_accept(true, 10000);  // now a stored no-op
     feed_incoming_call(sm, self, caller);   // 1-word addresses: 5 words, slots 0..4
 
     const uint32_t t_last   = 1000u + 4u * Trw;   // time of the conclusion's only word
     const uint32_t t_settle = t_last + Tdrw + 1;
-    sm.update(t_settle);                           // WAIT_CYCLE_END settle → AWAIT_ACCEPT
+    sm.update(t_settle);                           // WAIT_CYCLE_END settle → SLOT_WAIT (auto)
     return t_settle;
 }
 
-bool test_await_accept_holds_until_accept_call()
+// With manual-accept mode on, the responder must NOT pause in AWAIT_ACCEPT — it
+// auto-advances through SLOT_WAIT/CHANNEL_CHECK/SENDING_RESPONSE and sends the
+// normal accept response, exactly like auto-accept (MIL-STD-188-141B Twr/Twrt
+// interoperability).
+bool test_manual_accept_auto_completes_handshake()
 {
-    std::cout << "\n[ACCEPT-GATE] AWAIT_ACCEPT holds until accept_call()\n";
+    std::cout << "\n[ACCEPT] manual-accept mode does not gate the handshake\n";
 
     WordCapture cap;
     ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
     sm.process_event(ALEEvent::START_SCAN);
 
     const uint32_t Trw = ALETimingConstants::Trw_ms;
-    uint32_t t = drive_to_await_accept(sm, "JOE", "SAM", /*timeout_ms=*/10000);
+    uint32_t t = drive_to_conclusion_settle(sm, "JOE", "SAM");
 
-    bool gated = sm.get_handshake_phase() == HandshakePhase::AWAIT_ACCEPT;
-    std::cout << "  entered AWAIT_ACCEPT: " << (gated ? "PASS" : "FAIL") << "\n";
+    bool not_gated = sm.get_handshake_phase() != HandshakePhase::AWAIT_ACCEPT;
+    std::cout << "  did not enter AWAIT_ACCEPT: " << (not_gated ? "PASS" : "FAIL") << "\n";
 
-    // Advance well past where an auto-accept SM would already be linked; without
-    // a decision, this SM must still be gated and must not have sent anything.
-    sm.update(t + 5 * Trw);
-    bool still_gated = sm.get_handshake_phase() == HandshakePhase::AWAIT_ACCEPT && cap.empty();
-    std::cout << "  still gated without a decision: " << (still_gated ? "PASS" : "FAIL") << "\n";
-
-    bool accepted = sm.accept_call();
-    std::cout << "  accept_call() returns true: " << (accepted ? "PASS" : "FAIL") << "\n";
-
-    // AWAIT_ACCEPT → SLOT_WAIT (Tswt=0) → CHANNEL_CHECK → (Tdrw=2×Trw LBT) → SENDING_RESPONSE.
+    // SLOT_WAIT (Tswt=0) → CHANNEL_CHECK (Tdrw=2×Trw LBT) → SENDING_RESPONSE.
     sm.update(t + 1);
     sm.update(t + 2);
     sm.update(t + 2 + 2 * Trw + 1);
@@ -323,70 +321,34 @@ bool test_await_accept_holds_until_accept_call()
                               && trim_ale_address(cap.words[0].address) == "SAM"
                               && cap.words[2].type == PreambleType::TIS
                               && trim_ale_address(cap.words[2].address) == "JOE";
-    std::cout << "  normal accept response sent (3 words): " << (count_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  auto accept response sent (3 words): " << (count_ok ? "PASS" : "FAIL") << "\n";
     std::cout << "  response addresses caller/self correctly: " << (addr_ok ? "PASS" : "FAIL") << "\n";
 
-    return gated && still_gated && accepted && count_ok && addr_ok;
+    return not_gated && count_ok && addr_ok;
 }
 
-bool test_await_accept_reject_sends_twas()
+// The SM's accept_call()/reject_call() are no-ops now (the post-link decision
+// belongs to ALEController::accept_call()/reject_call()). Both return false and
+// transmit nothing by themselves.
+bool test_sm_accept_reject_are_noops()
 {
-    std::cout << "\n[ACCEPT-GATE] reject_call() during AWAIT_ACCEPT sends TWAS\n";
+    std::cout << "\n[ACCEPT] SM accept_call()/reject_call() are no-ops\n";
 
     WordCapture cap;
     ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
     sm.process_event(ALEEvent::START_SCAN);
 
-    const uint32_t Trw = ALETimingConstants::Trw_ms;
-    uint32_t t = drive_to_await_accept(sm, "JOE", "SAM", /*timeout_ms=*/10000);
+    drive_to_conclusion_settle(sm, "JOE", "SAM");  // lands in SLOT_WAIT, nothing sent yet
 
-    bool rejected = sm.reject_call();
-    std::cout << "  reject_call() returns true: " << (rejected ? "PASS" : "FAIL") << "\n";
+    bool accept_noop = !sm.accept_call();
+    bool reject_noop = !sm.reject_call();
+    std::cout << "  accept_call() is a no-op (false): " << (accept_noop ? "PASS" : "FAIL") << "\n";
+    std::cout << "  reject_call() is a no-op (false): " << (reject_noop ? "PASS" : "FAIL") << "\n";
 
-    // reject_call() resolves the gate immediately → SLOT_WAIT → CHANNEL_CHECK (Tdrw LBT) → SENDING_RESPONSE.
-    sm.update(t + 1);
-    sm.update(t + 2);
-    sm.update(t + 2 + 2 * Trw + 1);
+    bool nothing_sent = cap.empty();   // no TWAS / response triggered by the no-ops
+    std::cout << "  no words transmitted by the no-ops: " << (nothing_sent ? "PASS" : "FAIL") << "\n";
 
-    bool twas_ok = cap.size() == 1 && cap.words[0].type == PreambleType::TWAS
-                                    && trim_ale_address(cap.words[0].address) == "JOE";
-    std::cout << "  TWAS rejection sent (1 word, self address): " << (twas_ok ? "PASS" : "FAIL") << "\n";
-
-    return rejected && twas_ok;
-}
-
-bool test_await_accept_timeout_aborts_without_response()
-{
-    std::cout << "\n[ACCEPT-GATE] AWAIT_ACCEPT timeout drops the call (no response)\n";
-
-    WordCapture cap;
-    ALEStateMachine sm = make_sm(cap, /*self=*/"JOE", 0);
-    sm.process_event(ALEEvent::START_SCAN);
-
-    const uint32_t Trw      = ALETimingConstants::Trw_ms;
-    const uint32_t kTimeout = 500;
-    uint32_t t = drive_to_await_accept(sm, "JOE", "SAM", kTimeout);
-
-    // Just before timeout: still gated, nothing sent yet.
-    sm.update(t + kTimeout - 1);
-    bool gated_before = sm.get_handshake_phase() == HandshakePhase::AWAIT_ACCEPT && cap.empty();
-    std::cout << "  still gated just before timeout: " << (gated_before ? "PASS" : "FAIL") << "\n";
-
-    // Timeout elapses with no operator decision → call dropped, no response sent,
-    // SM returns to its pre-link state (SCANNING). The caller then runs into its
-    // own call timeout ("no reply").
-    sm.update(t + kTimeout + 1);
-    sm.update(t + kTimeout + 2);
-    sm.update(t + kTimeout + 2 + 2 * Trw + 1);
-
-    bool no_response = cap.empty();
-    bool left_handshake = sm.get_state() != ALEState::HANDSHAKE;
-    std::cout << "  no response transmitted after timeout: " << (no_response ? "PASS" : "FAIL")
-              << " (sent " << cap.size() << " words)\n";
-    std::cout << "  returned to pre-link state: " << (left_handshake ? "PASS" : "FAIL")
-              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
-
-    return gated_before && no_response && left_handshake;
+    return accept_noop && reject_noop && nothing_sent;
 }
 
 // 3-char JOE accepts a call from a >3-char SAM.  The caller address must be
@@ -2006,13 +1968,12 @@ int run_all_tests()
     run("RX-MULTIWORD reassemble >3-char caller address",
         test_rx_multiword_caller_address());
 
-    // Manual accept gate (AWAIT_ACCEPT) — set_require_explicit_accept()
-    run("ACCEPT-GATE AWAIT_ACCEPT holds until accept_call()",
-        test_await_accept_holds_until_accept_call());
-    run("ACCEPT-GATE reject_call() during AWAIT_ACCEPT sends TWAS",
-        test_await_accept_reject_sends_twas());
-    run("ACCEPT-GATE timeout drops the call without responding",
-        test_await_accept_timeout_aborts_without_response());
+    // Manual accept is a post-link operator gate (LINKED_PENDING_OPERATOR):
+    // the handshake auto-completes; SM accept/reject are no-ops.
+    run("ACCEPT manual-accept does not gate the handshake",
+        test_manual_accept_auto_completes_handshake());
+    run("ACCEPT SM accept_call()/reject_call() are no-ops",
+        test_sm_accept_reject_are_noops());
     run("RX-MULTIWORD full accept path at 15-char addresses",
         test_rx_multiword_full_accept_15char());
     run("RX-MULTIWORD caller peer not polluted by stale handshake flags",

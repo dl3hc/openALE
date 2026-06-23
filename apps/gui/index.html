@@ -55,9 +55,25 @@
         </div>
       </div>
 
-      <button class="hdr-btn" id="soundBtn" onclick="manualSound()" title="Transmit a manual sounding (LQA probe) on the current channel">📢 Sound</button>
+      <!-- Sounding — dropdown (single current channel / periodic multi-channel per net) -->
+      <div class="radio-wrap" id="soundWrap">
+        <button class="hdr-btn" id="soundBtn" onclick="toggleSoundPanel()" title="Transmit a sounding (LQA probe). Single channel, or periodic multi-channel over a net.">📢 Sound ▸</button>
+        <div class="radio-panel" id="soundPanel">
+          <div class="radio-head">Sounding <span>CHANNEL SELECTION</span></div>
+          <div class="sound-body">
+            <button class="sound-opt" onclick="soundSingle()">Single — current channel</button>
+            <div class="sound-sep">Periodic multi-channel (net)</div>
+            <div id="soundNetList"></div>
+            <button class="sound-opt sound-off" onclick="soundAutoOff()">■ Stop periodic</button>
+            <div class="fhint" style="margin-top:6px">Interval: Settings ▸ Timing ▸ Sounding Interval.</div>
+          </div>
+        </div>
+      </div>
 
-      <button class="hdr-btn" id="pttBtn" onclick="togglePtt()" title="Push to talk (PTT)">🎙 PTT</button>
+      <button class="hdr-btn" id="pttBtn"
+              onmousedown="setPtt(true)" onmouseup="setPtt(false)" onmouseleave="setPtt(false)"
+              ontouchstart="setPtt(true)" ontouchend="setPtt(false)"
+              title="Push to talk (hold)">🎙 PTT</button>
 
       <!-- Manual radio control — VFO dropdown -->
       <div class="radio-wrap" id="radioWrap">
@@ -172,6 +188,17 @@
         </div>
       </div>
 
+      <!-- Heard Stations -->
+      <div class="panel panel-heard">
+        <div class="plabel">
+          <span style="opacity:1;font-weight:700">Heard <em style="font-style:normal;font-weight:400;opacity:.7">STATIONS / LQA</em></span>
+          <button class="plabel-btn" onclick="clearHeard()">Clear All</button>
+        </div>
+        <div class="pbody" id="heardList">
+          <div class="heard-empty">No stations heard yet</div>
+        </div>
+      </div>
+
     </div><!-- /left-col -->
 
     <!-- Right column -->
@@ -190,8 +217,18 @@
           <div class="contact-list" id="contactList"></div>
         </div>
         <div class="call-zone" id="callZone">
-          <button class="btn-call" onclick="startCall()">
-            <span>📞</span> Call
+          <div class="call-mode-panel hidden" id="callModePanel">
+            <button class="call-mode-btn" onclick="startCall(false)">
+              <span class="cmo-title">Multi CH Call</span>
+              <span class="cmo-desc">LQA-optimized · all channels</span>
+            </button>
+            <button class="call-mode-btn" onclick="startCall(true)">
+              <span class="cmo-title">Single CH Call</span>
+              <span class="cmo-desc">Current channel only</span>
+            </button>
+          </div>
+          <button class="btn-call" id="callBtn" onclick="toggleCallModePanel()" disabled>
+            📞 Call ▸
           </button>
         </div>
       </div>
@@ -220,37 +257,44 @@
 
     </div><!-- /right-col -->
 
+    <!-- ALE LOG -->
+    <div class="ale-log" id="aleLog">
+      <div class="ale-log-hdr">
+        <span class="ale-log-title">ALE Log</span>
+        <span class="ale-log-count" id="aleLogCount">0 entries</span>
+        <span style="flex:1"></span>
+        <button class="mon-btn" onclick="clearAleLog()">Clear</button>
+      </div>
+      <div class="ale-log-body" id="aleLogBody">
+        <div class="ale-log-empty">No ALE activity yet</div>
+      </div>
+    </div>
+
+    <!-- SIGNAL STRIP -->
+    <div class="strip">
+
+      <!-- Clock + sync lock, beside the waterfall -->
+      <div class="strip-stats">
+        <div class="hdr-clock" id="clock" onclick="toggleClockZone()" title="Click to switch UTC / Local time">
+          <span class="hdr-clock-time" id="clockTime">--:--:--</span>
+          <span class="hdr-clock-zone" id="clockZone">UTC</span>
+        </div>
+      </div>
+
+      <!-- Waterfall -->
+      <div class="strip-wf">
+        <div class="wf-band-region" id="wfBandRegion"></div>
+        <div class="wf-band-cap" id="wfBandCap">ALE 8-FSK</div>
+        <div class="wf-label">
+          <div class="wf-band" id="wfBandLabel"></div>
+        </div>
+        <canvas id="waterfallCanvas"></canvas>
+        <div class="wf-ticks" id="wfTicks"></div>
+      </div>
+
+    </div>
+
   </main>
-
-  <!-- ══════ SIGNAL STRIP ══════ -->
-  <div class="strip">
-
-    <!-- Clock + sync lock, beside the waterfall -->
-    <div class="strip-stats">
-      <div class="hdr-clock" id="clock" onclick="toggleClockZone()" title="Click to switch UTC / Local time">
-        <span class="hdr-clock-time" id="clockTime">--:--:--</span>
-        <span class="hdr-clock-zone" id="clockZone">UTC</span>
-      </div>
-    </div>
-
-    <!-- Waterfall -->
-    <div class="strip-wf">
-      <div class="wf-band-region" id="wfBandRegion"></div>
-      <div class="wf-band-cap" id="wfBandCap">ALE 8-FSK</div>
-      <div class="wf-label">
-        <div class="wf-band" id="wfBandLabel"></div>
-      </div>
-      <canvas id="waterfallCanvas"></canvas>
-      <div class="wf-ticks" id="wfTicks"></div>
-    </div>
-
-    <!-- Protocol log -->
-    <div class="strip-proto">
-      <div class="proto-hdr">Protocol Log</div>
-      <div class="proto-log" id="protoLog"></div>
-    </div>
-
-  </div>
 
 </div><!-- /app -->
 
@@ -450,6 +494,31 @@
                 <input class="finput" id="rigModel" type="number" value="3021" placeholder="Model ID">
               </div>
             </div>
+            <div class="fg-row col3">
+              <div>
+                <label class="flabel">DTR State</label>
+                <select class="fselect" id="rigDtr">
+                  <option value="on" selected>ON (default — CAT bias)</option>
+                  <option value="off">OFF</option>
+                  <option value="auto">AUTO (hamlib default)</option>
+                </select>
+                <div class="fhint">DTR HIGH after port open. Required by most USB CAT adapters.</div>
+              </div>
+              <div>
+                <label class="flabel">RTS State</label>
+                <select class="fselect" id="rigRts">
+                  <option value="on" selected>ON (default — CAT bias)</option>
+                  <option value="off">OFF</option>
+                  <option value="auto">AUTO (hamlib default)</option>
+                </select>
+                <div class="fhint">RTS HIGH after port open. Independent of flow control.</div>
+              </div>
+              <div>
+                <label class="flabel">Stabilization (ms)</label>
+                <input class="finput" id="rigStab" type="number" value="200" min="0" max="2000">
+                <div class="fhint">Wait after port open before first CAT command.</div>
+              </div>
+            </div>
           </div>
 
           <hr class="fsep">
@@ -558,7 +627,7 @@
             </div>
             <div>
               <label class="flabel">Link Idle Timeout (s)</label>
-              <input class="finput" id="cfgLinkIdle" type="number" value="60" min="10">
+              <input class="finput" id="cfgLinkIdle" type="number" value="360" min="10">
               <div class="fhint">Terminate link after inactivity.</div>
             </div>
           </div>
@@ -579,6 +648,20 @@
               <input class="finput" id="cfgListen" type="number" value="784" min="0">
               <div class="fhint">ListenTime — LBT / response listen window (Twt).</div>
             </div>
+          </div>
+
+          <div class="fg-row col3">
+            <div>
+              <label class="flabel">PTT Lead (ms)</label>
+              <input class="finput" id="cfgPttLead" type="number" value="25" min="0">
+              <div class="fhint">Delay after PTT assert before audio TX (CAT/CI-V latency).</div>
+            </div>
+            <div>
+              <label class="flabel">PTT Tail (ms)</label>
+              <input class="finput" id="cfgPttTail" type="number" value="50" min="0">
+              <div class="fhint">Delay after SM RX-enable before PTT release (buffer drain).</div>
+            </div>
+            <div></div>
           </div>
 
           <div class="fhint" style="margin-top:6px">
@@ -790,7 +873,7 @@
                 <div class="ftoggle-desc">Periodically sound channels in the LQA DB (interval above)</div>
               </div>
               <label class="ftoggle">
-                <input type="checkbox" id="cfgAutoSound">
+                <input type="checkbox" id="cfgAutoSound" onchange="applySoundAuto()">
                 <span class="ftrack"></span>
               </label>
             </div>

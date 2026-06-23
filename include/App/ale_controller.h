@@ -45,6 +45,7 @@
 #include "Stores/ale_data_store.h"
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 #include <cstdint>
 
@@ -181,6 +182,17 @@ public:
      */
     void enable_automatic_sounding(bool on);
 
+    /**
+     * Enable periodic multi-channel sounding on a named net's channels. When on,
+     * the main loop starts a sounding sweep (ALEStateMachine::send_sounding_sweep)
+     * over the net's scan/sounding-enabled channels every @p interval_sec, whenever
+     * the SM is IDLE or SCANNING. Pass @p on=false (or an empty @p net_name) to
+     * stop. This is the GUI's "multi-channel sounding" dropdown mode, driven by
+     * the Sounding Interval setting (Settings ▸ Timing).
+     */
+    void set_automatic_sounding(bool on, uint32_t interval_sec,
+                                const std::string& net_name);
+
     /** Access the LQA analyzer for channel quality queries. */
     LQAAnalyzer& lqa_analyzer() { return lqa_analyzer_; }
     const LQAAnalyzer& lqa_analyzer() const { return lqa_analyzer_; }
@@ -221,6 +233,14 @@ public:
     bool send_sounding();
 
     /**
+     * Transmit a one-shot multi-channel sounding sweep over @p channels (each
+     * channel sounded in turn). Independent of set_automatic_sounding(); fires
+     * immediately when the operator asks. \return false if the SM is not in
+     * IDLE/SCANNING or @p channels is empty.
+     */
+    bool send_sounding_sweep(const std::vector<Channel>& channels);
+
+    /**
      * Initiate an individual call to target_addr.
      *
      * If target_addr matches a registered Contact (see add_contact()) that
@@ -233,6 +253,14 @@ public:
      * \return false if the SM is not in IDLE or SCANNING state.
      */
     bool initiate_call(const std::string& target_addr);
+
+    /**
+     * Initiate a call restricted to the currently tuned channel only.
+     * No LQA reordering, no multi-channel iteration — stays on the current
+     * channel regardless of scan-channel configuration.
+     * \return false if the SM is not in IDLE or SCANNING state.
+     */
+    bool initiate_single_channel_call(const std::string& target_addr);
 
     /**
      * Initiate a star group call (A.5.5.4.3) to an ad-hoc list of member
@@ -254,6 +282,13 @@ public:
 
     /** Emergency manual override: immediately abort all ALE operations. */
     void emergency_stop();
+
+    /**
+     * Operator-controlled PTT override.
+     * When on=true, PTT is asserted and the SM cannot release it.
+     * When on=false, SM-driven PTT control is restored.
+     */
+    void set_manual_ptt(bool on);
 
     // ── Main-loop drivers ───────────────────────────────────────────────────
     /**
@@ -295,6 +330,22 @@ public:
 
     /** Human-readable status change for logging or display. */
     std::function<void(const std::string& msg)> on_status_changed;
+
+    /**
+     * Passive channel monitor — fires for every successfully decoded ALE word
+     * (valid == true), regardless of local protocol state or address match.
+     * frame_id groups words that belong to the same assembled frame; it
+     * increments each time a frame completes.  Use for the ALE Monitor display.
+     */
+    std::function<void(const ALEWord& word, uint32_t frame_id)> on_word_decoded;
+
+    /**
+     * Fires once per complete assembled ALE frame (after the concluding TIS or
+     * equivalent word), carrying the full semantic classification (call_type,
+     * from_address, to_addresses, words).  Companion to on_word_decoded:
+     * the same frame_id links the individual word events to the frame summary.
+     */
+    std::function<void(const ALEMessage& frame, uint32_t frame_id)> on_frame_decoded;
 
     // ── GUI interfaces (CLI uses process_command) ────────────────────────
 
@@ -560,6 +611,11 @@ public:
     /** Set the blind-tune delay in milliseconds — ALEStateMachine::set_tune_delay_ms(). */
     void set_max_tune_time_ms(uint32_t ms);
 
+    /** PTT lead time in ms — delay between PTT assertion and first audio TX word. */
+    void set_ptt_lead_ms(uint32_t ms);
+    /** PTT tail time in ms — delay between SM RX-enable and actual PTT release. */
+    void set_ptt_tail_ms(uint32_t ms);
+
     // ── Audio device management ──────────────────────────────────────────
     // set_audio_input_device()/set_audio_output_device() are intentionally
     // NOT here — see docs/GUI_BRIDGE_GAPS.md (AudioDevice's lifecycle is owned
@@ -697,6 +753,14 @@ private:
     std::string              last_caller_;   // caller address as it arrives (TIS + DATA)
     bool                     call_alert_fired_ = false;  // on_call_received emitted once per handshake
 
+    // Manual-accept post-link gate (LINKED_PENDING_OPERATOR). When manual-accept
+    // mode is on (config_.manual_accept_mode), the 3-way handshake still
+    // completes automatically within Twr/Twrt and the link establishes; this
+    // flag is then set so the operator's accept_call()/reject_call() act on the
+    // *already-established* link instead of gating the handshake. Accept clears
+    // it (normal LINKED); reject calls terminate_link() (TWAS → AVAILABLE).
+    bool                     pending_operator_accept_ = false;
+
     // AMD orderwire tracking — active while in HANDSHAKE/WAIT_CYCLE_END
     int          amd_skip_count_ = 0;  // leading-call DATA/REP words to skip (2×(n-1))
     int          amd_seen_count_ = 0;  // DATA/REP words seen since HANDSHAKE entry
@@ -706,6 +770,7 @@ private:
     LQADatabase              lqa_database_;
     LQAAnalyzer              lqa_analyzer_;
     LQAMetrics               lqa_metrics_;        // standalone noise-floor tracking (no DB)
+    LQAMetrics               lqa_db_metrics_;     // connected to lqa_database_; fed into the SM
     std::vector<Channel>     calling_channels_;  // cached here so initiate_call() can reorder
     std::string              channel_file_;       // auto-save path (empty = no auto-save)
 
@@ -731,6 +796,9 @@ private:
     int                      manual_channel_idx_ = -1;   // index into calling_channels_ set by step_channel(); -1 = none
     uint32_t                 tune_step_hz_       = 1000; // nudge_frequency() step size
 
+    // Passive channel monitor (on_word_decoded / on_frame_decoded)
+    uint32_t                 monitor_frame_id_ = 0; // increments each time a frame completes
+
     // RX diagnostics (set_debug_rx)
     bool                     debug_rx_   = false;
     int                      dbg_peak_   = 0;   // running peak |sample| since last report
@@ -742,15 +810,47 @@ private:
 
     uint32_t                 lqa_update_ms_ = 0;
 
+    // Periodic multi-channel sounding (set_automatic_sounding). When enabled with
+    // a net, update() starts a send_sounding_sweep() over the net's channels every
+    // auto_sounding_interval_ms_, gated on IDLE/SCANNING (a sweep in progress shows
+    // as SOUNDING, which naturally blocks a re-entry).
+    bool                     auto_sounding_on_       = false;
+    uint32_t                 auto_sounding_interval_ms_ = 0;
+    std::string              auto_sounding_net_;
+    uint32_t                 auto_sounding_last_ms_  = 0;
+
     // Call/link timing (get_call_duration_seconds, is_link_active)
     uint32_t                 now_ms_        = 0;  // cached at top of update()
     uint32_t                 link_start_ms_ = 0;  // set at LINK_ESTABLISHED; 0 = not linked
+
+    // PTT timing (set_manual_ptt, wire_callbacks, update)
+    uint32_t                 ptt_lead_deadline_ms_ = 0;   // flush pending_tx_words_ when now_ms_ >= this; 0 = inactive
+    uint32_t                 ptt_tail_deadline_ms_ = 0;   // release PTT when now_ms_ >= this; 0 = inactive
+    bool                     sm_rx_enabled_        = true; // mirrors SM's last rx_enabled_callback value
+    bool                     manual_ptt_           = false;
+    std::vector<std::pair<ALEWord, bool>> pending_tx_words_; // word + had_audio_device flag, buffered during PTT lead
 
     // Last received word stats (get_current_signal_quality)
     float                    last_snr_db_     = 0.0f;
     float                    last_ber_        = 0.0f;
     uint8_t                  last_votes_      = 0;
     int                      last_fec_errors_ = 0;
+
+    // Received-sounding address reassembly (A.5.3.1): a sounding frame is the
+    // self-address conclusion (TIS [DATA|REP]*) sent twice. on_received_word()
+    // captures the TIS (first 3 chars) and appends each DATA/REP extension word
+    // (chars 4-15); the accumulated full address is committed to the LQA DB once
+    // the frame settles (Tdrw of silence after the last word) — mirrors the
+    // handshake caller-address reassembly in react_handshake(). Without this the
+    // LQA entry was keyed by only the 3-char TIS, truncating >3-char self
+    // addresses. snr/ber are averaged across the frame's words (A.5.4.1.1
+    // "linear average BER/LQA").
+    std::string              sounding_caller_acc_;
+    uint32_t                 sounding_freq_hz_    = 0;
+    uint32_t                 sounding_settle_ms_  = 0;
+    uint32_t                 sounding_word_count_ = 0;
+    float                    sounding_snr_sum_    = 0.0f;
+    float                    sounding_ber_sum_    = 0.0f;
 
     void wire_callbacks();
     void on_sm_state_change(ALEState from, ALEState to);
@@ -767,6 +867,11 @@ private:
      * it to sm_. No-op when no contact/net mapping is known.
      */
     void apply_target_scan_channels_for(const std::string& target_addr);
+
+    /// Resolve a net's scan/sounding-enabled channels (by id, from
+    /// calling_channels_) for a multi-channel sounding sweep. Empty if the net
+    /// doesn't exist or has no enabled member channels.
+    std::vector<Channel> resolve_net_sounding_channels(const std::string& net_name) const;
     void on_received_word(const ALEWord& word);
     /**
      * Emit the incoming-call alert (on_call_received / ALE_CALL_RECEIVED) and any
@@ -775,6 +880,10 @@ private:
      * Called from update() after driving the state machine.
      */
     void maybe_emit_call_alert();
+    /// Commit the accumulated received-sounding frame (full address + averaged
+    /// snr/ber) to the LQA DB and clear the reassembly buffer. No-op if nothing
+    /// is buffered. Called from update() once the frame has settled (Tdrw silence).
+    void commit_sounding_sample();
     void emit_status(const std::string& msg);
     void emit_event(pal::EventType type, const std::string& msg = "", int32_t code = 0);
 };

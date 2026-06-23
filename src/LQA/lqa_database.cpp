@@ -216,6 +216,10 @@ void LQADatabase::update_bilateral(uint32_t frequency_hz,
     entry.bilateral_mp        = mp_code;
     entry.bilateral_handshake_tried = true;
     entry.last_contact_ms     = now;
+    // Recompute so the score reflects the freshly stored bilateral measurement
+    // (compute_score falls back to bilateral_quality_score when no FROM-direction
+    // snr/word data exists — see compute_score below).
+    entry.score = compute_score(entry);
 }
 
 void LQADatabase::mark_bilateral_attempted(uint32_t frequency_hz,
@@ -232,6 +236,7 @@ void LQADatabase::mark_bilateral_attempted(uint32_t frequency_hz,
         it = entries_.find(key);
     }
     it->second.bilateral_handshake_tried = true;
+    it->second.score = compute_score(it->second);
 }
 
 std::shared_ptr<LQAEntry> LQADatabase::get_entry(uint32_t frequency_hz,
@@ -328,26 +333,37 @@ void LQADatabase::clear() {
 
 float LQADatabase::compute_score(const LQAEntry& entry) const {
     float score = 0.0f;
-    
+
     // Quality scale is 0 (worst) .. 30 (best); 31 is the reserved "unknown"
     // sentinel and must never be produced here (AC-GEN-001-002, A.4.1.5).
 
-    // SNR component (0-30 scale)
-    // Map SNR dB to 0-30: 0 dB = 0, 30 dB+ = 30
-    float snr_component = std::min(LQA_QUALITY_MAX, std::max(0.0f, entry.snr_db));
-    score += snr_component * config_.snr_weight;
+    // FROM-direction (locally measured) quality: snr + success rate. When no
+    // local measurement exists (e.g. a bilateral-only stub created by
+    // update_bilateral/mark_bilateral_attempted after a call), fall back to the
+    // bilateral (TO-direction) quality a peer reported about our signal so the
+    // score — and the GUI LQA table — reflects a real measurement instead of 0.
+    const bool has_from = (entry.total_words > 0) || (entry.snr_db > 0.0f)
+                          || (entry.sinad_db > 0.0f);
+    if (has_from) {
+        // SNR component (0-30 scale): map SNR dB to 0-30 (0 dB = 0, 30 dB+ = 30)
+        float snr_component = std::min(LQA_QUALITY_MAX, std::max(0.0f, entry.snr_db));
+        score += snr_component * config_.snr_weight;
 
-    // Success rate component (0-30 scale)
-    // Based on BER: 0 BER = 30, high BER = 0
-    float success_rate = 0.0f;
-    if (entry.total_words > 0) {
-        // Convert BER to success rate (1.0 - BER) and scale to 0-30
-        success_rate = (1.0f - std::min(1.0f, entry.ber)) * LQA_QUALITY_MAX;
+        // Success rate component (0-30 scale): 0 BER = 30, high BER = 0
+        float success_rate = 0.0f;
+        if (entry.total_words > 0) {
+            success_rate = (1.0f - std::min(1.0f, entry.ber)) * LQA_QUALITY_MAX;
+        }
+        score += success_rate * config_.success_weight;
+    } else {
+        // Bilateral TO-direction quality (SINAD dB higher=better, BER lower=better,
+        // per A.5.4.1/A.5.4.2 — no SINAD inversion). Weighted by the combined
+        // snr+success weight so the total weights still sum to 1.0.
+        score += bilateral_quality_score(entry)
+                 * (config_.snr_weight + config_.success_weight);
     }
-    score += success_rate * config_.success_weight;
 
-    // Recency component (0-30 scale)
-    // Recent contact = 30, old contact = 0
+    // Recency component (0-30 scale): recent contact = 30, old contact = 0
     uint32_t now = get_current_time_ms();
     uint32_t last_activity = entry.last_activity_ms();
 
@@ -361,6 +377,28 @@ float LQADatabase::compute_score(const LQAEntry& entry) const {
 
     // Clamp to [0, 30] range — never reach the 31 "unknown" sentinel
     return std::min(LQA_QUALITY_MAX, std::max(LQA_QUALITY_MIN, score));
+}
+
+float LQADatabase::bilateral_quality_score(const LQAEntry& entry) const {
+    // Per A.5.4.2: bilateral_sinad is the SINAD code [0-30] in dB, higher = better
+    // (31 = no measurement); bilateral_ber is the BER code [0-30] as a 2/3-vote
+    // count, lower = better (31 = no value). SINAD is the primary LQA metric
+    // (A.5.4.1.2, measured on all ALE signals); BER is secondary. Use SINAD when
+    // available, else derive from BER; 0 when neither was measured.
+    if (entry.bilateral_sinad <= 30u) {
+        float q = static_cast<float>(entry.bilateral_sinad);  // dB, higher = better
+        if (entry.bilateral_ber <= 30u) {
+            // Discount by BER (lower BER = better): minimise the two directions
+            // of the same report so a poor BER caps an optimistic SINAD.
+            const float ber_q = LQA_QUALITY_MAX - static_cast<float>(entry.bilateral_ber);
+            q = std::min(q, ber_q);
+        }
+        return std::min(LQA_QUALITY_MAX, std::max(LQA_QUALITY_MIN, q));
+    }
+    if (entry.bilateral_ber <= 30u) {
+        return LQA_QUALITY_MAX - static_cast<float>(entry.bilateral_ber);
+    }
+    return 0.0f;
 }
 
 bool LQADatabase::save_to_file(const std::string& filepath) const {

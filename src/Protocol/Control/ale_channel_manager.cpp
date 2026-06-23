@@ -17,9 +17,18 @@ void ALEChannelManager::add_channel(const Channel& ch) {
 }
 
 const Channel* ALEChannelManager::current() const {
+    // Sounding-sweep override takes precedence over the scan-list current channel
+    // (see set_override()).
+    if (override_active_) return &override_ch_;
     if (scan_.scan_list.empty()) return nullptr;
     if (scan_.channel_index >= scan_.scan_list.size()) return nullptr;
     return &scan_.scan_list[scan_.channel_index];
+}
+
+void ALEChannelManager::set_override(const Channel& ch) {
+    override_active_ = true;
+    override_ch_     = ch;
+    if (on_change_) on_change_(ch);  // tune the radio to the sweep channel
 }
 
 const Channel* ALEChannelManager::select_best() const {

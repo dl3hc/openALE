@@ -713,6 +713,85 @@ bool test_sounding_trs_timing() {
 }
 
 // ============================================================================
+// TEST 7g: Multi-channel sounding sweep (send_sounding_sweep)
+//
+// Verifies the sweep walks each channel in turn: the channel callback fires for
+// each channel in order, each channel transmits the self-address conclusion
+// (TIS ×2 for a 1-word address), and the SM returns to its previous state once
+// the last channel is sounded — with the channel-manager override cleared.
+// ============================================================================
+bool test_sounding_sweep_multichannel() {
+    std::cout << "\n[TEST 7g] Multi-channel sounding sweep — walks each channel\n";
+    std::cout << "===================================================================\n";
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    WordTracker wt;
+    ChannelTracker ct;
+    sm.set_transmit_callback([&wt](const ALEWord& w) { wt.record(w); });
+    sm.set_channel_callback([&ct](const Channel& ch) { ct.record(ch); });
+
+    // Start from IDLE (the SM's default state). send_sounding_sweep also works
+    // from SCANNING.
+    ct.clear();  // discard any construction-time channel-select (none, but safe)
+
+    std::vector<Channel> chans = {
+        Channel(7100000,  "USB"),
+        Channel(14100000, "USB"),
+        Channel(18100000, "USB"),
+    };
+
+    bool started = sm.send_sounding_sweep(chans);
+    std::cout << "  send_sounding_sweep() accepted (IDLE): "
+              << (started ? "PASS" : "FAIL") << "\n";
+    const bool in_sounding = (sm.get_state() == ALEState::SOUNDING);
+    std::cout << "  entered SOUNDING: " << (in_sounding ? "PASS" : "FAIL") << "\n";
+
+    const uint32_t Twt = ALETimingConstants::Twt_ms;
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    uint32_t t = 0;
+    size_t tis_total = 0;
+    for (size_t i = 0; i < chans.size(); ++i) {
+        // LBT → TRANSMITTING (conclusion ×2 enqueued, transmit_callback fired)
+        t += Twt + 10;
+        sm.update(t);
+        // Drain the 2 TX words → LISTENING
+        sm.on_word_complete();
+        sm.on_word_complete();
+        // LISTENING timeout → SOUNDING_COMPLETE → next channel (or done)
+        t += Trw + 50;
+        sm.update(t);
+    }
+    for (const auto& w : wt.words)
+        if (w.type == PreambleType::TIS) ++tis_total;
+
+    // Channel callback fired once per sweep channel, in order.
+    bool chan_order_ok = (ct.frequencies.size() >= chans.size());
+    for (size_t i = 0; chan_order_ok && i < chans.size(); ++i)
+        if (ct.frequencies[i] != chans[i].rx_frequency_hz) chan_order_ok = false;
+    std::cout << "  channel callback fired per channel in order: "
+              << (chan_order_ok ? "PASS" : "FAIL")
+              << " (count=" << ct.frequencies.size() << ")\n";
+
+    // 2 TIS words per channel (Trs = 2×Ta for a 1-word address).
+    bool tis_count_ok = (tis_total == 2u * chans.size());
+    std::cout << "  2 TIS words per channel (" << (2u * chans.size()) << " total): "
+              << (tis_count_ok ? "PASS" : "FAIL") << " (got=" << tis_total << ")\n";
+
+    // Sweep done → returned to IDLE (previous_state), override cleared.
+    bool returned = (sm.get_state() == ALEState::IDLE);
+    std::cout << "  returned to IDLE after sweep: "
+              << (returned ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+    bool override_cleared = (sm.get_current_channel() == nullptr)
+                         || (sm.get_current_channel()->rx_frequency_hz != chans.back().rx_frequency_hz);
+    std::cout << "  channel override cleared: "
+              << (override_cleared ? "PASS" : "FAIL") << "\n";
+
+    return started && in_sounding && chan_order_ok && tis_count_ok && returned && override_cleared;
+}
+
+// ============================================================================
 // Test 8: Complete Scanning Call Cycle
 // Traces the full SAM-side call sequence per A.5.5.3.1:
 //   LBT → TUNING → SCANNING_CALL → LEADING_CALL → CONCLUSION → LISTENING
@@ -1152,6 +1231,7 @@ int run_all_tests() {
     if (test_sounding_tss_timing()) { pass_count++; } else { fail_count++; }
     if (test_sounding_no_calling_phase()) { pass_count++; } else { fail_count++; }
     if (test_sounding_trs_timing()) { pass_count++; } else { fail_count++; }
+    if (test_sounding_sweep_multichannel()) { pass_count++; } else { fail_count++; }
     if (test_full_call_cycle()) { pass_count++; } else { fail_count++; }
     if (test_timing_parameters_isolation()) { pass_count++; } else { fail_count++; }
     if (test_standard_scan_rate_td2()) { pass_count++; } else { fail_count++; }

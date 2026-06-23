@@ -203,6 +203,12 @@ ALEController::ALEController()
 {
     wire_callbacks();
 
+    MetricsConfig mc;
+    mc.averaging_window = 1;
+    lqa_db_metrics_.set_config(mc);
+    lqa_db_metrics_.set_database(&lqa_database_);
+    sm_.set_lqa_metrics(&lqa_db_metrics_);
+
     // LQA auto-sounding: fire sm_.send_sounding() when the scanner is
     // currently dwelling on a channel that has stale (or absent) LQA data.
     lqa_analyzer_.set_sounding_callback([this](uint32_t freq) {
@@ -218,7 +224,13 @@ void ALEController::wire_callbacks()
     // The audio thread pulls symbol frames autonomously via the registered source;
     // it fires frame completion through AudioDevice::arm_frame_complete → tick().
     // In offline mode (no audio device) update() drains pending frames directly.
+    // When ptt_lead_deadline_ms_ is active (PTT just asserted, radio not yet in TX),
+    // words are buffered in pending_tx_words_ and flushed by update() after the lead.
     sm_.set_transmit_callback([this](const ALEWord& w) {
+        if (ptt_lead_deadline_ms_ > 0) {
+            pending_tx_words_.push_back({ w, audio_device_ != nullptr });
+            return;
+        }
         modulator_.enqueue_word(w);
         if (audio_device_)
             audio_device_->arm_frame_complete([this]() { sm_.on_word_complete(); });
@@ -239,6 +251,13 @@ void ALEController::wire_callbacks()
         emit_status(msg);
     });
 
+    // SM frame assembler → passive monitor (on_frame_decoded)
+    sm_.set_frame_assembled_callback([this](const ALEMessage& frame) {
+        const uint32_t fid = monitor_frame_id_++;
+        if (on_frame_decoded)
+            on_frame_decoded(frame, fid);
+    });
+
     // RX pipeline word → SM
     demodulator_.set_word_callback([this](const ALEWord& w) {
         on_received_word(w);
@@ -246,9 +265,36 @@ void ALEController::wire_callbacks()
 
     // SM RX-enable control → pipeline (SM disables RX during TX phases)
     // PTT transitions mirror RX enable: RX off = TX active = PTT on.
+    // PTT lead (RX→TX): PTT asserted immediately, audio words buffered for
+    // ptt_lead_ms to let the radio's CAT/CI-V command settle before audio starts.
+    // PTT tail (TX→RX): demodulator and PTT release deferred by ptt_tail_ms to
+    // let the audio buffer drain fully before switching to RX.
     sm_.set_rx_enabled_callback([this](bool rx_on) {
-        demodulator_.set_enabled(rx_on);
-        if (radio_) radio_->set_ptt(!rx_on);
+        sm_rx_enabled_ = rx_on;
+        if (manual_ptt_) {
+            if (!rx_on) demodulator_.set_enabled(false);
+            emit_event(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
+            return;
+        }
+        if (rx_on) {
+            // TX→RX: cancel any pending lead, apply tail
+            ptt_lead_deadline_ms_ = 0;
+            pending_tx_words_.clear();
+            if (config_.ptt_tail_ms > 0) {
+                ptt_tail_deadline_ms_ = now_ms_ + config_.ptt_tail_ms;
+                // actual PTT release + demod enable happen in update()
+            } else {
+                if (radio_) radio_->set_ptt(false);
+                demodulator_.set_enabled(true);
+            }
+        } else {
+            // RX→TX: cancel any pending tail, assert PTT, start lead
+            ptt_tail_deadline_ms_ = 0;
+            demodulator_.set_enabled(false);
+            if (radio_) radio_->set_ptt(true);
+            ptt_lead_deadline_ms_ = (config_.ptt_lead_ms > 0)
+                ? now_ms_ + config_.ptt_lead_ms : 0;
+        }
         emit_event(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
     });
 
@@ -390,6 +436,8 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     set_sounding_interval_sec(cfg.sounding_interval_sec);
     set_link_idle_timeout_sec(cfg.link_idle_timeout_sec);
     set_max_tune_time_ms(cfg.max_tune_time_ms);
+    set_ptt_lead_ms(cfg.ptt_lead_ms);
+    set_ptt_tail_ms(cfg.ptt_tail_ms);
     config_.assumed_scan_channels = cfg.assumed_scan_channels;
 }
 
@@ -427,6 +475,17 @@ bool ALEController::send_sounding()
         return false;
     }
     emit_status("Manual sounding — transmitting on current channel");
+    return true;
+}
+
+bool ALEController::send_sounding_sweep(const std::vector<Channel>& channels)
+{
+    if (!sm_.send_sounding_sweep(channels)) {
+        emit_status("Sounding sweep rejected — only available while IDLE or scanning");
+        return false;
+    }
+    emit_status("Sounding sweep — " + std::to_string(channels.size())
+                + " channel(s)");
     return true;
 }
 
@@ -481,45 +540,82 @@ bool ALEController::initiate_call(const std::string& target_addr)
         return false;
     }
 
-    // Reorder calling channels by LQA history for this station (best first).
-    // Falls back silently to the user-configured order when no LQA data exist.
-    if (!calling_channels_.empty() && config_.lqa_exchange_enabled) {
+    // Channel ordering: always use LQA data when available (Spec: mandatory).
+    // Priority: 1) station-specific bilateral scores (A.5.4.5), 2) aggregate
+    // channel scores (soundings from any station), 3) user-configured order.
+    uint32_t first_call_freq_hz = calling_channels_.empty()
+        ? 0u : calling_channels_.front().rx_frequency_hz;
+    if (!calling_channels_.empty()) {
         auto ranked = lqa_analyzer_.rank_channels_for_station(target_addr);
-        if (!ranked.empty()) {
-            auto score_for = [&ranked](uint32_t freq) -> float {
-                for (const auto& r : ranked)
-                    if (r.frequency_hz == freq) return r.score;
-                return 0.0f;
-            };
-            std::vector<Channel> ordered = calling_channels_;
-            std::stable_sort(ordered.begin(), ordered.end(),
-                [&score_for](const Channel& a, const Channel& b) {
+        const bool has_station_data = !ranked.empty();
+
+        auto score_for = [&ranked](uint32_t freq) -> float {
+            for (const auto& r : ranked)
+                if (r.frequency_hz == freq) return r.score;
+            return -1.0f;  // unlisted: sort after all ranked entries
+        };
+
+        std::vector<Channel> ordered = calling_channels_;
+        std::stable_sort(ordered.begin(), ordered.end(),
+            [&](const Channel& a, const Channel& b) {
+                if (has_station_data) {
                     return score_for(a.rx_frequency_hz) > score_for(b.rx_frequency_hz);
-                });
-            sm_.set_calling_channels(ordered);
+                }
+                float sa = lqa_analyzer_.compute_channel_aggregate_score(a.rx_frequency_hz);
+                float sb = lqa_analyzer_.compute_channel_aggregate_score(b.rx_frequency_hz);
+                if (sa > 0.0f || sb > 0.0f) return sa > sb;
+                return false;
+            });
+        sm_.set_calling_channels(ordered);
+        first_call_freq_hz = ordered.front().rx_frequency_hz;
+        if (has_station_data) {
             emit_status("LQA: channel order optimised for " + target_addr
-                        + " (best: " + std::to_string(ordered.front().rx_frequency_hz) + " Hz)");
+                        + " (best: " + std::to_string(first_call_freq_hz) + " Hz)");
         }
     }
 
     apply_target_scan_channels_for(target_addr);
 
     // Block A4 — Queue CMD LQA (KA1=1) for the calling station's frame.
-    // Use the first (best-ranked) channel's frequency for the measurement.
+    // Gated on lqa_exchange_enabled; channel ranking above is always active.
     sent_ka1_ = false;
     last_call_target_.clear();
     last_call_freq_hz_ = 0;
     if (!calling_channels_.empty() && config_.lqa_exchange_enabled) {
-        const uint32_t freq = calling_channels_.front().rx_frequency_hz;
-        LQACmdPayload p = compute_lqa_payload(freq);
+        LQACmdPayload p = compute_lqa_payload(first_call_freq_hz);
         p.ka1 = true;
         sm_.set_pending_lqa_cmd(encode_lqa_cmd(p));
         sent_ka1_          = true;
         last_call_target_  = target_addr;
-        last_call_freq_hz_ = freq;
+        last_call_freq_hz_ = first_call_freq_hz;
     }
 
     emit_status("Initiating call to " + target_addr);
+    return sm_.initiate_call(target_addr);
+}
+
+bool ALEController::initiate_single_channel_call(const std::string& target_addr)
+{
+    if (!is_valid_ale_address(target_addr)) {
+        emit_status("ERROR: address '" + target_addr
+                    + "' invalid — must be 3–15 Basic-38 characters (A-Z, 0-9, @, ?)");
+        return false;
+    }
+    Channel cur = get_current_channel();
+    sm_.set_calling_channels({ cur });
+    sm_.set_target_scan_channels(1);
+    sent_ka1_ = false;
+    last_call_target_.clear();
+    last_call_freq_hz_ = 0;
+    if (config_.lqa_exchange_enabled) {
+        LQACmdPayload p = compute_lqa_payload(cur.rx_frequency_hz);
+        p.ka1 = true;
+        sm_.set_pending_lqa_cmd(encode_lqa_cmd(p));
+        sent_ka1_         = true;
+        last_call_target_ = target_addr;
+        last_call_freq_hz_ = cur.rx_frequency_hz;
+    }
+    emit_status("Initiating single-channel call to " + target_addr);
     return sm_.initiate_call(target_addr);
 }
 
@@ -543,20 +639,38 @@ bool ALEController::initiate_group_call(const std::vector<std::string>& members)
 
 void ALEController::reject_call()
 {
-    emit_status("Rejecting incoming call (TWAS)");
-    sm_.reject_call();
+    // Manual accept is a POST-link decision (the handshake auto-completed). A
+    // reject therefore tears down the already-established link with a TWAS
+    // termination frame and returns to AVAILABLE. Works for both the pending
+    // (LINKED_PENDING_OPERATOR) case and an auto-accepted link the operator
+    // chooses to drop. No-op when no link is active.
+    if (pending_operator_accept_ || is_link_active()) {
+        pending_operator_accept_ = false;
+        emit_status("Rejecting call — terminating link (TWAS)");
+        terminate_link();
+        return;
+    }
+    emit_status("Reject has no effect — no active link to terminate");
 }
 
 void ALEController::accept_call()
 {
-    if (sm_.accept_call())
-        emit_status("Accepting incoming call");
+    // In manual-accept mode the link is already up (handshake auto-completed);
+    // Accept just clears the pending-operator gate so the operator's voice/data
+    // session is "blessed". No-op otherwise (auto-accept links need no blessing).
+    if (pending_operator_accept_) {
+        pending_operator_accept_ = false;
+        emit_status("Call accepted by operator — link retained");
+        return;
+    }
 }
 
 void ALEController::set_manual_accept_mode(bool on, uint32_t decision_timeout_ms)
 {
     config_.manual_accept_mode = on;
-    config_.accept_timeout_ms  = decision_timeout_ms;
+    config_.accept_timeout_ms  = decision_timeout_ms;  // retained for config export; no longer gates the handshake
+    // The SM no longer pauses for manual accept (post-link operator gate instead);
+    // set_require_explicit_accept() is a no-op kept for API compatibility.
     sm_.set_require_explicit_accept(on, decision_timeout_ms);
 }
 
@@ -572,14 +686,80 @@ void ALEController::emergency_stop()
     sm_.emergency_manual_control();
 }
 
+void ALEController::set_manual_ptt(bool on)
+{
+    manual_ptt_ = on;
+    if (on) {
+        // Immediate TX override: cancel pending timing, disable demod, assert PTT
+        ptt_tail_deadline_ms_ = 0;
+        ptt_lead_deadline_ms_ = 0;
+        pending_tx_words_.clear();
+        demodulator_.set_enabled(false);
+        if (radio_) radio_->set_ptt(true);
+    } else {
+        // Restore SM control: release PTT only if SM currently wants RX
+        if (sm_rx_enabled_) {
+            if (radio_) radio_->set_ptt(false);
+            demodulator_.set_enabled(true);
+        }
+        // If SM wants TX, the rx_enabled_callback already manages PTT — nothing to do
+    }
+    emit_event(on ? pal::EventType::PTT_ON : pal::EventType::PTT_OFF);
+}
+
 // ── Main-loop drivers ─────────────────────────────────────────────────────────
 
 void ALEController::update(uint32_t now_ms)
 {
     now_ms_ = now_ms;
+
+    // PTT lead: flush buffered TX words once the lead time has elapsed
+    if (ptt_lead_deadline_ms_ > 0 && now_ms >= ptt_lead_deadline_ms_) {
+        ptt_lead_deadline_ms_ = 0;
+        for (auto& [w, has_dev] : pending_tx_words_) {
+            modulator_.enqueue_word(w);
+            if (has_dev && audio_device_)
+                audio_device_->arm_frame_complete([this]() { sm_.on_word_complete(); });
+        }
+        pending_tx_words_.clear();
+    }
+
+    // PTT tail: release PTT + enable demodulator once audio buffer has drained
+    if (ptt_tail_deadline_ms_ > 0 && !manual_ptt_ && now_ms >= ptt_tail_deadline_ms_) {
+        ptt_tail_deadline_ms_ = 0;
+        if (radio_) radio_->set_ptt(false);
+        demodulator_.set_enabled(true);
+    }
+
     sm_.update(now_ms);
 
     maybe_emit_call_alert();
+
+    // Commit a settled received-sounding frame to the LQA DB (full address +
+    // frame-averaged snr/ber). Checked every tick — cheap, and time-sensitive.
+    if (!sounding_caller_acc_.empty() && sounding_settle_ms_ > 0
+        && (now_ms - sounding_settle_ms_) >= ALETimingConstants::Tdrw_ms) {
+        commit_sounding_sample();
+    }
+
+    // Periodic multi-channel sounding sweep (set_automatic_sounding). Start a
+    // sweep over the configured net's channels every interval, gated on IDLE/
+    // SCANNING. A running sweep holds the SM in SOUNDING, which blocks re-entry.
+    if (auto_sounding_on_ && !auto_sounding_net_.empty()
+        && auto_sounding_interval_ms_ > 0) {
+        const ALEState st = sm_.get_state();
+        if ((st == ALEState::IDLE || st == ALEState::SCANNING)
+            && (now_ms - auto_sounding_last_ms_) >= auto_sounding_interval_ms_) {
+            auto channels = resolve_net_sounding_channels(auto_sounding_net_);
+            if (!channels.empty()) {
+                sm_.send_sounding_sweep(channels);
+                emit_status("Auto-sounding sweep on net '" + auto_sounding_net_
+                            + "' (" + std::to_string(channels.size()) + " channels)");
+            }
+            // Re-arm whether or not channels resolved (avoid busy-looping).
+            auto_sounding_last_ms_ = now_ms_;
+        }
+    }
 
     // Offline mode: no audio device, so drive word-completion directly by
     // pulling all pending symbol frames and firing on_word_complete per frame.
@@ -673,6 +853,23 @@ void ALEController::maybe_emit_call_alert()
     }
     if (on_call_received) on_call_received(caller);
     emit_event(pal::EventType::ALE_CALL_RECEIVED, caller);
+}
+
+void ALEController::commit_sounding_sample()
+{
+    if (sounding_caller_acc_.empty() || sounding_word_count_ == 0) {
+        sounding_caller_acc_.clear();
+        return;
+    }
+    const float avg_snr = sounding_snr_sum_ / static_cast<float>(sounding_word_count_);
+    const float avg_ber = sounding_ber_sum_ / static_cast<float>(sounding_word_count_);
+    lqa_analyzer_.process_sounding(sounding_caller_acc_, sounding_freq_hz_,
+                                   avg_snr, avg_ber);
+    sounding_caller_acc_.clear();
+    sounding_settle_ms_  = 0;
+    sounding_word_count_ = 0;
+    sounding_snr_sum_    = 0.0f;
+    sounding_ber_sum_    = 0.0f;
 }
 
 void ALEController::feed_audio(const int16_t* samples, uint32_t count)
@@ -770,6 +967,7 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     // Link exited (except via HANDSHAKE_COMPLETE → LINKED)
     if (from == ALEState::LINKED && to != ALEState::LINKED) {
         link_start_ms_ = 0;
+        pending_operator_accept_ = false;  // clear any unresolved manual-accept gate
         if (on_link_terminated)
             on_link_terminated("Link state exited");
         emit_event(pal::EventType::ALE_LINK_TERMINATED, "Link state exited");
@@ -795,7 +993,11 @@ void ALEController::on_operator_event(OperatorEvent ev)
             pending_bilateral_valid_ = false;
 
             // Block A6 — successful call: bilateral data was (or wasn't) received.
-            // mark_bilateral_attempted if we sent KA1 but received no CMD 'a' back.
+            // Flush any pending response-frame word metrics BEFORE marking bilateral
+            // attempted: commit_sounding_sample() stores the TIS:peer FROM-direction
+            // quality so mark_bilateral_attempted finds a real entry to annotate
+            // instead of creating a zero-score stub (which scores ~6 recency-only).
+            commit_sounding_sample();
             if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
                 lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
             sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
@@ -805,14 +1007,26 @@ void ALEController::on_operator_event(OperatorEvent ev)
             const std::string& peer = !sm_.get_to_address().empty()
                 ? sm_.get_to_address()
                 : sm_.get_caller_address();
-            emit_status("LINK ESTABLISHED with " + peer);
+            // Manual-accept post-link gate: the handshake already completed (link
+            // is up); in manual mode the operator must still Accept/Reject the
+            // established link. on_link_established fires either way (the link is
+            // genuinely up); the GUI uses its auto-accept setting to decide whether
+            // to show the active-call panel or the pending Answer/Decline panel.
+            if (config_.manual_accept_mode) {
+                pending_operator_accept_ = true;
+                emit_status("LINK ESTABLISHED with " + peer
+                            + " — pending operator accept");
+            } else {
+                emit_status("LINK ESTABLISHED with " + peer);
+            }
             link_start_ms_ = now_ms_;
             if (on_link_established) on_link_established(peer);
             emit_event(pal::EventType::ALE_LINK_ESTABLISHED, peer);
             break;
         }
         case OperatorEvent::CALL_REJECTED:
-            // Block A6 — mark bilateral attempted (no CMD LQA received back)
+            // Block A6 — flush any partial response metrics before marking
+            commit_sounding_sample();
             if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
                 lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
             sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
@@ -821,7 +1035,8 @@ void ALEController::on_operator_event(OperatorEvent ev)
             emit_event(pal::EventType::ALE_LINK_TERMINATED, "Call rejected");
             break;
         case OperatorEvent::NO_CHANNELS_LEFT:
-            // Block A6 — mark bilateral attempted (no CMD LQA received back)
+            // Block A6 — flush any partial response metrics before marking
+            commit_sounding_sample();
             if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
                 lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
             sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
@@ -859,6 +1074,12 @@ void ALEController::on_received_word(const ALEWord& word)
         last_fec_errors_ = word.fec_errors;
         last_snr_db_     = (word.unanimous_votes / kMaxVotes) * 31.0f;
         last_ber_        = (word.fec_errors > 0) ? static_cast<float>(word.fec_errors) / 50.0f : 0.0f;
+
+        // ── Passive monitor tap: neutral decoded-word notification ──────────
+        // Fires for every successfully decoded word regardless of local protocol
+        // state. Does not consult self_address, expected_caller, or any SM gate.
+        if (on_word_decoded)
+            on_word_decoded(word, monitor_frame_id_);
     }
 
     // Capture caller identity as it arrives word-by-word in HANDSHAKE/WAIT_CYCLE_END.
@@ -921,7 +1142,8 @@ void ALEController::on_received_word(const ALEWord& word)
                                       && sm_.get_calling_phase() == CallingPhase::LISTENING);
             if (word.type == PreambleType::CMD && word.address[0] == 'a'
                     && (in_hs_wce || in_ca_lst)) {
-                if (const Channel* ch = sm_.get_current_channel()) {
+                const Channel* ch = sm_.get_current_channel();
+                if (ch && ch->rx_frequency_hz > 0) {
                     pending_bilateral_payload_  = decode_lqa_cmd(word.raw_payload);
                     pending_bilateral_valid_    = true;
                     pending_bilateral_freq_hz_  = ch->rx_frequency_hz;
@@ -961,24 +1183,43 @@ void ALEController::on_received_word(const ALEWord& word)
         }
     }
 
-    // LQA sounding: record any valid foreign TIS received while listening.
-    // A TIS conclusion frame from another station is the primary LQA input;
-    // unanimous_votes (0-48) and fec_errors proxy for SNR and BER.
-    if (word.valid && word.type == PreambleType::TIS) {
-        const ALEState st = sm_.get_state();
-        if (st == ALEState::SCANNING || st == ALEState::IDLE) {
+    // LQA sounding: accumulate a foreign sounding frame (TIS + DATA/REP
+    // extension words) received while listening. A sounding is the sender's
+    // self-address conclusion (§A.5.3.1), so a >3-char self address arrives as
+    // TIS:XXX + DATA:YYY [+ REP:ZZZ ...]. Capturing only the TIS word (the old
+    // behaviour) truncated the address to 3 chars in the LQA DB. The full
+    // address is committed once the frame settles (Tdrw of silence after the
+    // last word) — see commit_sounding_sample(), driven from update().
+    // unanimous_votes (0-48) and fec_errors proxy for SNR and BER; averaged
+    // across the frame's words per A.5.4.1.1 ("linear average BER/LQA").
+    if (word.valid && (sm_.get_state() == ALEState::SCANNING
+                       || sm_.get_state() == ALEState::IDLE)) {
+        const bool is_tis  = (word.type == PreambleType::TIS);
+        const bool is_ext  = (word.type == PreambleType::DATA
+                              || word.type == PreambleType::REP);
+        if (is_tis || (is_ext && !sounding_caller_acc_.empty())) {
             const Channel* ch = sm_.get_current_channel();
-            if (ch) {
+            if (ch && ch->rx_frequency_hz > 0) {
                 constexpr float kMaxVotes = 48.0f;
                 const float snr_db = (word.unanimous_votes / kMaxVotes) * 31.0f;
                 const float ber    = (word.fec_errors > 0)
                                      ? static_cast<float>(word.fec_errors) / 50.0f
                                      : 0.0f;
-                lqa_analyzer_.process_sounding(
-                    trim_ale_address(word.address),
-                    ch->rx_frequency_hz,
-                    snr_db,
-                    ber);
+                // A new TIS (re)starts the frame — the conclusion is sent twice
+                // (Trs redundancy), so the last copy's TIS+ext wins.
+                if (is_tis) {
+                    sounding_caller_acc_  = trim_ale_address(word.address);
+                    sounding_freq_hz_     = ch->rx_frequency_hz;
+                    sounding_word_count_  = 1;
+                    sounding_snr_sum_     = snr_db;
+                    sounding_ber_sum_     = ber;
+                } else {
+                    sounding_caller_acc_ += trim_ale_address(word.address);
+                    sounding_word_count_ += 1;
+                    sounding_snr_sum_    += snr_db;
+                    sounding_ber_sum_    += ber;
+                }
+                sounding_settle_ms_ = now_ms_;  // controller clock — same as the commit check in update()
             }
         }
     }
@@ -1042,6 +1283,40 @@ void ALEController::enable_automatic_sounding(bool on)
     lqa_analyzer_.set_config(cfg);
 }
 
+void ALEController::set_automatic_sounding(bool on, uint32_t interval_sec,
+                                           const std::string& net_name)
+{
+    auto_sounding_on_          = on && !net_name.empty();
+    auto_sounding_interval_ms_ = on ? interval_sec * 1000u : 0u;
+    auto_sounding_net_         = on ? net_name : std::string{};
+    // Arm the first sweep for `interval` from now (don't fire immediately on
+    // enable — the operator just turned it on and may still be configuring).
+    auto_sounding_last_ms_     = now_ms_;
+    if (auto_sounding_on_) {
+        emit_status("Periodic sounding on net '" + net_name + "' every "
+                    + std::to_string(interval_sec) + " s");
+    } else {
+        emit_status("Periodic multi-channel sounding off");
+    }
+}
+
+std::vector<Channel> ALEController::resolve_net_sounding_channels(
+    const std::string& net_name) const
+{
+    std::vector<Channel> out;
+    const Net* net = net_store_.find(net_name);
+    if (!net) return out;
+    for (const auto& ch_id : net->channel_ids) {
+        for (const auto& ch : calling_channels_) {
+            if (ch.id == ch_id && ch.enabled) {
+                out.push_back(ch);
+                break;
+            }
+        }
+    }
+    return out;
+}
+
 void ALEController::set_sounding_interval_sec(uint32_t sec)
 {
     config_.sounding_interval_sec = sec;
@@ -1074,16 +1349,29 @@ void ALEController::set_max_tune_time_ms(uint32_t ms)
     sm_.set_timing_parameters(tp);
 }
 
+void ALEController::set_ptt_lead_ms(uint32_t ms) { config_.ptt_lead_ms = ms; }
+void ALEController::set_ptt_tail_ms(uint32_t ms) { config_.ptt_tail_ms = ms; }
+
 std::vector<std::string> ALEController::get_all_lqa_entries() const
 {
     std::vector<std::string> out;
     const uint32_t now = lqa_database_.get_current_time_ms();  // same clock as LQADatabase itself
     for (const auto& e : lqa_database_.get_all_entries()) {
         const uint32_t age_ms = (now > e.last_activity_ms()) ? (now - e.last_activity_ms()) : 0u;
-        char buf[160];
-        std::snprintf(buf, sizeof(buf), "%u|%s|%.1f|%.4f|%.1f|%.1f|%u",
+        // Fields: freq|station|snr_db|ber|sinad_db|score|age_ms
+        //        |bilateral_sinad|bilateral_ber|bilateral_mp|display_score
+        // score already incorporates the bilateral fallback (see compute_score),
+        // so display_score == score; bilateral_* are shipped so the GUI can show
+        // the peer-reported SINAD/BER/MP when no local FROM measurement exists.
+        char buf[200];
+        std::snprintf(buf, sizeof(buf),
+                      "%u|%s|%.1f|%.4f|%.1f|%.1f|%u|%u|%u|%u|%.1f",
                       e.frequency_hz, e.remote_station.c_str(),
-                      e.snr_db, e.ber, e.sinad_db, e.score, age_ms);
+                      e.snr_db, e.ber, e.sinad_db, e.score, age_ms,
+                      static_cast<unsigned>(e.bilateral_sinad),
+                      static_cast<unsigned>(e.bilateral_ber),
+                      static_cast<unsigned>(e.bilateral_mp),
+                      e.score);
         out.push_back(buf);
     }
     return out;

@@ -9,6 +9,24 @@
 namespace pal {
 
 /**
+ * @brief Konfiguriert den physischen Leitungsstatus serieller Ports nach dem Öffnen.
+ *
+ * Viele CAT-Interfaces (z. B. TS-480 USB-Wandler) benötigen DTR=HIGH und RTS=HIGH
+ * als Bias-Signal, unabhängig von Flow-Control.  Das ist kein Handshake-Requirement,
+ * sondern ein physischer Line-State der vom Gerät/Interface benötigt wird.
+ *
+ *  ON   = Leitung dauerhaft HIGH setzen nach rig_open()
+ *  OFF  = Leitung dauerhaft LOW setzen nach rig_open()
+ *  AUTO = Hamlib/OS entscheiden (keine explizite Manipulation)
+ */
+struct SerialLinePolicy {
+    enum class State { ON, OFF, AUTO };
+    State    dtr              = State::ON;   ///< DTR-Zustand nach Port-Open (default: HIGH)
+    State    rts              = State::ON;   ///< RTS-Zustand nach Port-Open (default: HIGH)
+    uint32_t stabilization_ms = 200;         ///< Wartezeit nach Port-Open vor erstem CAT-Befehl
+};
+
+/**
  * @brief Hamlib-basierte IRadio-Implementierung.
  *
  * Unterstützt direkte Geräteansteuerung über serielle Schnittstellen
@@ -23,8 +41,10 @@ public:
      * @brief Erzeugt einen Hamlib-Radio-Adapter.
      * @param model Hamlib-Modell-ID als String (z. B. "229")
      * @param port Verbindungsziel, z. B. "/dev/ttyUSB0" oder "127.0.0.1:4532"
+     * @param baud Baud-Rate (0 = Hamlib-Default, typisch 19200)
      */
-    HamlibRadio(const std::string& model, const std::string& port);
+    HamlibRadio(const std::string& model, const std::string& port, int baud = 0,
+                SerialLinePolicy policy = {});
 
     /**
      * @brief Gibt Ressourcen frei und schließt die Verbindung.
@@ -127,8 +147,16 @@ private:
      */
     bool configure_port();
 
-    std::string model_;
-    std::string port_;
+    // Setzt DTR/RTS nach erfolgreichem rig_open() gemäß policy_.
+    // Versucht erst hamlib-Token-API, dann direkten Windows-HANDLE-Fallback.
+    void apply_line_policy();
+
+    bool is_serial_port() const;
+
+    std::string      model_;
+    std::string      port_;
+    int              baud_;
+    SerialLinePolicy policy_;
 
     RIG* rig_ = nullptr;
 

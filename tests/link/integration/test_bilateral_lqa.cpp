@@ -101,15 +101,20 @@ static uint32_t feed_sam_words_to_joe(ALEStateMachine& joe,
     return t - Trw;  // timestamp of the last word
 }
 
-// Drive JOE through CHANNEL_CHECK → SENDING_RESPONSE.
-// Returns the timestamp after SENDING_RESPONSE starts.
+// Drive JOE through WAIT_CYCLE_END → SLOT_WAIT → CHANNEL_CHECK → SENDING_RESPONSE.
+// Returns the timestamp at which SENDING_RESPONSE (and build_response_words()) fires.
+//
+// Three phase transitions, each needing a separate update() call:
+//   1. t_last_rx + Tdrw + 1  : WAIT_CYCLE_END → SLOT_WAIT (hs_tlww settle >= Tdrw)
+//   2. t_last_rx + Tdrw + 2  : SLOT_WAIT → CHANNEL_CHECK (tswt_ms_=0 for individual)
+//   3. t_last_rx + 2*Tdrw + 3: CHANNEL_CHECK → SENDING_RESPONSE (LBT >= Tdrw)
 static uint32_t drive_joe_to_response(ALEStateMachine& joe, uint32_t t_last_rx)
 {
     const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
-    joe.update(t_last_rx + 1);         // WAIT_CYCLE_END settle → SLOT_WAIT
-    joe.update(t_last_rx + 2);         // SLOT_WAIT (Tswt=0) → CHANNEL_CHECK
-    joe.update(t_last_rx + Tdrw + 1);  // CHANNEL_CHECK clear → SENDING_RESPONSE
-    return t_last_rx + Tdrw + 1;
+    joe.update(t_last_rx + Tdrw + 1);        // WAIT_CYCLE_END → SLOT_WAIT
+    joe.update(t_last_rx + Tdrw + 2);        // SLOT_WAIT → CHANNEL_CHECK
+    joe.update(t_last_rx + 2 * Tdrw + 3);   // CHANNEL_CHECK clear → SENDING_RESPONSE
+    return t_last_rx + 2 * Tdrw + 3;
 }
 
 // Feed JOE's response words to SAM.

@@ -517,6 +517,38 @@ void test_bilateral_save_load() {
     std::cout << "  PASS" << std::endl;
 }
 
+// bilateral_quality_score / update_bilateral scoring (A.5.4.1/A.5.4.2):
+// SINAD code is dB (higher = better), BER code is 2/3-vote count (lower = better).
+// A bilateral-only stub must get a non-zero score, and higher SINAD must score
+// higher. Regression for the SINAD-inversion fix (compute_score now uses
+// bilateral_quality_score when no FROM measurement exists).
+void test_bilateral_quality_score_spec_direction() {
+    std::cout << "Test: bilateral_quality_score() — SINAD higher=better, BER lower=better (A.5.4.2)..." << std::endl;
+
+    LQADatabase db;
+
+    // Stub from update_bilateral only (no FROM snr/words) — score must be non-zero.
+    db.update_bilateral(7073000, "A", /*sinad=*/20u, /*ber=*/5u, /*mp=*/2u);
+    auto a = db.get_entry(7073000, "A");
+    assert(a != nullptr);
+    assert(a->score > 0.0f);
+
+    // Higher SINAD (better) must yield a higher bilateral score than lower SINAD.
+    db.update_bilateral(10142000, "HI", 28u, 2u, 0u);
+    db.update_bilateral(14107000, "LO", 5u,  2u, 0u);
+    auto hi = db.get_entry(10142000, "HI");
+    auto lo = db.get_entry(14107000, "LO");
+    assert(hi != nullptr && lo != nullptr);
+    assert(hi->score > lo->score);
+
+    // bilateral_quality_score directly: SINAD 28 dB → ~28 (clamped by BER 30-2=28).
+    assert(std::abs(db.bilateral_quality_score(*hi) - 28.0f) < 0.5f);
+
+    std::cout << "  A score=" << a->score << "  HI=" << hi->score
+              << "  LO=" << lo->score << std::endl;
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== LQA Database Tests ===" << std::endl;
 
@@ -540,6 +572,7 @@ int main() {
     test_mark_bilateral_attempted();
     test_bilateral_x_vs_dash();
     test_bilateral_save_load();
+    test_bilateral_quality_score_spec_direction();
 
     std::cout << "\n=== All LQA Database Tests Passed ===" << std::endl;
     return 0;

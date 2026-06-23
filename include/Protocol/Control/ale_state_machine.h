@@ -248,6 +248,18 @@ public:
     bool send_sounding();
 
     /**
+     * Transmit a sounding on each channel in @p channels in turn (multi-channel
+     * sounding sweep, §A.5.3). The sweep tunes the radio to each channel via the
+     * channel callback, performs the normal LBT → TX (self-address conclusion
+     * ×2) → LISTENING sounding cycle, then advances to the next channel. A
+     * return call detected during any LISTENING window (T-08) interrupts the
+     * sweep and links on that channel. When the last channel is sounded the SM
+     * returns to its previous state (IDLE/SCANNING).
+     * \return false if not in IDLE/SCANNING or @p channels is empty.
+     */
+    bool send_sounding_sweep(const std::vector<Channel>& channels);
+
+    /**
      * Terminate the current link per A.5.5.3.5:
      * Sends TO [peer] × 2 + TWAS [self] before transitioning to pre_link_state_.
      * No-op if not in LINKED state.
@@ -431,6 +443,16 @@ public:
         trace_cb_ = std::move(cb);
     }
 
+    /**
+     * Register a monitor callback fired once per complete assembled ALE frame.
+     * Fires unconditionally for every frame that MessageAssembler considers
+     * complete — regardless of local protocol state or address match.
+     * Pass nullptr to detach.
+     */
+    void set_frame_assembled_callback(std::function<void(const ALEMessage&)> cb) {
+        frame_assembled_cb_ = std::move(cb);
+    }
+
 private:
     // ── State machine ─────────────────────────────────────────────────────
     ALEState current_state;
@@ -544,6 +566,13 @@ private:
     SoundingPhase sounding_phase_;        ///< Aktuelle Phase innerhalb SOUNDING
     uint32_t      sounding_lbt_start_ms_; ///< When SOUNDING LBT started; 0 = not active
 
+    // ── Multi-channel sounding sweep (send_sounding_sweep) ────────────────
+    // Active only during a sweep; the channel-manager override (see
+    // ALEChannelManager::set_override) pins current() to the sweep channel.
+    std::vector<Channel> sounding_sweep_chs_;
+    size_t               sounding_sweep_idx_     = 0;
+    bool                 sounding_sweep_active_  = false;
+
     // ── Target scan channels ──────────────────────────────────────────────
     uint32_t target_scan_channels;       ///< Assumed scan channels of target (for Tsc)
 
@@ -566,6 +595,7 @@ private:
     std::function<void(bool)>                rx_enabled_callback;
     std::function<void(OperatorEvent)>       operator_callback;
     std::function<void(const std::string&)>  trace_cb_;
+    std::function<void(const ALEMessage&)>   frame_assembled_cb_;
 
     // ── Internals ─────────────────────────────────────────────────────────
     void enter_state(ALEState new_state);

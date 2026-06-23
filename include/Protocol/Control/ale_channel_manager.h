@@ -43,6 +43,16 @@ public:
     uint32_t          current_index()  const { return scan_.channel_index; }
     const ScanConfig& config()         const { return scan_; }
 
+    // ── Sounding-sweep override ────────────────────────────────────────────
+    // A multi-channel sounding sweep (ALEStateMachine::send_sounding_sweep)
+    // transmits on each channel in turn without disturbing the scan list. While
+    // a sweep is in progress, set_override() pins current() to the sweep channel
+    // (and fires on_change_ so the radio tunes to it); clear_override() restores
+    // normal scan-list current(). The override is cleared on any return to
+    // IDLE/SCANNING (see enter_state).
+    void set_override(const Channel& ch);
+    void clear_override() { override_active_ = false; }
+
     // ── Scan lifecycle ─────────────────────────────────────────────────────
     /** Reset to channel 0 and fire callback.  Call on SCANNING entry. */
     void start(uint32_t current_time_ms);
@@ -69,6 +79,11 @@ private:
     ScanConfig scan_;
     uint32_t   last_hop_ms_ = 0;
     std::function<void(const Channel&)> on_change_;
+
+    // Sounding-sweep override (see set_override()). When active, current()
+    // returns &override_ch_ instead of the scan-list entry.
+    bool    override_active_ = false;
+    Channel override_ch_;
 
     /** Set channel_index, stamp last_scan_time_ms, fire on_change_. */
     void apply(uint32_t index, uint32_t current_time_ms);

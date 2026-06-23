@@ -44,9 +44,22 @@ struct ALEStationConfig {
     /// Sounding-Intervall (Sekunden); Standard = 300 s.
     uint32_t  sounding_interval_sec  = 300;
     /// Link-Idle-Timeout: Verbindung wird nach dieser Zeit getrennt (Sekunden).
-    uint32_t  link_idle_timeout_sec  = 30;
+    /// Default 360 s — programmierbarer Twa-Override gem. MIL-STD-188-141B Level-5
+    /// (entspricht PCALE TWA=360000 ms). Der SM-Spec-Default bleibt 30 s
+    /// (ale_timing.h Twa_ms, AC-LINK-003-001); dies ist nur der Stations-Default.
+    uint32_t  link_idle_timeout_sec  = 360;
     /// Maximale Tuning-Zeit Tt (ms); Standard = 1045 ms (Blindabstimmung).
     uint32_t  max_tune_time_ms       = 1045;
+
+    // ── PTT-Timing ────────────────────────────────────────────────────────
+    /// Zeit nach PTT-Assertion bevor Audio gesendet wird (ms).
+    /// Kompensiert CAT/CI-V-Latenz beim Sounding (Calling hat bereits Tt als Lead).
+    /// 0 = kein Delay.
+    uint32_t  ptt_lead_ms             = 25;
+    /// Zeit nach SM-RX-Freigabe bevor PTT deasserted wird (ms).
+    /// Lässt den Audio-Buffer vollständig leerlaufen bevor auf RX umgeschaltet.
+    /// 0 = sofortige PTT-Freigabe.
+    uint32_t  ptt_tail_ms             = 50;
 
     // ── LQA-Austausch ─────────────────────────────────────────────────────
     /// true = CMD LQA / CMD NOISE / LQA Report aktiv senden und auswerten.

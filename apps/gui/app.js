@@ -10,6 +10,7 @@ let bridgeReconnectTimer = null;  // guard: at most one pending reconnect
 let bridgeReqId      = 0;
 const bridgePending  = new Map();   // id -> callback(reply)
 let latestSpectrum   = null;        // Float32Array(257) from the last binary frame, or null
+const wfMarkers      = [];          // ALE frame markers; aged each waterfall row in drawWaterfall()
 
 function bridgeWsUrl() {
   return 'ws://localhost:' + window.location.port;
@@ -49,7 +50,7 @@ function connectBridge() {
   ws.onopen = () => {
     bridgeConnected = true;
     setBridgeOverlay(false);
-    pushLog([['data', 'Bridge connected — syncing live station state']], '');
+    aleLogInfo('Bridge connected — syncing live station state');
     syncAllFromBridge();
   };
 
@@ -68,7 +69,7 @@ function connectBridge() {
   ws.onerror = () => {};  // onclose always follows; let it handle cleanup + retry
 
   ws.onclose = () => {
-    if (bridgeConnected) pushLog([['data', 'Bridge disconnected']], '');
+    if (bridgeConnected) aleLogInfo('Bridge disconnected');
     bridgeConnected = false;
     bridgeWs = null;
     bridgePending.clear();
@@ -90,6 +91,8 @@ function syncAllFromBridge() {
   syncVfoFromBridge();
   pollRigStatus();   // establish initial radio-control lock state
   applyManualAcceptToBridge();  // push the GUI's accept-mode default to the SM
+  applyTimingToBridge();        // push Timing settings (Sounding Interval etc.) to the core
+  applySoundAuto();             // re-assert periodic-sounding mode if active
 }
 
 // No dedicated push event exists for VFO/PTT/audio-level changes (they're
@@ -98,26 +101,48 @@ function syncAllFromBridge() {
 // Light poll only while connected.
 setInterval(() => { if (bridgeConnected) { syncVfoFromBridge(); pollRigStatus(); pollSignalQuality(); } }, 2000);
 
-// Poll SIGNAL_QUALITY and wire SINAD into the header display and call-panel quality widget.
-// sinad_db is stored as an integer [0,30] in the LQA database (sinad_to_lqa_code).
+// Header SINAD: best LQA entry on the current frequency (any station).
+// sinad_db in the mapped entry already falls back to bilateral_sinad_db
+// when no local FROM measurement exists (see syncLqaFromBridge mapping).
+function updateHeaderSinadFromLqa() {
+  const el = document.getElementById('snrVal');
+  if (!el) return;
+  const matches = lqaEntries.filter(e =>
+    Math.abs((e.freq_hz || 0) - radioFreqHz) < 500);
+  if (!matches.length) return;
+  const best = matches.reduce((a, b) => a.score > b.score ? a : b);
+  const val = best.sinad_db > 0 ? best.sinad_db : best.score;
+  if (val > 0) el.textContent = '+' + Math.round(val);
+}
+
+// Poll SIGNAL_QUALITY for the active-link quality panel (bars + label).
+// The header SINAD readout now comes from the LQA database instead.
 function pollSignalQuality() {
   bridgeSend('SIGNAL_QUALITY', {}, (r) => {
     if (!r.ok) return;
     const sinad = Math.max(0, Math.min(30, Math.round(r.sinad_db)));
-
-    // Header SINAD readout
-    document.getElementById('snrVal').textContent = (sinad >= 0 ? '+' : '') + sinad;
-
-    // Quality label in the active-link panel
     const qtext = sinad >= 24 ? 'Excellent' : sinad >= 17 ? 'Good' : sinad >= 10 ? 'Fair' : 'Poor';
     const lbl = document.getElementById('qualityLbl');
     if (lbl) lbl.textContent = qtext + ' · +' + sinad + ' dB';
-
-    // Quality bars: 5 bars, one per 6 dB (0 bars below 6, 5 bars at 30)
     const activeBars = sinad >= 30 ? 5 : Math.floor(sinad / 6);
     const bars = document.querySelectorAll('#qbars .qbar');
     bars.forEach((b, i) => b.classList.toggle('inactive', i >= activeBars));
   });
+}
+
+function updateLinkQualityFromLqa(peerAddr) {
+  const best = [...lqaEntries]
+    .filter(e => e.addr === peerAddr)
+    .sort((a, b) => b.score - a.score)[0];
+  if (!best) return;
+  const qt = best.score >= 24 ? 'Excellent' : best.score >= 17 ? 'Good'
+           : best.score >= 10 ? 'Fair' : 'Poor';
+  const sinadPart = best.sinad !== '—' ? ' · +' + best.sinad + ' dB' : '';
+  const lbl = document.getElementById('qualityLbl');
+  if (lbl) lbl.textContent = qt + ' · score=' + best.score + sinadPart;
+  const bars = Math.min(5, Math.floor(best.score / 6));
+  document.querySelectorAll('#qbars .qbar')
+    .forEach((b, i) => b.classList.toggle('inactive', i >= bars));
 }
 
 function applyStatusReply(r) {
@@ -141,8 +166,9 @@ function applyBridgeState(state) {
 function onBridgeEvent(e) {
   switch (e.event) {
     case 'state': applyBridgeState(e.value); break;
-    case 'status': pushLog([['data', e.msg]], ''); break;
+    case 'status': aleLogInfo(e.msg); break;
     case 'call_received':
+      isIncomingCall = true;
       stopTimer();
       setStatus('Incoming', 'incoming');
       document.getElementById('incCs').textContent   = e.caller;
@@ -151,17 +177,53 @@ function onBridgeEvent(e) {
       showCallPanel(false);
       break;
     case 'link_established':
-      stopTimer();
-      setStatus('Linked', 'linked');
       document.getElementById('callCs').textContent = e.peer;
-      showInc(false);
-      showCallPanel(true);
-      callStart = Date.now();
-      timerId   = setInterval(tickTimer, 1000);
-      tickTimer();
+      updateLinkQualityFromLqa(e.peer);
+      if (autoAcceptOn()) {
+        // Auto-accept: the link is live — show the active-call panel + timer.
+        stopTimer();
+        setStatus('Linked', 'linked');
+        showInc(false);
+        showCallPanel(true);
+        callStart = Date.now();
+        timerId   = setInterval(tickTimer, 1000);
+        tickTimer();
+        pendingAccept = false;
+      } else {
+        // Manual mode: operator already decided during the INCOMING phase?
+        if (preClickedAccept) {
+          preClickedAccept = false;
+          showInc(false); showCallPanel(true);
+          setStatus('Linked', 'linked');
+          callStart = Date.now();
+          timerId   = setInterval(tickTimer, 1000); tickTimer();
+          if (bridgeConnected) bridgeSend('ACCEPT', {});
+        } else if (preClickedDecline) {
+          preClickedDecline = false;
+          if (bridgeConnected) bridgeSend('REJECT', {});
+          else goScanning();
+        } else if (isIncomingCall) {
+          // Called station: present "Linked — accept?" for operator decision
+          stopTimer();
+          setStatus('Linked · pending', 'incoming');
+          document.getElementById('incName').textContent = 'Linked — accept?';
+          showInc(true);
+          showCallPanel(false);
+          pendingAccept = true;
+        } else {
+          // Calling station: remote responded, link is live — no operator action needed
+          stopTimer();
+          setStatus('Linked', 'linked');
+          showInc(false);
+          showCallPanel(true);
+          callStart = Date.now();
+          timerId   = setInterval(tickTimer, 1000);
+          tickTimer();
+        }
+      }
       break;
     case 'link_terminated':
-      pushLog([['data', 'Link terminated: ' + e.reason]], '');
+      aleLogInfo('Link terminated: ' + e.reason);
       stopTimer();
       goScanning();
       break;
@@ -169,6 +231,8 @@ function onBridgeEvent(e) {
       messages.unshift({ from: e.from, time: nowZulu(), text: e.text, own: false });
       renderMessages();
       break;
+    case 'word_decoded':  onAleLogWord(e);   break;
+    case 'frame_decoded': onAleLogFrame(e);  break;
   }
 }
 
@@ -374,6 +438,7 @@ function drawWaterfall() {
     rows.unshift(genRow());
     if (rows.length > H) rows.length = H;
     nextRowAt = now + 100;
+    for (const m of wfMarkers) m.age++;
   }
 
   const img = ctx.createImageData(W, H);
@@ -387,36 +452,173 @@ function drawWaterfall() {
     }
   }
   ctx.putImageData(img, 0, 0);
+
+  // Draw frame markers as 4 px-wide colored ticks on the left edge
+  for (const m of wfMarkers) {
+    if (m.age >= H) continue;
+    ctx.fillStyle = m.color;
+    ctx.fillRect(0, m.age, 4, 3);
+  }
+
   requestAnimationFrame(drawWaterfall);
 }
 drawWaterfall();
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   PROTOCOL LOG
+   CHANNEL LOOKUP HELPERS  (frequency is the primary LQA key per MIL-STD)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-const logEntries = [];
+function chFromFreq(freqHz) {
+  return channels.find(c => Math.abs(parseInt(c.rx, 10) - freqHz) < 500) || null;
+}
+function aleChLabel(freqHz) {
+  const ch = chFromFreq(freqHz);
+  if (ch) return ch.id.replace('C-', 'C');
+  return freqHz ? '(' + (freqHz / 1e6).toFixed(3) + ')' : '?';
+}
+function chLabelForFreq(freqHz) {
+  const ch = chFromFreq(freqHz);
+  return ch ? ch.id.replace('C-', 'C') : '';
+}
 
-function renderLog() {
-  const el = document.getElementById('protoLog');
-  if (logEntries.length > 250) logEntries.length = 250;   // cap history
-  el.innerHTML = logEntries.map(e => {
-    const pills = e.w.map(([cls, lbl]) =>
-      `<span class="pill pill-${cls}">${lbl}</span>`).join('');
-    const rc = e.r === 'linked' ? 'linked' : e.r === 'calling' ? 'calling' : 'miss';
-    const rt = e.r === 'linked' ? 'LINKED' : e.r === 'calling' ? 'CALLING' : '—';
-    return `<div class="proto-row">
-      <span class="ptime">${e.t}</span>
-      <span class="pwords">${pills}</span>
-      <span class="presult ${rc}">${rt}</span>
-    </div>`;
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   HEARD STATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+let heardStations = [];  // { addr, freq_hz, ts, score, sinad_db }
+
+function upsertHeard(addr, freqHz, score, sinadDb) {
+  const ts  = new Date().toTimeString().slice(0, 8);
+  const idx = heardStations.findIndex(h => h.addr === addr && h.freq_hz === freqHz);
+  const entry = { addr, freq_hz: freqHz, ts, score, sinad_db: sinadDb };
+  if (idx >= 0) heardStations[idx] = entry;
+  else          heardStations.unshift(entry);
+  renderHeard();
+}
+
+function deleteHeard(addr, freqHz) {
+  heardStations = heardStations.filter(h => !(h.addr === addr && h.freq_hz === freqHz));
+  renderHeard();
+}
+
+function clearHeard() { heardStations = []; renderHeard(); }
+
+function renderHeard() {
+  const el = document.getElementById('heardList');
+  if (!el) return;
+  if (!heardStations.length) {
+    el.innerHTML = '<div class="heard-empty">No stations heard yet</div>';
+    return;
+  }
+  el.innerHTML = heardStations.map(h => {
+    const freqMhz  = h.freq_hz ? (h.freq_hz / 1e6).toFixed(3) : '?';
+    const lbl      = chLabelForFreq(h.freq_hz);
+    const scoreCls = h.score >= 24 ? 'hs-good' : h.score >= 14 ? 'hs-ok' : 'hs-bad';
+    const sinadTxt = h.sinad_db > 0 ? `+${Math.round(h.sinad_db)} dB` : '—';
+    return `<div class="heard-row">` +
+      `<span class="heard-cs">${escapeHtml(h.addr)}</span>` +
+      `<span class="heard-freq">${escapeHtml(freqMhz)}</span>` +
+      `<span class="heard-lbl">${lbl ? '['+escapeHtml(lbl)+']' : ''}</span>` +
+      `<span class="heard-score ${scoreCls}">${h.score != null ? h.score : '—'}</span>` +
+      `<span class="heard-sinad">${sinadTxt}</span>` +
+      `<span class="heard-ts">${h.ts}</span>` +
+      `<button class="heard-del" onclick="deleteHeard(${JSON.stringify(h.addr)},${h.freq_hz})" title="Remove">×</button>` +
+      `</div>`;
   }).join('');
 }
-renderLog();
 
-function pushLog(words, result) {
-  const now = new Date().toTimeString().slice(0, 8);
-  logEntries.unshift({ t: now, w: words, r: result });
-  renderLog();
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ALE LOG
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+const ALE_LOG_CAP = 1000;
+let aleLogCount = 0;
+const aleLogFrameCh = new Map();  // frame_id → freq_hz
+
+function aleLogAppend(html) {
+  const body = document.getElementById('aleLogBody');
+  if (!body) return;
+  const empty = body.querySelector('.ale-log-empty');
+  if (empty) empty.remove();
+  body.insertAdjacentHTML('beforeend', html);
+  body.scrollTop = body.scrollHeight;
+  aleLogCount++;
+  if (aleLogCount > ALE_LOG_CAP) { body.removeChild(body.firstChild); aleLogCount--; }
+  document.getElementById('aleLogCount').textContent =
+    aleLogCount + (aleLogCount === 1 ? ' entry' : ' entries');
+}
+
+function onAleLogWord(e) {
+  const fid = e.frame_id;
+  if (!aleLogFrameCh.has(fid) && e.freq_hz)
+    aleLogFrameCh.set(fid, e.freq_hz);
+  const freqHz = aleLogFrameCh.get(fid) || e.freq_hz || 0;
+  const chDisp = aleChLabel(freqHz);
+  const ts  = new Date().toTimeString().slice(0, 8);
+  const p   = (e.preamble || '').toLowerCase();
+  const pill = p === 'to' ? 'pill-to' : p === 'tis' ? 'pill-tis' :
+               p === 'twas' ? 'pill-twas' : p === 'thru' ? 'pill-thru' :
+               p === 'rep' ? 'pill-rep' : 'pill-data';
+  const fec = e.fec || 0;
+  const berCls = fec === 0 ? 'ale-ber-ok' : fec <= 1 ? 'ale-ber-warn' : 'ale-ber-bad';
+  aleLogAppend(
+    `<div class="ale-entry">` +
+    `<span class="ale-entry-ts">${ts}</span>` +
+    `<span class="ale-entry-ch">[${escapeHtml(chDisp)}]</span>` +
+    `<span class="ale-entry-mode">[ALE]</span>` +
+    `<span class="ale-entry-word pill ${pill}">${escapeHtml(e.preamble)}</span>` +
+    `<span class="ale-entry-addr">[${escapeHtml(e.addr)}]</span>` +
+    `<span class="ale-entry-ber ${berCls}">BER: ${fec}</span>` +
+    `</div>`);
+  if (!wfMarkers.some(m => m.frameId === fid)) {
+    wfMarkers.unshift({ frameId: fid, age: 0, color: '#7a9ab8' });
+    if (wfMarkers.length > 500) wfMarkers.length = 500;
+  }
+}
+
+const ALE_LOG_COLORS = { SOUNDING:'#00dc8c', INDIVIDUAL:'#4dc8ff',
+                         NET:'#ffca28', AMD:'#ff8a65', UNKNOWN:'#7a9ab8' };
+
+function onAleLogFrame(e) {
+  const m = wfMarkers.find(x => x.frameId === e.frame_id);
+  if (m) m.color = ALE_LOG_COLORS[e.call_type] || ALE_LOG_COLORS.UNKNOWN;
+  if (aleLogFrameCh.size > 200)
+    aleLogFrameCh.delete(aleLogFrameCh.keys().next().value);
+  aleLogAppend(`<div class="ale-frame-sep"></div>`);
+}
+
+function onAleLogLqa(addr, freqHz, score, sinadDb) {
+  upsertHeard(addr, freqHz, score, sinadDb);
+  const ts      = new Date().toTimeString().slice(0, 8);
+  const freqStr = freqHz ? ` ${(freqHz / 1e6).toFixed(3)} MHz` : '';
+  const lbl     = freqHz ? chLabelForFreq(freqHz) : '';
+  const lblStr  = lbl ? ` [${lbl}]` : '';
+  const scoreStr = score != null ? ` score=${score}` : '';
+  const sinadStr = sinadDb > 0   ? ` SINAD=+${Math.round(sinadDb)}dB` : '';
+  aleLogAppend(
+    `<div class="ale-entry ale-info">` +
+    `<span class="ale-entry-ts">${ts}</span>` +
+    `<span class="ale-entry-ch"></span>` +
+    `<span class="ale-entry-mode">[INFO]</span>` +
+    `<span class="ale-entry-addr">LQA record: ${escapeHtml(addr)}` +
+    `${escapeHtml(freqStr + lblStr + scoreStr + sinadStr)}</span>` +
+    `</div>`);
+}
+
+function aleLogInfo(text) {
+  const ts = new Date().toTimeString().slice(0, 8);
+  aleLogAppend(
+    `<div class="ale-entry ale-info">` +
+    `<span class="ale-entry-ts">${ts}</span>` +
+    `<span class="ale-entry-ch"></span>` +
+    `<span class="ale-entry-mode">[INFO]</span>` +
+    `<span class="ale-entry-addr">${escapeHtml(text)}</span>` +
+    `</div>`);
+}
+
+function clearAleLog() {
+  const body = document.getElementById('aleLogBody');
+  if (body) body.innerHTML = '<div class="ale-log-empty">No ALE activity yet</div>';
+  aleLogCount = 0;
+  document.getElementById('aleLogCount').textContent = '0 entries';
+  aleLogFrameCh.clear();
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -470,6 +672,7 @@ function stopTimer() {
    STATE HELPERS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 function goIdle() {
+  pendingAccept = preClickedAccept = preClickedDecline = isIncomingCall = false;
   stopTimer();
   setStatus('Idle', 'idle');
   showInc(false);
@@ -477,6 +680,7 @@ function goIdle() {
 }
 
 function goScanning() {
+  pendingAccept = preClickedAccept = preClickedDecline = isIncomingCall = false;
   stopTimer();
   setStatus('Scanning', 'scanning');
   showInc(false);
@@ -502,7 +706,8 @@ function renderContacts() {
   if (selectedContact && !contacts.includes(selectedContact)) selectedContact = null;
   if (!selectedContact && list.length) selectedContact = list[0];
 
-  document.querySelector('.btn-call').disabled = !selectedContact;
+  const cb = document.getElementById('callBtn');
+  if (cb) cb.disabled = !selectedContact;
 
   el.innerHTML = list.length ? list.map(c => {
     const idx = contacts.indexOf(c);
@@ -599,24 +804,69 @@ function deleteContact() {
   if (bridgeConnected && removedCs) bridgeSend('CONTACT_DEL', { callsign: removedCs }, () => syncContactsFromBridge());
 }
 
-function startCall() {
-  if (!selectedContact || !bridgeConnected) return;
-  setStatus('Calling…', 'calling');   // cosmetic; real transition comes from CALLING/link_established
-  bridgeSend('CALL', { addr: selectedContact.cs });
+function toggleCallModePanel() {
+  const p = document.getElementById('callModePanel');
+  if (!p) return;
+  const nowHidden = p.classList.toggle('hidden');
+  const b = document.getElementById('callBtn');
+  if (b) b.textContent = nowHidden ? '📞 Call ▸' : '📞 Call ▾';
 }
 
-// ACCEPT/REJECT resolve the manual-accept gate (AWAIT_ACCEPT). The GUI defaults
-// to manual accept (Settings ▸ Policy ▸ Auto-Accept off → MANUAL_ACCEPT_MODE on,
-// pushed on connect/save), so Answer/Decline are the operator's real decision.
-// With Auto-Accept on the SM links automatically and ACCEPT is just a dismiss.
+function closeCallModePanel() {
+  document.getElementById('callModePanel')?.classList.add('hidden');
+  const b = document.getElementById('callBtn');
+  if (b) b.textContent = '📞 Call ▸';
+}
+
+function startCall(single) {
+  if (!selectedContact || !bridgeConnected) return;
+  closeCallModePanel();
+  setStatus('Calling…', 'calling');   // cosmetic; real transition comes from CALLING/link_established
+  bridgeSend('CALL', { addr: selectedContact.cs, single_channel: !!single });
+}
+
+// Manual accept is a POST-link decision: the 3-way handshake completes
+// automatically (interoperable with MIL-STD-188-141B Twr/Twrt) and the link is
+// already up when the operator is prompted. Answer blesses the established link
+// (clears the core's pending-operator gate → active call panel); Decline sends
+// REJECT → the core terminates with TWAS → link_terminated → goScanning.
+// With Auto-Accept ON the link_established handler already shows the call
+// panel, so Answer/Decline are just dismiss/operator-drop.
+let pendingAccept    = false;
+let preClickedAccept  = false;
+let preClickedDecline = false;
+let isIncomingCall    = false;  // true = we are the CALLED station (set on call_received)
+function autoAcceptOn() { return !!(document.getElementById('cfgAutoAccept')?.checked); }
+
 function answerCall() {
-  showInc(false);
-  if (bridgeConnected) bridgeSend('ACCEPT', {});
+  if (pendingAccept) {
+    // Post-link: operator confirmed "Linked — accept?"
+    pendingAccept = false;
+    if (bridgeConnected) bridgeSend('ACCEPT', {});
+    showInc(false);
+    setStatus('Linked', 'linked');
+    showCallPanel(true);
+    callStart = Date.now();
+    timerId   = setInterval(tickTimer, 1000);
+    tickTimer();
+    return;
+  }
+  // Pre-link: operator clicked Answer before link_established fired — queue it
+  preClickedAccept = true;
+  document.getElementById('incName').textContent = 'Connecting…';
 }
 function declineCall() {
-  showInc(false);
-  if (bridgeConnected) { bridgeSend('REJECT', {}); return; }
-  goScanning();
+  if (pendingAccept) {
+    // Post-link: operator rejected "Linked — accept?"
+    pendingAccept = false;
+    showInc(false);
+    if (bridgeConnected) { bridgeSend('REJECT', {}); return; }  // core terminates → link_terminated → goScanning
+    goScanning();
+  } else {
+    // Pre-link: operator clicked Decline before link_established fired — queue it
+    preClickedDecline = true;
+    showInc(false);
+  }
 }
 function endCall() {
   stopTimer();
@@ -727,7 +977,7 @@ function openAudioDevice() {
       btn.textContent = r.ok ? '■ Close Audio' : '🔌 Connect Audio';
       btn.classList.toggle('scan-on', !!r.ok);
     }
-    if (!r.ok) pushLog([['data', 'Audio open failed: ' + (r.error || '?')]], 'miss');
+    if (!r.ok) aleLogInfo('Audio open failed: ' + (r.error || '?'));
   });
 }
 
@@ -760,6 +1010,10 @@ function rigArgs() {
     port:    document.getElementById('rigPort').value,
     serial:  document.getElementById('rigSerial').value,
     model:   document.getElementById('rigModel').value,
+    baud:    parseInt(document.getElementById('rigBaud')?.value, 10) || 0,
+    dtr:     document.getElementById('rigDtr')?.value  ?? 'on',
+    rts:     document.getElementById('rigRts')?.value  ?? 'on',
+    stab:    parseInt(document.getElementById('rigStab')?.value, 10) || 200,
   };
 }
 
@@ -849,9 +1103,9 @@ function pollRigStatus() {
     const connected = !!r.connected;
     if (connected !== rigConnected) {  // log only on real transitions
       if (rigConnected && !connected)
-        pushLog([['data', 'Radio connection lost — controls locked']], 'miss');
+        aleLogInfo('Radio connection lost — controls locked');
       else if (connected)
-        pushLog([['data', 'Radio connected']], '');
+        aleLogInfo('Radio connected');
     }
     // Re-assert every poll so the lock is correct even on the first sync (when
     // both are already false) and tracks the bridge-connected state too.
@@ -987,6 +1241,7 @@ function syncChannelsFromBridge() {
     }));
     renderChannels();
     renderNets();
+    renderSoundPanel();   // net channel labels in the sounding dropdown
     updateScanBtn();   // channel count changed → refresh Scan button gating
   });
 }
@@ -1055,6 +1310,7 @@ function syncNetsFromBridge() {
     if (!r.ok) return;
     nets = r.data.map(n => ({ name: n.name, channelIds: n.channel_ids }));
     renderNets();
+    renderSoundPanel();   // sounding dropdown's net list mirrors the configured nets
   });
 }
 
@@ -1100,6 +1356,8 @@ function updateAutoAcceptUi() {
 
 function saveSettings() {
   applyManualAcceptToBridge();
+  applyTimingToBridge();   // Sounding Interval / Link Idle / Max Tune → core
+  applySoundAuto();        // interval may have changed → re-assert periodic mode
   updateSelfHeader();
   closeSettings();
 }
@@ -1143,37 +1401,125 @@ function updateScanBtn() {
 function updateSoundBtn() {
   const b = document.getElementById('soundBtn');
   if (!b) return;
-  // Mirror the SM: send_sounding() is only honoured in IDLE/SCANNING. Grey out
-  // while calling/handshaking (wfState 'calling'), incoming, or linked.
-  const ok = wfState === 'idle' || wfState === 'scanning';
-  b.disabled = !ok;
-  b.title = ok ? 'Transmit a manual sounding (LQA probe) on the current channel'
-               : 'Sounding nur im Idle/Scan möglich';
+  // The button is now a dropdown toggle (always enabled to open); the single-
+  // channel action inside is gated by the bridge reply. Reflect any active
+  // periodic-sounding net in the label.
+  b.disabled = false;
+  b.textContent = (activeSoundNet ? '📢 ' + activeSoundNet + ' ' : '📢 Sound ') + (soundPanelOpen() ? '▾' : '▸');
+  b.title = activeSoundNet
+    ? 'Periodic sounding on ' + activeSoundNet + ' every ' + soundingIntervalSec() + ' s'
+    : 'Transmit a sounding (LQA probe). Single channel, or periodic over a net.';
+}
+
+function soundingIntervalSec() {
+  const v = parseInt(document.getElementById('cfgSounding')?.value, 10);
+  return Number.isFinite(v) && v > 0 ? v : 300;
+}
+
+function soundPanelOpen() {
+  const p = document.getElementById('soundPanel');
+  return !!p && p.classList.contains('open');
+}
+
+function toggleSoundPanel() {
+  const p = document.getElementById('soundPanel');
+  const open = p.classList.toggle('open');
+  document.getElementById('soundBtn').textContent =
+    (activeSoundNet ? '📢 ' + activeSoundNet + ' ' : '📢 Sound ') + (open ? '▾' : '▸');
+  if (open) renderSoundPanel();
+}
+
+// Build the per-net list from the configured nets + channels. Each row enables
+// periodic multi-channel sounding on that net's channels (SOUND_AUTO), driven by
+// the Sounding Interval setting. The active net is highlighted.
+function renderSoundPanel() {
+  const el = document.getElementById('soundNetList');
+  if (!el) return;
+  if (!nets.length) {
+    el.innerHTML = '<div class="fhint" style="margin:0">No nets — configure in Settings ▸ Nets.</div>';
+    return;
+  }
+  el.innerHTML = nets.map(n => {
+    const chans = (n.channelIds || []).join(', ') || '—';
+    const active = n.name === activeSoundNet;
+    return `<div class="sound-net-item${active ? ' active' : ''}" onclick="soundAutoNet('${escapeHtml(n.name)}')">
+      <span class="sound-net-name">${escapeHtml(n.name)}</span>
+      <span class="sound-net-chans">${escapeHtml(chans)}</span>
+    </div>`;
+  }).join('');
+}
+
+// Single-channel one-shot sounding on the current channel.
+function soundSingle() {
+  closeSoundPanel();
+  if (bridgeConnected) {
+    bridgeSend('SOUND', {}, (r) => {
+      if (r && r.ok) aleLogInfo('TX SOUNDING from ' + primarySelfAddr());
+      else           aleLogInfo('Sounding abgelehnt — nur im Idle/Scan');
+    });
+    return;
+  }
+  aleLogInfo('TX SOUNDING from ' + primarySelfAddr());
+}
+
+// Select a net for periodic multi-channel sounding (SOUND_AUTO on).
+function soundAutoNet(name) {
+  activeSoundNet = name;
+  const cb = document.getElementById('cfgAutoSound'); if (cb) cb.checked = true;
+  applySoundAuto();
+  renderSoundPanel();
+  closeSoundPanel();
+}
+
+function soundAutoOff() {
+  activeSoundNet = null;
+  const cb = document.getElementById('cfgAutoSound'); if (cb) cb.checked = false;
+  applySoundAuto();
+  renderSoundPanel();
+}
+
+// Push the periodic-sounding mode to the core. ON when a net is selected and the
+// Automatic Sounding toggle is checked; OFF otherwise. The interval comes from
+// the Sounding Interval setting (Timing), wired via applyTimingToBridge().
+let activeSoundNet = null;
+function applySoundAuto() {
+  if (!bridgeConnected) { updateSoundBtn(); return; }
+  const on = !!activeSoundNet && !!(document.getElementById('cfgAutoSound')?.checked);
+  bridgeSend('SOUND_AUTO', { on, interval_sec: soundingIntervalSec(), net: on ? activeSoundNet : '' });
+  updateSoundBtn();
+}
+
+function closeSoundPanel() {
+  const p = document.getElementById('soundPanel');
+  if (p) p.classList.remove('open');
+  updateSoundBtn();
+}
+
+// Push Timing settings (Settings ▸ Timing) to the core via TIMING_SET. Without
+// this the Sounding Interval / Link Idle / Tune / Scan-dwell fields were cosmetic.
+function applyTimingToBridge() {
+  if (!bridgeConnected) return;
+  const num = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v > 0 ? v : null; };
+  const args = {};
+  const s  = num('cfgSounding');    if (s)  args.sounding_interval_sec = s;
+  const li = num('cfgLinkIdle');    if (li) args.link_idle_timeout_sec = li;
+  const mt = num('cfgMaxTune');     if (mt) args.max_tune_time_ms = mt;
+  // ptt_lead/tail accept 0 (disabled), so bypass the v>0 guard
+  const numZ = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v >= 0 ? v : null; };
+  const pl = numZ('cfgPttLead');    if (pl !== null) args.ptt_lead_ms = pl;
+  const pt = numZ('cfgPttTail');    if (pt !== null) args.ptt_tail_ms = pt;
+  bridgeSend('TIMING_SET', args);
 }
 
 function toggleScan() {
   // Stopping (currently scanning) is always allowed; only *starting* needs >=2.
   if (wfState !== 'scanning' && !scanEnabled()) {
-    pushLog([['data', 'Scanning braucht ≥2 Kanäle']], 'miss');
+    aleLogInfo('Scanning braucht ≥2 Kanäle');
     return;
   }
   if (bridgeConnected) { bridgeSend(wfState === 'scanning' ? 'AVAILABLE' : 'SCAN', {}); return; }
   // setStatus() reflects the button label/state; just flip scanning ⇄ idle.
   if (wfState === 'scanning') goIdle(); else goScanning();
-}
-
-// Manual sounding — fire a one-shot LQA probe on the current channel. The SM
-// only honours SOUNDING_REQUEST while IDLE or SCANNING; the bridge reply's
-// `ok:false` surfaces a rejection (e.g. while linked/handshaking).
-function manualSound() {
-  if (bridgeConnected) {
-    bridgeSend('SOUND', {}, (r) => {
-      if (r && r.ok) pushLog([['tis', 'TIS:'+primarySelfAddr().slice(0,3)], ['data', 'SOUNDING']], '');
-      else           pushLog([['data', 'Sounding abgelehnt — nur im Idle/Scan']], 'miss');
-    });
-    return;
-  }
-  pushLog([['tis', 'TIS:'+primarySelfAddr().slice(0,3)], ['data', 'SOUNDING']], '');
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1214,8 +1560,13 @@ function updateRadioDisplay() {
   if (mEl) mEl.textContent = radioMode;
   // mirror onto the header readout + linked-panel label
   const fv = document.getElementById('freqVal');     if (fv) fv.textContent = fmtStatFreq(radioFreqHz);
-  const fs = document.getElementById('freqSub');     if (fs) fs.textContent = (radioChannel >= 0 ? 'CH ' + (radioChannel + 1) : 'VFO') + ' · ' + radioMode;
+  const fs = document.getElementById('freqSub');
+  if (fs) {
+    const ch = chFromFreq(radioFreqHz);
+    fs.textContent = (ch ? ch.id.replace('C-', 'CH ') : 'VFO') + ' · ' + radioMode;
+  }
   const cf = document.getElementById('callFreqLbl');  if (cf) cf.textContent = fmtStatFreq(radioFreqHz) + ' MHz · ' + radioMode;
+  updateHeaderSinadFromLqa();
   document.querySelectorAll('.rk-mode').forEach(b => b.classList.toggle('active', b.dataset.mode === radioMode));
   document.querySelectorAll('.rk-step').forEach(b => b.classList.toggle('active', +b.dataset.step === radioStep));
 }
@@ -1225,13 +1576,19 @@ function toggleRadioPanel() {
   document.getElementById('radioToggle').textContent = open ? '📻 Radio ▾' : '📻 Radio ▸';
   if (open) updateRadioDisplay();
 }
-// dismiss the VFO panel on an outside click
+// dismiss the VFO / Sounding panels on an outside click
 document.addEventListener('click', e => {
   const wrap = document.getElementById('radioWrap');
   const panel = document.getElementById('radioPanel');
   if (panel && panel.classList.contains('open') && wrap && !wrap.contains(e.target)) {
     panel.classList.remove('open');
     document.getElementById('radioToggle').textContent = '📻 Radio ▸';
+  }
+  const swrap = document.getElementById('soundWrap');
+  const spanel = document.getElementById('soundPanel');
+  if (spanel && spanel.classList.contains('open') && swrap && !swrap.contains(e.target)) {
+    spanel.classList.remove('open');
+    updateSoundBtn();
   }
 });
 
@@ -1267,16 +1624,16 @@ function stepChannel(dir) {
   updateRadioDisplay();
 }
 
-// Manual voice PTT has no Core counterpart (ALE's own PTT is automatic,
-// driven by the protocol's RX-enable signal — see ALEController::
-// get_ptt_state()'s doc). Left cosmetic-only even when connected; the
-// indicator still reflects the REAL state via syncVfoFromBridge().
-function togglePtt() {
+// Operator manual PTT override — sends SET_PTT to the bridge so the
+// controller asserts/releases PTT independently of the ALE state machine.
+// Button is press-and-hold: onmousedown/ontouchstart → on=true,
+// onmouseup/ontouchend/onmouseleave → on=false.
+function setPtt(on) {
   if (radioCtrlLocked()) return;
-  pttOn = !pttOn;
+  if (bridgeConnected) bridgeSend('SET_PTT', { on });
+  pttOn = on;
   const b = document.getElementById('pttBtn');
-  b.classList.toggle('ptt-on', pttOn);
-  b.textContent = pttOn ? '● TX' : '🎙 PTT';
+  if (b) { b.classList.toggle('ptt-on', on); b.textContent = on ? '⚡ TX' : '🎙 PTT'; }
 }
 
 // keypad direct entry — digits accumulate, MHz/kHz (or ENT) commit
@@ -1349,7 +1706,7 @@ function sendAmd() {
   renderMessages();
   if (bridgeConnected) { bridgeSend('AMD', { text: txt }); return; }
   const to = selectedContact ? selectedContact.cs.slice(0,3) : '@@@';
-  pushLog([['to','TO:'+to],['data','DATA:AMD'],['tis','TIS:'+self.slice(0,3)]], 'linked');
+  aleLogInfo('AMD demo: TO:' + to + ' DATA:AMD TIS:' + self.slice(0, 3));
 }
 function nowZulu() { return new Date().toISOString().slice(11,16) + 'Z'; }
 
@@ -1420,24 +1777,72 @@ function delSelfAddr(i) {
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    LQA MATRIX  (LqaMatrix / LqaEntry — A.4.3.4)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-let lqaEntries = [
-  { addr:'W1ABC', ch:'14.109', score:28, sinad:24, ber:'1e-4', mp:'0.8 ms', ageMin:2  },
-  { addr:'W1ABC', ch:'7.102',  score:19, sinad:16, ber:'4e-3', mp:'1.4 ms', ageMin:5  },
-  { addr:'K2XYZ', ch:'14.109', score:22, sinad:19, ber:'2e-3', mp:'1.1 ms', ageMin:8  },
-  { addr:'N3DEF', ch:'3.596',  score:11, sinad:9,  ber:'2e-2', mp:'2.9 ms', ageMin:14 },
+let lqaEntries = [];
+
+// MIL-STD-188-141B Table A-XIII: average 2/3-vote count (0-30) → approximate BER.
+// 31 = "no value available". BER code is lower=better (0 votes → 0.0 BER).
+const BER_TABLE_A_XIII = [
+  0.0,0.006993,0.01409,0.02129,0.02860,0.03602,0.04356,0.05124,0.05904,0.06699,
+  0.07508,0.08333,0.09175,0.1003,0.1091,0.1181,0.1273,0.1368,0.1464,0.1564,
+  0.1667,0.1773,0.1882,0.1995,0.2113,0.2236,0.2365,0.2500,0.2643,0.2795,0.3
 ];
-// Bridge's LQA_LIST format (freq_hz/station/snr_db/ber/sinad_db/score/age_ms
-// — see ALEController::get_all_lqa_entries()) has no multipath field; "mp"
-// shows "—" (genuinely not in the data) rather than a guessed value.
+function fmtBerCode(code) {
+  if (code == null) return '—';
+  const c = Math.round(code);
+  if (c === 31 || c < 0 || c > 30) return '—';
+  return BER_TABLE_A_XIII[c].toExponential(1);
+}
+
+// Bridge's LQA_LIST format (see ALEController::get_all_lqa_entries()):
+//   freq_hz|station|snr_db|ber|sinad_db|score|age_ms|bilateral_sinad_db|
+//   bilateral_ber|bilateral_mp|display_score
+// FROM-direction (snr_db/ber/sinad_db) is locally measured; bilateral_* is what
+// the peer reported via CMD LQA (A.5.4.2). Per spec: SINAD code = dB, higher =
+// better (31 = no measurement); BER code = 2/3-vote count, lower = better
+// (31 = no value); MP = ms (7 = not measured). Prefer a real measurement from
+// either direction; show "—" for the no-data sentinels. display_score already
+// incorporates the bilateral fallback (compute_score), so it is non-zero for
+// bilateral-only stub entries.
 function syncLqaFromBridge() {
   bridgeSend('LQA_LIST', {}, (r) => {
     if (!r.ok) return;
-    lqaEntries = r.data.map(e => ({
-      addr: e.station || '(sounding)', ch: (e.freq_hz / 1e6).toFixed(3),
-      score: Math.round(e.score), sinad: Math.round(e.sinad_db),
-      ber: e.ber.toExponential(0), mp: '—', ageMin: Math.round(e.age_ms / 60000),
-    }));
+    const prevKeys = new Set(lqaEntries.map(e => e.addr + '|' + e.ch));
+    lqaEntries = r.data.map(e => {
+      const fromSinad = (typeof e.sinad_db === 'number' && e.sinad_db > 0)
+        ? String(Math.round(e.sinad_db))
+        : (typeof e.snr_db === 'number' && e.snr_db > 0)
+        ? String(Math.round(e.snr_db)) : null;
+      const bilatSinad = (typeof e.bilateral_sinad_db === 'number'
+                          && e.bilateral_sinad_db <= 30)
+        ? String(Math.round(e.bilateral_sinad_db)) : null;
+      const fromBer = (typeof e.ber === 'number' && e.ber > 0)
+        ? e.ber.toExponential(1) : null;
+      const bilatBer = (typeof e.bilateral_ber === 'number')
+        ? fmtBerCode(e.bilateral_ber) : null;
+      const mp = (typeof e.bilateral_mp === 'number' && e.bilateral_mp >= 0
+                  && e.bilateral_mp <= 6)
+        ? e.bilateral_mp.toFixed(0) + ' ms' : '—';
+      return {
+        addr:    e.station || '(sounding)',
+        ch:      (e.freq_hz / 1e6).toFixed(3),
+        freq_hz: e.freq_hz,
+        score:   Math.round(e.display_score != null ? e.display_score : e.score),
+        sinad:   fromSinad || bilatSinad || '—',
+        sinad_db: (typeof e.sinad_db === 'number' && e.sinad_db > 0) ? e.sinad_db
+                : (typeof e.snr_db === 'number' && e.snr_db > 0)   ? e.snr_db
+                : typeof e.bilateral_sinad_db === 'number' ? e.bilateral_sinad_db : 0,
+        snr_db:  typeof e.snr_db === 'number' ? e.snr_db : 0,
+        ber:     fromBer   || bilatBer   || '—',
+        mp,
+        ageMin:  Math.round(e.age_ms / 60000),
+      };
+    });
+    lqaEntries.forEach(e => {
+      if (!prevKeys.has(e.addr + '|' + e.ch))
+        onAleLogLqa(e.addr, e.freq_hz, e.score, e.sinad_db);
+    });
     renderLqa();
+    updateHeaderSinadFromLqa();
   });
 }
 // LQA changes from real radio activity (soundings/contacts), not GUI
@@ -1455,10 +1860,10 @@ function renderLqa() {
                       b.score - a.score);
   tb.innerHTML = rows.length ? rows.map(e => `
     <tr>
-      <td class="lqa-cell" style="text-align:left">${e.addr}</td>
+      <td class="lqa-cell" style="text-align:left">${escapeHtml(e.addr)}</td>
       <td class="lqa-cell">${e.ch}</td>
       <td class="lqa-cell ${lqaClass(e.score)}">${e.score}</td>
-      <td class="lqa-cell">${e.sinad} dB</td>
+      <td class="lqa-cell">${e.sinad === '—' ? '—' : e.sinad + ' dB'}</td>
       <td class="lqa-cell">${e.ber}</td>
       <td class="lqa-cell">${e.mp}</td>
       <td class="lqa-cell">${e.ageMin}m</td>
@@ -1491,6 +1896,8 @@ goIdle();              // boot idle (Scan off); real state arrives via syncAllFr
 updateScanBtn();       // reflect channel count on the Scan button (>=2 channels required)
 updateSelfHeader();
 updateAutoAcceptUi();  // reflect auto-accept checkbox state on the decision-window field
+renderSoundPanel();    // sounding dropdown's net list (populated when nets sync from the bridge)
+updateSoundBtn();
 // Show overlay immediately; it is hidden as soon as the WebSocket handshake succeeds.
 setBridgeOverlay(true);
 // Small delay before first connect: the bridge serves CSS/JS sequentially on the same
