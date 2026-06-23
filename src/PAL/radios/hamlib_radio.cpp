@@ -164,14 +164,12 @@ bool HamlibRadio::configure_port() {
     if (!rig_) return false;
 
     // ── Netzwerk-Pfad (rigctld via TCP) ──────────────────────────────────
+    // Pfad als-is übernehmen — rig_open() überschreibt den port type sowieso
+    // aus den Backend-Caps (NET_RIGCTL → RIG_PORT_NETWORK), und hamlib 4.x
+    // versteht "tcp://host:port" in network_open() nativ.
     if (port_.rfind("tcp://", 0) == 0 || port_.rfind("rigctld://", 0) == 0) {
         rig_->state.rigport.type.rig = RIG_PORT_NETWORK;
-
-        std::string endpoint = port_;
-        if (endpoint.rfind("tcp://", 0) == 0)      endpoint.erase(0, 6);
-        else if (endpoint.rfind("rigctld://", 0) == 0) endpoint.erase(0, 10);
-
-        std::strncpy(rig_->state.rigport.pathname, endpoint.c_str(), HAMLIB_FILPATHLEN);
+        std::strncpy(rig_->state.rigport.pathname, port_.c_str(), HAMLIB_FILPATHLEN);
         rig_->state.rigport.pathname[HAMLIB_FILPATHLEN - 1] = '\0';
         return true;
     }
@@ -186,19 +184,31 @@ bool HamlibRadio::configure_port() {
     if (baud_ > 0)
         rig_->state.rigport.parm.serial.rate = baud_;
 
-    // Datenformat: 8N1
+    // Datenformat: 8N1, kein Flow-Control-Handshake.
     rig_->state.rigport.parm.serial.data_bits = 8;
     rig_->state.rigport.parm.serial.stop_bits = 1;
     rig_->state.rigport.parm.serial.parity    = RIG_PARITY_NONE;
-
-    // Kein UART-Handshake (Flow Control off).
-    // DTR/RTS-Line-State wird NACH rig_open() in apply_line_policy() gesetzt —
-    // das ist unabhängig von Handshake und darf diesen nicht beeinflussen.
     rig_->state.rigport.parm.serial.handshake = RIG_HANDSHAKE_NONE;
+
+    // DTR/RTS VOR rig_open() als conf-Token setzen (KRITISCH für TS-480 und
+    // ähnliche USB-CAT-Adapter):  hamlib liest diese Werte in rig_open() beim
+    // DCB-Setup und öffnet den Port mit den richtigen Leitungszuständen.
+    // apply_line_policy() setzt sie zusätzlich noch einmal NACH rig_open()
+    // als Absicherung (Windows-HANDLE-Fallback).
+    if (policy_.dtr != SerialLinePolicy::State::AUTO) {
+        const char* val = (policy_.dtr == SerialLinePolicy::State::ON) ? "ON" : "OFF";
+        token_t tok = rig_token_lookup(rig_, "dtr_state");
+        if (tok) rig_set_conf(rig_, tok, val);
+    }
+    if (policy_.rts != SerialLinePolicy::State::AUTO) {
+        const char* val = (policy_.rts == SerialLinePolicy::State::ON) ? "ON" : "OFF";
+        token_t tok = rig_token_lookup(rig_, "rts_state");
+        if (tok) rig_set_conf(rig_, tok, val);
+    }
 
     std::fprintf(stderr,
         "[HamlibRadio] configure_port: port=%s baud=%d 8N1 handshake=NONE "
-        "→ DTR=%s RTS=%s stab=%ums (applied after rig_open)\n",
+        "DTR=%s RTS=%s stab=%ums\n",
         port_.c_str(), baud_,
         policy_.dtr == SerialLinePolicy::State::ON  ? "ON"  :
         policy_.dtr == SerialLinePolicy::State::OFF ? "OFF" : "AUTO",
