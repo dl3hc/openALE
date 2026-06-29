@@ -5,6 +5,7 @@
 #include "App/ale_controller.h"
 #include "LQA/lqa_metrics.h"
 #include "PAL/radio.h"
+#include "Protocol/Control/ale_freq_select.h"
 #include "Word/ale_word.h"
 #include <algorithm>
 #include <cmath>
@@ -438,7 +439,10 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     set_max_tune_time_ms(cfg.max_tune_time_ms);
     set_ptt_lead_ms(cfg.ptt_lead_ms);
     set_ptt_tail_ms(cfg.ptt_tail_ms);
-    config_.assumed_scan_channels = cfg.assumed_scan_channels;
+    config_.assumed_scan_channels        = cfg.assumed_scan_channels;
+    config_.relink_enabled               = cfg.relink_enabled;
+    config_.relink_improvement_threshold = cfg.relink_improvement_threshold;
+    config_.enhanced_freq_select         = cfg.enhanced_freq_select;
 }
 
 void ALEController::set_calling_channels(const std::vector<Channel>& channels)
@@ -465,6 +469,23 @@ void ALEController::start_available()
 void ALEController::start_scanning()
 {
     emit_status("Starting ALE scanner — channel hopping");
+
+    // A.5.4.5.3: sort scan channels by FROM-direction quality.
+    // FROM score = locally measured SINAD from received soundings, stored
+    // in the sounding entry (empty station key) sinad_db field.
+    ScanConfig cfg = sm_.get_scan_config();
+    if (!cfg.scan_list.empty()) {
+        std::stable_sort(cfg.scan_list.begin(), cfg.scan_list.end(),
+            [this](const Channel& a, const Channel& b) {
+                auto ea = lqa_database_.get_entry(a.rx_frequency_hz, "");
+                auto eb = lqa_database_.get_entry(b.rx_frequency_hz, "");
+                float sa = (ea && ea->sinad_db > 0.0f) ? ea->sinad_db : 0.0f;
+                float sb = (eb && eb->sinad_db > 0.0f) ? eb->sinad_db : 0.0f;
+                return sa > sb;  // higher FROM-quality first
+            });
+        sm_.configure_scan(cfg);
+    }
+
     sm_.process_event(ALEEvent::START_SCAN);
 }
 
@@ -489,29 +510,6 @@ bool ALEController::send_sounding_sweep(const std::vector<Channel>& channels)
     return true;
 }
 
-void ALEController::apply_target_scan_channels_for(const std::string& target_addr)
-{
-    // Fallback: assumed_scan_channels wenn gesetzt, sonst eigene Kanalliste.
-    uint32_t n = (config_.assumed_scan_channels > 0)
-                     ? config_.assumed_scan_channels
-                     : static_cast<uint32_t>(calling_channels_.size());
-
-    // Net-Override falls Kontakt einem bekannten Net angehört.
-    const Contact* c = contact_store_.find(target_addr);
-    if (c) {
-        for (const auto& net_name : c->net_members) {
-            if (const Net* net = net_store_.find(net_name)) {
-                n = net_scan_channel_count(*net, calling_channels_);
-                emit_status("Net '" + net_name + "': scanning call sized for "
-                            + std::to_string(n) + " channel(s)");
-                break;
-            }
-        }
-    }
-
-    sm_.set_target_scan_channels(n);
-    emit_status("Scanning call: C=" + std::to_string(n) + " channel(s)");
-}
 
 LQACmdPayload ALEController::compute_lqa_payload(uint32_t freq_hz) const {
     LQACmdPayload p{};  // sentinels: sinad=31, ber=31, mp=7
@@ -522,8 +520,12 @@ LQACmdPayload ALEController::compute_lqa_payload(uint32_t freq_hz) const {
         const float s = e->sinad_db;
         p.sinad = (s <= 0.0f) ? 0u : (s >= 30.0f) ? 30u : static_cast<uint8_t>(s + 0.5f);
     }
-    if (e->ber > 0.0f) {
-        const auto ber_score = static_cast<uint8_t>(std::min(48.0f, e->ber * 50.0f));
+    if (e->total_words > 0) {
+        // ber is stored as averaged non-unanimous vote count (0.0–48.0, A.5.4.1.1).
+        // total_words>0 means a real measurement exists, so BER=0 is a valid
+        // result (code 0 = best) and must be reported — not the 31 "no value"
+        // sentinel (A.5.4.2.1 / Table A-XIII).
+        const auto ber_score = static_cast<uint8_t>(std::min(48.0f, std::max(0.0f, e->ber)));
         p.ber = ber_score_to_lqa_code(ber_score);
     }
     if (e->multipath_score > 0.0f) {
@@ -534,6 +536,8 @@ LQACmdPayload ALEController::compute_lqa_payload(uint32_t freq_hz) const {
 
 bool ALEController::initiate_call(const std::string& target_addr)
 {
+    // TODO A.5.4.5.2: when one-way broadcast mode is added, call
+    // rank_channels_for_station(target, SelectionMode::BROADCAST) here.
     if (!is_valid_ale_address(target_addr)) {
         emit_status("ERROR: address '" + target_addr
                     + "' invalid — must be 3–15 Basic-38 characters (A-Z, 0-9, @, ?)");
@@ -558,13 +562,18 @@ bool ALEController::initiate_call(const std::string& target_addr)
         std::vector<Channel> ordered = calling_channels_;
         std::stable_sort(ordered.begin(), ordered.end(),
             [&](const Channel& a, const Channel& b) {
-                if (has_station_data) {
-                    return score_for(a.rx_frequency_hz) > score_for(b.rx_frequency_hz);
-                }
-                float sa = lqa_analyzer_.compute_channel_aggregate_score(a.rx_frequency_hz);
-                float sb = lqa_analyzer_.compute_channel_aggregate_score(b.rx_frequency_hz);
-                if (sa > 0.0f || sb > 0.0f) return sa > sb;
-                return false;
+                const float sa = score_for(a.rx_frequency_hz);
+                const float sb = score_for(b.rx_frequency_hz);
+                // Tier 1: both have station-specific bilateral data
+                if (sa >= 0.0f && sb >= 0.0f) return sa > sb;
+                // Tier 2: only one has station-specific data — that one goes first
+                if (sa >= 0.0f) return true;
+                if (sb >= 0.0f) return false;
+                // Tier 3: neither has station data — fall back to aggregate sounding scores
+                const float agg_a = lqa_analyzer_.compute_channel_aggregate_score(a.rx_frequency_hz);
+                const float agg_b = lqa_analyzer_.compute_channel_aggregate_score(b.rx_frequency_hz);
+                if (agg_a > 0.0f || agg_b > 0.0f) return agg_a > agg_b;
+                return false;  // no LQA at all: preserve original order (A.5.4 fallback)
             });
         sm_.set_calling_channels(ordered);
         first_call_freq_hz = ordered.front().rx_frequency_hz;
@@ -574,7 +583,8 @@ bool ALEController::initiate_call(const std::string& target_addr)
         }
     }
 
-    apply_target_scan_channels_for(target_addr);
+    sm_.set_target_scan_channels(config_.assumed_scan_channels);
+    emit_status("Scanning call: C=" + std::to_string(config_.assumed_scan_channels) + " channel(s)");
 
     // Block A4 — Queue CMD LQA (KA1=1) for the calling station's frame.
     // Gated on lqa_exchange_enabled; channel ranking above is always active.
@@ -603,7 +613,7 @@ bool ALEController::initiate_single_channel_call(const std::string& target_addr)
     }
     Channel cur = get_current_channel();
     sm_.set_calling_channels({ cur });
-    sm_.set_target_scan_channels(1);
+    sm_.set_target_scan_channels(config_.assumed_scan_channels);
     sent_ka1_ = false;
     last_call_target_.clear();
     last_call_freq_hz_ = 0;
@@ -630,8 +640,8 @@ bool ALEController::initiate_group_call(const std::vector<std::string>& members)
         }
     }
 
-    // First-member-only simplification — see header doc.
-    apply_target_scan_channels_for(members.front());
+    sm_.set_target_scan_channels(config_.assumed_scan_channels);
+    emit_status("Scanning call: C=" + std::to_string(config_.assumed_scan_channels) + " channel(s)");
 
     emit_status("Initiating group call (" + std::to_string(members.size()) + " members)");
     return sm_.initiate_group_call(members);
@@ -742,6 +752,43 @@ void ALEController::update(uint32_t now_ms)
         commit_sounding_sample();
     }
 
+    // Commit a settled non-sounding RX frame's averaged BER/SNR (A.5.4.1.1) to
+    // the LQA DB for the measured peer + channel. Same Tdrw-silence frame-end
+    // detection as the sounding path above.
+    if (rx_ber_acc_.word_count() > 0 && rx_ber_settle_ms_ > 0
+        && (now_ms - rx_ber_settle_ms_) >= ALETimingConstants::Tdrw_ms) {
+        commit_rx_ber_sample();
+    }
+
+    // Auto-Relink / Enhanced Frequency-Select: evaluate channel renegotiation.
+    // Only while LINKED, LQA enabled, no relink already pending, and EFS IDLE.
+    if ((config_.relink_enabled || config_.enhanced_freq_select)
+        && op_params_.lqa_enabled
+        && sm_.get_state() == ALEState::LINKED
+        && pending_relink_addr_.empty()
+        && fs_phase_ == FreqSelectPhase::IDLE) {
+        config_.enhanced_freq_select
+            ? evaluate_freq_proposal(now_ms)
+            : evaluate_relink(now_ms);
+    }
+
+    // EFS: proposal timeout — no response → stay on current channel.
+    if (fs_phase_ == FreqSelectPhase::PROPOSED && now_ms > fs_timeout_ms_) {
+        fs_phase_ = FreqSelectPhase::IDLE;
+        emit_status("EFS: no response from peer — staying on current channel");
+    }
+
+    // Auto-Relink: after TWAS completes and SM is back to IDLE/SCANNING,
+    // re-initiate the call to pending_relink_addr_ on the now-best channel.
+    if (!pending_relink_addr_.empty()) {
+        const ALEState st = sm_.get_state();
+        if (st == ALEState::IDLE || st == ALEState::SCANNING) {
+            std::string addr = std::move(pending_relink_addr_);
+            pending_relink_addr_.clear();
+            initiate_call(addr);
+        }
+    }
+
     // Periodic multi-channel sounding sweep (set_automatic_sounding). Start a
     // sweep over the configured net's channels every interval, gated on IDLE/
     // SCANNING. A running sweep holds the SM in SOUNDING, which blocks re-entry.
@@ -811,7 +858,7 @@ void ALEController::maybe_emit_call_alert()
 
     // Block A5 — store bilateral SINAD/BER/MP received from caller's CMD 'a'.
     if (config_.lqa_exchange_enabled && pending_bilateral_valid_) {
-        if (!caller.empty()) {
+        if (!caller.empty() && !self_address_store_.matches_self(caller)) {
             const auto& bp = pending_bilateral_payload_;
             lqa_database_.update_bilateral(pending_bilateral_freq_hz_, caller,
                                             bp.sinad, bp.ber, bp.mp, 0u);
@@ -830,9 +877,12 @@ void ALEController::maybe_emit_call_alert()
                         r.age   = lqa_age_code(e.last_contact_ms, now);
                         r.sinad = (e.sinad_db > 0.0f)
                             ? static_cast<uint8_t>(std::min(30.0f, e.sinad_db)) : kSinadLqaNoValue;
-                        r.ber   = (e.ber > 0.0f)
+                        // ber stored as averaged non-unanimous vote count (0.0–48.0);
+                        // total_words>0 → real measurement, so BER=0 reports as code 0
+                        // (not the 31 "no value" sentinel) per A.5.4.2.1 / Table A-XIII.
+                        r.ber   = (e.total_words > 0)
                             ? ber_score_to_lqa_code(
-                                  static_cast<uint8_t>(std::min(48.0f, e.ber * 50.0f)))
+                                  static_cast<uint8_t>(std::min(48.0f, std::max(0.0f, e.ber))))
                             : kBerLqaNoValue;
                         r.mp    = multipath_delay_to_lqa_code(e.multipath_score * 6.0f);
                         reports.push_back(r);
@@ -861,15 +911,198 @@ void ALEController::commit_sounding_sample()
         sounding_caller_acc_.clear();
         return;
     }
-    const float avg_snr = sounding_snr_sum_ / static_cast<float>(sounding_word_count_);
-    const float avg_ber = sounding_ber_sum_ / static_cast<float>(sounding_word_count_);
+    // MIL-STD Fig. A-27: LQA matrix is remote-stations only — never store own address.
+    if (self_address_store_.matches_self(sounding_caller_acc_)) {
+        sounding_caller_acc_.clear();
+        sounding_settle_ms_  = 0;
+        sounding_word_count_ = 0;
+        sounding_snr_sum_    = 0.0f;
+        sounding_ber_sum_    = 0.0f;
+        sounding_sinad_sum_  = 0.0f;
+        return;
+    }
+    const float n        = static_cast<float>(sounding_word_count_);
+    const float avg_snr  = sounding_snr_sum_  / n;
+    const float avg_ber  = sounding_ber_sum_  / n;
+    const float avg_sinad = sounding_sinad_sum_ / n;
     lqa_analyzer_.process_sounding(sounding_caller_acc_, sounding_freq_hz_,
-                                   avg_snr, avg_ber);
+                                   avg_snr, avg_ber, avg_sinad);
     sounding_caller_acc_.clear();
     sounding_settle_ms_  = 0;
     sounding_word_count_ = 0;
     sounding_snr_sum_    = 0.0f;
     sounding_ber_sum_    = 0.0f;
+    sounding_sinad_sum_  = 0.0f;
+}
+
+void ALEController::commit_rx_ber_sample()
+{
+    const uint32_t words = rx_ber_acc_.word_count();
+    if (words == 0) {
+        rx_ber_acc_.reset();
+        rx_ber_snr_sum_   = 0.0f;
+        rx_ber_sinad_sum_ = 0.0f;
+        rx_ber_settle_ms_ = 0;
+        return;
+    }
+
+    // Resolve the station that sent the measured transmission (the peer): the
+    // station we called (to_address) when we initiated, else the caller
+    // (caller_address) when we were called — same rule as the LQA-report path.
+    // get_to_address()/get_caller_address() already return cleaned addresses.
+    const std::string sender = !sm_.get_to_address().empty()
+        ? sm_.get_to_address() : sm_.get_caller_address();
+
+    // Skip when no peer is known yet or the address is our own (Fig. A-27: the
+    // LQA matrix records remote stations only).
+    if (!sender.empty() && !self_address_store_.matches_self(sender)) {
+        const float n        = static_cast<float>(words);
+        const float avg_ber  = static_cast<float>(rx_ber_acc_.ber_score());
+        const float avg_snr  = rx_ber_snr_sum_  / n;
+        const float avg_sinad = rx_ber_sinad_sum_ / n;
+        // A.5.4.1.2: write measured SINAD via update_entry_extended.
+        lqa_database_.update_entry_extended(rx_ber_freq_hz_, sender,
+                                             avg_snr, avg_ber, avg_sinad,
+                                             0.0f, -120.0f, 0,
+                                             static_cast<int>(words), 0);
+        if (debug_rx_)
+            emit_status("LQA BER: " + sender + " ch=" + std::to_string(rx_ber_freq_hz_)
+                        + " ber=" + std::to_string(static_cast<int>(avg_ber))
+                        + " sinad=" + std::to_string(static_cast<int>(avg_sinad))
+                        + " (" + std::to_string(words) + " words)");
+    }
+
+    rx_ber_acc_.reset();
+    rx_ber_snr_sum_   = 0.0f;
+    rx_ber_sinad_sum_ = 0.0f;
+    rx_ber_settle_ms_ = 0;
+}
+
+void ALEController::evaluate_relink(uint32_t now_ms) {
+    // Hysteresis guard: require at least 4×Tdrw of stable data before evaluating.
+    if (rx_ber_settle_ms_ == 0
+        || (now_ms - rx_ber_settle_ms_) < ALETimingConstants::Tdrw_ms * 4u)
+        return;
+
+    const std::string peer = !sm_.get_to_address().empty()
+        ? sm_.get_to_address() : sm_.get_caller_address();
+    if (peer.empty() || self_address_store_.matches_self(peer)) return;
+
+    const Channel* ch = sm_.get_current_channel();
+    if (!ch || ch->rx_frequency_hz == 0) return;
+
+    // Score of the currently active channel for this peer.
+    const auto ranked = lqa_analyzer_.rank_channels_for_station(peer);
+    if (ranked.empty()) return;
+
+    float cur_score = 0.0f;
+    for (const auto& r : ranked)
+        if (r.frequency_hz == ch->rx_frequency_hz) { cur_score = r.score; break; }
+
+    const float best_score = ranked.front().score;
+    const uint32_t best_freq = ranked.front().frequency_hz;
+
+    if (best_freq != ch->rx_frequency_hz
+        && best_score > cur_score + config_.relink_improvement_threshold) {
+        emit_status("Auto-relink: ch " + std::to_string(best_freq)
+                    + " Hz score " + std::to_string(static_cast<int>(best_score))
+                    + " > cur " + std::to_string(static_cast<int>(cur_score))
+                    + " + " + std::to_string(static_cast<int>(config_.relink_improvement_threshold)));
+        pending_relink_addr_ = peer;
+        sm_.terminate_link();
+    }
+}
+
+void ALEController::evaluate_freq_proposal(uint32_t now_ms) {
+    if (rx_ber_settle_ms_ == 0
+        || (now_ms - rx_ber_settle_ms_) < ALETimingConstants::Tdrw_ms * 4u)
+        return;
+    if (fs_cooldown_ms_ > 0 && now_ms < fs_cooldown_ms_) return;
+
+    const std::string peer = !sm_.get_to_address().empty()
+        ? sm_.get_to_address() : sm_.get_caller_address();
+    if (peer.empty() || self_address_store_.matches_self(peer)) return;
+
+    const Channel* ch = sm_.get_current_channel();
+    if (!ch || ch->rx_frequency_hz == 0) return;
+
+    const auto ranked = lqa_analyzer_.rank_channels_for_station(peer);
+    if (ranked.empty()) return;
+
+    float cur_score = 0.0f;
+    for (const auto& r : ranked)
+        if (r.frequency_hz == ch->rx_frequency_hz) { cur_score = r.score; break; }
+
+    const float best_score = ranked.front().score;
+    const uint32_t best_hz = ranked.front().frequency_hz;
+
+    if (best_hz != ch->rx_frequency_hz
+        && best_score > cur_score + config_.relink_improvement_threshold) {
+        fs_peer_        = peer;
+        fs_proposed_hz_ = best_hz;
+        fs_phase_       = FreqSelectPhase::PROPOSED;
+        fs_timeout_ms_  = now_ms + 3000u;
+        emit_status("EFS: proposing " + std::to_string(best_hz / 1000u) + " kHz to " + peer
+                    + " (score " + std::to_string(static_cast<int>(best_score))
+                    + " > cur " + std::to_string(static_cast<int>(cur_score)) + ")");
+        send_freq_select_orderwire(best_hz);
+    }
+}
+
+void ALEController::handle_freq_select_response(uint32_t freq_hz, uint32_t now_ms) {
+    if (fs_phase_ != FreqSelectPhase::PROPOSED) return;
+    if (freq_hz > 0 && freq_hz == fs_proposed_hz_) {
+        // Accept — coordinated TWAS + re-call on freq_hz (via pending_relink_addr_)
+        fs_phase_            = FreqSelectPhase::EXECUTING;
+        pending_relink_addr_ = fs_peer_;
+        emit_status("EFS: peer accepted " + std::to_string(freq_hz / 1000u) + " kHz — relinking");
+        sm_.terminate_link();
+    } else if (freq_hz == 0) {
+        // Reject — stay on current channel, apply cooldown
+        fs_phase_       = FreqSelectPhase::IDLE;
+        fs_cooldown_ms_ = now_ms + 60000u;
+        emit_status("EFS: rejected by peer — staying on current channel");
+    }
+    // Other freq_hz values: unexpected — ignore (peer may have sent own proposal after our collision)
+}
+
+void ALEController::handle_freq_select_proposal(uint32_t freq_hz, const std::string& peer, uint32_t now_ms) {
+    if (freq_hz == 0) return;
+    const Channel* ch = sm_.get_current_channel();
+    if (!ch || ch->rx_frequency_hz == 0 || peer.empty()) return;
+
+    // Collision: both stations proposed simultaneously — lexicographically lower address defers
+    if (fs_phase_ == FreqSelectPhase::PROPOSED) {
+        const std::string self = get_primary_self_address();
+        if (self < fs_peer_) {
+            // We defer — discard our own proposal, evaluate peer's proposal instead
+            fs_phase_       = FreqSelectPhase::IDLE;
+            fs_proposed_hz_ = 0;
+        } else {
+            return;  // We take priority; peer should defer
+        }
+    }
+
+    const auto ranked = lqa_analyzer_.rank_channels_for_station(peer);
+    float cur_score = 0.0f, proposed_score = 0.0f;
+    for (const auto& r : ranked) {
+        if (r.frequency_hz == ch->rx_frequency_hz) cur_score      = r.score;
+        if (r.frequency_hz == freq_hz)             proposed_score = r.score;
+    }
+
+    if (proposed_score > cur_score + config_.relink_improvement_threshold) {
+        emit_status("EFS: accepting proposal for " + std::to_string(freq_hz / 1000u) + " kHz");
+        send_freq_select_orderwire(freq_hz);  // echo-accept
+    } else {
+        emit_status("EFS: rejecting proposal for " + std::to_string(freq_hz / 1000u) + " kHz");
+        send_freq_select_orderwire(0u);       // reject
+    }
+
+    (void)now_ms;  // reserved for future cooldown on outbound rejections
+}
+
+void ALEController::send_freq_select_orderwire(uint32_t freq_hz) {
+    sm_.trigger_linked_orderwire(build_freq_select_sequence(freq_hz));
 }
 
 void ALEController::feed_audio(const int16_t* samples, uint32_t count)
@@ -982,7 +1215,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // Block A5 — SAM side: if JOE sent CMD 'a' in the response frame, store it.
             if (config_.lqa_exchange_enabled && pending_bilateral_valid_) {
                 const std::string peer = sm_.get_to_address();
-                if (!peer.empty()) {
+                if (!peer.empty() && !self_address_store_.matches_self(peer)) {
                     const auto& bp = pending_bilateral_payload_;
                     lqa_database_.update_bilateral(pending_bilateral_freq_hz_, peer,
                                                    bp.sinad, bp.ber, bp.mp, 0u);
@@ -1039,6 +1272,13 @@ void ALEController::on_operator_event(OperatorEvent ev)
             commit_sounding_sample();
             if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
                 lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
+            // A.5.4.5.1: all tried channels failed → record handshake failure so
+            // rank_channels_for_station() can deprioritise them for the next attempt.
+            if (!last_call_target_.empty()) {
+                for (const auto& ch : calling_channels_)
+                    lqa_database_.record_handshake_fail(ch.rx_frequency_hz,
+                                                        last_call_target_, now_ms_);
+            }
             sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
             emit_status("No reply — all calling channels exhausted");
             if (on_link_terminated) on_link_terminated("No reply");
@@ -1134,13 +1374,16 @@ void ALEController::on_received_word(const ALEWord& word)
         // ── Block A5 — CMD LQA (char 'a') bilateral RX ───────────────────────
         // Captures in HANDSHAKE/WAIT_CYCLE_END (JOE receiving SAM's CMD 'a')
         // and in CALLING/LISTENING (SAM receiving JOE's CMD 'a' in the response).
+        // cmd_char_code() reads raw_payload bits directly: CMD 'a'=0x61 is in the
+        // b7b6="11" range and fails Basic38/Expanded64 validation, so address[0]
+        // is '?' for received words; raw_payload is always correct.
         {
             const ALEState  cur_st = sm_.get_state();
             const bool in_hs_wce  = (cur_st == ALEState::HANDSHAKE
                                       && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END);
             const bool in_ca_lst  = (cur_st == ALEState::CALLING
                                       && sm_.get_calling_phase() == CallingPhase::LISTENING);
-            if (word.type == PreambleType::CMD && word.address[0] == 'a'
+            if (word.type == PreambleType::CMD && cmd_char_code(word) == 'a'
                     && (in_hs_wce || in_ca_lst)) {
                 const Channel* ch = sm_.get_current_channel();
                 if (ch && ch->rx_frequency_hz > 0) {
@@ -1152,7 +1395,7 @@ void ALEController::on_received_word(const ALEWord& word)
         }
 
         // ── Block B4 — CMD NOISE (char 'n') RX ───────────────────────────────
-        if (word.type == PreambleType::CMD && word.address[0] == 'n') {
+        if (word.type == PreambleType::CMD && cmd_char_code(word) == 'n') {
             if (const Channel* ch = sm_.get_current_channel()) {
                 const uint8_t max_db  = (word.raw_payload >> 7) & 0x7Fu;
                 const uint8_t mean_db =  word.raw_payload       & 0x7Fu;
@@ -1162,7 +1405,7 @@ void ALEController::on_received_word(const ALEWord& word)
         }
 
         // ── Block C5 RX — LQA Report (CMD 'r' header + DATA payloads) ────────
-        if (word.type == PreambleType::CMD && word.address[0] == 'r') {
+        if (word.type == PreambleType::CMD && cmd_char_code(word) == 'r') {
             lqa_report_decoder_.start(word.raw_payload);
         }
         if (lqa_report_decoder_.active() && word.type == PreambleType::DATA) {
@@ -1171,7 +1414,7 @@ void ALEController::on_received_word(const ALEWord& word)
                 const std::string sender = !sm_.get_to_address().empty()
                     ? sm_.get_to_address()
                     : sm_.get_caller_address();
-                if (!sender.empty()) {
+                if (!sender.empty() && !self_address_store_.matches_self(sender)) {
                     for (const auto& r : lqa_report_decoder_.reports())
                         lqa_database_.update_bilateral(r.frequency_hz, sender,
                                                        r.sinad, r.ber, r.mp, 0u);
@@ -1183,6 +1426,31 @@ void ALEController::on_received_word(const ALEWord& word)
         }
     }
 
+    // ── EFS: CMD 'f' + DATA 2-word sequence capture (A.5.6.3.2) ─────────────
+    // Only active while LINKED and enhanced_freq_select enabled.
+    // CMD 'f' char code = 0x66 (b7b6="11" range — not in Basic38/Expanded64;
+    // detected via raw_payload bits, not word.address[0]).
+    if (config_.enhanced_freq_select && sm_.get_state() == ALEState::LINKED) {
+        if (word.type == PreambleType::CMD && cmd_char_code(word) == 'f') {
+            fs_pending_cmd_rx_ = true;
+        } else if (fs_pending_cmd_rx_) {
+            fs_pending_cmd_rx_ = false;
+            if (word.type == PreambleType::DATA) {
+                const uint32_t freq_hz = decode_freq_data_word(word.raw_payload);
+                const std::string peer = !sm_.get_to_address().empty()
+                    ? sm_.get_to_address() : sm_.get_caller_address();
+                if (fs_phase_ == FreqSelectPhase::PROPOSED) {
+                    handle_freq_select_response(freq_hz, now_ms_);
+                } else if (!peer.empty() && !self_address_store_.matches_self(peer)) {
+                    handle_freq_select_proposal(freq_hz, peer, now_ms_);
+                }
+            }
+            // Non-DATA word after CMD 'f': ignore (robustness)
+        }
+    } else if (!config_.enhanced_freq_select) {
+        fs_pending_cmd_rx_ = false;
+    }
+
     // LQA sounding: accumulate a foreign sounding frame (TIS + DATA/REP
     // extension words) received while listening. A sounding is the sender's
     // self-address conclusion (§A.5.3.1), so a >3-char self address arrives as
@@ -1190,36 +1458,71 @@ void ALEController::on_received_word(const ALEWord& word)
     // behaviour) truncated the address to 3 chars in the LQA DB. The full
     // address is committed once the frame settles (Tdrw of silence after the
     // last word) — see commit_sounding_sample(), driven from update().
-    // unanimous_votes (0-48) and fec_errors proxy for SNR and BER; averaged
-    // across the frame's words per A.5.4.1.1 ("linear average BER/LQA").
-    if (word.valid && (sm_.get_state() == ALEState::SCANNING
-                       || sm_.get_state() == ALEState::IDLE)) {
-        const bool is_tis  = (word.type == PreambleType::TIS);
-        const bool is_ext  = (word.type == PreambleType::DATA
-                              || word.type == PreambleType::REP);
-        if (is_tis || (is_ext && !sounding_caller_acc_.empty())) {
-            const Channel* ch = sm_.get_current_channel();
-            if (ch && ch->rx_frequency_hz > 0) {
-                constexpr float kMaxVotes = 48.0f;
-                const float snr_db = (word.unanimous_votes / kMaxVotes) * 31.0f;
-                const float ber    = (word.fec_errors > 0)
-                                     ? static_cast<float>(word.fec_errors) / 50.0f
-                                     : 0.0f;
-                // A new TIS (re)starts the frame — the conclusion is sent twice
-                // (Trs redundancy), so the last copy's TIS+ext wins.
-                if (is_tis) {
-                    sounding_caller_acc_  = trim_ale_address(word.address);
-                    sounding_freq_hz_     = ch->rx_frequency_hz;
-                    sounding_word_count_  = 1;
-                    sounding_snr_sum_     = snr_db;
-                    sounding_ber_sum_     = ber;
-                } else {
-                    sounding_caller_acc_ += trim_ale_address(word.address);
-                    sounding_word_count_ += 1;
-                    sounding_snr_sum_    += snr_db;
-                    sounding_ber_sum_    += ber;
+    //
+    // BER (A.5.4.1.1): averaged non-unanimous 2/3-vote count across all words.
+    // non_unanimous = 48 - unanimous_votes for correctable words; 48 for
+    // Golay-uncorrectable words. SNR is mapped from unanimous_votes. The whole
+    // FROM-direction measurement is gated on lqa_enabled (OperatingParameters).
+    if (op_params_.lqa_enabled) {
+        const ALEState cur_st = sm_.get_state();
+        if (cur_st == ALEState::SCANNING || cur_st == ALEState::IDLE) {
+            const bool is_tis  = word.valid && (word.type == PreambleType::TIS);
+            const bool is_ext  = word.valid && (word.type == PreambleType::DATA
+                                                || word.type == PreambleType::REP);
+            const bool is_uncorr = word.golay_uncorrectable && !sounding_caller_acc_.empty();
+
+            if (is_tis || (is_ext && !sounding_caller_acc_.empty()) || is_uncorr) {
+                const Channel* ch = sm_.get_current_channel();
+                if (ch && ch->rx_frequency_hz > 0) {
+                    // A.5.4.1.1: non_unanimous votes = 48 − unanimous_votes for
+                    // correctable words; uncorrectable half(s) → contribute 48.
+                    constexpr float kMaxVotes = 48.0f;
+                    const float snr_db = word.valid
+                        ? (word.unanimous_votes / kMaxVotes) * 31.0f : 0.0f;
+                    const float ber = word.golay_uncorrectable
+                        ? 48.0f
+                        : static_cast<float>(48u - word.unanimous_votes);
+
+                    if (is_tis) {
+                        // A new TIS restarts the frame (Trs redundancy: last copy wins).
+                        sounding_caller_acc_  = trim_ale_address(word.address);
+                        sounding_freq_hz_     = ch->rx_frequency_hz;
+                        sounding_word_count_  = 1;
+                        sounding_snr_sum_     = snr_db;
+                        sounding_ber_sum_     = ber;
+                        sounding_sinad_sum_   = word.sinad_db;
+                    } else {
+                        if (is_ext)
+                            sounding_caller_acc_ += trim_ale_address(word.address);
+                        sounding_word_count_ += 1;
+                        sounding_snr_sum_    += snr_db;
+                        sounding_ber_sum_    += ber;
+                        sounding_sinad_sum_  += word.sinad_db;
+                    }
+                    sounding_settle_ms_ = now_ms_;
                 }
-                sounding_settle_ms_ = now_ms_;  // controller clock — same as the commit check in update()
+            }
+        } else {
+            // ── Non-sounding transmission (handshake / linked frame) ──────────
+            // A.5.4.1.1: BER must be measured for EVERY received word after word
+            // sync — correctable words contribute their non-unanimous count (0–48);
+            // Golay-uncorrectable words contribute the max value 48.
+            // unanimous_votes is populated by the majority-voter for both word
+            // types and used as the SNR proxy in both cases.
+            if (word.valid || word.golay_uncorrectable) {
+                const Channel* ch = sm_.get_current_channel();
+                if (ch && ch->rx_frequency_hz > 0) {
+                    constexpr float kMaxVotes = 48.0f;
+                    const uint8_t non_unanimous = word.golay_uncorrectable
+                        ? 48u
+                        : (word.unanimous_votes <= 48u
+                           ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
+                    rx_ber_acc_.add_word(non_unanimous, word.golay_uncorrectable);
+                    rx_ber_snr_sum_   += (word.unanimous_votes / kMaxVotes) * 31.0f;
+                    rx_ber_sinad_sum_ += word.sinad_db;
+                    rx_ber_freq_hz_    = ch->rx_frequency_hz;
+                    rx_ber_settle_ms_  = now_ms_;
+                }
             }
         }
     }
@@ -1274,6 +1577,11 @@ bool ALEController::load_lqa(const std::string& path)
 bool ALEController::save_lqa(const std::string& path) const
 {
     return lqa_database_.save_to_file(path);
+}
+
+void ALEController::clear_lqa()
+{
+    lqa_database_.clear();
 }
 
 void ALEController::enable_automatic_sounding(bool on)
@@ -1401,8 +1709,12 @@ ALEController::SignalQuality ALEController::get_current_signal_quality() const
         const std::string peer = !sm_.get_to_address().empty()
             ? sm_.get_to_address() : sm_.get_caller_address();
         if (auto e = lqa_database_.get_entry(ch->rx_frequency_hz, peer)) {
-            q.sinad_db     = e->sinad_db;
+            // Prefer measured Goertzel SINAD; fall back to votes-based SNR
+            // approximation when no SINAD has been measured yet (A.5.4.1.4).
+            q.sinad_db     = e->sinad_db > 0.0f ? e->sinad_db : last_snr_db_;
             q.multipath_ms = e->multipath_score;  // severity 0-1, not a measured delay
+        } else {
+            q.sinad_db = last_snr_db_;
         }
     }
     return q;
@@ -1460,6 +1772,9 @@ bool ALEController::export_settings(const std::string& path)
     f << "sounding_interval_sec=" << config_.sounding_interval_sec << "\n";
     f << "link_idle_timeout_sec=" << config_.link_idle_timeout_sec << "\n";
     f << "max_tune_time_ms=" << config_.max_tune_time_ms << "\n";
+    f << "relink_enabled=" << (config_.relink_enabled ? 1 : 0) << "\n";
+    f << "relink_improvement_threshold=" << config_.relink_improvement_threshold << "\n";
+    f << "enhanced_freq_select=" << (config_.enhanced_freq_select ? 1 : 0) << "\n";
     return f.good();
 }
 
@@ -1505,6 +1820,12 @@ bool ALEController::import_settings(const std::string& path)
             cfg.link_idle_timeout_sec = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "max_tune_time_ms") {
             cfg.max_tune_time_ms = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "relink_enabled") {
+            cfg.relink_enabled = (val == "1");
+        } else if (key == "relink_improvement_threshold") {
+            cfg.relink_improvement_threshold = std::stof(val);
+        } else if (key == "enhanced_freq_select") {
+            cfg.enhanced_freq_select = (val == "1");
         }
     }
     apply_config(cfg);

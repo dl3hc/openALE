@@ -21,6 +21,7 @@ struct WordEvent {
         DATA_EXTENSION,   ///< DATA/REP nach TIS → mehrteilige Adresse
         TWAS_REJECTION,   ///< TWAS nicht an uns → Rufablehnung
         CHANNEL_BUSY,     ///< Gültiges Wort während LBT-Phase
+        ALLCALL,          ///< AllCall (A.5.5.4.4): TO an Wildcard-Adresse @?@ / @A@
     };
     Type        type    = Type::NONE;
     std::string address; ///< Bereinigtes Adressfeld (trim_ale_address)

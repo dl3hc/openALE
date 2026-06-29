@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <vector>
 #include <cstring>
+#include <thread>
 #ifdef _MSC_VER
 #pragma warning(disable: 4996)  // strncpy: safe usage with fixed-size ALE address fields
 #endif
@@ -1206,6 +1207,668 @@ bool test_return_to_origin_ac_gen_009_003() {
 }
 
 // ============================================================================
+// TEST 14: SENDING_RESPONSE must drain ALL queued words (incl. inserted LQA /
+//         LQA-report words) before advancing to WAIT_ACK.
+//
+// Regression guard for the words_pending desync: build_response_words() inserts
+// CMD-LQA + LQA-report words between the TO×2 prefix and the TIS conclusion,
+// but on_word_complete() used to compute the completion threshold from an
+// independent AddressEncoder::encode() count that ignored those insertions.
+// The phase advanced to WAIT_ACK before the inserted words' completions fired,
+// leaving words_pending > 0 permanently — so a later terminate_link() never
+// reached words_pending == 0 and the SM hung in LINKED with RX disabled.
+// ============================================================================
+bool test_sending_response_drains_all_words() {
+    std::cout << "\n[TEST 14] SENDING_RESPONSE drains all queued words (LQA insertion)\n";
+    std::cout << "===================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("JOE");                 // responder
+    sm.set_target_scan_channels(1);
+    // Record transmitted words so the test can drain exactly the real armed
+    // frame-completion count (one on_word_complete per transmitted word) — this
+    // models reality, where no "extra" completions ever fire.
+    std::vector<ALEWord> sent;
+    sm.set_transmit_callback([&](const ALEWord& w){ sent.push_back(w); });
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_channel_callback([](const Channel&){});
+    sm.set_rx_enabled_callback([](bool){});
+    sm.set_operator_callback([](OperatorEvent){});
+
+    // Arm the bug: a pending CMD-LQA word forces build_response_words() into the
+    // LQA-insertion branch (TO×2 + CMD 'a' + TIS), transmitting 4 words while the
+    // old resp_slots count expected only 3.
+    sm.set_pending_lqa_cmd(0u);
+
+    sm.process_event(ALEEvent::START_SCAN);    // → SCANNING
+
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;   // 392
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;   // 784
+    const char joe3[3] = {'J','O','E'};
+    const char sam3[3] = {'S','A','M'};
+    uint32_t t = 1000u;
+
+    // Caller SAM calls JOE: scanning TO×2 + leading TO×2 + conclusion TIS SAM.
+    auto rx = [&](PreambleType ty, const char a3[3]) {
+        sm.update(t);
+        sm.process_received_word(WordParser::make_word(ty, a3));
+        t += Trw;
+    };
+    rx(PreambleType::TO,  joe3);   // SCANNING → HANDSHAKE (CALL_DETECTED)
+    rx(PreambleType::TO,  joe3);   // WAIT_CYCLE_END (re-anchor silence)
+    rx(PreambleType::TO,  joe3);   // leading ×2
+    rx(PreambleType::TO,  joe3);
+    rx(PreambleType::TIS, sam3);   // conclusion → hs_conclusion_rcvd, caller_address=SAM
+
+    check(sm.get_state() == ALEState::HANDSHAKE, "Reached HANDSHAKE");
+    check(sm.is_hs_conclusion_rcvd(), "Caller conclusion (TIS SAM) received");
+
+    // Absolute timeline (rx used t=1000..2568; TIS SAM was processed at 2568):
+    //   tis_t      = 2568  → hs_tlww_start_ms anchored here
+    //   settle_t   = tis_t + Tdrw = 3352  → SLOT_WAIT
+    //   3353       → CHANNEL_CHECK (hs_lbt_start_ms = 3353)
+    //   4137       → CHANNEL_CHECK LBT clear → SENDING_RESPONSE + build_response_words
+    const uint32_t tis_t    = 1000u + 4u * Trw;   // 2568
+    const uint32_t settle_t = tis_t + Tdrw;       // 3352
+    sm.update(settle_t);                          // WAIT_CYCLE_END settle → SLOT_WAIT
+    sm.update(settle_t + 1);                      // SLOT_WAIT (0 ms) → CHANNEL_CHECK
+    sm.update(settle_t + 1 + Tdrw);               // CHANNEL_CHECK LBT clear → SENDING_RESPONSE
+
+    check(sm.get_handshake_phase() == HandshakePhase::SENDING_RESPONSE,
+          "Reached SENDING_RESPONSE");
+
+    // Count words actually handed to transmit_callback (= words_pending).
+    const uint32_t wp_after_build = sm.get_words_pending();
+    std::cout << "  words_pending after build_response_words = " << wp_after_build << "\n";
+    check(wp_after_build == 4, "4 words queued (TO×2 + CMD 'a' + TIS)");
+    check(static_cast<uint32_t>(sent.size()) == 4, "transmit_callback saw 4 words");
+
+    // Drain exactly the queued words via on_word_complete (one per rendered frame).
+    for (uint32_t i = 0; i < wp_after_build; ++i)
+        sm.on_word_complete();
+
+    // ROOT-CAUSE assertion: every queued word must have been consumed; none leaked.
+    check(sm.get_words_pending() == 0,
+          "words_pending == 0 after SENDING_RESPONSE (no LQA word leaked)");
+    check(sm.get_handshake_phase() == HandshakePhase::WAIT_ACK,
+          "Advanced to WAIT_ACK only after full drain");
+
+    // Complete the handshake: feed SAM's ACK (TO JOE ×2 + TIS SAM) + Tdrw settle.
+    // WAIT_ACK (1) window is ~2091 ms from hs_ack_start_ms (= 4137); stay inside it.
+    const uint32_t ack0 = settle_t + 1 + Tdrw + 500;   // 4637 — first ACK word
+    sm.update(ack0);                  sm.process_received_word(WordParser::make_word(PreambleType::TO,  joe3));
+    sm.update(ack0 + Trw);           sm.process_received_word(WordParser::make_word(PreambleType::TO,  joe3));
+    sm.update(ack0 + 2 * Trw);       sm.process_received_word(WordParser::make_word(PreambleType::TIS, sam3));
+    sm.update(ack0 + 2 * Trw + Tdrw); // ACK conclusion settle → LINKED
+
+    check(sm.get_state() == ALEState::LINKED, "Reached LINKED");
+
+    // END-TO-END assertion: terminate_link() must complete (LINK_TERMINATED),
+    // not hang with a stale words_pending.  Drain ONLY the real termination
+    // words (one on_word_complete per armed frame) — over-draining would mask
+    // the leak by clearing the stale count with a completion that never fires.
+    const size_t sent_before_term = sent.size();
+    sm.terminate_link();                              // transmits TO×2 + TWAS
+    const uint32_t term_words =
+        static_cast<uint32_t>(sent.size() - sent_before_term);
+    std::cout << "  terminate_link transmitted " << term_words << " words\n";
+    for (uint32_t i = 0; i < term_words; ++i)
+        sm.on_word_complete();                         // drain the termination frame
+
+    check(sm.get_words_pending() == 0, "terminate_link drained (words_pending == 0)");
+    check(sm.get_state() != ALEState::LINKED,
+          "Left LINKED after terminate_link (no hang)");
+
+    if (all_pass)
+        std::cout << "PASS: SENDING_RESPONSE drains all queued words\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 15: emergency_manual_control() must not leak words_pending into the
+//         next operation.  From LINKED it transmits a TWAS termination frame
+//         (incrementing words_pending) and immediately transitions to IDLE
+//         before those frame completions can drain.  If IDLE/SOUNDING entry
+//         does not reset words_pending, a subsequent send_sounding() inherits
+//         the stale count, never reaches words_pending == 0, and hangs in
+//         SOUNDING/TRANSMITTING with RX disabled and no timeout.
+// ============================================================================
+bool test_emergency_does_not_leak_words_pending() {
+    std::cout << "\n[TEST 15] emergency_manual_control() does not leak words_pending\n";
+    std::cout << "===================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    std::vector<ALEWord> sent;
+    sm.set_transmit_callback([&](const ALEWord& w){ sent.push_back(w); });
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_channel_callback([](const Channel&){});
+    sm.set_rx_enabled_callback([](bool){});
+    sm.set_operator_callback([](OperatorEvent){});
+
+    // Reach LINKED with active_call_to set so emergency_manual_control() emits a
+    // real TWAS termination frame (it gates on !active_call_to.empty()).
+    sm.initiate_call("JOE");                          // IDLE → CALLING; active_call_to = "JOE"
+    sm.process_event(ALEEvent::HANDSHAKE_COMPLETE);   // CALLING → LINKED
+    check(sm.get_state() == ALEState::LINKED, "Reached LINKED");
+    check(sm.get_words_pending() == 0, "LINKED starts with words_pending == 0");
+
+    sm.update(1000u);  // set current_time_ms for LBT math below
+
+    // Emergency abort: transmits TO JOE ×2 + TWAS SAM, then → IDLE.
+    const size_t sent_before_emerg = sent.size();
+    sm.emergency_manual_control();
+    const uint32_t emerg_words =
+        static_cast<uint32_t>(sent.size() - sent_before_emerg);
+    std::cout << "  emergency transmitted " << emerg_words << " words\n";
+    check(emerg_words == 3, "emergency transmitted TWAS termination (3 words)");
+    check(sm.get_state() == ALEState::IDLE, "emergency → IDLE");
+
+    // The armed frame completions for the TWAS words fire now (in IDLE).  IDLE has
+    // no on_word_complete handler, so a stale words_pending would survive them.
+    for (uint32_t i = 0; i < emerg_words; ++i)
+        sm.on_word_complete();
+    check(sm.get_words_pending() == 0,
+          "no stale words_pending after emergency (would leak into next op)");
+
+    // The real failure mode: a subsequent sounding must not hang in TRANSMITTING.
+    check(sm.send_sounding(), "send_sounding from IDLE accepted");
+    check(sm.get_state() == ALEState::SOUNDING, "Entered SOUNDING");
+    check(sm.get_sounding_phase() == SoundingPhase::LBT, "SOUNDING starts in LBT");
+
+    // LBT (Twt = 784 ms) elapses → TRANSMITTING; conclusion ×2 enqueued.
+    const size_t sent_before_snd = sent.size();
+    sm.update(1000u + ALETimingConstants::Twt_ms + 1u);
+    const uint32_t snd_words =
+        static_cast<uint32_t>(sent.size() - sent_before_snd);
+    std::cout << "  sounding transmitted " << snd_words << " words\n";
+    check(snd_words == 2, "sounding transmitted conclusion ×2");
+    check(sm.get_sounding_phase() == SoundingPhase::TRANSMITTING,
+          "SOUNDING in TRANSMITTING");
+
+    // Drain ONLY the 2 real conclusion completions (one per armed frame).
+    for (uint32_t i = 0; i < snd_words; ++i)
+        sm.on_word_complete();
+
+    check(sm.get_words_pending() == 0,
+          "words_pending == 0 after sounding TX (no stale carry-over)");
+    check(sm.get_sounding_phase() == SoundingPhase::LISTENING,
+          "Sounding reached LISTENING (not hung in TRANSMITTING)");
+
+    if (all_pass)
+        std::cout << "PASS: emergency_manual_control() does not leak words_pending\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 16: terminate_link() must not hang in LINKED if its TX frame never drains.
+//         terminate_link() transmits TO×2 + TWAS and relies on on_word_complete()
+//         firing LINK_TERMINATED once words_pending reaches 0.  If the audio
+//         device stalls (or transmit_callback never arms the completion), the SM
+//         would hang in LINKED with RX disabled — handle_linked() short-circuits
+//         on linked_terminating_ and the Twa timer is suppressed.  A drain
+//         deadline must force LINK_TERMINATED so the radio recovers.
+// ============================================================================
+bool test_terminate_link_drain_timeout() {
+    std::cout << "\n[TEST 16] terminate_link() drain deadline (no hang on stalled TX)\n";
+    std::cout << "===================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    std::vector<ALEWord> sent;
+    sm.set_transmit_callback([&](const ALEWord& w){ sent.push_back(w); });
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_channel_callback([](const Channel&){});
+    sm.set_operator_callback([](OperatorEvent){});
+    bool rx_on = false;
+    sm.set_rx_enabled_callback([&](bool on){ rx_on = on; });
+
+    // Reach LINKED with active_call_to set (so terminate emits a real frame).
+    sm.initiate_call("JOE");                          // IDLE → CALLING; active_call_to="JOE"
+    sm.process_event(ALEEvent::HANDSHAKE_COMPLETE);   // CALLING → LINKED
+    check(sm.get_state() == ALEState::LINKED, "Reached LINKED");
+
+    sm.update(1000u);  // set current_time_ms
+    rx_on = true;
+
+    const size_t sent_before = sent.size();
+    sm.terminate_link();                              // transmits TO JOE×2 + TWAS SAM
+    const uint32_t term_words =
+        static_cast<uint32_t>(sent.size() - sent_before);
+    std::cout << "  termination words: " << term_words << "\n";
+    check(term_words == 3, "terminate_link transmitted termination frame (3 words)");
+    check(sm.get_state() == ALEState::LINKED, "Still LINKED (drain pending, not yet terminated)");
+    check(!rx_on, "RX disabled during termination TX");
+
+    // Simulate a stall: do NOT fire on_word_complete().  Advance past the drain
+    // deadline — handle_linked() must force LINK_TERMINATED instead of hanging.
+    sm.update(1000u + ALETimingConstants::TX_DRAIN_TIMEOUT_MS + 1u);
+    check(sm.get_state() != ALEState::LINKED,
+          "Force-LINK_TERMINATED after drain timeout (not hung in LINKED)");
+    check(rx_on, "RX re-enabled after forced termination");
+
+    if (all_pass)
+        std::cout << "PASS: terminate_link() drain deadline\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 17: trigger_linked_orderwire() must not hang in LINKED if its burst never
+//         drains.  Same shape as terminate_link but the recovery is to ABANDON
+//         the orderwire burst (stay LINKED, re-open RX), not to terminate the link.
+// ============================================================================
+bool test_orderwire_drain_timeout() {
+    std::cout << "\n[TEST 17] trigger_linked_orderwire() drain deadline (abandon on stall)\n";
+    std::cout << "===========================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    std::vector<ALEWord> sent;
+    sm.set_transmit_callback([&](const ALEWord& w){ sent.push_back(w); });
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_channel_callback([](const Channel&){});
+    sm.set_operator_callback([](OperatorEvent){});
+    bool rx_on = false;
+    sm.set_rx_enabled_callback([&](bool on){ rx_on = on; });
+
+    sm.initiate_call("JOE");
+    sm.process_event(ALEEvent::HANDSHAKE_COMPLETE);   // → LINKED
+    check(sm.get_state() == ALEState::LINKED, "Reached LINKED");
+
+    sm.update(1000u);
+    rx_on = true;
+
+    // Queue a one-word orderwire burst (CMD 'f').  handle_linked() will start it
+    // on the next update(): pending + TIS:SELF, doubled → 4 words on the air.
+    ALEWord cmd{};
+    cmd.type    = PreambleType::CMD;
+    cmd.address[0] = 'f'; cmd.address[1] = ' '; cmd.address[2] = ' '; cmd.address[3] = '\0';
+    cmd.valid   = true;
+    sm.trigger_linked_orderwire({cmd});
+
+    // Start the burst (orderwire_pending_ → transmit → orderwire_transmitting_).
+    // The burst is pending + TIS:SELF, doubled → 4 words (regression-guard: the
+    // conclusion must actually be appended, not dropped by a dangling-ref loop).
+    const size_t sent_before = sent.size();
+    sm.update(1001u);
+    const uint32_t burst_words =
+        static_cast<uint32_t>(sent.size() - sent_before);
+    std::cout << "  orderwire burst words: " << burst_words << "\n";
+    check(burst_words == 4, "orderwire burst = [CMD, TIS, CMD, TIS] (4 words)");
+    check(sm.get_state() == ALEState::LINKED, "Still LINKED during orderwire TX");
+    check(!rx_on, "RX disabled during orderwire TX");
+
+    // Stall: do not drain.  Advance past the deadline → abandon the burst, keep
+    // the link, re-open RX (NOT terminate the link).
+    sm.update(1001u + ALETimingConstants::TX_DRAIN_TIMEOUT_MS + 1u);
+    check(sm.get_state() == ALEState::LINKED,
+          "Orderwire drain timeout abandons burst, keeps link LINKED");
+    check(rx_on, "RX re-enabled after orderwire drain timeout");
+
+    if (all_pass)
+        std::cout << "PASS: trigger_linked_orderwire() drain deadline\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 18: respond_to_call() must not bypass the 3-way handshake.  The handshake
+//         auto-advances (WAIT_CYCLE_END → … → WAIT_ACK → LINKED) on update(); there
+//         is no manual "respond" step.  Calling respond_to_call() from an early
+//         phase (before the caller's conclusion is received or our response sent)
+//         used to fire HANDSHAKE_COMPLETE unconditionally, declaring LINKED with an
+//         empty caller identity and no response on the air — the peer would time
+//         out while we believed the link was up.  It must be a no-op there.
+// ============================================================================
+bool test_respond_to_call_does_not_bypass_handshake() {
+    std::cout << "\n[TEST 18] respond_to_call() does not bypass the handshake\n";
+    std::cout << "===================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("JOE");
+    sm.set_transmit_callback([](const ALEWord&){});
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_channel_callback([](const Channel&){});
+    sm.set_rx_enabled_callback([](bool){});
+    sm.set_operator_callback([](OperatorEvent){});
+    sm.set_target_scan_channels(0);
+    sm.process_event(ALEEvent::START_SCAN);
+
+    // Drive an incoming call up to HANDSHAKE/WAIT_CYCLE_END but STOP before the
+    // caller's conclusion (TIS) arrives: hs_conclusion_rcvd == false,
+    // caller_address empty.  This is the dangerous phase for a bypass.
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    uint32_t t = 1000u;
+    const char joe3[3] = {'J','O','E'};
+    sm.update(t); sm.process_received_word(WordParser::make_word(PreambleType::TO, joe3));
+    // SCANNING → HANDSHAKE on the first TO; no TIS yet.
+    check(sm.get_state() == ALEState::HANDSHAKE, "Reached HANDSHAKE");
+    check(!sm.is_hs_conclusion_rcvd(), "No conclusion received yet");
+    check(sm.get_caller_address().empty(), "caller_address empty (no TIS yet)");
+
+    bool ok = sm.respond_to_call();
+    check(!ok, "respond_to_call() returns false from WAIT_CYCLE_END (no conclusion)");
+    check(sm.get_state() == ALEState::HANDSHAKE, "Still HANDSHAKE (not LINKED)");
+    check(sm.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END,
+          "Phase unchanged (no bypass)");
+
+    // Even after the conclusion arrives (WAIT_CYCLE_END, conclusion received),
+    // the response frame has not been sent — respond_to_call() must still refuse.
+    const char sam3[3] = {'S','A','M'};
+    sm.update(t + Trw); sm.process_received_word(WordParser::make_word(PreambleType::TIS, sam3));
+    check(sm.is_hs_conclusion_rcvd(), "Conclusion now received");
+    ok = sm.respond_to_call();
+    check(!ok, "respond_to_call() returns false before response is sent");
+    check(sm.get_state() == ALEState::HANDSHAKE, "Still HANDSHAKE (not LINKED)");
+
+    if (all_pass)
+        std::cout << "PASS: respond_to_call() does not bypass the handshake\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 19: AllCall address detection in the decoder (A.5.5.4.4).
+//         Global @?@ → ALLCALL for all; selective @A@ → ALLCALL only if our self
+//         address ends in the selector char; AnyCall @@? is NOT AllCall (NONE);
+//         a normal TO to self stays TO_SELF.
+// ============================================================================
+bool test_allcall_decoder_detection() {
+    std::cout << "\n[TEST 19] AllCall address detection (decoder)\n";
+    std::cout << "===================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEWordDecoder dec;
+    auto decode = [&](PreambleType ty, const char a3[3], const std::string& self) {
+        ALEWord w = WordParser::make_word(ty, a3);
+        WordDecodeContext ctx;
+        ctx.self_address = self;
+        return dec.decode(w, ctx);
+    };
+
+    const char allcall_g[3] = {'@','?','@'};   // global AllCall
+    const char allcall_sA[3] = {'@','A','@'}; // selective AllCall (selector 'A')
+    const char anycall[3] = {'@','@','?'};    // global AnyCall (A.5.5.4.5)
+    const char sam3[3] = {'S','A','M'};
+
+    auto e1 = decode(PreambleType::TO, allcall_g, "JOE");
+    check(e1.type == WordEvent::Type::ALLCALL, "global @?@ → ALLCALL (any self)");
+    check(e1.address == "@?", "address trimmed to @?");
+
+    auto e2 = decode(PreambleType::TO, allcall_sA, "SAMA");
+    check(e2.type == WordEvent::Type::ALLCALL, "selective @A@ pertinent (self ends A) → ALLCALL");
+    auto e3 = decode(PreambleType::TO, allcall_sA, "SAM");
+    check(e3.type == WordEvent::Type::NONE, "selective @A@ not pertinent (self ends M) → NONE");
+
+    auto e4 = decode(PreambleType::TO, anycall, "JOE");
+    check(e4.type == WordEvent::Type::NONE, "AnyCall @@? → NONE (not AllCall)");
+
+    auto e5 = decode(PreambleType::TO, sam3, "SAM");
+    check(e5.type == WordEvent::Type::TO_SELF, "normal TO to self → TO_SELF (not ALLCALL)");
+
+    if (all_pass)
+        std::cout << "PASS: AllCall address detection\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 20: AllCall receiver (A.5.5.4.4) — one-way broadcast, no response frame.
+//          On TIS conclusion the SM links directly to the caller (no
+//          SENDING_RESPONSE/WAIT_ACK); on TWAS it resumes scanning.  No frame
+//          is ever transmitted in reply.
+// ============================================================================
+bool test_allcall_receiver_links_on_tis() {
+    std::cout << "\n[TEST 20] AllCall receiver links on TIS conclusion (no response)\n";
+    std::cout << "=========================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("JOE");
+    std::vector<ALEWord> sent;
+    sm.set_transmit_callback([&](const ALEWord& w){ sent.push_back(w); });
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_channel_callback([](const Channel&){});
+    sm.set_rx_enabled_callback([](bool){});
+    OperatorEvent last_op{};
+    bool op_fired = false;
+    sm.set_operator_callback([&](OperatorEvent e){ last_op = e; op_fired = true; });
+
+    sm.process_event(ALEEvent::START_SCAN);    // → SCANNING
+
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;   // 392
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;   // 784
+    const char allcall3[3] = {'@','?','@'};   // global AllCall address
+    const char sam3[3] = {'S','A','M'};
+    uint32_t t = 1000u;
+
+    // Caller SAM sends an AllCall: scanning TO @?@ ×2 + leading TO @?@ ×2,
+    // then conclusion TIS SAM (the AllCall address never appears in the
+    // conclusion).  First @?@ in SCANNING → ALLCALL → HANDSHAKE.
+    auto rx = [&](PreambleType ty, const char a3[3]) {
+        sm.update(t);
+        sm.process_received_word(WordParser::make_word(ty, a3));
+        t += Trw;
+    };
+    rx(PreambleType::TO,  allcall3);   // SCANNING → HANDSHAKE (AllCall)
+    rx(PreambleType::TO,  allcall3);
+    rx(PreambleType::TO,  allcall3);   // leading ×2
+    rx(PreambleType::TO,  allcall3);
+    rx(PreambleType::TIS, sam3);       // conclusion → hs_conclusion_rcvd, caller=SAM
+
+    check(sm.get_state() == ALEState::HANDSHAKE, "In HANDSHAKE collecting AllCall conclusion");
+    check(sm.is_hs_conclusion_rcvd(), "Caller conclusion (TIS SAM) received");
+    check(sm.get_caller_address() == "SAM", "caller recorded as SAM");
+
+    // Settle Tdrw after the conclusion → AllCall path → LINKED (no response sent).
+    const uint32_t tis_t = 1000u + 4u * Trw;   // 2568 — when TIS was processed
+    sm.update(tis_t + Tdrw);                    // settle → AllCall TIS → LINKED
+
+    check(sm.get_state() == ALEState::LINKED, "LINKED on AllCall TIS conclusion");
+    check(op_fired && last_op == OperatorEvent::LINK_ESTABLISHED,
+          "Operator LINK_ESTABLISHED fired");
+    check(sent.empty(), "No response frame transmitted (AllCall is one-way)");
+    check(sm.get_caller_address() == "SAM", "Linked to the AllCall caller SAM");
+
+    if (all_pass)
+        std::cout << "PASS: AllCall receiver links on TIS (no response)\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 21: AllCall concluding with TWAS → resume scanning (no link).
+// ============================================================================
+bool test_allcall_receiver_resumes_on_twas() {
+    std::cout << "\n[TEST 21] AllCall receiver resumes scanning on TWAS conclusion\n";
+    std::cout << "=========================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("JOE");
+    sm.set_transmit_callback([](const ALEWord&){});
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_channel_callback([](const Channel&){});
+    sm.set_rx_enabled_callback([](bool){});
+    sm.set_operator_callback([](OperatorEvent){});
+
+    sm.process_event(ALEEvent::START_SCAN);
+
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    const char allcall3[3] = {'@','?','@'};
+    const char sam3[3] = {'S','A','M'};
+    uint32_t t = 1000u;
+    auto rx = [&](PreambleType ty, const char a3[3]) {
+        sm.update(t);
+        sm.process_received_word(WordParser::make_word(ty, a3));
+        t += Trw;
+    };
+    rx(PreambleType::TO,   allcall3);   // SCANNING → HANDSHAKE (AllCall)
+    rx(PreambleType::TO,   allcall3);
+    rx(PreambleType::TO,   allcall3);
+    rx(PreambleType::TO,   allcall3);
+    rx(PreambleType::TWAS, sam3);       // AllCall concluded with TWAS → resume
+
+    check(sm.get_state() == ALEState::SCANNING,
+          "AllCall + TWAS conclusion → resume SCANNING (no link)");
+    check(!sm.is_hs_conclusion_rcvd(), "No conclusion linked on TWAS");
+
+    if (all_pass)
+        std::cout << "PASS: AllCall receiver resumes on TWAS\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 22: Single-thread contract net (debug-only).  The SM has no internal
+//         synchronization; the caller must drive it from one thread.  In debug
+//         builds a boundary call from a different thread increments
+//         thread_violations(); in release the check is compiled out (always 0).
+// ============================================================================
+bool test_thread_contract_check() {
+    std::cout << "\n[TEST 22] Single-thread contract net\n";
+    std::cout << "===================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    sm.set_transmit_callback([](const ALEWord&){});
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_channel_callback([](const Channel&){});
+    sm.set_rx_enabled_callback([](bool){});
+    sm.set_operator_callback([](OperatorEvent){});
+
+    // First boundary call on THIS thread captures the owner.
+    sm.update(1000u);
+    sm.update(2000u);
+    check(sm.thread_violations() == 0, "No violation on the owner thread");
+
+    // A boundary call from a second thread must be detected (debug) / no-op (release).
+    std::thread other([&](){ sm.update(3000u); });
+    other.join();
+#ifndef NDEBUG
+    check(sm.thread_violations() > 0, "Cross-thread call detected (debug build)");
+#else
+    std::cout << "  cross-thread detection: SKIPPED (release build, check compiled out)\n";
+    check(sm.thread_violations() == 0, "Release: check compiled out (0 violations)");
+#endif
+
+    if (all_pass)
+        std::cout << "PASS: single-thread contract net\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 23: SENDING_RESPONSE must not hang until the 30 s Twa backstop if its
+//          response frame never drains.  A stuck audio device / null completion
+//          would leave the responder in SENDING_RESPONSE until Twa.  The per-
+//          phase TX-drain deadline must force LINK_TIMEOUT promptly.
+// ============================================================================
+bool test_sending_response_drain_timeout() {
+    std::cout << "\n[TEST 23] SENDING_RESPONSE drain deadline (no Twa-wait on stall)\n";
+    std::cout << "===================================================================\n";
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("JOE");                 // responder
+    sm.set_target_scan_channels(1);
+    sm.set_transmit_callback([](const ALEWord&){});
+    sm.set_state_callback([](ALEState, ALEState){});
+    sm.set_channel_callback([](const Channel&){});
+    sm.set_rx_enabled_callback([](bool){});
+    sm.set_operator_callback([](OperatorEvent){});
+
+    sm.process_event(ALEEvent::START_SCAN);
+
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
+    const char joe3[3] = {'J','O','E'};
+    const char sam3[3] = {'S','A','M'};
+    uint32_t t = 1000u;
+    auto rx = [&](PreambleType ty, const char a3[3]) {
+        sm.update(t); sm.process_received_word(WordParser::make_word(ty, a3)); t += Trw;
+    };
+    rx(PreambleType::TO,  joe3);
+    rx(PreambleType::TO,  joe3);
+    rx(PreambleType::TO,  joe3);
+    rx(PreambleType::TO,  joe3);
+    rx(PreambleType::TIS, sam3);   // conclusion → WAIT_CYCLE_END
+
+    const uint32_t tis_t    = 1000u + 4u * Trw;   // 2568
+    const uint32_t settle_t = tis_t + Tdrw;       // 3352
+    sm.update(settle_t);                          // settle → SLOT_WAIT
+    sm.update(settle_t + 1);                      // SLOT_WAIT → CHANNEL_CHECK
+    const uint32_t sr_t = settle_t + 1 + Tdrw;    // 4137
+    sm.update(sr_t);                              // CHANNEL_CHECK → SENDING_RESPONSE + build_response_words
+
+    check(sm.get_handshake_phase() == HandshakePhase::SENDING_RESPONSE,
+          "Reached SENDING_RESPONSE with response frame queued");
+    check(sm.get_words_pending() > 0, "Response frame is pending (waiting for drain)");
+
+    // Do NOT fire on_word_complete — simulate a stalled audio device.  Advance
+    // past the TX-drain deadline (well under the 30 s Twa backstop).
+    sm.update(sr_t + ALETimingConstants::TX_DRAIN_TIMEOUT_MS + 1u);
+    check(sm.get_state() != ALEState::HANDSHAKE,
+          "Force-LINK_TIMEOUT after SENDING_RESPONSE drain timeout (not hung)");
+    check(sm.get_state() == ALEState::SCANNING,
+          "Returned to pre-link state (SCANNING)");
+
+    if (all_pass)
+        std::cout << "PASS: SENDING_RESPONSE drain deadline\n";
+    return all_pass;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -1238,6 +1901,16 @@ int run_all_tests() {
     if (test_fast_scan_rate_td5()) { pass_count++; } else { fail_count++; }
     if (test_always_listen_ac_gen_009_001()) { pass_count++; } else { fail_count++; }
     if (test_return_to_origin_ac_gen_009_003()) { pass_count++; } else { fail_count++; }
+    if (test_sending_response_drains_all_words()) { pass_count++; } else { fail_count++; }
+    if (test_emergency_does_not_leak_words_pending()) { pass_count++; } else { fail_count++; }
+    if (test_terminate_link_drain_timeout()) { pass_count++; } else { fail_count++; }
+    if (test_orderwire_drain_timeout()) { pass_count++; } else { fail_count++; }
+    if (test_respond_to_call_does_not_bypass_handshake()) { pass_count++; } else { fail_count++; }
+    if (test_allcall_decoder_detection()) { pass_count++; } else { fail_count++; }
+    if (test_allcall_receiver_links_on_tis()) { pass_count++; } else { fail_count++; }
+    if (test_allcall_receiver_resumes_on_twas()) { pass_count++; } else { fail_count++; }
+    if (test_thread_contract_check()) { pass_count++; } else { fail_count++; }
+    if (test_sending_response_drain_timeout()) { pass_count++; } else { fail_count++; }
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

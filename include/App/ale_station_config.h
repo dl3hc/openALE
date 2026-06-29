@@ -19,10 +19,10 @@ namespace ale {
 struct ALEStationConfig {
 
     // ── Scanning-Call-Planung ──────────────────────────────────────────────
-    /// Angenommene Kanal-Anzahl der Gegenstelle für Tsc = C × 2 × Trw.
-    /// 0 = automatisch aus eigener Kanalliste (calling_channels_.size()).
-    /// >0 = konservatives Maximum (z.B. wenn Gegenstelle mehr Kanäle hat).
-    uint32_t  assumed_scan_channels  = 0;
+    /// Angenommene Scan-Kanal-Anzahl der Gegenstelle (Tsc = C × 2 × Trw).
+    /// Einzige Quelle für die Scanning-Call-Länge — wird nie automatisch
+    /// überschrieben. 10 = MIL-STD-Maximum (PCALE-Default, interoperabel).
+    uint32_t  assumed_scan_channels  = 10;
 
     // ── Eingehende Anrufe ──────────────────────────────────────────────────
     /// true = Anruf erst nach accept_call() weitergeben (kein Auto-Accept).
@@ -70,6 +70,21 @@ struct ALEStationConfig {
     // ── Diagnose ──────────────────────────────────────────────────────────
     /// RX-Diagnose-Ausgabe via on_status_changed (Peak-Level + jedes Wort).
     bool      debug_rx               = false;
+
+    // ── Auto-Relink (A.5.4.5 bilateral channel selection) ─────────────────
+    /// true = nach LINKED auf besseren Kanal umschwenken: TWAS + Neulink.
+    /// Erfordert lqa_enabled=true; nutzt bilaterale LQA-Scores aus CMD-Austausch.
+    bool      relink_enabled             = false;
+    /// Mindest-Score-Verbesserung (0–30 Skala) um Relink auszulösen.
+    /// Hysterese gegen Thrashing: kleinere Werte → aggressiver, größere → stabiler.
+    float     relink_improvement_threshold = 5.0f;
+
+    // ── Enhanced Frequency-Select (CMD 'f' post-link bilateral negotiation) ───
+    /// true = CMD 'f' Verhandlung vor TWAS (A.5.6.3.2, post-link adaptation).
+    /// Schlägt der Gegenstation einen besseren Kanal vor; bei Standard-ALE-2G-
+    /// Stationen läuft der Vorschlag in einen Timeout (kein Relink = Link bleibt).
+    /// Nur sinnvoll wenn beide Stationen Enhanced-Mode aktiviert haben.
+    bool      enhanced_freq_select = false;
 };
 
 } // namespace ale

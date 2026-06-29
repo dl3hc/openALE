@@ -152,6 +152,7 @@ void Demodulator::reset()
     step_accum_    = 0;
     grid_locked_   = false;
     grid_anchor_   = 0;
+    uncorr_anchor_ = 0;
     silence_count_ = 0;
     restore_base_operating_point_();   // fresh acquisition uses the base point
 }
@@ -198,8 +199,8 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
             ALEWord word;
             Golay::DecodeResult fec;
             uint8_t unanimous_votes = 0;
-            if (try_decode(word, fec, unanimous_votes) &&
-                accept_word_(fec, word, unanimous_votes)) {
+            const bool decoded_ok = try_decode(word, fec, unanimous_votes);
+            if (decoded_ok && accept_word_(fec, word, unanimous_votes)) {
                 // A.5.2.6.3 "DO": once tracking, fold the accepted word's quality
                 // into the adaptive estimate and update the operating point.
                 if (adaptive_) {
@@ -208,6 +209,25 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
                     min_unanimous_votes_ = adaptive_fec_.threshold();
                 }
                 if (word_cb_) word_cb_(word);
+            } else if (!decoded_ok && word.golay_uncorrectable
+                       && grid_locked_
+                       && unanimous_votes >= min_unanimous_votes_) {
+                // Grid-locked, quality-thresholded uncorrectable word:
+                // report via word_cb_ (word.valid=false, word.golay_uncorrectable=true)
+                // so the controller can contribute 48 to the BER sum per A.5.4.1.1.
+                // Mirror the on-grid check from accept_word_() but do NOT advance
+                // grid_anchor_ — a failed word does not re-anchor the sync grid.
+                // uncorr_anchor_ prevents re-firing for the same word slot.
+                const uint32_t samples_since = write_pos_ - grid_anchor_;
+                const uint32_t min_sp        = WORD_SAMPLES - FFT_SIZE;
+                if (samples_since >= min_sp) {
+                    const uint32_t phase = samples_since % WORD_SAMPLES;
+                    if (((phase <= FFT_SIZE) || (phase >= WORD_SAMPLES - FFT_SIZE))
+                            && (write_pos_ - uncorr_anchor_ >= min_sp)) {
+                        uncorr_anchor_ = write_pos_;
+                        if (word_cb_) word_cb_(word);
+                    }
+                }
             }
         }
     }
@@ -259,14 +279,20 @@ float Demodulator::goertzel_power(const int16_t* block, float freq_hz)
     return q1 * q1 + q2 * q2 - coeff * q1 * q2;
 }
 
-uint8_t Demodulator::symbol_from_block(const int16_t* block)
+uint8_t Demodulator::symbol_from_block(const int16_t* block, float& sinad_db_out)
 {
-    float   best = -1.0f;
+    // A.5.4.1.2: compute all 8 Goertzel powers in a single pass to measure SINAD.
+    // Signal power = winning-tone power; Noise+Distortion = sum of the other 7 tones.
+    // SINAD = total / (total − signal) in dB.
+    float total = 0.0f, best = -1.0f;
     uint8_t rank = 0;
     for (uint8_t r = 0; r < NUM_TONES; ++r) {
         float p = goertzel_power(block, static_cast<float>(TONE_FREQS_HZ[r]));
+        total += p;
         if (p > best) { best = p; rank = r; }
     }
+    const float nd = total - best;
+    sinad_db_out = (nd > 0.0f) ? 10.0f * std::log10f(total / nd) : 30.0f;
     return FREQ_TO_SYMBOL[rank];
 }
 
@@ -350,12 +376,17 @@ bool Demodulator::try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& un
     const uint32_t base = write_pos_ - WORD_SAMPLES;
     int16_t blk[FFT_SIZE];
     uint8_t sym[SYMBOLS_PER_WORD];
+    float sinad_sum = 0.0f;
     for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
         const uint32_t bk = base + k * FFT_SIZE;
         for (uint32_t j = 0; j < FFT_SIZE; ++j)
             blk[j] = ring_at(bk + j);
-        sym[k] = symbol_from_block(blk);
+        float sym_sinad;
+        sym[k] = symbol_from_block(blk, sym_sinad);
+        sinad_sum += sym_sinad;
     }
+    // A.5.4.1.2: SINAD = time-averaged value over the signal duration (49 symbols).
+    out.sinad_db = sinad_sum / static_cast<float>(SYMBOLS_PER_WORD);
     return ALEDecoder::decode(sym, out, fec, &unanimous_votes, golay_mode_);
 }
 

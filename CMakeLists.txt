@@ -115,6 +115,7 @@ target_link_libraries(ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
 add_library(ale_link
     src/Protocol/Control/ale_state_machine.cpp
     src/Protocol/Control/ale_channel_manager.cpp
+    src/Protocol/Control/ale_freq_select.cpp
     src/Word/ale_word_decoder.cpp
 )
 

@@ -196,6 +196,22 @@ bool ALEStateMachine::process_event(ALEEvent event) {
 // ============================================================================
 
 void ALEStateMachine::update(uint32_t now_ms) {
+    check_thread_();
+    // The SM's clock must be monotonically non-decreasing.  Every timeout is
+    // `current_time_ms - some_start_ms >= threshold` on uint32_t; that subtraction
+    // is wrap-safe only while the clock moves forward.  A backward jump from a
+    // non-monotonic source (clock skew, resume-from-sleep step, two callers
+    // disagreeing) would make `(current - start)` wrap near 2^32 and fire EVERY
+    // threshold at once — a spurious LINK_TIMEOUT mid-handshake / mid-link.
+    // Distinguish a real backward jump (unsigned delta >= 2^31) from a legitimate
+    // forward wrap (delta near 0) and hold the logical clock on a backward step:
+    // the SM freezes until the source catches back up, instead of dropping the
+    // link.  A genuine 49.7-day forward wrap reads as a tiny delta and is handled
+    // correctly by the unsigned arithmetic.
+    if ((now_ms - current_time_ms) >= 0x80000000u) {
+        SM_TRACE("[TRACE] update: non-monotonic clock (backward jump) — holding\n");
+        return;
+    }
     this->current_time_ms = now_ms;
 
     if (check_link_timeout()) {
@@ -233,10 +249,25 @@ bool ALEStateMachine::transition_to(ALEState new_state) {
 }
 
 void ALEStateMachine::enter_state(ALEState new_state) {
+    // words_pending is scoped to a single state's TX burst: in every normal
+    // transition the queue has already drained to 0 before we leave the old
+    // state, so this is a no-op then.  Abnormal exits — emergency_manual_control()
+    // transmits a TWAS frame then transitions to IDLE *before* those frame
+    // completions can drain — would otherwise leak a stale count into the next
+    // state (IDLE has no on_word_complete handler to clear it), and a later
+    // send_sounding() would inherit it, never reach 0, and hang in TRANSMITTING
+    // with no timeout.  Resetting on every entry makes "a state starts with no
+    // pending words" an invariant instead of an assumption.
+    words_pending        = 0;
+    // Same invariant for the TX-drain deadline (terminate_link / orderwire /
+    // SENDING_RESPONSE / SENDING_ACK): no TX burst is pending on a fresh state.
+    tx_drain_start_ms_   = 0;
+
     switch (new_state) {
         case ALEState::IDLE:
             // Available state: RX on, fixed channel, wait for incoming calls.
             channel_manager_.clear_override();  // end any sounding-sweep pin
+            allcall_silent_ = false;             // leave any AllCall handshake
             if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
@@ -245,6 +276,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             allcall_pause_start_ms_  = 0;
             channel_manager_.clear_override();  // end any sounding-sweep pin
             channel_manager_.start(current_time_ms);
+            allcall_silent_ = false;             // leave any AllCall handshake
             if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
@@ -258,7 +290,6 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             tune_start_ms                  = 0;
             call_cycle_count               = 0;
             call_cycles_in_phase           = 0;
-            words_pending                  = 0;
             listening_start_ms             = 0;
             response_to_detected           = false;
             response_rx_start_ms           = 0;
@@ -289,7 +320,6 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             hs_ack_to_ms        = 0;
             hs_ack_tis_rcvd     = false;
             contiguous_errors   = 0;
-            words_pending       = 0;
             hs_lbt_start_ms     = 0;
             hs_message_start_ms = 0;
             pending_reject_     = false;
@@ -307,12 +337,27 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             link_start_time_ms  = current_time_ms;
             last_word_time_ms   = current_time_ms;
             linked_terminating_ = false;
+            tx_drain_start_ms_ = 0;   // no TX drain pending on a fresh link
+            allcall_silent_ = false;          // AllCall concluded → normal linked state
+            // Star-Group-Call (T-11): a group call is initiated with
+            // active_call_to = members.front() (initiate_group_call), but any
+            // member may answer.  The handshake records the actual responder in
+            // to_address (react_calling TIS_CALLER).  Bind termination/TWAS to
+            // that responder so the link is torn down with the station that
+            // actually holds it — otherwise terminate_link() / the Twa-timeout
+            // path would address members.front(), leaving the real peer unaware
+            // it should return to available.  Scoped to group calls only;
+            // individual calls already carry the single peer in active_call_to,
+            // and the responder path does not set active_call_is_group.
+            if (active_call_is_group && !to_address.empty())
+                active_call_to = to_address;
             if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
         case ALEState::SOUNDING:
-            sounding_phase_        = SoundingPhase::LBT;
-            sounding_lbt_start_ms_ = current_time_ms;
+            sounding_phase_                = SoundingPhase::LBT;
+            sounding_lbt_start_ms_          = current_time_ms;
+            sounding_listening_start_ms_    = 0;   // no LISTENING window yet
             if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
@@ -513,7 +558,20 @@ void ALEStateMachine::handle_calling() {
         // Third handshake frame: TO JOE [DATA]* TIS SAM [DATA]*.
         // Transition to LINKED via on_word_complete() after all words sent.
         case CallingPhase::SENDING_ACK: {
-            if (words_pending > 0) break;
+            if (words_pending > 0) {
+                // Waiting for the ACK frame to drain.  Bound the wait so an audio
+                // stall (or a transmit_callback that doesn't arm the completion)
+                // doesn't hang here until the 30 s Twa backstop.
+                if (tx_drain_start_ms_ != 0 &&
+                    (current_time_ms - tx_drain_start_ms_)
+                        >= ALETimingConstants::TX_DRAIN_TIMEOUT_MS) {
+                    SM_TRACE("[TRACE] handle_calling: SENDING_ACK drain timeout → LINK_TIMEOUT\n");
+                    tx_drain_start_ms_ = 0;
+                    process_event(ALEEvent::LINK_TIMEOUT);
+                    return;
+                }
+                break;
+            }
             if (call_cycles_in_phase == 0)
                 build_ack_words();
             break;
@@ -563,6 +621,19 @@ void ALEStateMachine::handle_handshake() {
             // the extension was appended, truncating the caller address.
             if (hs_conclusion_rcvd && hs_tlww_start_ms > 0 &&
                 (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tdrw_ms) {
+                // AllCall (A.5.5.4.4): one-way broadcast — no response frame.  On
+                // TIS conclusion, link directly to the caller (the conclusion
+                // carries the caller's real address; the AllCall address never
+                // appears in it).  Skip SLOT_WAIT/CHANNEL_CHECK/SENDING_RESPONSE/
+                // WAIT_ACK entirely — the caller is not expecting an ACK.
+                if (allcall_silent_) {
+                    SM_TRACE("[TRACE] handle_handshake: AllCall TIS conclusion → LINKED (no response)\n");
+                    active_call_to = caller_address;  // terminate/TWAS would address the AllCall caller
+                    if (operator_callback)
+                        operator_callback(OperatorEvent::LINK_ESTABLISHED);
+                    process_event(ALEEvent::HANDSHAKE_COMPLETE);
+                    return;
+                }
                 // Manual accept no longer gates the handshake: the responder
                 // always auto-advances to SLOT_WAIT and completes the 3-way
                 // handshake within Twr/Twrt (MIL-STD-188-141B interoperability —
@@ -620,9 +691,21 @@ void ALEStateMachine::handle_handshake() {
 
         // ── SENDING_RESPONSE ──────────────────────────────────────────────
         // Response TX in progress; on_word_complete() drives the counter and
-        // transitions to WAIT_ACK when all words have been sent.
-        case HandshakePhase::SENDING_RESPONSE:
+        // transitions to WAIT_ACK when all words have been sent.  If the audio
+        // stalls (or the frame completion is never armed) the phase would hang
+        // until the 30 s Twa backstop — bound it with the TX-drain deadline so
+        // the SM aborts to pre_link_state promptly.
+        case HandshakePhase::SENDING_RESPONSE: {
+            if (tx_drain_start_ms_ != 0 &&
+                (current_time_ms - tx_drain_start_ms_)
+                    >= ALETimingConstants::TX_DRAIN_TIMEOUT_MS) {
+                SM_TRACE("[TRACE] handle_handshake: SENDING_RESPONSE drain timeout → LINK_TIMEOUT\n");
+                tx_drain_start_ms_ = 0;
+                process_event(ALEEvent::LINK_TIMEOUT);
+                return;
+            }
             break;
+        }
 
         // ── WAIT_ACK ─────────────────────────────────────────────────────
         // Wait for SAM's ACK frame (TO JOE × 2 + TIS SAM — Figure A-31).
@@ -693,9 +776,72 @@ void ALEStateMachine::handle_handshake() {
 }
 
 void ALEStateMachine::handle_linked() {
+    // ── TX-drain safety net (AC-LINK-023-adjacent) ──────────────────────────
+    // terminate_link() and the orderwire burst both rely on on_word_complete()
+    // draining words_pending to 0.  If that never happens (audio stall or a
+    // transmit_callback that doesn't arm the frame completion), the SM would
+    // hang in LINKED with RX disabled — the linked_terminating_ short-circuit
+    // below and the orderwire_transmitting_ return suppress the Twa timer, so
+    // nothing else recovers it.  Bound the wait: once TX_DRAIN_TIMEOUT_MS
+    // has elapsed since the drain was armed, force the transition (termination)
+    // or abandon the burst (orderwire) and re-open RX.
+    if ((linked_terminating_ || orderwire_transmitting_)
+        && tx_drain_start_ms_ != 0
+        && (current_time_ms - tx_drain_start_ms_)
+               >= ALETimingConstants::TX_DRAIN_TIMEOUT_MS) {
+        if (linked_terminating_) {
+            SM_TRACE("[TRACE] handle_linked: terminate drain timeout → LINK_TERMINATED (forced)\n");
+            linked_terminating_       = false;
+            tx_drain_start_ms_ = 0;
+            if (rx_enabled_callback) rx_enabled_callback(true);
+            process_event(ALEEvent::LINK_TERMINATED);
+        } else {
+            SM_TRACE("[TRACE] handle_linked: orderwire drain timeout → abandon burst\n");
+            orderwire_transmitting_   = false;
+            tx_drain_start_ms_ = 0;
+            if (rx_enabled_callback) rx_enabled_callback(true);
+        }
+        return;
+    }
+
     if (linked_terminating_) return;
-    // AC-LINK-023: auto-terminate after Twa=30s (default; per-instance override
-    // via set_timing_parameters(), see TimingParameters) of link inactivity.
+
+    // ── Linked Orderwire (Enhanced Frequency-Select, A.5.6.3.2) ─────────────
+    // Sends pending_orderwire_words_ + TIS:SELF (×2) while LINKED so that
+    // EFS proposals/responses can be exchanged without terminating the link.
+    if (orderwire_transmitting_) {
+        if (words_pending == 0) {
+            orderwire_transmitting_   = false;
+            tx_drain_start_ms_ = 0;
+            if (rx_enabled_callback) rx_enabled_callback(true);
+        }
+        return;
+    }
+    if (orderwire_pending_) {
+        orderwire_pending_      = false;
+        orderwire_transmitting_ = true;
+        if (rx_enabled_callback) rx_enabled_callback(false);
+        std::vector<ALEWord> tx = pending_orderwire_words_;
+        // Hold the conclusion in a named local: ALESequence::words() returns by
+        // const reference, so iterating `ALESequenceBuilder::conclusion(...).words()`
+        // directly would dangle — the temporary ALESequence is destroyed before the
+        // range-for body runs, silently dropping the TIS:SELF conclusion from the
+        // orderwire burst.
+        const ALESequence concl = ALESequenceBuilder::conclusion(
+            address_book.get_self_address());
+        for (const auto& w : concl.words())
+            tx.push_back(w);
+        const auto once = tx;
+        tx.insert(tx.end(), once.begin(), once.end());
+        transmit_words(tx);
+        // Arm the drain deadline (skipped harmlessly if nothing was enqueued —
+        // the words_pending == 0 branch above clears it next tick).
+        if (words_pending > 0)
+            tx_drain_start_ms_ = current_time_ms;
+        return;
+    }
+
+    // ── Twa inactivity timeout (AC-LINK-023) ─────────────────────────────────
     // AC-LINK-023-6: send TWAS before transitioning so the peer can return
     // to available state immediately (T-07).
     if ((current_time_ms - last_word_time_ms) >= timing_.Twa_ms) {
@@ -703,8 +849,19 @@ void ALEStateMachine::handle_linked() {
         if (!active_call_to.empty() && !address_book.get_self_address().empty())
             transmit_words(ALESequenceBuilder::termination(
                 active_call_to, address_book.get_self_address()).words());
+        // Transmits TWAS, then transitions out immediately (process_event leaves
+        // LINKED; the frame still goes out via the modulator).  No drain deadline
+        // needed here — handle_linked() won't run again once we leave LINKED.
         process_event(ALEEvent::LINK_TIMEOUT);
     }
+}
+
+void ALEStateMachine::trigger_linked_orderwire(std::vector<ALEWord> words) {
+    check_thread_();
+    if (current_state != ALEState::LINKED || linked_terminating_) return;
+    pending_orderwire_words_ = std::move(words);
+    orderwire_pending_       = true;
+    last_word_time_ms        = current_time_ms;  // reset Twa to prevent timeout during TX
 }
 
 void ALEStateMachine::on_link_activity() {
@@ -753,15 +910,15 @@ void ALEStateMachine::handle_sounding() {
     // Fallback: wenn alle TX-Wörter durch sind aber on_word_complete() nicht gefeuert
     // hat (z.B. keine Adresse → kein Wort gesendet), Übergang direkt hier auslösen.
     if (sounding_phase_ == SoundingPhase::TRANSMITTING && words_pending == 0) {
-        sounding_phase_     = SoundingPhase::LISTENING;
-        state_entry_time_ms = current_time_ms;  // anchor LISTENING from now (after LBT + TX)
+        sounding_phase_                = SoundingPhase::LISTENING;
+        sounding_listening_start_ms_   = current_time_ms;  // anchor LISTENING window
         if (rx_enabled_callback) rx_enabled_callback(true);
         // Kein return: LISTENING-Timeout-Check folgt direkt unten
     }
     if (sounding_phase_ == SoundingPhase::TRANSMITTING) return;  // Wörter noch ausstehend
 
     // LISTENING: Trw-Fenster auf eingehenden Ruf warten (A.5.3.4)
-    if ((current_time_ms - state_entry_time_ms) > ALETimingConstants::Trw_ms) {
+    if ((current_time_ms - sounding_listening_start_ms_) > ALETimingConstants::Trw_ms) {
         if (rx_enabled_callback) rx_enabled_callback(false);
         process_event(ALEEvent::SOUNDING_COMPLETE);
     }
@@ -788,6 +945,7 @@ const Channel* ALEStateMachine::get_current_channel() const {
 }
 
 bool ALEStateMachine::initiate_call(const std::string& target) {
+    check_thread_();
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
         return false;
 
@@ -867,7 +1025,21 @@ bool ALEStateMachine::initiate_group_call(const std::vector<std::string>& member
 }
 
 bool ALEStateMachine::respond_to_call() {
+    check_thread_();
+    // The 3-way handshake auto-advances (WAIT_CYCLE_END → SLOT_WAIT →
+    // CHANNEL_CHECK → SENDING_RESPONSE → WAIT_ACK → LINKED) on update(); there
+    // is no manual "respond" step, and the manual-accept gate is a no-op (see
+    // set_require_explicit_accept()).  This method is retained only as a
+    // bounded force-complete, and ONLY from a state where it is safe: WAIT_ACK,
+    // i.e. our response frame has already been transmitted and we are merely
+    // waiting for the caller's ACK.  From any earlier phase it is a no-op —
+    // firing HANDSHAKE_COMPLETE there would declare LINKED with an empty/partial
+    // caller identity and without sending any response, leaving the peer to time
+    // out while we believed the link was up.  See accept_call()/reject_call()
+    // (also no-ops) — the operator decision is applied post-link by ALEController.
     if (current_state != ALEState::HANDSHAKE) return false;
+    if (handshake_phase != HandshakePhase::WAIT_ACK) return false;
+    if (caller_address.empty()) return false;
     process_event(ALEEvent::HANDSHAKE_COMPLETE);
     return true;
 }
@@ -893,12 +1065,14 @@ void ALEStateMachine::set_require_explicit_accept(bool /*on*/, uint32_t /*decisi
 }
 
 bool ALEStateMachine::send_sounding() {
+    check_thread_();
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
         return false;
     return process_event(ALEEvent::SOUNDING_REQUEST);
 }
 
 bool ALEStateMachine::send_sounding_sweep(const std::vector<Channel>& channels) {
+    check_thread_();
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
         return false;
     if (channels.empty()) return false;
@@ -911,15 +1085,30 @@ bool ALEStateMachine::send_sounding_sweep(const std::vector<Channel>& channels) 
 }
 
 void ALEStateMachine::terminate_link() {
+    check_thread_();
     if (current_state != ALEState::LINKED) return;
     linked_terminating_ = true;
     // T-07: TO [peer] × 2 + TWAS [self] — peer returns to available state immediately
     transmit_words(ALESequenceBuilder::termination(
         active_call_to, address_book.get_self_address()).words());
     if (rx_enabled_callback) rx_enabled_callback(false);
+    if (words_pending == 0) {
+        // Empty termination frame (degenerate addresses) — nothing is on the air,
+        // no on_word_complete will ever fire.  Complete the transition now rather
+        // than wait for the drain deadline.
+        linked_terminating_ = false;
+        process_event(ALEEvent::LINK_TERMINATED);
+        return;
+    }
+    // Arm the TX-drain safety net: on_word_complete() normally fires
+    // LINK_TERMINATED once the frame drains, but if the audio device stalls or
+    // transmit_callback never armed the completion, handle_linked() force-fires
+    // it after TX_DRAIN_TIMEOUT_MS so the SM never hangs in LINKED.
+    tx_drain_start_ms_ = current_time_ms;
 }
 
 void ALEStateMachine::emergency_manual_control() {
+    check_thread_();
     emergency_active = true;
     if (operator_callback)
         operator_callback(OperatorEvent::EMERGENCY_ACTIVE);
@@ -967,17 +1156,17 @@ void ALEStateMachine::react_scanning(const WordEvent& ev) {
         process_event(ALEEvent::CALL_DETECTED);
         return;
     }
-    // T-10: AllCall/AnyCall-Erkennung — Adresse beginnt mit '@' (A.5.2.4.7)
-    if (current_state == ALEState::SCANNING
-        && scanning_phase_ == ScanningPhase::HOPPING
-        && ev.type == WordEvent::Type::NONE) {
-        // WordEvent::NONE mit TO-Preamble und '@'-Adresse = AllCall
-        // (Erkennung über das rohe Adressfeld im WordEvent ist hier nicht direkt
-        // verfügbar; die Logik nutzt ev.address das vom Decoder gesetzt wird)
-        if (!ev.address.empty() && ev.address[0] == '@') {
-            scanning_phase_         = ScanningPhase::ALLCALL_PAUSE;
-            allcall_pause_start_ms_ = current_time_ms;
-        }
+    // AllCall (A.5.5.4.4): one-way broadcast to the wildcard address @?@ / @A@.
+    // The receiver does NOT respond — it freezes scanning and collects the
+    // conclusion via HANDSHAKE/WAIT_CYCLE_END.  On a TIS conclusion the SM links
+    // directly to the caller (no response frame, handled in handle_handshake);
+    // on a TWAS conclusion the handshake aborts back to scanning.  The AllCall
+    // address itself never appears in the conclusion.  The decoder already
+    // decided selective pertinence (self address ends in the selector char).
+    if (ev.type == WordEvent::Type::ALLCALL) {
+        allcall_silent_ = true;
+        process_event(ALEEvent::CALL_DETECTED);  // SCANNING → HANDSHAKE
+        return;
     }
     // TWAS während AllCall-Pause → Pause beenden (A.5.5.4.4)
     if (scanning_phase_ == ScanningPhase::ALLCALL_PAUSE
@@ -1100,6 +1289,7 @@ void ALEStateMachine::react_handshake(const WordEvent& ev, const ALEWord& word) 
 }
 
 void ALEStateMachine::process_received_word(const ALEWord& word) {
+    check_thread_();
     if (!word.valid) { handle_invalid_word(); return; }
     contiguous_errors = 0;
     last_word_time_ms = current_time_ms;
@@ -1311,6 +1501,12 @@ void ALEStateMachine::build_ack_words() {
     // so it is encoded here at send time, not pre-computed.
     transmit_words(ALESequenceBuilder::ack(
         to_address, address_book.get_self_address()).words());
+    // Arm the TX-drain deadline: on_word_complete() normally fires
+    // HANDSHAKE_COMPLETE once the frame drains; if the audio stalls or the
+    // completion is never armed, handle_calling SENDING_ACK force-aborts after
+    // TX_DRAIN_TIMEOUT_MS instead of waiting the full Twa backstop.
+    if (words_pending > 0)
+        tx_drain_start_ms_ = current_time_ms;
 }
 
 void ALEStateMachine::build_response_words() {
@@ -1350,6 +1546,12 @@ void ALEStateMachine::build_response_words() {
         words.push_back(bw.back());
         transmit_words(words);
     }
+    // Arm the TX-drain deadline: on_word_complete() normally fires WAIT_ACK /
+    // the reject abort once the frame drains; if the audio stalls or the
+    // completion is never armed, handle_handshake SENDING_RESPONSE force-aborts
+    // after TX_DRAIN_TIMEOUT_MS instead of waiting the full Twa backstop.
+    if (words_pending > 0)
+        tx_drain_start_ms_ = current_time_ms;
 }
 
 void ALEStateMachine::transmit_word(const ALEWord& word) {
@@ -1373,6 +1575,7 @@ void ALEStateMachine::transmit_words(const std::vector<ALEWord>& words) {
 // ============================================================================
 
 void ALEStateMachine::on_word_complete() {
+    check_thread_();
     // ── LINKED termination path (T-07) ────────────────────────────────────
     // terminate_link() sendet TO×2 + TWAS; erst wenn alle Wörter durch sind
     // wird LINK_TERMINATED gefeuert.
@@ -1383,7 +1586,8 @@ void ALEStateMachine::on_word_complete() {
         // kommt — SAM blieb dadurch in LINKED hängen.
         if (words_pending > 0) --words_pending;
         if (words_pending == 0) {
-            linked_terminating_ = false;
+            linked_terminating_       = false;
+            tx_drain_start_ms_ = 0;   // disarm the drain safety net
             process_event(ALEEvent::LINK_TERMINATED);
         }
         return;
@@ -1398,8 +1602,8 @@ void ALEStateMachine::on_word_complete() {
         if (words_pending > 0) --words_pending;
         // Alle Wörter gesendet — RX-Fenster öffnen (A.5.3.4)
         if (words_pending == 0 && sounding_phase_ == SoundingPhase::TRANSMITTING) {
-            sounding_phase_     = SoundingPhase::LISTENING;
-            state_entry_time_ms = current_time_ms;  // Fenster-Timer neu starten
+            sounding_phase_                = SoundingPhase::LISTENING;
+            sounding_listening_start_ms_    = current_time_ms;  // Fenster-Timer neu starten
             if (rx_enabled_callback) rx_enabled_callback(true);
         }
         return;
@@ -1407,6 +1611,19 @@ void ALEStateMachine::on_word_complete() {
 
     // ── CALLING path (SAM side) ───────────────────────────────────────────
     if (current_state == ALEState::CALLING) {
+        // Every frame completion must correspond to a word we actually queued
+        // (transmit_word incremented words_pending).  A completion with no
+        // pending word is a spurious / double-fired frame-complete — ignore it
+        // rather than underflowing words_pending to UINT32_MAX (which would make
+        // every ==0 completion check below permanently false and stall the phase
+        // machine) or advancing call_cycles_in_phase on nothing (premature phase
+        // transition).  In normal operation words_pending > 0 for every CALLING
+        // completion; the last word transitions to LISTENING/LINKED and leaves
+        // CALLING before any further completion.
+        if (words_pending == 0) {
+            SM_TRACE("[TRACE] on_word_complete: spurious CALLING completion (no pending word) — ignored\n");
+            return;
+        }
         --words_pending;
         ++call_cycle_count;
         ++call_cycles_in_phase;
@@ -1499,25 +1716,29 @@ void ALEStateMachine::on_word_complete() {
     }
 
     // ── HANDSHAKE / SENDING_RESPONSE path (JOE side) ─────────────────────
+    // Completion is driven by the TX queue draining (words_pending == 0), NOT by a
+    // re-derived slot count.  build_response_words() may insert CMD-LQA + LQA-
+    // report words between the TO×2 prefix and the TIS conclusion; any slot-count
+    // computed independently of the actually-transmitted sequence (the old
+    // AddressEncoder::encode() formula) diverged from the real word count, so the
+    // phase advanced to WAIT_ACK before the inserted words' completions fired and
+    // words_pending leaked — a later terminate_link() then never reached 0 and the
+    // SM hung in LINKED with RX disabled.  words_pending is the single source of
+    // truth for "all response words have been rendered" (same pattern as
+    // SENDING_ACK above).  hs_words_in_phase is kept only as a diagnostic counter.
     if (current_state == ALEState::HANDSHAKE &&
         handshake_phase == HandshakePhase::SENDING_RESPONSE) {
+        // A completion with no queued word is spurious — ignore it (same guard as
+        // the CALLING path above) so it cannot underflow words_pending or falsely
+        // fire the WAIT_ACK / reject transition on nothing.
+        if (words_pending == 0) {
+            SM_TRACE("[TRACE] on_word_complete: spurious SENDING_RESPONSE completion — ignored\n");
+            return;
+        }
         --words_pending;
         ++hs_words_in_phase;
 
-        // Slot count depends on whether this is an accept or a reject frame.
-        // Rejection (FEAT-FRAME-005): TWAS [self_address] only — no TO prefix.
-        // Accept (Figure A-30):       TO [caller] × 2 + TIS [self_address].
-        const uint32_t resp_slots = pending_reject_
-            ? static_cast<uint32_t>(
-                  AddressEncoder::encode(address_book.get_self_address(),
-                                         PreambleType::TWAS).size())
-            : 2u * static_cast<uint32_t>(
-                       AddressEncoder::encode(caller_address, PreambleType::TO).size())
-              + static_cast<uint32_t>(
-                       AddressEncoder::encode(address_book.get_self_address(),
-                                              PreambleType::TIS).size());
-
-        if (hs_words_in_phase >= resp_slots) {
+        if (words_pending == 0) {
             if (pending_reject_) {
                 // Rejection sent — SAM expects no ACK; return to SCANNING.
                 SM_TRACE("[TRACE] on_word_complete: SENDING_RESPONSE (TWAS reject) → pre_link_state\n");

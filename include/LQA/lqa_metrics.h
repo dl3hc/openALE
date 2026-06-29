@@ -28,6 +28,7 @@ namespace ale {
  */
 struct MetricsSample {
     float snr_db;              ///< Signal-to-Noise Ratio (dB)
+    float sinad_db;            ///< Goertzel SINAD averaged over 49 symbols (dB); A.5.4.1.2
     float signal_power_dbm;    ///< Signal power (dBm)
     float noise_power_dbm;     ///< Noise power (dBm)
     int fec_errors_corrected;  ///< Golay errors corrected this word
@@ -40,7 +41,7 @@ struct MetricsSample {
     bool golay_uncorrectable;    ///< True if Golay reported uncorrectable errors in either half
 
     MetricsSample()
-        : snr_db(0.0f), signal_power_dbm(-120.0f), noise_power_dbm(-120.0f),
+        : snr_db(0.0f), sinad_db(0.0f), signal_power_dbm(-120.0f), noise_power_dbm(-120.0f),
           fec_errors_corrected(0), decode_success(false),
           multipath_delay_ms(0.0f), timestamp_ms(0),
           non_unanimous_count(0), golay_uncorrectable(false) {}
@@ -203,18 +204,21 @@ public:
      */
     float estimate_ber(int errors_corrected, int total_words) const;
     
-    /**
-     * @brief Convert measured multipath delay (ms) to 3-bit LQA code (AC-CHAN-002-003)
-     *
-     * Maps multipath delay onto the 3-bit CMD LQA MP field
-     * (MIL-STD-188-141B A.5.4.2, Table A-XIII):
-     *   < 0 ms   → code 0 (negative clamped)
-     *   0..6 ms  → code 0..6 (floor to integer ms)
-     *   > 6 ms   → code 7  ("6+ ms" saturation / out-of-range)
-     *
-     * @param delay_ms Measured multipath delay in milliseconds
-     * @return 3-bit code 0–7 (7 = 6+ ms or not measured)
-     */
+/**
+ * @brief Convert measured multipath delay (ms) to 3-bit LQA code (AC-CHAN-002-003)
+ *
+ * Maps multipath delay onto the 3-bit CMD LQA MP field
+ * (MIL-STD-188-141B A.5.4.2, Table A-XIII):
+ *   < 0 ms   → code 0 (negative clamped)
+ *   0..6 ms  → code 0..6 (rounded to nearest ms)
+ *   > 6 ms   → code 6  ("≥ 6 ms" saturation per A.5.4.2.3)
+ *
+ * Code 7 (kMpLqaNotMeasured) is NOT returned by this function; it is only set
+ * explicitly by callers when multipath was not measured.
+ *
+ * @param delay_ms Measured multipath delay in milliseconds
+ * @return 3-bit code 0–6
+ */
     uint8_t multipath_delay_to_lqa_code(float delay_ms) const;
 
     /**
@@ -283,6 +287,7 @@ private:
     LQADatabase* database_;                  ///< LQA database to update
     MetricsConfig config_;                   ///< Configuration
     std::vector<MetricsSample> samples_;     ///< Averaging window
+    BerAccumulator ber_acc_;                 ///< A.5.4.1.1 per-frame BER accumulator
 
     // Rolling 60-min noise floor window (AC-CHAN-004-001)
     struct NoiseFloorSample { uint32_t timestamp_ms; float noise_dbm; };
@@ -385,21 +390,18 @@ LQACmdPayload decode_lqa_cmd(uint32_t word24);
 uint8_t lqa_age_code(uint32_t last_contact_ms, uint32_t now_ms);
 
 /**
- * @brief Multipath delay → 3-bit LQA code per MIL-STD-188-141B A.5.4.1.
+ * @brief Multipath delay → 3-bit LQA code per MIL-STD-188-141B A.5.4.2.3.
  *
  * delay_ms | code
  * ---------|------
  *  < 0     |  0  (treated as 0 ms)
- *  0–1 ms  |  0–1
- *  …       |  …
- *  6 ms    |  6
- *  > 6 ms  |  7  (saturation)
+ *  0–6 ms  |  0–6 (rounded to nearest ms)
+ *  > 6 ms  |  6  ("≥ 6 ms" saturation)
  *
- * Codes 0–6 reflect the floored integer millisecond value.
- * Code 7 = "> 6 ms" per spec.
+ * Code 7 (kMpLqaNotMeasured) is used only when multipath was not measured.
  *
  * @param delay_ms  Estimated multipath delay in milliseconds (≥ 0)
- * @return 3-bit code [0-7]
+ * @return 3-bit code [0-6]
  */
 uint8_t multipath_delay_to_lqa_code(float delay_ms);
 

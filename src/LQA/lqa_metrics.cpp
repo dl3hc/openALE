@@ -46,6 +46,9 @@ void LQAMetrics::add_sample(const MetricsSample& sample,
         }
     }
 
+    // A.5.4.1.1: accumulate non-unanimous vote count per received word
+    ber_acc_.add_word(sample.non_unanimous_count, sample.golay_uncorrectable);
+
     // Add to averaging window
     samples_.push_back(sample);
 
@@ -75,12 +78,13 @@ void LQAMetrics::update_database(uint32_t frequency_hz,
     // Compute averaged metrics
     MetricsSample avg = compute_average();
     
-    // Estimate BER from FEC errors
-    float ber = estimate_ber(accumulated_.total_fec_errors, 
-                            accumulated_.total_words);
+    // A.5.4.1.1: BER = averaged non-unanimous vote count over all received words (0–48)
+    float ber = static_cast<float>(ber_acc_.ber_score());
     
-    // Calculate SINAD, clamp to LQA code [0,30] before storing (REQ-CHAN-013)
-    float sinad_code = static_cast<float>(sinad_to_lqa_code(calculate_sinad(avg.snr_db, -30.0f)));
+    // A.5.4.1.2: SINAD = time-averaged Goertzel measurement over signal duration.
+    // avg.sinad_db is already averaged across all received words (per compute_average()).
+    // Clamp to LQA code [0,30] before storing (REQ-CHAN-013).
+    float sinad_code = static_cast<float>(sinad_to_lqa_code(avg.sinad_db));
 
     // Detect multipath if enabled
     float multipath_score = 0.0f;
@@ -116,6 +120,7 @@ void LQAMetrics::update_database(uint32_t frequency_hz,
     // Reset accumulators for next window
     accumulated_.total_fec_errors = 0;
     accumulated_.total_words = 0;
+    ber_acc_.reset();
 }
 
 MetricsSample LQAMetrics::compute_average() const {
@@ -125,19 +130,22 @@ MetricsSample LQAMetrics::compute_average() const {
     
     MetricsSample avg;
     float sum_snr = 0.0f;
+    float sum_sinad = 0.0f;
     float sum_signal = 0.0f;
     float sum_noise = 0.0f;
     float sum_multipath = 0.0f;
-    
+
     for (const auto& s : samples_) {
         sum_snr += s.snr_db;
+        sum_sinad += s.sinad_db;
         sum_signal += s.signal_power_dbm;
         sum_noise += s.noise_power_dbm;
         sum_multipath += s.multipath_delay_ms;
     }
-    
+
     size_t n = samples_.size();
     avg.snr_db = sum_snr / n;
+    avg.sinad_db = sum_sinad / n;
     avg.signal_power_dbm = sum_signal / n;
     avg.noise_power_dbm = sum_noise / n;
     avg.multipath_delay_ms = sum_multipath / n;
@@ -178,8 +186,8 @@ uint8_t LQAMetrics::sinad_to_lqa_code(float sinad_db) const {
 
 uint8_t LQAMetrics::multipath_delay_to_lqa_code(float delay_ms) const {
     if (delay_ms < 0.0f) return 0u;
-    if (delay_ms > 6.0f) return 7u;                      // "6+ ms" → saturation code 7
-    return static_cast<uint8_t>(delay_ms);                // floor to 0..6
+    if (delay_ms > 6.0f) return 6u;                      // "≥ 6 ms" → saturation code 6 (A.5.4.2.3)
+    return static_cast<uint8_t>(std::round(delay_ms));   // round to nearest ms (A.5.4.2.3)
 }
 
 float LQAMetrics::estimate_ber(int errors_corrected, int total_words) const {
@@ -251,6 +259,7 @@ void LQAMetrics::reset() {
     samples_.clear();
     accumulated_.total_fec_errors = 0;
     accumulated_.total_words = 0;
+    ber_acc_.reset();
 }
 
 size_t LQAMetrics::get_sample_count() const {
@@ -327,8 +336,8 @@ uint8_t lqa_age_code(uint32_t last_contact_ms, uint32_t now_ms) {
 
 uint8_t multipath_delay_to_lqa_code(float delay_ms) {
     if (delay_ms < 0.0f) return 0u;
-    if (delay_ms > 6.0f) return 7u;              // "> 6 ms" saturation
-    return static_cast<uint8_t>(delay_ms);        // floor to code 0–6
+    if (delay_ms > 6.0f) return 6u;                      // "≥ 6 ms" → saturation code 6 (A.5.4.2.3)
+    return static_cast<uint8_t>(std::round(delay_ms));   // round to nearest ms (A.5.4.2.3)
 }
 
 } // namespace ale

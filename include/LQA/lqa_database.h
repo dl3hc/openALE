@@ -47,7 +47,7 @@ struct LQAEntry {
     uint32_t frequency_hz;           ///< Channel frequency in Hz
     std::string remote_station;      ///< Remote station address (or "" for sounding)
     float snr_db;                    ///< Signal-to-Noise Ratio (dB)
-    float ber;                       ///< Bit Error Rate (0.0 - 1.0)
+    float ber;                       ///< Averaged non-unanimous 2/3-vote count (0.0–48.0, A.5.4.1.1)
     float sinad_db;                  ///< SINAD (Signal+Noise+Distortion to Noise+Distortion)
     int fec_errors;                  ///< Total Golay FEC errors corrected
     int total_words;                 ///< Total ALE words received
@@ -68,6 +68,10 @@ struct LQAEntry {
     bool    bilateral_handshake_tried; ///< true = call attempted, no CMD LQA received ("X" in Figure A-27)
                                        ///<        false = never tried ("-" in Figure A-27)
 
+    // A.5.4.5.1: recently failed handshake → deprioritise in channel ranking.
+    // Not persisted (volatile within session; 0 = no known failure).
+    uint32_t last_failed_handshake_ms = 0;
+
     /**
      * @brief Default constructor — bilateral fields initialised to "no data" sentinels.
      */
@@ -78,7 +82,8 @@ struct LQAEntry {
           last_sounding_ms(0), last_contact_ms(0), score(0.0f),
           sample_count(0),
           bilateral_sinad(31u), bilateral_ber(31u), bilateral_mp(7u),
-          bilateral_handshake_tried(false) {}
+          bilateral_handshake_tried(false),
+          last_failed_handshake_ms(0) {}
 
     /**
      * @brief Timestamp of the most recent activity on this channel/station.
@@ -253,6 +258,17 @@ public:
      */
     void mark_bilateral_attempted(uint32_t frequency_hz,
                                   const std::string& remote_station);
+
+    /**
+     * @brief Record a failed handshake attempt on @p frequency_hz for @p remote_station
+     *        (A.5.4.5.1 — recently failed channels must be deprioritised in ranking).
+     *
+     * Sets last_failed_handshake_ms to @p timestamp_ms (current time when 0).
+     * Creates a stub entry when none exists.
+     */
+    void record_handshake_fail(uint32_t frequency_hz,
+                               const std::string& remote_station,
+                               uint32_t timestamp_ms = 0);
 
     /**
      * @brief Get LQA entry for specific channel/station

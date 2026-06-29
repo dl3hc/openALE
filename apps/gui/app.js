@@ -139,7 +139,7 @@ function updateLinkQualityFromLqa(peerAddr) {
            : best.score >= 10 ? 'Fair' : 'Poor';
   const sinadPart = best.sinad !== '—' ? ' · +' + best.sinad + ' dB' : '';
   const lbl = document.getElementById('qualityLbl');
-  if (lbl) lbl.textContent = qt + ' · score=' + best.score + sinadPart;
+  if (lbl) lbl.textContent = qt + sinadPart;
   const bars = Math.min(5, Math.floor(best.score / 6));
   document.querySelectorAll('#qbars .qbar')
     .forEach((b, i) => b.classList.toggle('inactive', i >= bars));
@@ -1356,8 +1356,11 @@ function updateAutoAcceptUi() {
 
 function saveSettings() {
   applyManualAcceptToBridge();
-  applyTimingToBridge();   // Sounding Interval / Link Idle / Max Tune → core
-  applySoundAuto();        // interval may have changed → re-assert periodic mode
+  applyTimingToBridge();      // Timing + Calling Policy → core
+  applyLqaToBridge();         // Record-LQA toggle → core (A.5.4.1.1)
+  applyRelinkToBridge();      // Auto-Relink toggle + threshold → core (A.5.4.5)
+  applyEnhFreqSelectToBridge(); // Enhanced Freq-Select → core (A.5.6.3.2)
+  applySoundAuto();           // interval may have changed → re-assert periodic mode
   updateSelfHeader();
   closeSettings();
 }
@@ -1495,8 +1498,7 @@ function closeSoundPanel() {
   updateSoundBtn();
 }
 
-// Push Timing settings (Settings ▸ Timing) to the core via TIMING_SET. Without
-// this the Sounding Interval / Link Idle / Tune / Scan-dwell fields were cosmetic.
+// Push Timing + Calling Policy settings to the core via TIMING_SET.
 function applyTimingToBridge() {
   if (!bridgeConnected) return;
   const num = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v > 0 ? v : null; };
@@ -1508,7 +1510,53 @@ function applyTimingToBridge() {
   const numZ = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v >= 0 ? v : null; };
   const pl = numZ('cfgPttLead');    if (pl !== null) args.ptt_lead_ms = pl;
   const pt = numZ('cfgPttTail');    if (pt !== null) args.ptt_tail_ms = pt;
+  const sc = numZ('cfgTargetScan'); if (sc !== null) args.assumed_scan_channels = sc;
   bridgeSend('TIMING_SET', args);
+}
+
+// Push the "Record LQA" toggle to the core (A.5.4.1.1 per-frame BER/SNR
+// measurement into the LQA Memory). Fired on change and from saveSettings().
+function applyLqaToBridge() {
+  if (!bridgeConnected) return;
+  const on = document.getElementById('cfgRecLqa')?.checked ?? true;
+  bridgeSend('LQA_SET', { lqa_enabled: on });
+}
+
+// Push Auto-Relink settings (enabled + threshold) to the core (A.5.4.5).
+// Fired on change and from saveSettings().
+function applyRelinkToBridge() {
+  if (!bridgeConnected) return;
+  const on  = document.getElementById('cfgAutoRelink')?.checked ?? false;
+  const thr = parseFloat(document.getElementById('cfgRelinkThreshold')?.value ?? '5') || 5;
+  bridgeSend('RELINK_SET', { relink_enabled: on, relink_threshold: thr });
+}
+
+// Sync Auto-Relink state from core into the GUI toggles.
+function syncRelinkFromBridge() {
+  bridgeSend('RELINK_GET', {}, (r) => {
+    if (!r.ok) return;
+    const elOn  = document.getElementById('cfgAutoRelink');
+    const elThr = document.getElementById('cfgRelinkThreshold');
+    if (elOn  && typeof r.relink_enabled   === 'boolean') elOn.checked  = r.relink_enabled;
+    if (elThr && typeof r.relink_threshold === 'number')  elThr.value   = r.relink_threshold;
+  });
+}
+
+// Push Enhanced Frequency-Select state to the core (A.5.6.3.2 CMD 'f' bilateral).
+function applyEnhFreqSelectToBridge() {
+  if (!bridgeConnected) return;
+  const on = document.getElementById('cfgEnhFreqSelect')?.checked ?? false;
+  bridgeSend('FREQ_SELECT_SET', { enhanced_freq_select: on });
+}
+
+// Sync Enhanced Frequency-Select state from core into the GUI toggle.
+function syncEnhFreqSelectFromBridge() {
+  bridgeSend('FREQ_SELECT_GET', {}, (r) => {
+    if (!r.ok) return;
+    const el = document.getElementById('cfgEnhFreqSelect');
+    if (el && typeof r.enhanced_freq_select === 'boolean')
+      el.checked = r.enhanced_freq_select;
+  });
 }
 
 function toggleScan() {
@@ -1804,6 +1852,15 @@ function fmtBerCode(code) {
 // incorporates the bilateral fallback (compute_score), so it is non-zero for
 // bilateral-only stub entries.
 function syncLqaFromBridge() {
+  // Reflect the core's Record-LQA state into the toggle (A.5.4.1.1).
+  bridgeSend('LQA_GET', {}, (r) => {
+    if (r.ok && typeof r.lqa_enabled === 'boolean') {
+      const el = document.getElementById('cfgRecLqa');
+      if (el) el.checked = r.lqa_enabled;
+    }
+  });
+  syncRelinkFromBridge();
+  syncEnhFreqSelectFromBridge();
   bridgeSend('LQA_LIST', {}, (r) => {
     if (!r.ok) return;
     const prevKeys = new Set(lqaEntries.map(e => e.addr + '|' + e.ch));
@@ -1848,6 +1905,11 @@ function syncLqaFromBridge() {
 // LQA changes from real radio activity (soundings/contacts), not GUI
 // actions — periodic poll, same reasoning as the VFO poll above.
 setInterval(() => { if (bridgeConnected) syncLqaFromBridge(); }, 5000);
+
+function clearLqa() {
+  if (!confirm('Clear all LQA data? This also overwrites the saved file.')) return;
+  bridgeSend('LQA_CLEAR', {}, () => syncLqaFromBridge());
+}
 
 function lqaClass(s) { return s >= 24 ? 'lqa-hi' : s >= 14 ? 'lqa-mid' : 'lqa-lo'; }
 function renderLqa() {

@@ -364,38 +364,37 @@ bool test_ale_legacy_file_without_ids_still_loads()
 }
 
 // ============================================================================
-// End-to-end: target_scan_channels auto-derivation via ALEController::initiate_call
+// End-to-end: assumed_scan_channels is the sole authority for scanning-call length
 // ============================================================================
 
-bool test_initiate_call_derives_target_scan_channels_from_net()
+bool test_initiate_call_uses_assumed_scan_channels()
 {
-    std::cout << "\n[target_scan_channels] initiate_call derives C from the target's net\n";
+    std::cout << "\n[target_scan_channels] initiate_call always uses assumed_scan_channels\n";
 
     ALEController ctrl;
     ctrl.set_self_address("SAM");
 
-    // 4 enabled + 1 disabled channel, all assigned to net "XYZ".
+    // Contact with a net — net channel count must NOT override the policy value.
     for (int i = 0; i < 5; ++i) {
         Channel ch(14250000 + i * 1000);
-        ch.enabled = (i != 4);  // last one is SCAN=N
+        ch.enabled = (i != 4);
         ctrl.add_channel(ch);
     }
     ctrl.add_net("XYZ");
     for (const auto& c : ctrl.channels())
         ctrl.assign_channel_to_net("XYZ", c.id);
-
     ctrl.add_contact("BOB", "Bob", "enabled", "XYZ", "ALL");
 
-    ctrl.set_target_scan_channels(1);  // baseline, should be overridden by the net lookup
+    ctrl.set_target_scan_channels(7);  // policy value
     bool started = ctrl.initiate_call("BOB");
-    bool derived = (ctrl.get_target_scan_channels() == 4);
+    bool used    = (ctrl.get_target_scan_channels() == 7);  // net (4) must NOT win
 
     std::cout << "  call started: " << (started ? "PASS" : "FAIL") << "\n";
-    std::cout << "  target_scan_channels derived as 4 (not 5, one disabled): "
-              << (derived ? "PASS" : "FAIL")
+    std::cout << "  assumed_scan_channels=7 used (net count 4 ignored): "
+              << (used ? "PASS" : "FAIL")
               << " (got " << ctrl.get_target_scan_channels() << ")\n";
 
-    return started && derived;
+    return started && used;
 }
 
 bool test_initiate_call_without_contact_leaves_target_scan_channels_untouched()
@@ -976,8 +975,8 @@ int run_all_tests()
     run(".ale round-trip: IDs and nets survive",    test_ale_roundtrip_ids_and_nets());
     run(".ale legacy file still loads",             test_ale_legacy_file_without_ids_still_loads());
 
-    run("initiate_call derives target_scan_channels from net",
-        test_initiate_call_derives_target_scan_channels_from_net());
+    run("initiate_call uses assumed_scan_channels (net count ignored)",
+        test_initiate_call_uses_assumed_scan_channels());
     run("initiate_call without contact leaves target_scan_channels untouched",
         test_initiate_call_without_contact_leaves_target_scan_channels_untouched());
 

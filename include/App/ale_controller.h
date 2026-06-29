@@ -93,8 +93,8 @@ public:
     /// Return the current station configuration (always in sync with subsystems).
     ALEStationConfig get_config() const { return config_; }
 
-    /// Assumed channel count of the remote station for scanning-call sizing.
-    /// 0 (default) = derive automatically from own calling_channels_ size.
+    /// Assumed scan channels of the called station — sets Tsc = C × 2 × Trw.
+    /// This is the single authority for scanning-call length (default 10 = MIL-STD max).
     void     set_assumed_scan_channels(uint32_t n) { config_.assumed_scan_channels = n; }
     uint32_t get_assumed_scan_channels() const      { return config_.assumed_scan_channels; }
 
@@ -173,6 +173,9 @@ public:
      * \return false on I/O error.
      */
     bool save_lqa(const std::string& path) const;
+
+    /** Clear all LQA entries from memory (does not touch the file on disk). */
+    void clear_lqa();
 
     /**
      * Enable/disable automatic periodic sounding on channels already in the LQA DB.
@@ -704,6 +707,35 @@ public:
     void set_debug_rx(bool on)                   { config_.debug_rx = on; debug_rx_ = on; }
     bool debug_rx() const                        { return debug_rx_; }
 
+    // ── Auto-Relink (A.5.4.5 bilateral channel renegotiation) ────────────────
+    /// Enable/disable post-link automatic channel renegotiation via TWAS + re-call.
+    /// When on and a better-scoring channel is known (from LQA/bilateral data), the
+    /// controller terminates the current link and immediately re-initiates the call
+    /// on the best available channel. Requires lqa_enabled=true.
+    void  set_relink_enabled(bool on)        { config_.relink_enabled = on; }
+    bool  relink_enabled() const             { return config_.relink_enabled; }
+    void  set_relink_threshold(float score)  { config_.relink_improvement_threshold = score; }
+    float relink_threshold() const           { return config_.relink_improvement_threshold; }
+
+    // ── Enhanced Frequency-Select (CMD 'f' bilateral post-link negotiation) ───
+    /// When on, proposes better channels to the peer via standard CMD 'f' (A.5.6.3.2)
+    /// before TWAS. The peer evaluates its LQA for the proposed channel and echoes
+    /// CMD 'f' to accept or sends CMD 'f'(freq=0) to reject. Standard ALE 2G stations
+    /// ignore CMD 'f' in LINKED state (per A.5.6.3.2d) — no relink occurs then.
+    void set_enhanced_freq_select(bool on) { config_.enhanced_freq_select = on; }
+    bool enhanced_freq_select() const      { return config_.enhanced_freq_select; }
+
+    // ── LQA measurement (OperatingParameters::lqa_enabled, A.5.4.1.1) ───────
+    /// Enable/disable recording of received-transmission link-quality into the
+    /// LQA Memory: the per-frame FROM-direction BER (averaged non-unanimous
+    /// 2/3-votes) and SNR, measured for every received transmission after word
+    /// sync — soundings and handshake/linked frames alike.  On by default.
+    /// Independent of config_.lqa_exchange_enabled, which governs the *active*
+    /// CMD-LQA/NOISE/Report exchange (TX). With this off the receiver still
+    /// links but stores no new channel-quality data.
+    void set_lqa_enabled(bool on)                { op_params_.set_lqa_enabled(on); }
+    bool lqa_enabled() const                     { return op_params_.lqa_enabled; }
+
     // ── Spectrum / waterfall ────────────────────────────────────────────────
     using SpectrumCallback = ALE2GModem::Demodulator::SpectrumCallback;
 
@@ -851,6 +883,38 @@ private:
     uint32_t                 sounding_word_count_ = 0;
     float                    sounding_snr_sum_    = 0.0f;
     float                    sounding_ber_sum_    = 0.0f;
+    float                    sounding_sinad_sum_  = 0.0f;  ///< A.5.4.1.2 SINAD accumulator
+
+    // Run-time tunables (Stores/ale_data_store.h). Only lqa_enabled is consulted
+    // here — it gates the per-frame FROM-direction BER/SNR measurement into the
+    // LQA Memory (A.5.4.1.1). The struct's other fields are covered by
+    // ALEStationConfig / dedicated setters and remain unused in this instance.
+    OperatingParameters      op_params_;
+
+    // Auto-Relink: set in evaluate_relink() when a better channel is found;
+    // consumed in update() once SM returns to IDLE/SCANNING after TWAS.
+    std::string              pending_relink_addr_;
+
+    // Enhanced Frequency-Select (CMD 'f', A.5.6.3.2) post-link bilateral negotiation.
+    enum class FreqSelectPhase : uint8_t { IDLE, PROPOSED, EXECUTING };
+    FreqSelectPhase          fs_phase_          = FreqSelectPhase::IDLE;
+    uint32_t                 fs_proposed_hz_    = 0;
+    uint32_t                 fs_timeout_ms_     = 0;
+    uint32_t                 fs_cooldown_ms_    = 0;
+    std::string              fs_peer_;
+    bool                     fs_pending_cmd_rx_ = false;  // CMD 'f' recvd, waiting for DATA
+
+    // A.5.4.1.1 per-frame FROM-direction BER for received transmissions OTHER
+    // than soundings (handshake / linked frames — the sounding path in
+    // SCANNING/IDLE is handled by commit_sounding_sample()). Accumulates the
+    // non-unanimous 2/3-vote count per word; committed at frame settle (Tdrw of
+    // silence) to (peer, channel) via commit_rx_ber_sample(). Gated on
+    // op_params_.lqa_enabled.
+    BerAccumulator           rx_ber_acc_;
+    float                    rx_ber_snr_sum_    = 0.0f;
+    float                    rx_ber_sinad_sum_  = 0.0f;  ///< A.5.4.1.2 SINAD accumulator
+    uint32_t                 rx_ber_freq_hz_   = 0;
+    uint32_t                 rx_ber_settle_ms_ = 0;
 
     void wire_callbacks();
     void on_sm_state_change(ALEState from, ALEState to);
@@ -859,14 +923,6 @@ private:
     // Returns a CMD LQA payload populated from the LQA DB entry for freq_hz.
     // Fields default to "no-value" sentinels when no entry exists.
     LQACmdPayload compute_lqa_payload(uint32_t freq_hz) const;
-
-    /**
-     * If target_addr is a registered Contact with a net membership that
-     * resolves to a known Net, derive target_scan_channels from that net's
-     * scan/sounding-enabled channel count (net_scan_channel_count()) and push
-     * it to sm_. No-op when no contact/net mapping is known.
-     */
-    void apply_target_scan_channels_for(const std::string& target_addr);
 
     /// Resolve a net's scan/sounding-enabled channels (by id, from
     /// calling_channels_) for a multi-channel sounding sweep. Empty if the net
@@ -884,6 +940,24 @@ private:
     /// snr/ber) to the LQA DB and clear the reassembly buffer. No-op if nothing
     /// is buffered. Called from update() once the frame has settled (Tdrw silence).
     void commit_sounding_sample();
+    /// Evaluate whether the current link should be renegotiated to a better channel.
+    /// Called from update() while LINKED + relink_enabled. Sets pending_relink_addr_
+    /// and calls sm_.terminate_link() when a significantly better channel is found.
+    void evaluate_relink(uint32_t now_ms);
+    /// EFS: Propose a better channel to the peer via CMD 'f' (A.5.6.3.2).
+    /// Called from update() while LINKED + enhanced_freq_select + IDLE phase.
+    void evaluate_freq_proposal(uint32_t now_ms);
+    /// EFS: Handle the peer's CMD 'f' + DATA response (accept or reject).
+    void handle_freq_select_response(uint32_t freq_hz, uint32_t now_ms);
+    /// EFS: Handle an incoming CMD 'f' proposal from the peer.
+    void handle_freq_select_proposal(uint32_t freq_hz, const std::string& peer, uint32_t now_ms);
+    /// EFS: Queue CMD 'f' + DATA(freq_hz) as a linked orderwire via the SM.
+    void send_freq_select_orderwire(uint32_t freq_hz);
+    /// Commit the accumulated non-sounding RX-frame BER/SNR (A.5.4.1.1 linear
+    /// average) to the LQA DB for the measured peer + channel, then reset the
+    /// accumulator. No-op if no words are buffered or no peer is resolvable.
+    /// Called from update() once the frame has settled (Tdrw silence).
+    void commit_rx_ber_sample();
     void emit_status(const std::string& msg);
     void emit_event(pal::EventType type, const std::string& msg = "", int32_t code = 0);
 };

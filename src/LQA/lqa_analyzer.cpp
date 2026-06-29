@@ -6,11 +6,16 @@
 #include "LQA/lqa_analyzer.h"
 #include <algorithm>
 #include <chrono>
+#include <map>
 #include <sstream>
 #include <iomanip>
 #include <set>
 
 namespace ale {
+
+// Forward declarations for free helpers (defined below rank_channels_for_station)
+float channel_from_score(const LQAEntry& entry);
+float channel_to_score(const LQAEntry& entry);
 
 LQAAnalyzer::LQAAnalyzer(LQADatabase* database)
     : database_(database), sounding_cb_(nullptr) {
@@ -38,19 +43,19 @@ void LQAAnalyzer::process_sounding(const std::string& station,
                                   uint32_t frequency_hz,
                                   float snr_db,
                                   float ber,
+                                  float sinad_db,
                                   uint32_t timestamp_ms) {
-    if (!database_) {
-        return;
-    }
-    
+    if (!database_) return;
+
     uint32_t now = (timestamp_ms == 0) ? get_current_time_ms() : timestamp_ms;
-    
-    // Update database with sounding result
-    // For sounding, use empty station address to indicate general channel quality
-    database_->update_entry(frequency_hz, "", snr_db, ber, 0, 1, now);
-    
-    // Also update for specific station
-    database_->update_entry(frequency_hz, station, snr_db, ber, 0, 1, now);
+
+    // A.5.4.1.2: write measured SINAD via update_entry_extended so the sinad_db
+    // field is populated for both the channel entry and the station entry.
+    // multipath and noise-floor are not measured during sounding — use defaults.
+    database_->update_entry_extended(frequency_hz, "", snr_db, ber, sinad_db,
+                                     0.0f, -120.0f, 0, 1, now);
+    database_->update_entry_extended(frequency_hz, station, snr_db, ber, sinad_db,
+                                     0.0f, -120.0f, 0, 1, now);
 }
 
 void LQAAnalyzer::process_sounding_extended(const std::string& station,
@@ -61,17 +66,26 @@ void LQAAnalyzer::process_sounding_extended(const std::string& station,
     }
     
     uint32_t now = (sample.timestamp_ms == 0) ? get_current_time_ms() : sample.timestamp_ms;
-    
-    // Estimate BER from decode success
-    float ber = sample.decode_success ? 0.001f : 0.1f;
-    
+
+    // A.5.4.1.1: BER = non-unanimous vote count (0–48).
+    // Uncorrectable word → 48; correctable → 48 − unanimous_votes.
+    // Fall back to decode_success heuristic when no vote count is available.
+    float ber;
+    if (sample.golay_uncorrectable) {
+        ber = 48.0f;
+    } else if (sample.non_unanimous_count > 0 || sample.decode_success) {
+        ber = static_cast<float>(sample.non_unanimous_count);
+    } else {
+        ber = 48.0f;  // no info, assume worst case
+    }
+
     // Update with full metrics
     database_->update_entry_extended(
         frequency_hz,
         station,
         sample.snr_db,
         ber,
-        sample.snr_db,  // SINAD approximation (same as SNR for now)
+        sample.sinad_db,  // A.5.4.1.2: measured Goertzel SINAD (dB)
         sample.multipath_delay_ms / 10.0f,  // Normalize to 0-1
         sample.noise_power_dbm,
         sample.fec_errors_corrected,
@@ -146,56 +160,75 @@ std::shared_ptr<ChannelRank> LQAAnalyzer::get_best_channel() const {
     );
 }
 
-std::vector<ChannelRank> LQAAnalyzer::rank_all_channels() const {
+std::vector<ChannelRank> LQAAnalyzer::rank_all_channels(
+        SelectionMode mode,
+        const std::vector<std::string>& target_stations,
+        float min_path_score) const {
     std::vector<ChannelRank> ranks;
-    
-    if (!database_) {
-        return ranks;
-    }
-    
-    // Get all entries
-    auto all_entries = database_->get_all_entries();
-    
-    // Group by frequency and compute aggregate scores
+
+    if (!database_) return ranks;
+
+    // Group all entries by frequency, optionally filtered to target_stations.
     std::map<uint32_t, std::vector<LQAEntry>> by_frequency;
-    for (const auto& entry : all_entries) {
+    for (const auto& entry : database_->get_all_entries()) {
+        if (entry.remote_station.empty()) continue;  // skip channel-only sounding stubs
+        if (!target_stations.empty()) {
+            bool found = false;
+            for (const auto& s : target_stations)
+                if (s == entry.remote_station) { found = true; break; }
+            if (!found) continue;
+        }
         by_frequency[entry.frequency_hz].push_back(entry);
     }
-    
-    // Create ranks
+
     for (const auto& pair : by_frequency) {
-        uint32_t freq = pair.first;
-        const auto& entries = pair.second;
-        
-        // Find best station on this channel
-        auto best = std::max_element(entries.begin(), entries.end(),
-            [](const LQAEntry& a, const LQAEntry& b) {
-                return a.score < b.score;
-            });
-        
-        // Compute aggregate score (average of all stations)
-        float aggregate_score = 0.0f;
-        uint32_t latest_update = 0;
+        uint32_t freq             = pair.first;
+        const auto& entries       = pair.second;
+        float aggregate_score     = 0.0f;
+        int   qualifying          = 0;
+        uint32_t latest_update    = 0;
+        std::string best_station;
+        float best_path           = -1.0f;
+
         for (const auto& e : entries) {
-            aggregate_score += e.score;
-            latest_update = std::max(latest_update, e.last_activity_ms());
+            float path_score;
+            switch (mode) {
+                case SelectionMode::BROADCAST:
+                    path_score = channel_to_score(e);
+                    if (path_score < 0) path_score = e.score;
+                    break;
+                case SelectionMode::LISTENING:
+                    path_score = channel_from_score(e);
+                    if (path_score < 0) path_score = e.score;
+                    break;
+                case SelectionMode::LINK_ESTABLISHMENT:
+                default:
+                    path_score = bilateral_channel_score(e);
+                    break;
+            }
+            if (path_score < min_path_score) continue;  // A.5.4.6 per-path filter
+            aggregate_score += path_score;
+            ++qualifying;
+            uint32_t act = e.last_activity_ms();
+            if (act > latest_update) latest_update = act;
+            if (path_score > best_path) { best_path = path_score; best_station = e.remote_station; }
         }
-        aggregate_score /= entries.size();
-        
-        ranks.emplace_back(freq, aggregate_score, best->remote_station, latest_update);
+
+        if (qualifying == 0) continue;  // no path meets min_path_score on this channel
+        aggregate_score /= static_cast<float>(qualifying);
+        ranks.emplace_back(freq, aggregate_score, best_station, latest_update);
     }
-    
-    // Sort by score (highest first)
+
     std::sort(ranks.begin(), ranks.end(),
-        [](const ChannelRank& a, const ChannelRank& b) {
-            return a.score > b.score;
-        });
-    
+        [](const ChannelRank& a, const ChannelRank& b) { return a.score > b.score; });
+
     return ranks;
 }
 
+
 std::vector<ChannelRank> LQAAnalyzer::rank_channels_for_station(
-    const std::string& station) const {
+    const std::string& station,
+    SelectionMode mode) const {
     
     std::vector<ChannelRank> ranks;
     
@@ -206,22 +239,68 @@ std::vector<ChannelRank> LQAAnalyzer::rank_channels_for_station(
     auto entries = database_->get_entries_for_station(station);
     
     for (const auto& entry : entries) {
-        float score = bilateral_channel_score(entry);
+        float from_q = -1.0f;
+        float to_q   = -1.0f;
+        float score;
+        
+        switch (mode) {
+            case SelectionMode::BROADCAST:
+                // TO-direction only (peer→us)
+                to_q = channel_to_score(entry);
+                score = (to_q >= 0) ? to_q : entry.score;
+                from_q = -1.0f;  // not used in this mode
+                break;
+
+            case SelectionMode::LISTENING:
+                // FROM-direction only (us←peer)
+                from_q = channel_from_score(entry);
+                score = (from_q >= 0) ? from_q : entry.score;
+                to_q = -1.0f;  // not used in this mode
+                break;
+
+            case SelectionMode::LINK_ESTABLISHMENT:
+            default:
+                // Bilateral (FROM+TO)/2 with balance tiebreaker
+                score = bilateral_channel_score(entry, from_q, to_q);
+                break;
+        }
+
+        // A.5.4.5.1: recently-failed handshake → deprioritise this channel.
+        if (entry.last_failed_handshake_ms > 0) {
+            const uint32_t now_ms = get_current_time_ms();
+            const uint32_t age   = now_ms - entry.last_failed_handshake_ms;
+            if (age < config_.handshake_fail_penalty_window_ms)
+                score *= config_.handshake_fail_score_factor;
+        }
+
         ranks.emplace_back(entry.frequency_hz, score, station,
                            entry.last_activity_ms());
+        // Store quality values for tiebreaking
+        ranks.back().from_quality = from_q;
+        ranks.back().to_quality = to_q;
     }
 
-    // Sort by score (highest first)
+    // Sort by score (highest first), then by balance tiebreaker
     std::sort(ranks.begin(), ranks.end(),
         [](const ChannelRank& a, const ChannelRank& b) {
-            return a.score > b.score;
+            if (std::abs(a.score - b.score) > 0.01f) return a.score > b.score;
+            // Tiebreaker: prefer more balanced path (A.5.4.5.1)
+            const float imb_a = (a.from_quality >= 0 && a.to_quality >= 0)
+                ? std::abs(a.from_quality - a.to_quality) : 30.0f;
+            const float imb_b = (b.from_quality >= 0 && b.to_quality >= 0)
+                ? std::abs(b.from_quality - b.to_quality) : 30.0f;
+            return imb_a < imb_b;  // lower imbalance = more balanced = preferred
         });
 
     return ranks;
 }
 
-float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry) const {
+float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry,
+                                            float& from_q_out,
+                                            float& to_q_out) const {
     if (entry.bilateral_sinad > 30u) {
+        from_q_out = -1.0f;
+        to_q_out = -1.0f;
         return entry.score;  // No bilateral SINAD data — fall back to composite score
     }
     // TO direction: bilateral SINAD code is dB directly, higher = better
@@ -243,8 +322,43 @@ float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry) const {
         from_quality = entry.score;
     }
 
-    // Bilateral minimization per A.5.4.5: worst direction determines link quality
-    return std::min(from_quality, to_quality);
+    // Store outputs for use in ranking
+    from_q_out = from_quality;
+    to_q_out = to_quality;
+    
+    // Bilateral averaging per A.5.4.5.1: (FROM + TO) / 2
+    // When both directions are known, return the average of both qualities.
+    // Otherwise, fall back to the original composite score.
+    return (from_quality >= 0 && to_quality >= 0) ? (from_quality + to_quality) / 2.0f : entry.score;
+}
+
+// Wrapper for backward compatibility
+float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry) const {
+    float f, t;
+    return bilateral_channel_score(entry, f, t);
+}
+
+// New helper functions for rank_channels_for_station
+float channel_from_score(const LQAEntry& entry) {
+    if (entry.sinad_db > 0.0f) {
+        return std::min(30.0f, entry.sinad_db);
+    } else {
+        return entry.score;
+    }
+}
+
+float channel_to_score(const LQAEntry& entry) {
+    if (entry.bilateral_sinad > 30u) {
+        return -1.0f;  // No bilateral data
+    }
+    // TO direction: bilateral SINAD code is dB directly, higher = better
+    float to_quality = static_cast<float>(entry.bilateral_sinad);
+    if (entry.bilateral_ber <= 30u) {
+        // BER code is the 2/3-vote count, lower = better (A.5.4.2.1 / Table A-XIII).
+        const float ber_q = 30.0f - static_cast<float>(entry.bilateral_ber);
+        to_quality = std::min(to_quality, ber_q);
+    }
+    return to_quality;
 }
 
 float LQAAnalyzer::compute_channel_aggregate_score(uint32_t frequency_hz) const {
@@ -257,12 +371,14 @@ float LQAAnalyzer::compute_channel_aggregate_score(uint32_t frequency_hz) const 
         return 0.0f;
     }
     
-    float total_score = 0.0f;
+    float total = 0.0f;
+    int   count = 0;
     for (const auto& entry : entries) {
-        total_score += entry.score;
+        if (entry.remote_station.empty()) continue;  // skip channel-only sounding entries
+        total += bilateral_channel_score(entry);     // now uses (FROM+TO)/2 (Fix 2)
+        ++count;
     }
-    
-    return total_score / entries.size();
+    return count > 0 ? total / static_cast<float>(count) : 0.0f;
 }
 
 bool LQAAnalyzer::is_sounding_due(uint32_t frequency_hz) const {

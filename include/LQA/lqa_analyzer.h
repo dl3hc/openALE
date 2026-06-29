@@ -18,6 +18,12 @@
 #include <functional>
 
 namespace ale {
+    
+enum class SelectionMode {
+    LINK_ESTABLISHMENT,  // A.5.4.5.1: bilateral (FROM+TO)/2, tiebreak by balance
+    BROADCAST,           // A.5.4.5.2: TO-direction only (peer→us is irrelevant)
+    LISTENING,           // A.5.4.5.3: FROM-direction only (us←peer)
+};
 
 /**
  * @brief Channel ranking entry
@@ -29,12 +35,14 @@ struct ChannelRank {
     float score;              ///< Composite LQA score (0=worst .. 30=best)
     std::string best_station; ///< Station with best LQA on this channel
     uint32_t last_update_ms;  ///< Last update timestamp
+    float from_quality = -1.0f;  ///< local FROM score used for bilateral; -1 = unknown
+    float to_quality   = -1.0f;  ///< peer TO score used for bilateral; -1 = unknown
     
     ChannelRank()
-        : frequency_hz(0), score(0.0f), best_station(""), last_update_ms(0) {}
+        : frequency_hz(0), score(0.0f), best_station(""), last_update_ms(0), from_quality(-1.0f), to_quality(-1.0f) {}
     
     ChannelRank(uint32_t freq, float sc, const std::string& st, uint32_t ts)
-        : frequency_hz(freq), score(sc), best_station(st), last_update_ms(ts) {}
+        : frequency_hz(freq), score(sc), best_station(st), last_update_ms(ts), from_quality(-1.0f), to_quality(-1.0f) {}
 };
 
 /**
@@ -45,6 +53,10 @@ struct AnalyzerConfig {
     uint32_t sounding_interval_ms = 300000; ///< Sounding interval (5 minutes)
     bool prefer_recent_contacts = true;   ///< Weight recent contacts higher
     bool enable_automatic_sounding = false; ///< Auto-sound periodically
+
+    // A.5.4.5.1: recently-failed-handshake penalty
+    uint32_t handshake_fail_penalty_window_ms = 300000; ///< Penalty window (5 min)
+    float    handshake_fail_score_factor      = 0.5f;   ///< Score multiplier while penalised
 };
 
 /**
@@ -109,13 +121,15 @@ public:
      * @param station Station that sent sounding
      * @param frequency_hz Channel frequency
      * @param snr_db Measured SNR
-     * @param ber Estimated BER
+     * @param ber Estimated BER (A.5.4.1.1 non-unanimous vote count, 0–48)
+     * @param sinad_db Measured SINAD (dB, A.5.4.1.2); 0.0 = not measured
      * @param timestamp_ms Sounding timestamp (0 = current time)
      */
     void process_sounding(const std::string& station,
                          uint32_t frequency_hz,
                          float snr_db,
                          float ber,
+                         float sinad_db = 0.0f,
                          uint32_t timestamp_ms = 0);
     
     /**
@@ -150,22 +164,35 @@ public:
     std::shared_ptr<ChannelRank> get_best_channel() const;
     
     /**
-     * @brief Rank all channels by quality
-     * 
-     * Returns channels sorted by LQA score (highest first).
-     * 
+     * @brief Rank all channels by quality (A.5.4.6 multi-station selection)
+     *
+     * Aggregates LQA scores from all stations (or a filtered subset) per channel,
+     * then sorts highest first.  The @p mode controls which direction is weighted:
+     *   - LINK_ESTABLISHMENT  bilateral (FROM+TO)/2
+     *   - BROADCAST           TO-direction (peer→us, A.5.4.5.2)
+     *   - LISTENING           FROM-direction (us←peer, A.5.4.5.3)
+     *
+     * @param mode            Direction priority (default: LINK_ESTABLISHMENT)
+     * @param target_stations Only include entries for these stations; empty = all
+     * @param min_path_score  Per-path minimum score; channel aggregated only over
+     *                        entries that meet this threshold (A.5.4.6 filter)
      * @return Vector of ranked channels
      */
-    std::vector<ChannelRank> rank_all_channels() const;
+    std::vector<ChannelRank> rank_all_channels(
+        SelectionMode mode = SelectionMode::LINK_ESTABLISHMENT,
+        const std::vector<std::string>& target_stations = {},
+        float min_path_score = 0.0f) const;
     
-    /**
+/**
      * @brief Rank channels for specific station
      * 
      * @param station Target station address
+     * @param mode Selection mode (default: LINK_ESTABLISHMENT)
      * @return Vector of ranked channels for this station
      */
     std::vector<ChannelRank> rank_channels_for_station(
-        const std::string& station) const;
+        const std::string& station,
+        SelectionMode mode = SelectionMode::LINK_ESTABLISHMENT) const;
     
     /**
      * @brief Check if sounding is due for a channel
@@ -229,25 +256,22 @@ public:
     float compute_channel_aggregate_score(uint32_t frequency_hz) const;
 
 private:
-    /**
-     * @brief Bilateral channel score for a single entry (MIL-STD-188-141B A.5.4.5)
-     *
-     * When bilateral SINAD is available (bilateral_sinad <= 30):
-     *   - FROM quality = 30 - sinad_code_from  (derived from entry.sinad_db when > 0)
-     *   - TO quality   = 30 - entry.bilateral_sinad
-     *   - Returns min(from_quality, to_quality)  — worst direction determines ranking
-     *
-     * When bilateral SINAD is not available:
-     *   - Falls back to entry.score (composite LQA score)
-     *
-     * SINAD and LQA Score are distinct: SINAD is a single physical measurement;
-     * LQA Score is a composite (SNR + BER + recency).  This function uses SINAD codes
-     * exclusively for bilateral comparison and score only as a fallback.
-     *
-     * @param entry  LQA database entry for one (station, channel) pair
-     * @return Score in [0, 30] (higher = better quality)
-     */
-    float bilateral_channel_score(const LQAEntry& entry) const;
+/**
+      * @brief Bilateral channel score for a single entry (MIL-STD-188-141B A.5.4.5.1)
+      *
+      * When bilateral SINAD is available (bilateral_sinad <= 30):
+      *   - FROM quality = min(30, entry.sinad_db)  (local SINAD in dB; entry.score fallback)
+      *   - TO quality   = min(bilateral_sinad, 30 - bilateral_ber)  (peer-reported)
+      *   - Returns (from_quality + to_quality) / 2  — average of both directions
+      *
+      * When bilateral SINAD is not available:
+      *   - Falls back to entry.score (composite LQA score)
+      *
+      * @param entry  LQA database entry for one (station, channel) pair
+      * @return Score in [0, 30] (higher = better quality)
+      */
+     float bilateral_channel_score(const LQAEntry& entry) const;
+     float bilateral_channel_score(const LQAEntry& entry, float& from_q_out, float& to_q_out) const;
     
     /**
      * @brief Get current timestamp in milliseconds

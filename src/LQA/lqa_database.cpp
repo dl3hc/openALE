@@ -239,6 +239,24 @@ void LQADatabase::mark_bilateral_attempted(uint32_t frequency_hz,
     it->second.score = compute_score(it->second);
 }
 
+void LQADatabase::record_handshake_fail(uint32_t frequency_hz,
+                                         const std::string& remote_station,
+                                         uint32_t timestamp_ms) {
+    EntryKey key{frequency_hz, remote_station};
+    uint32_t now = (timestamp_ms == 0) ? get_current_time_ms() : timestamp_ms;
+    auto it = entries_.find(key);
+    if (it == entries_.end()) {
+        LQAEntry entry;
+        entry.frequency_hz    = frequency_hz;
+        entry.remote_station  = remote_station;
+        entry.last_contact_ms = now;
+        evict_oldest_if_full();
+        entries_[key] = entry;
+        it = entries_.find(key);
+    }
+    it->second.last_failed_handshake_ms = now;
+}
+
 std::shared_ptr<LQAEntry> LQADatabase::get_entry(uint32_t frequency_hz,
                                                  const std::string& remote_station) const {
     EntryKey key{frequency_hz, remote_station};
@@ -349,10 +367,11 @@ float LQADatabase::compute_score(const LQAEntry& entry) const {
         float snr_component = std::min(LQA_QUALITY_MAX, std::max(0.0f, entry.snr_db));
         score += snr_component * config_.snr_weight;
 
-        // Success rate component (0-30 scale): 0 BER = 30, high BER = 0
+        // Success rate component (0-30 scale): 0 BER = 30, high BER = 0.
+        // ber is the averaged non-unanimous vote count (0.0–48.0, A.5.4.1.1).
         float success_rate = 0.0f;
         if (entry.total_words > 0) {
-            success_rate = (1.0f - std::min(1.0f, entry.ber)) * LQA_QUALITY_MAX;
+            success_rate = (1.0f - std::min(1.0f, entry.ber / 48.0f)) * LQA_QUALITY_MAX;
         }
         score += success_rate * config_.success_weight;
     } else {

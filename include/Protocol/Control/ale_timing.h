@@ -164,6 +164,16 @@ constexpr uint32_t Twa_ms = 30000u;  // Twa = 30 s
 // Link maintenance timeout  (implementation-defined — not a spec symbol)
 constexpr uint32_t LINK_TIMEOUT_MS = 120000u;  // 120 s
 
+// LINKED TX-drain safety-net timeout (implementation-defined — not a spec
+// symbol).  terminate_link() and trigger_linked_orderwire() rely on
+// on_word_complete() draining the TX burst; if that never happens (audio stall
+// or a transmit_callback that doesn't arm the frame completion), the SM would
+// otherwise hang in LINKED with RX disabled.  handle_linked() force-completes
+// the termination (or abandons the orderwire burst) once this elapses, bounding
+// the hang instead of waiting forever.  Generous vs. any real burst (max
+// termination section Tx_max = 5×Trw ≈ 2 s; orderwire bursts are a few words).
+constexpr uint32_t TX_DRAIN_TIMEOUT_MS = 10000u;  // 10 s
+
 // ────────────────────────────────────────────────────────────────────────────
 // Star calling  (Annex B §"Star calling")
 // ────────────────────────────────────────────────────────────────────────────
@@ -229,7 +239,16 @@ constexpr double calc_tx_ms(uint32_t conclusion_words) {
 //          + 5×Trw                             LISTENING(b): conclusion collect
 //          + Tlww                              LISTENING(c): settle
 //
-//   timeout = n_channels × per_ch + 2 s margin
+//   timeout = n_channels × per_ch + Tack + 2 s margin
+//
+// Tack = (Tlc + Tx) = SENDING_ACK frame (TO peer ×2 + TIS self), the 3rd
+// handshake frame the caller transmits ONCE on the linking channel after
+// LISTENING settles.  It is NOT part of per_ch (the per-channel *try* cost,
+// which ends at LISTENING); it is added once, like the margin.  Omitting it
+// made the n_channels=1 budget expire mid-ACK — single-channel calls received
+// the response but the global timeout fired before SENDING_ACK → LINKED, so
+// they dropped back to IDLE.  n_channels≥2 masked the gap via the ×n_channels
+// factor (which over-counts the one-shot ACK across every channel).
 //
 // The LISTENING windows already include the SW-decoder detect time and the
 // round-trip audio latency (see handle_calling LISTENING docs).
@@ -256,7 +275,12 @@ constexpr uint32_t calc_calling_timeout_ms(const CallingBudgetParams& p) {
     const uint32_t per_ch = Twt_ale_ms
                           + static_cast<uint32_t>(TT_BLIND_MS + 0.5)
                           + tsc + tlc + tx + listen;
-    return per_ch * p.n_channels + 2000u;
+    // SENDING_ACK frame (TO peer ×2 + TIS self) — transmitted once on the
+    // linking channel after LISTENING settles.  Added once (not per channel):
+    // without it the n_channels=1 budget fired mid-ACK and single-channel
+    // links never reached LINKED.
+    const uint32_t tack = tlc + tx;
+    return per_ch * p.n_channels + tack + 2000u;
 }
 
 } // namespace ale
@@ -289,6 +313,7 @@ namespace ALETimingConstants {
     constexpr uint32_t Twa_ms  = ale::Twa_ms;         // 30 000 ms
     constexpr uint32_t Tps_ms  = ale::Tps_ms;         // 2 700 000 ms (45 min)
     constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;  // 120 000 ms
+    constexpr uint32_t TX_DRAIN_TIMEOUT_MS = ale::TX_DRAIN_TIMEOUT_MS;  // 10 000 ms
 
     // ── Derived protocol limits (integer, for SM comparisons) ────────────
     constexpr uint32_t Tx_max_ms  = 5u  * Trw_ms;  // max termination  = 5×Trw  = 1960 ms

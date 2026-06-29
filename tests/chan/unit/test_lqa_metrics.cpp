@@ -158,11 +158,12 @@ void test_database_integration() {
     for (int i = 0; i < 3; i++) {
         MetricsSample sample;
         sample.snr_db = 22.0f;
+        sample.sinad_db = 18.0f;
         sample.signal_power_dbm = -50.0f;
         sample.noise_power_dbm = -72.0f;
         sample.fec_errors_corrected = 1;
         sample.decode_success = true;
-        
+
         metrics.add_sample(sample, 7073000, "REMOTE");
     }
     
@@ -485,15 +486,17 @@ void test_multipath_code_integer_values() {
     std::cout << "  PASS" << std::endl;
 }
 
-// Fractional values are floored (not rounded)
-void test_multipath_code_fractional_floor() {
-    std::cout << "Test: multipath_delay_to_lqa_code - fractional ms is floored..." << std::endl;
+// Fractional values are rounded to nearest ms (A.5.4.2.3)
+void test_multipath_code_fractional_round() {
+    std::cout << "Test: multipath_delay_to_lqa_code - fractional ms is rounded to nearest..." << std::endl;
 
     LQAMetrics metrics;
     assert(metrics.multipath_delay_to_lqa_code(3.0f) == 3);
-    assert(metrics.multipath_delay_to_lqa_code(3.1f) == 3);
-    assert(metrics.multipath_delay_to_lqa_code(3.9f) == 3);   // floor, not round
-    assert(metrics.multipath_delay_to_lqa_code(0.9f) == 0);   // floor
+    assert(metrics.multipath_delay_to_lqa_code(3.4f) == 3);   // rounds down
+    assert(metrics.multipath_delay_to_lqa_code(3.5f) == 4);   // rounds up
+    assert(metrics.multipath_delay_to_lqa_code(3.9f) == 4);   // rounds up, not floor
+    assert(metrics.multipath_delay_to_lqa_code(0.6f) == 1);   // rounds up
+    assert(metrics.multipath_delay_to_lqa_code(0.4f) == 0);   // rounds down
 
     std::cout << "  PASS" << std::endl;
 }
@@ -508,14 +511,14 @@ void test_multipath_code_boundary_six_ms() {
     std::cout << "  PASS" << std::endl;
 }
 
-// > 6 ms -> code 7 ("6+ ms" saturation)
+// > 6 ms -> code 6 ("≥ 6 ms" saturation per A.5.4.2.3)
 void test_multipath_code_above_six_saturation() {
-    std::cout << "Test: multipath_delay_to_lqa_code - >6 ms -> code 7 (saturation)..." << std::endl;
+    std::cout << "Test: multipath_delay_to_lqa_code - >6 ms -> code 6 (saturation)..." << std::endl;
 
     LQAMetrics metrics;
-    assert(metrics.multipath_delay_to_lqa_code(6.001f) == 7);
-    assert(metrics.multipath_delay_to_lqa_code(6.5f)   == 7);
-    assert(metrics.multipath_delay_to_lqa_code(100.0f) == 7);
+    assert(metrics.multipath_delay_to_lqa_code(6.001f) == 6);
+    assert(metrics.multipath_delay_to_lqa_code(6.5f)   == 6);
+    assert(metrics.multipath_delay_to_lqa_code(100.0f) == 6);
 
     std::cout << "  PASS" << std::endl;
 }
@@ -532,17 +535,17 @@ void test_multipath_code_range_never_outside_bounds() {
     std::cout << "  PASS" << std::endl;
 }
 
-// All 8 codes 0..7 are reachable
-void test_multipath_code_all_codes_reachable() {
-    std::cout << "Test: multipath_delay_to_lqa_code - all codes 0..7 are reachable..." << std::endl;
+// Codes 0..6 are reachable via measurement; code 7 is the "not measured" sentinel
+void test_multipath_code_codes_zero_to_six_reachable() {
+    std::cout << "Test: multipath_delay_to_lqa_code - codes 0..6 reachable; 7 = not measured..." << std::endl;
 
     LQAMetrics metrics;
     // Each code 0..6 is produced by its exact ms value
     for (int ms = 0; ms <= 6; ++ms) {
         assert(metrics.multipath_delay_to_lqa_code(static_cast<float>(ms)) == static_cast<uint8_t>(ms));
     }
-    // Code 7 via saturation
-    assert(metrics.multipath_delay_to_lqa_code(7.0f) == 7);
+    // Code 7 (kMpLqaNotMeasured) is NOT produced by this function — it is the
+    // "not measured" sentinel, only set explicitly by callers.
 
     std::cout << "  PASS" << std::endl;
 }
@@ -748,11 +751,11 @@ int main() {
     test_multipath_code_negative_clamped_to_zero();
     test_multipath_code_zero_ms();
     test_multipath_code_integer_values();
-    test_multipath_code_fractional_floor();
+    test_multipath_code_fractional_round();
     test_multipath_code_boundary_six_ms();
     test_multipath_code_above_six_saturation();
     test_multipath_code_range_never_outside_bounds();
-    test_multipath_code_all_codes_reachable();
+    test_multipath_code_codes_zero_to_six_reachable();
 
     // Table A-XIII: ber_score_to_lqa_code
     test_ber_score_to_lqa_code_zero();

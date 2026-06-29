@@ -78,7 +78,22 @@ bool WordParser::decode_ascii(uint32_t payload,
     char c1 = static_cast<char>((payload >>  7) & 0x7F);  // bits 13-7
     char c2 = static_cast<char>((payload >>  0) & 0x7F);  // bits 6-0
 
-    // Select the correct character-set validator for this word type
+    // CMD words carry function codes defined in TABLE A-XVI (A.5.6), not addresses.
+    // A.5.2.6.3 NOTE: CMD validity is determined by "history, status, expectations,
+    // and protocol" — not by Basic38 character set membership.  CMD function codes
+    // ('a'=1100001, 'f'=1100110, 'n'=1101110, …) are in the b7b6="11" range (0x60–0x7E),
+    // outside both Basic38 and Expanded64 (which covers b7b6="01"/"10" = 0x20–0x5F per
+    // A.5.7.2.1).  Character-set validation is therefore not applicable to CMD words;
+    // validity is determined by FEC decode success and protocol context.
+    if (word_type == PreambleType::CMD) {
+        output[0] = c0;
+        output[1] = c1;
+        output[2] = c2;
+        output[3] = '\0';
+        return true;
+    }
+
+    // All other word types: select Basic38 (addresses) or Expanded64 (orderwire data).
     bool (*valid_char)(char) = uses_basic38(word_type)
                                ? is_valid_basic38_char
                                : is_valid_expanded64_char;

@@ -242,6 +242,7 @@ struct BridgeCtx {
     ALEController*                 ctrl;
     std::unique_ptr<AudioDevice>*  audio;
     std::unique_ptr<pal::IRadio>*  radio;
+    std::string                    lqa_path;  ///< empty = persistence disabled
 };
 
 // ── Command dispatch ────────────────────────────────────────────────────────
@@ -429,6 +430,47 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("data", list);
         return mj::dump(r);
     }
+    if (cmd == "LQA_CLEAR") {
+        ctrl.clear_lqa();
+        if (!ctx.lqa_path.empty()) ctrl.save_lqa(ctx.lqa_path);
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "LQA_SET") {
+        // lqa_enabled: record per-frame FROM-direction BER/SNR for every received
+        // transmission after word sync into the LQA Memory (A.5.4.1.1).
+        if (msg.has("lqa_enabled")) ctrl.set_lqa_enabled(msg.get_bool("lqa_enabled"));
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "LQA_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("lqa_enabled", mj::Value::boolean(ctrl.lqa_enabled()));
+        return mj::dump(r);
+    }
+    if (cmd == "RELINK_SET") {
+        // relink_enabled: auto-renegotiate channel via TWAS + re-call when a
+        // better channel is known post-LINKED (A.5.4.5 bilateral selection).
+        if (msg.has("relink_enabled"))
+            ctrl.set_relink_enabled(msg.get_bool("relink_enabled"));
+        if (msg.has("relink_threshold"))
+            ctrl.set_relink_threshold(static_cast<float>(msg.get_number("relink_threshold")));
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "RELINK_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("relink_enabled", mj::Value::boolean(ctrl.relink_enabled()));
+        r.set("relink_threshold", mj::Value::number(ctrl.relink_threshold()));
+        return mj::dump(r);
+    }
+    if (cmd == "FREQ_SELECT_SET") {
+        if (msg.has("enhanced_freq_select"))
+            ctrl.set_enhanced_freq_select(msg.get_bool("enhanced_freq_select"));
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "FREQ_SELECT_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("enhanced_freq_select", mj::Value::boolean(ctrl.enhanced_freq_select()));
+        return mj::dump(r);
+    }
     if (cmd == "SIGNAL_QUALITY") {
         const auto q = ctrl.get_current_signal_quality();
         mj::Value r = make_reply(msg, true);
@@ -464,6 +506,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("max_tune_time_ms"))       ctrl.set_max_tune_time_ms(static_cast<uint32_t>(msg.get_number("max_tune_time_ms")));
         if (msg.has("ptt_lead_ms"))            ctrl.set_ptt_lead_ms(static_cast<uint32_t>(msg.get_number("ptt_lead_ms")));
         if (msg.has("ptt_tail_ms"))            ctrl.set_ptt_tail_ms(static_cast<uint32_t>(msg.get_number("ptt_tail_ms")));
+        if (msg.has("assumed_scan_channels"))  ctrl.set_assumed_scan_channels(static_cast<uint32_t>(msg.get_number("assumed_scan_channels")));
         return mj::dump(make_reply(msg, true));
     }
 
@@ -607,7 +650,10 @@ static void print_usage(const char* prog) {
         "               different ports simultaneously)\n"
         "  --remote     Bind to 0.0.0.0 instead of 127.0.0.1 (LAN-reachable)\n"
         "               Without this flag the server is localhost-only.\n"
-        "  --webroot D  Serve static files from DIR instead of auto-detected apps/gui/\n",
+        "  --webroot D  Serve static files from DIR instead of auto-detected apps/gui/\n"
+        "\n"
+        "LQA history is persisted to lqa.bin in the working directory — loaded on\n"
+        "startup, saved on exit. Delete the file to reset channel quality history.\n",
         prog);
 }
 
@@ -667,7 +713,11 @@ int main(int argc, char* argv[]) {
     // calls until then, which is correct for an unconfigured station.
     ALEController ctrl;
 
-    BridgeCtx ctx{ &ctrl, &audio, &radio };
+    const std::string lqa_path = "lqa.bin";
+    if (ctrl.load_lqa(lqa_path))
+        std::printf("[ale_bridge] LQA loaded from %s\n", lqa_path.c_str());
+
+    BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path };
 
     // ── Event push ───────────────────────────────────────────────────────
     ctrl.on_status_changed = [&](const std::string& m) {
@@ -785,6 +835,8 @@ int main(int argc, char* argv[]) {
     if (radio) radio->stop();
     if (audio) audio->close();
     ws.stop();
+    if (ctrl.save_lqa(lqa_path))
+        std::printf("[ale_bridge] LQA saved to %s\n", lqa_path.c_str());
     std::printf("[ale_bridge] Exiting.\n");
     return 0;
 }

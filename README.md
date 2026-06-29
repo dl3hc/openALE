@@ -405,6 +405,59 @@ Hamlib-Modell `2` ist `RIG_MODEL_NETRIGCTL` — der eingebaute rigctld-Client-Ba
 
 ---
 
+## 📶 LQA-Austausch und Auto-Relink (A.5.4.4 / A.5.4.5)
+
+PC-ALE implementiert den vollständigen bilateralen LQA-Austausch nach MIL-STD-188-141B
+sowie einen spec-konformen Mechanismus zur automatischen Kanaloptimierung.
+
+### Bilateraler Kanal-Score
+
+Beim normalen 3-Wege-Handshake (CALL → RESPONSE → ACK) tauschen beide Stationen ihre
+lokale Empfangsqualität via **CMD-LQA-Wörter** (Tabelle A-XIV, Zeichenwert `'a'`) aus.
+Das `KA1`-Bit (Bit 13) in SAMs CMD-Wort signalisiert JOE, dass eine Rückmeldung
+erwartet wird — JOE antwortet in seiner RESPONSE mit einem eigenen CMD 'a' und (falls
+KA1=1) zusätzlichen LQA-Report-Wörtern für alle bekannten Kanäle.
+
+Nach dem Handshake haben beide Stationen **bidirektionale** Qualitätsdaten:
+- **FROM-Qualität:** Lokal gemessen (SINAD, BER aus Soundings und laufendem Link)
+- **TO-Qualität:** Vom Peer gemeldet (was er von uns empfängt)
+
+Der **bilaterale Kanal-Score** (A.5.4.5) ist das Minimum beider Richtungen:
+```
+score = min(FROM-Qualität, TO-Qualität)
+```
+Die schlechtere Übertragungsrichtung bestimmt die nutzbare Linkqualität.
+
+### Auto-Relink
+
+Wenn `Auto-Relink` aktiviert ist, überwacht die Station im `LINKED`-Zustand kontinuierlich,
+ob ein anderer bekannter Kanal bilateral deutlich besser wäre. Ist die Bedingung erfüllt:
+
+```
+bilateraler Score (bester Kanal) > bilateraler Score (aktueller Kanal) + Threshold
+```
+
+…terminiert die Station den Link ordnungsgemäß per **TWAS** und initiiert sofort einen
+neuen Call auf dem besseren Kanal. JOE geht nach TWAS in SCANNING zurück und nimmt den
+Neulink an.
+
+Ein konfigurierbarer **Schwellwert** (Standard: 5 Punkte auf der 0–30-Skala) verhindert
+"Channel-Thrashing" bei geringfügigen Qualitätsunterschieden.
+
+**Konfiguration (GUI → Einstellungen → LQA-Tab):**
+- **Auto-Relink** Toggle — aktiviert den Mechanismus
+- **Threshold** — Mindestverbesserung in Score-Punkten (1–30)
+
+**Bridge-API:**
+```json
+→ { "cmd": "RELINK_SET", "relink_enabled": true, "relink_threshold": 5.0 }
+→ { "cmd": "RELINK_GET" }
+```
+
+Vollständige technische Dokumentation: [docs/LQA_BILATERAL_RELINK.md](docs/LQA_BILATERAL_RELINK.md)
+
+---
+
 ## 📊 Current Status
 
 | Phase | Component | Status |
@@ -625,6 +678,7 @@ ctest --verbose
 - [Architecture](docs/ARCHITECTURE.md) - System design and layers
 - [API Reference](docs/API_REFERENCE.md) - Complete API documentation
 - [Integration Guide](docs/INTEGRATION_GUIDE.md) - Audio I/O and radio integration
+- [LQA-Austausch und Auto-Relink](docs/LQA_BILATERAL_RELINK.md) - Bilateraler CMD-LQA-Austausch und automatische Kanaloptimierung (A.5.4.4/A.5.4.5)
 - [MIL-STD Compliance](docs/MIL_STD_COMPLIANCE.md) - Standards compliance matrix
 - [Glossary](docs/GLOSSARY.md) - ALE terminology and acronyms
 - [Testing Guide](docs/TESTING.md) - Running and writing tests

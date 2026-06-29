@@ -2,23 +2,15 @@
  * \file apps/radio_mock.cpp
  * \brief Mock Radio Server — rigctld-kompatibles Test-TRX
  *
- * Startet einen TCP-Listener auf Port 4532 (default) und implementiert
- * das Hamlib rigctld-Netzwerkprotokoll.  Jede PTT- und Frequenzänderung,
- * die ale_cli über das IRadio/HamlibRadio-Interface schickt, wird im
- * Terminal als lesbares Ereignis ausgegeben — genau wie bei einem echten
- * TRX mit CAT-Kabel, nur ohne Hardware.
+ * Startet einen TCP-Listener und implementiert das Hamlib rigctld-
+ * Netzwerkprotokoll (NET_RIGCTL, model 2).  PTT- und Frequenzänderungen
+ * werden im Terminal als lesbares Ereignis ausgegeben.
  *
- * Verwendung (zwei Terminals):
+ * Verwendung:
+ *   radio_mock.exe --port 8766
  *
- *   Terminal 1 — Mock-TRX starten (--port ist Pflichtfeld):
- *     radio_mock.exe --port 4532
- *
- *   Terminal 2 — ALE-CLI verbinden (Hamlib model 2 = NET_RIGCTL):
- *     ale_cli --self SAM --radio hamlib:2:tcp://127.0.0.1:4532
- *
- *   Mehrere Instanzen auf unterschiedlichen Ports:
- *     radio_mock.exe --port 4532
- *     radio_mock.exe --port 4533
+ * ale_bridge verbinden (GUI: Radio → CAT → hamlib:2:tcp://127.0.0.1:8766):
+ *   ale_bridge --radio hamlib:2:tcp://127.0.0.1:8766 ...
  *
  * Implementiertes rigctld-Protokoll (Hamlib 4.x, Subset):
  *   \chk_vfo            → RPRT -1     (einfacher Modus, kein VFO-Präfix)
@@ -302,8 +294,8 @@ int main(int argc, char* argv[])
     std::printf("║  Freq    : %-44.3f ║\n", s_freq_hz / 1000.0);
     std::printf("║  Mode    : %-44s ║\n", s_mode.c_str());
     std::printf("╠═══════════════════════════════════════════════════════╣\n");
-    std::printf("║  ale_cli verbinden:                                   ║\n");
-    std::printf("║    --radio hamlib:2:tcp://127.0.0.1:%-18d ║\n", port);
+    std::printf("║  ale_bridge / GUI verbinden:                          ║\n");
+    std::printf("║    hamlib:2:tcp://127.0.0.1:%-26d ║\n", port);
     std::printf("╚═══════════════════════════════════════════════════════╝\n");
     std::printf("\nWarte auf Verbindung...\n\n");
     std::fflush(stdout);

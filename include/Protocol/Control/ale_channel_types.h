@@ -115,13 +115,17 @@ struct ScanConfig {
  */
 struct LinkQuality {
     float    snr_db;
+    float    sinad_db;             ///< Goertzel SINAD averaged over 49 symbols (dB); A.5.4.1.2
     float    ber;
     uint32_t fec_errors;
     uint32_t total_words;
     uint32_t timestamp_ms;
+    uint8_t  non_unanimous_count;  ///< Non-unanimous 2/3-vote bits this word (0–48); A.5.4.1.1
+    bool     golay_uncorrectable;  ///< true if Golay could not correct either half
 
-    LinkQuality() : snr_db(0.0f), ber(0.0f), fec_errors(0),
-                    total_words(0), timestamp_ms(0) {}
+    LinkQuality() : snr_db(0.0f), sinad_db(0.0f), ber(0.0f), fec_errors(0),
+                    total_words(0), timestamp_ms(0),
+                    non_unanimous_count(0), golay_uncorrectable(false) {}
 };
 
 } // namespace ale

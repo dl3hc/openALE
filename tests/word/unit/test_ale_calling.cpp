@@ -1648,6 +1648,254 @@ bool test_initiate_group_call_three_members_tx_sequence()
     return started && got_words && scanning_thru_rep_only && no_thru_after_scanning;
 }
 
+// Star-Group-Call: a group call is initiated with active_call_to = members.front(),
+// but any member may answer.  The handshake records the actual responder in
+// to_address; the SM must bind termination/TWAS to that responder, so the link is
+// torn down with the station that actually holds it.  Regression: without the
+// binding, terminate_link() addressed members.front() and the real peer never got
+// the TWAS, leaving it unaware it should return to available.
+bool test_group_call_termination_addresses_responder()
+{
+    std::cout << "\n[Group call] termination addresses the responding member, not front\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"SAM", /*scan_ch=*/2);
+    bool started = sm.initiate_group_call({"BOB", "EDGAR", "KAI"});
+    std::cout << "  call started: " << (started ? "PASS" : "FAIL") << "\n";
+    if (!started) return false;
+
+    advance_to_tx_start(sm);              // enqueues the full group TX sequence
+    const size_t tx_words = cap.size();
+    std::cout << "  group TX words enqueued: " << tx_words << "\n";
+
+    // Drain the whole TX sequence → GROUP_SCANNING_CALL → LEADING_CALL →
+    // CONCLUSION → LISTENING.
+    for (size_t i = 0; i < tx_words; ++i) sm.on_word_complete();
+    bool in_listening = (sm.get_calling_phase() == CallingPhase::LISTENING);
+    std::cout << "  reached LISTENING: " << (in_listening ? "PASS" : "FAIL") << "\n";
+    if (!in_listening) return false;
+
+    // A non-front member (EDGAR, index 1) answers: TO SAM + TIS EDGAR.
+    // The response must arrive within the LISTENING(a) no-response window
+    // (~3136 ms from listening_start_ms); feeding late would abort the call.
+    cap.clear();
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
+    uint32_t t = 2000u;
+    sm.update(t);          sm.process_received_word(rx_word(PreambleType::TO,  "SAM"));
+    sm.update(t + Trw);    sm.process_received_word(rx_word(PreambleType::TIS, "EDG"));
+
+    // LISTENING (c): TIS settle Tdrw → SENDING_ACK (TO EDGAR ×2 + TIS SAM).
+    sm.update(t + Trw + Tdrw + 1);
+    sm.update(t + Trw + Tdrw + 2);
+
+    const size_t ack_words = cap.size();
+    std::cout << "  ACK words: " << ack_words << "\n";
+    for (size_t i = 0; i < ack_words; ++i) sm.on_word_complete();
+    bool linked = (sm.get_state() == ALEState::LINKED);
+    std::cout << "  reached LINKED: " << (linked ? "PASS" : "FAIL") << "\n";
+    if (!linked) return false;
+
+    // Terminate.  The TWAS frame must be addressed TO the responder (EDGAR),
+    // NOT to members.front() (BOB).
+    cap.clear();
+    sm.terminate_link();
+    const size_t term_words = cap.size();
+    std::cout << "  termination words: " << term_words << "\n";
+    for (size_t i = 0; i < term_words; ++i) sm.on_word_complete();
+
+    std::string term_to_addr;
+    for (const auto& w : cap.words)
+        if (w.type == PreambleType::TO) { term_to_addr.assign(w.address, 3); break; }
+    std::cout << "  termination TO address = \"" << term_to_addr << "\"\n";
+    bool ok = (term_to_addr == "EDG");
+    std::cout << "  termination addressed to responder (EDGAR, not BOB): "
+              << (ok ? "PASS" : "FAIL") << "\n";
+    return ok;
+}
+
+// A spurious / double-fired frame completion (one with no queued word behind it)
+// must not underflow words_pending to UINT32_MAX (which would make every ==0
+// completion check permanently false and stall the phase machine) nor advance
+// phase counters on nothing.  The on_word_complete CALLING/SENDING_RESPONSE
+// paths ignore a completion when words_pending == 0.
+bool test_spurious_completion_does_not_underflow()
+{
+    std::cout << "\n[CALLING] spurious frame completion does not underflow words_pending\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"SAM", /*scan_ch=*/0);
+    bool started = sm.initiate_call("JOE");
+    std::cout << "  call started: " << (started ? "PASS" : "FAIL") << "\n";
+    if (!started) return false;
+
+    advance_to_tx_start(sm);   // enqueues leading(2) + conclusion(1) = 3 words
+    const size_t tx_words = cap.size();
+    std::cout << "  TX words enqueued: " << tx_words << "\n";
+
+    // Drain all real completions → LISTENING, words_pending == 0.
+    for (size_t i = 0; i < tx_words; ++i) sm.on_word_complete();
+    bool drained = (sm.get_words_pending() == 0)
+                    && (sm.get_calling_phase() == CallingPhase::LISTENING);
+    std::cout << "  drained to LISTENING, words_pending == 0: "
+              << (drained ? "PASS" : "FAIL")
+              << " (phase=" << static_cast<int>(sm.get_calling_phase())
+              << ", wp=" << sm.get_words_pending() << ")\n";
+
+    // Fire a spurious completion (no word queued).  words_pending must stay 0,
+    // not underflow to UINT32_MAX.
+    sm.on_word_complete();
+    bool no_underflow = (sm.get_words_pending() == 0);
+    std::cout << "  spurious completion ignored (no underflow): "
+              << (no_underflow ? "PASS" : "FAIL")
+              << " (words_pending=" << sm.get_words_pending() << ")\n";
+
+    return started && drained && no_underflow;
+}
+
+// A non-monotonic clock (backward jump) must not make every
+// `current_time_ms - start` timeout wrap near 2^32 and fire at once (spurious
+// LINK_TIMEOUT mid-handshake).  update() holds the logical clock on a backward
+// step instead of advancing into the wrapped regime.
+bool test_non_monotonic_clock_does_not_spuriously_timeout()
+{
+    std::cout << "\n[CALLING] non-monotonic clock does not spuriously time out\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"SAM", /*scan_ch=*/0);
+    bool started = sm.initiate_call("JOE");
+    if (!started) { std::cout << "  FAIL: call did not start\n"; return false; }
+
+    advance_to_tx_start(sm);   // current_time_ms = Twt+Tt = 1829, TX enqueued
+    for (size_t i = 0; i < cap.size(); ++i) sm.on_word_complete();  // → LISTENING
+
+    bool in_listening = (sm.get_calling_phase() == CallingPhase::LISTENING);
+    std::cout << "  reached LISTENING: " << (in_listening ? "PASS" : "FAIL") << "\n";
+    if (!in_listening) return false;
+
+    const ALEState before = sm.get_state();   // CALLING
+
+    // Backward clock jump: 100 ms < current_time_ms (1829).  Without the guard
+    // `(100 - listening_start_ms)` wraps near 2^32 and fires LISTENING(a)
+    // → try_next_calling_channel → LINK_TIMEOUT → IDLE.
+    sm.update(100u);
+
+    bool no_spurious = (sm.get_state() == before)
+                        && (sm.get_calling_phase() == CallingPhase::LISTENING);
+    std::cout << "  no spurious LINK_TIMEOUT on backward jump: "
+              << (no_spurious ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state())
+              << ", phase=" << static_cast<int>(sm.get_calling_phase()) << ")\n";
+
+    return no_spurious;
+}
+
+// set_calling_channels() must reset calling_channel_index to 0 so a retry
+// always starts from the first channel.  Without the reset, reconfiguring
+// mid-retry (index already > 0) leaves the index past the start, and the next
+// try_next_calling_channel() either hops the wrong channel or skips past a
+// shorter list and falsely reports NO_CHANNELS_LEFT.
+bool test_set_calling_channels_resets_index()
+{
+    std::cout << "\n[CALLING] set_calling_channels resets calling_channel_index\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"SAM", /*scan_ch=*/0);
+    std::vector<uint32_t> freqs;
+    sm.set_channel_callback([&](const Channel& ch){ freqs.push_back(ch.rx_frequency_hz); });
+
+    const Channel A(7000000u, "USB"), B(7100000u, "USB"), C(7200000u, "USB");
+    const Channel X(14000000u, "USB"), Y(14100000u, "USB"), Z(14200000u, "USB");
+    sm.set_calling_channels({A, B, C});
+    bool started = sm.initiate_call("JOE");   // → CALLING, hop A (index 0)
+    if (!started) { std::cout << "  FAIL: call did not start\n"; return false; }
+    std::cout << "  initial hop A: " << (freqs.back() == 7000000u ? "PASS" : "FAIL") << "\n";
+
+    const uint32_t Twt = ALETimingConstants::Twt_ms;
+    const uint32_t Tt  = ALETimingConstants::Tt_ms;
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    const uint32_t Tlisten =
+          static_cast<uint32_t>(0.5 + ale::Twrt_slow_ms)
+        + static_cast<uint32_t>(ale::Tdrw_ms)
+        + (ALETimingConstants::Tdrw_ms - ALETimingConstants::Tlww_ms);  // 3136
+
+    // Drive one full retry cycle: LBT → TUNING → TX → LISTENING → (a) timeout
+    // → try_next_calling_channel (index 0→1, hop B).
+    auto drive_retry = [&](uint32_t t0) -> uint32_t {
+        sm.update(t0 + Twt);            // LBT → TUNING
+        sm.update(t0 + Twt + Tt);       // TUNING → enqueue TX
+        uint32_t t = t0 + Twt + Tt;
+        for (size_t i = 0; i < cap.size(); ++i) { t += Trw; sm.update(t); sm.on_word_complete(); }
+        cap.clear();
+        sm.update(t + Tlisten + 1);     // LISTENING(a) timeout → try_next
+        return t + Tlisten + 1;
+    };
+
+    uint32_t t = drive_retry(0u);
+    bool hopped_B = (!freqs.empty() && freqs.back() == 7100000u);
+    std::cout << "  first retry hopped B (index 0→1): "
+              << (hopped_B ? "PASS" : "FAIL") << "\n";
+    if (!hopped_B) return false;
+
+    // Reconfigure mid-retry with a same-length list.  Bug: index stays 1.
+    // Fix: index resets to 0.
+    sm.set_calling_channels({X, Y, Z});
+
+    // Drive a second retry cycle → try_next_calling_channel.
+    // Fix: index 0→1 → hop Y (14100000).  Bug: index 1→2 → hop Z (14200000).
+    t = drive_retry(t);
+    bool hopped_Y = (!freqs.empty() && freqs.back() == 14100000u);
+    std::cout << "  after reconfigure, retry hopped Y (index reset to 0): "
+              << (hopped_Y ? "PASS" : "FAIL")
+              << " (freq=" << (freqs.empty() ? 0u : freqs.back()) << ")\n";
+
+    return hopped_B && hopped_Y;
+}
+
+// SENDING_ACK (the caller's third handshake frame) must not hang if its ACK
+// frame never drains.  The per-phase TX-drain deadline must force LINK_TIMEOUT
+// promptly, ahead of the (much longer, per-channel-reset) global calling timeout.
+// Two calling channels are used so the global calling timeout (~17 s) sits well
+// above TX_DRAIN_TIMEOUT_MS (10 s) — that way the drain deadline is what fires.
+bool test_sending_ack_drain_timeout()
+{
+    std::cout << "\n[CALLING] SENDING_ACK drain deadline (no Twa-wait on stall)\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap, /*self=*/"SAM", /*scan_ch=*/0);
+    sm.set_calling_channels({Channel(7000000u, "USB"), Channel(7100000u, "USB")});
+    bool started = sm.initiate_call("JOE");
+    if (!started) { std::cout << "  FAIL: call did not start\n"; return false; }
+
+    advance_to_tx_start(sm);                       // enqueue leading(2) + conclusion(1)
+    for (size_t i = 0; i < cap.size(); ++i) sm.on_word_complete();  // → LISTENING
+
+    const uint32_t t0   = ALETimingConstants::Twt_ms + ALETimingConstants::Tt_ms;  // 1829
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
+
+    // JOE's response: TO SAM + TIS JOE.
+    sm.update(t0 + 100u);  sm.process_received_word(rx_word(PreambleType::TO,  "SAM"));
+    sm.update(t0 + 200u);  sm.process_received_word(rx_word(PreambleType::TIS, "JOE"));
+    // LISTENING (c) settle → SENDING_ACK (build_ack_words transmits, arms drain).
+    sm.update(t0 + 200u + Tdrw + 1u);
+    sm.update(t0 + 200u + Tdrw + 2u);
+
+    bool in_ack = (sm.get_calling_phase() == CallingPhase::SENDING_ACK);
+    std::cout << "  reached SENDING_ACK: " << (in_ack ? "PASS" : "FAIL") << "\n";
+    if (!in_ack) return false;
+
+    // Do NOT fire on_word_complete — simulate a stalled audio device.  Advance
+    // past the TX-drain deadline (well under the 2-channel global calling timeout).
+    const uint32_t ack_arm_t = t0 + 200u + Tdrw + 2u;
+    sm.update(ack_arm_t + ALETimingConstants::TX_DRAIN_TIMEOUT_MS + 1u);
+    bool not_hung = (sm.get_state() != ALEState::CALLING);
+    std::cout << "  force-LINK_TIMEOUT after SENDING_ACK drain timeout (not hung): "
+              << (not_hung ? "PASS" : "FAIL")
+              << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+
+    return in_ack && not_hung;
+}
+
 // ============================================================================
 // AC-GEN-009-002 — "nicht bereits in einem Link" guard:
 // A new incoming individual call received while already LINKED must be
@@ -1961,6 +2209,16 @@ int run_all_tests()
         test_initiate_group_call_rejects_empty());
     run("Group call: initiate_group_call 3-member full TX sequence",
         test_initiate_group_call_three_members_tx_sequence());
+    run("Group call: termination addresses the responding member, not front",
+        test_group_call_termination_addresses_responder());
+    run("Calling: spurious frame completion does not underflow words_pending",
+        test_spurious_completion_does_not_underflow());
+    run("Calling: non-monotonic clock does not spuriously time out",
+        test_non_monotonic_clock_does_not_spuriously_timeout());
+    run("Calling: set_calling_channels resets calling_channel_index",
+        test_set_calling_channels_resets_index());
+    run("Calling: SENDING_ACK drain deadline (no Twa-wait on stall)",
+        test_sending_ack_drain_timeout());
 
     // RX multi-word address regression (accepting calls > 3 chars)
     run("RX-MULTIWORD accept call to >3-char own address",

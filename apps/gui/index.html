@@ -582,14 +582,6 @@
             </div>
           </div>
 
-          <hr class="fsep">
-
-          <div class="fg">
-            <label class="flabel">Target Scan Channels</label>
-            <input class="finput" id="cfgTargetScan" type="number" value="0" min="0"
-              style="width:120px" placeholder="0">
-            <div class="fhint">Expected number of scan channels of the called station (0 = fixed channel). Sizes the calling section.</div>
-          </div>
         </div><!-- /nets -->
 
         <!-- ── Timing ── -->
@@ -718,11 +710,54 @@
           <div class="fhint" style="margin-top:6px">
             Governs which inbound frames the controller answers or displays. Calls from disabled or unlisted addresses are dropped unless <em style="font-style:normal;color:var(--accent)">Accept Any Call</em> is on.
           </div>
+
+          <hr class="fsep">
+
+          <div class="ssec-subtitle">Calling Policy</div>
+          <div class="fg">
+            <label class="flabel">Scanning-Call Length (C)</label>
+            <input class="finput" id="cfgTargetScan" type="number" value="10" min="0" max="10"
+              style="width:120px">
+            <div class="fhint">
+              Assumed scan channels of the called station — sets Tsc = C × 784 ms.
+              <strong>10</strong> (MIL-STD max, PCALE default) ensures delivery to any station scanning up to 10 channels.
+              Overridden automatically per call when the contact's net channel count is known.
+              0 = target is on a fixed channel (no scanning section).
+            </div>
+          </div>
         </div><!-- /policy -->
 
         <!-- ── LQA ── -->
         <div class="ssec" data-sec="lqa">
           <div class="ssec-title">Link Quality Analysis · LqaMatrix</div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Record LQA</div>
+              <div class="ftoggle-desc">Measure &amp; store BER/SNR from every received transmission after word sync (A.5.4.1.1). Off = link normally but learn no new channel quality.</div>
+            </div>
+            <label class="ftoggle" style="margin-left:12px"><input type="checkbox" id="cfgRecLqa" checked onchange="applyLqaToBridge()"><span class="ftrack"></span></label>
+          </div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Auto-Relink</div>
+              <div class="ftoggle-desc">Terminate and re-call on a better channel when bilateral LQA shows a significant improvement (A.5.4.5). Threshold sets the minimum score gain needed to trigger a relink.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-left:12px">
+              <label class="ftoggle"><input type="checkbox" id="cfgAutoRelink" onchange="applyRelinkToBridge()"><span class="ftrack"></span></label>
+              <input class="finput" id="cfgRelinkThreshold" type="number" value="5" min="1" max="30" step="1" style="width:64px" title="Min. score improvement (1–30)" onchange="applyRelinkToBridge()">
+              <span style="font-size:11px;opacity:0.6">pts</span>
+            </div>
+          </div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Enhanced Freq-Select</div>
+              <div class="ftoggle-desc">Propose a better channel to the peer via standard CMD 'f' (A.5.6.3.2) before TWAS. The peer evaluates its LQA for the proposed channel and accepts or rejects. Standard ALE 2G stations ignore CMD 'f' while linked — no relink occurs then. Both stations should have this enabled.</div>
+            </div>
+            <label class="ftoggle"><input type="checkbox" id="cfgEnhFreqSelect" onchange="applyEnhFreqSelectToBridge()"><span class="ftrack"></span></label>
+          </div>
 
           <div class="fg-row col3">
             <div style="display:flex;flex-direction:column;justify-content:flex-end">
@@ -763,6 +798,7 @@
             LqaMatrix is indexed by LqaAddr × LqaChannel. Populated from passive listening and active sounding; restored from the LQA database file (Identity tab) on startup. Score 0–31; SINAD/BER/Multipath are the LqaSINAD / LqaBER / LqaMultipath metrics.
           </div>
           <button class="btn-sm" style="margin-top:10px" onclick="renderLqa()">↺ Refresh</button>
+          <button class="btn-sm" style="margin-top:10px;margin-left:6px" onclick="clearLqa()">⌫ Clear LQA</button>
         </div><!-- /lqa -->
 
         <!-- ── FEC / Sync ── -->

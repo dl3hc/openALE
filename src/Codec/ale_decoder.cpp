@@ -51,7 +51,9 @@ bool ALEDecoder::decode(const uint8_t* symbols_49,
     // decode; DECODE_OK / DECODE_CORRECTED = all errors within the code's power.
     const uint32_t word24 = ALEFECCodec::deinterleave_word(tx49, fec, golay_mode);
     out.fec_errors = fec.errors_corrected;
-    if (fec.flag != Golay::DECODE_OK && fec.flag != Golay::DECODE_CORRECTED)
+    out.golay_uncorrectable = (fec.flag != Golay::DECODE_OK
+                               && fec.flag != Golay::DECODE_CORRECTED);
+    if (out.golay_uncorrectable)
         return false;
 
     // ── Acceptable character bits (A.5.2.6.3) ───────────────────────────────

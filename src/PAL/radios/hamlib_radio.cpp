@@ -164,12 +164,14 @@ bool HamlibRadio::configure_port() {
     if (!rig_) return false;
 
     // ── Netzwerk-Pfad (rigctld via TCP) ──────────────────────────────────
-    // Pfad als-is übernehmen — rig_open() überschreibt den port type sowieso
-    // aus den Backend-Caps (NET_RIGCTL → RIG_PORT_NETWORK), und hamlib 4.x
-    // versteht "tcp://host:port" in network_open() nativ.
+    // NET_RIGCTL's netrigctl_open() / network_open() erwartet "host:port" —
+    // das tcp:// bzw. rigctld:// Präfix muss vor der Übergabe entfernt werden.
     if (port_.rfind("tcp://", 0) == 0 || port_.rfind("rigctld://", 0) == 0) {
         rig_->state.rigport.type.rig = RIG_PORT_NETWORK;
-        std::strncpy(rig_->state.rigport.pathname, port_.c_str(), HAMLIB_FILPATHLEN);
+        std::string endpoint = port_;
+        if (endpoint.rfind("tcp://", 0) == 0)         endpoint.erase(0, 6);
+        else if (endpoint.rfind("rigctld://", 0) == 0) endpoint.erase(0, 10);
+        std::strncpy(rig_->state.rigport.pathname, endpoint.c_str(), HAMLIB_FILPATHLEN);
         rig_->state.rigport.pathname[HAMLIB_FILPATHLEN - 1] = '\0';
         return true;
     }

@@ -223,6 +223,7 @@ private:
     uint32_t             step_accum_    = 0;
     bool                 grid_locked_   = false;
     uint32_t             grid_anchor_   = 0;
+    uint32_t             uncorr_anchor_ = 0;  ///< last write_pos_ at which an uncorrectable word was reported
     uint32_t             silence_count_ = 0;
 
     // FEC / sync operating point (A.5.2.6.3).  base_* = configured acquisition
@@ -304,7 +305,7 @@ private:
     void compute_spectrum_();
 
     static float   goertzel_power(const int16_t* block, float freq_hz);
-    static uint8_t symbol_from_block(const int16_t* block);
+    static uint8_t symbol_from_block(const int16_t* block, float& sinad_db_out);
     int16_t        ring_at(uint32_t abs_pos) const { return ring_[abs_pos % BUF_CAP]; }
     bool           try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes) const;
     bool           accept_word_(const Golay::DecodeResult& fec, const ALEWord& word,

@@ -30,6 +30,7 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <thread>  // std::thread::id — debug-only single-thread contract check
 
 namespace ale { class LQAMetrics; }
 
@@ -204,6 +205,22 @@ public:
      */
     bool initiate_group_call(const std::vector<std::string>& members);
 
+    /**
+     * Force-complete the incoming-call handshake.  The handshake otherwise
+     * auto-advances (WAIT_CYCLE_END → … → WAIT_ACK → LINKED) on update() with no
+     * manual step, so this is only a bounded escape hatch.
+     *
+     * Returns false (no-op) unless the SM is in HANDSHAKE/WAIT_ACK with a known
+     * caller — i.e. our response frame has already been transmitted and we are
+     * only waiting for the caller's ACK.  From any earlier phase (notably
+     * WAIT_CYCLE_END, before the caller's conclusion was received or our
+     * response sent) it MUST refuse, otherwise it would declare LINKED with an
+     * empty caller identity and no response on the air (peer times out, we
+     * believe the link is up).  The operator accept/reject decision itself is
+     * applied post-link by ALEController (see accept_call()/reject_call()).
+     *
+     * \return true if the handshake was force-completed to LINKED, false otherwise.
+     */
     bool respond_to_call();
 
     /**
@@ -302,10 +319,17 @@ public:
      * Set the ordered list of channels SAM will try when calling.
      * On LISTENING timeout on one channel, SAM hops to the next.
      * If empty, SAM stays on the current channel (single-channel operation).
-     * Must be called before initiate_call(); calling_channel_index resets to 0.
+     * Must be called before initiate_call(); calling_channel_index resets to 0
+     * so a retry sequence always starts from the first channel — without the
+     * reset, a mid-retry reconfiguration (calling_channel_index already > 0)
+     * would make the next try_next_calling_channel() increment past the new
+     * (shorter) list and falsely report NO_CHANNELS_LEFT, skipping valid
+     * channels.  initiate_call*() also reset it; this makes the contract hold
+     * regardless of which is called first.
      */
     void set_calling_channels(const std::vector<Channel>& channels) {
-        calling_channels = channels;
+        calling_channels      = channels;
+        calling_channel_index = 0;
     }
 
     /**
@@ -343,6 +367,15 @@ public:
         pending_noise_cmd_raw_ = raw24; pending_noise_cmd_set_ = true;
     }
     void clear_pending_noise_cmd() { pending_noise_cmd_set_ = false; }
+
+    /**
+     * Queue a word sequence (e.g. CMD 'f' + DATA) to be sent as a brief
+     * orderwire burst while LINKED, followed by TIS:SELF (×2 for reliability).
+     * Used by Enhanced Frequency-Select (A.5.6.3.2) to propose/accept/reject a
+     * channel while the link remains active.
+     * No-op if not in LINKED state or termination already in progress.
+     */
+    void trigger_linked_orderwire(std::vector<ALEWord> words);
 
     /**
      * Emergency manual override per REQ-LINK-007 / A.5.5.1.
@@ -392,6 +425,21 @@ public:
     const std::string& get_caller_address()   const { return caller_address; }
     bool           is_hs_conclusion_rcvd()    const { return hs_conclusion_rcvd; }
     bool           is_pending_reject()        const { return pending_reject_; }
+
+    /**
+     * Debug-only single-thread contract net.  Returns the number of times a
+     * boundary method (update / process_received_word / on_word_complete / the
+     * public mutators) was called from a thread other than the one that made the
+     * first such call.  The SM has no internal synchronization — safety rests on
+     * the caller-dispatched single-thread contract (see ale_controller.h and
+     * docs/THREADING.md); this counter makes a violation visible in dev/CI.
+     *
+     * In release builds the check is compiled out, so this is always 0 and adds
+     * no overhead.  In debug builds a non-zero value indicates a contract
+     * violation (a caller is driving the SM from multiple threads without its
+     * own locking).
+     */
+    uint32_t       thread_violations()        const { return thread_violations_; }
 
     // ── Callbacks ────────────────────────────────────────────────────────
 
@@ -470,6 +518,15 @@ private:
     uint32_t         last_word_time_ms;
     MessageAssembler message_assembler;
     bool             linked_terminating_;  ///< true = TWAS-Terminierungsframe läuft (T-07)
+    // TX-drain safety net for terminate_link() / trigger_linked_orderwire():
+    // both wait for on_word_complete() to drain words_pending to 0.  If that
+    // never happens (audio stall / null transmit_callback that doesn't arm the
+    // completion), the SM would hang in LINKED with RX disabled — handle_linked()
+    // short-circuits while these flags are set, suppressing the Twa timer.  This
+    // timestamp arms when a drain begins; handle_linked() force-completes the
+    // transition / abandons the burst once TX_DRAIN_TIMEOUT_MS elapses.
+    // 0 = no drain in progress (not armed).
+    uint32_t         tx_drain_start_ms_ = 0;
 
     // ── Calling sub-state (MIL-STD A.5.5.3.1) ────────────────────────────
     CallingPhase calling_phase;          ///< Current phase within CALLING
@@ -530,6 +587,9 @@ private:
     uint32_t       hs_lbt_start_ms;      ///< When CHANNEL_CHECK LBT started; 0 = not active
     uint32_t       hs_message_start_ms;  ///< When first message word (DATA/REP before TIS) arrived; 0 = none
     bool           pending_reject_;      ///< true = send TWAS rejection frame (set via reject_call())
+    bool           allcall_silent_ = false; ///< true = current handshake is an AllCall (A.5.5.4.4):
+                                           ///<  one-way broadcast — link on TIS conclusion,
+                                           ///<  resume on TWAS, never send a response frame
 
     // ── Manual-accept gate (AWAIT_ACCEPT) ────────────────────────────────
     bool           require_explicit_accept_;   ///< set via set_require_explicit_accept(); default off
@@ -558,6 +618,11 @@ private:
     uint32_t    pending_noise_cmd_raw_ = 0;
     bool        pending_noise_cmd_set_ = false;
 
+    // ── Linked Orderwire (Enhanced Frequency-Select, A.5.6.3.2) ──────────
+    std::vector<ALEWord> pending_orderwire_words_;
+    bool                 orderwire_pending_      = false;
+    bool                 orderwire_transmitting_ = false;
+
     // ── Scanning sub-state (T-10) ────────────────────────────────────────
     ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING
     uint32_t      allcall_pause_start_ms_;   ///< Startzeit der AllCall-Pause (T-10)
@@ -565,6 +630,12 @@ private:
     // ── Sounding sub-state (T-08) ─────────────────────────────────────────
     SoundingPhase sounding_phase_;        ///< Aktuelle Phase innerhalb SOUNDING
     uint32_t      sounding_lbt_start_ms_; ///< When SOUNDING LBT started; 0 = not active
+    // Anchor for the SOUNDING LISTENING window (A.5.3.4) — when TRANSMITTING
+    // drains and the optional RX window opens.  Kept separate from
+    // state_entry_time_ms (which records when the STATE was entered) so a future
+    // check_link_timeout() case for SOUNDING compares against the real entry
+    // time, not the LISTENING sub-phase start.
+    uint32_t      sounding_listening_start_ms_ = 0;
 
     // ── Multi-channel sounding sweep (send_sounding_sweep) ────────────────
     // Active only during a sweep; the channel-manager override (see
@@ -601,6 +672,29 @@ private:
     void enter_state(ALEState new_state);
     void exit_state(ALEState old_state);
     bool transition_to(ALEState new_state);
+
+    // ── Single-thread contract (debug-only) ──────────────────────────────
+    // The SM has no internal synchronization; the caller must drive it from one
+    // thread (or provide its own locking).  check_thread_() captures the owner
+    // thread on the first boundary call and counts any call from a different
+    // thread.  Compiled out in release (zero overhead); the members are kept so
+    // the class layout stays stable across configs.
+    std::thread::id owner_thread_id_;
+    bool           owner_thread_captured_ = false;
+    uint32_t       thread_violations_    = 0;
+#ifndef NDEBUG
+    void check_thread_() {
+        const auto cur = std::this_thread::get_id();
+        if (!owner_thread_captured_) {
+            owner_thread_id_   = cur;
+            owner_thread_captured_ = true;
+        } else if (cur != owner_thread_id_) {
+            ++thread_violations_;
+        }
+    }
+#else
+    void check_thread_() {}  // release: compiled out
+#endif
 
     // ── Word-receive helpers ──────────────────────────────────────────────
     void handle_invalid_word();
