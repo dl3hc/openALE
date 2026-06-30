@@ -22,8 +22,9 @@
  *     main thread → tick() → rx_out
  *
  *   Frame completion:
- *     Audio thread increments frames_rendered_ (atomic) when the last
- *     device-rate sample of a symbol frame has been handed to WASAPI.
+ *     Audio thread increments frames_rendered_ (atomic) when a symbol frame
+ *     has actually been PLAYED OUT on air (DAC consumed it), tracked via
+ *     played = total_written_ - padding against per-word write-end targets.
  *     Main thread tick() fires armed callbacks from frame_notify_queue_
  *     when frames_rendered_ reaches each callback's target.
  *
@@ -193,9 +194,25 @@ private:
 
     // ── Frame completion tracking ─────────────────────────────────────────
     // frames_rendered_: number of symbol frames whose device-rate samples
-    //   have all been handed to WASAPI ReleaseBuffer.
+    //   have actually been PLAYED OUT on air (consumed by the DAC), not merely
+    //   written into the WASAPI render buffer.  Completion fires at playout
+    //   time so the SM's rx_enabled_callback(true) / PTT release aligns with
+    //   the true on-air end of the burst — otherwise PTT drops while up to
+    //   ~buffer-depth of audio is still queued and the on-air TX is truncated.
     //   Written by audio thread; read by main thread via tick().
     std::atomic<uint64_t>  frames_rendered_{0};
+
+    // Playout-time completion bookkeeping (audio-thread-only):
+    //   total_written_        — cumulative device frames handed to WASAPI
+    //                           (real audio + silence), monotonic.
+    //   word_play_targets_    — write-end position (in total_written_) of each
+    //                           word still awaiting its playout completion.
+    // A word is fully on air when the DAC has consumed up to its write-end:
+    //   played = total_written_ - padding  >=  word_play_targets_.front()
+    // (padding <= total_written_ since every buffered frame was written by us,
+    // so the subtraction never underflows.)
+    uint64_t                total_written_ = 0;
+    std::deque<uint64_t>    word_play_targets_;
 
     // frame_notify_queue_ and frames_armed_: main-thread-only.
     struct FrameNotify {
@@ -336,6 +353,8 @@ void WasapiDevice::close()
     frames_rendered_.store(0, std::memory_order_relaxed);
     frames_armed_ = 0;
     frame_notify_queue_.clear();
+    total_written_ = 0;          // audio thread joined above — safe to touch
+    word_play_targets_.clear();
 
     { std::lock_guard<std::mutex> lk(sym_src_mtx_); sym_pull_ = nullptr; }
     { std::lock_guard<std::mutex> lk(rx_mtx_);      rx_queue_.clear(); }
@@ -418,6 +437,18 @@ void WasapiDevice::service_render()
     UINT32 padding = 0;
     if (FAILED(r_client_->GetCurrentPadding(&padding))) return;
 
+    // Fire word completions whose audio has actually been played out on air.
+    // The DAC has consumed `played = total_written_ - padding` frames so far
+    // (everything written but still queued is `padding`).  A word whose last
+    // sample was written at position W is fully on air once played >= W.
+    // Checked before the avail==0 early-return so completions still fire while
+    // the render buffer drains with nothing new to write.
+    const uint64_t played = total_written_ - padding;
+    while (!word_play_targets_.empty() && word_play_targets_.front() <= played) {
+        word_play_targets_.pop_front();
+        frames_rendered_.fetch_add(1, std::memory_order_release);
+    }
+
     const UINT32 avail = r_buf_frames_ - padding;
     if (avail == 0) return;
 
@@ -452,19 +483,28 @@ void WasapiDevice::service_render()
                 at_render_pos_    = 0;
                 at_frame_pending_ = true;
             } else {
-                // No symbols pending — fill remaining frames with silence
-                for (; i < avail; ++i)
+                // No symbols pending — fill remaining frames with silence.
+                // Silence occupies real buffer positions, so it must advance
+                // total_written_ too (keeps played = total_written_ - padding
+                // consistent with DAC progress).
+                for (; i < avail; ++i) {
                     write_frame(data, i, 0);
+                    ++total_written_;
+                }
                 break;
             }
         }
 
         write_frame(data, i++, at_render_buf_[at_render_pos_++]);
+        ++total_written_;
 
-        // When the last device-rate sample of a word has been handed to WASAPI,
-        // signal completion so the main-loop tick() can fire on_word_complete().
+        // When the last device-rate sample of a word has been written into the
+        // WASAPI buffer, record its write-end position.  The completion is fired
+        // from the playout-progress check above once the DAC has actually
+        // consumed up to this position — NOT here at write time (which would be
+        // up to ~buffer-depth too early and truncate the on-air TX).
         if (at_frame_pending_ && at_render_pos_ >= at_render_buf_.size()) {
-            frames_rendered_.fetch_add(1, std::memory_order_release);
+            word_play_targets_.push_back(total_written_);
             at_frame_pending_ = false;
         }
     }

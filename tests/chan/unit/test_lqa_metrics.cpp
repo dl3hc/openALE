@@ -458,9 +458,8 @@ void test_sinad_code_range_never_outside_bounds() {
 void test_multipath_code_negative_clamped_to_zero() {
     std::cout << "Test: multipath_delay_to_lqa_code - negative ms -> code 0..." << std::endl;
 
-    LQAMetrics metrics;
-    assert(metrics.multipath_delay_to_lqa_code(-1.0f) == 0);
-    assert(metrics.multipath_delay_to_lqa_code(-100.0f) == 0);
+    assert(multipath_delay_to_lqa_code(-1.0f) == 0);
+    assert(multipath_delay_to_lqa_code(-100.0f) == 0);
 
     std::cout << "  PASS" << std::endl;
 }
@@ -469,8 +468,7 @@ void test_multipath_code_negative_clamped_to_zero() {
 void test_multipath_code_zero_ms() {
     std::cout << "Test: multipath_delay_to_lqa_code - 0 ms -> code 0..." << std::endl;
 
-    LQAMetrics metrics;
-    assert(metrics.multipath_delay_to_lqa_code(0.0f) == 0);
+    assert(multipath_delay_to_lqa_code(0.0f) == 0);
 
     std::cout << "  PASS" << std::endl;
 }
@@ -479,9 +477,8 @@ void test_multipath_code_zero_ms() {
 void test_multipath_code_integer_values() {
     std::cout << "Test: multipath_delay_to_lqa_code - integer ms 1..6 -> codes 1..6..." << std::endl;
 
-    LQAMetrics metrics;
     for (int ms = 1; ms <= 6; ++ms)
-        assert(metrics.multipath_delay_to_lqa_code(static_cast<float>(ms)) == static_cast<uint8_t>(ms));
+        assert(multipath_delay_to_lqa_code(static_cast<float>(ms)) == static_cast<uint8_t>(ms));
 
     std::cout << "  PASS" << std::endl;
 }
@@ -490,13 +487,12 @@ void test_multipath_code_integer_values() {
 void test_multipath_code_fractional_round() {
     std::cout << "Test: multipath_delay_to_lqa_code - fractional ms is rounded to nearest..." << std::endl;
 
-    LQAMetrics metrics;
-    assert(metrics.multipath_delay_to_lqa_code(3.0f) == 3);
-    assert(metrics.multipath_delay_to_lqa_code(3.4f) == 3);   // rounds down
-    assert(metrics.multipath_delay_to_lqa_code(3.5f) == 4);   // rounds up
-    assert(metrics.multipath_delay_to_lqa_code(3.9f) == 4);   // rounds up, not floor
-    assert(metrics.multipath_delay_to_lqa_code(0.6f) == 1);   // rounds up
-    assert(metrics.multipath_delay_to_lqa_code(0.4f) == 0);   // rounds down
+    assert(multipath_delay_to_lqa_code(3.0f) == 3);
+    assert(multipath_delay_to_lqa_code(3.4f) == 3);   // rounds down
+    assert(multipath_delay_to_lqa_code(3.5f) == 4);   // rounds up
+    assert(multipath_delay_to_lqa_code(3.9f) == 4);   // rounds up, not floor
+    assert(multipath_delay_to_lqa_code(0.6f) == 1);   // rounds up
+    assert(multipath_delay_to_lqa_code(0.4f) == 0);   // rounds down
 
     std::cout << "  PASS" << std::endl;
 }
@@ -505,8 +501,7 @@ void test_multipath_code_fractional_round() {
 void test_multipath_code_boundary_six_ms() {
     std::cout << "Test: multipath_delay_to_lqa_code - 6.0 ms -> code 6 (boundary)..." << std::endl;
 
-    LQAMetrics metrics;
-    assert(metrics.multipath_delay_to_lqa_code(6.0f) == 6);
+    assert(multipath_delay_to_lqa_code(6.0f) == 6);
 
     std::cout << "  PASS" << std::endl;
 }
@@ -515,10 +510,9 @@ void test_multipath_code_boundary_six_ms() {
 void test_multipath_code_above_six_saturation() {
     std::cout << "Test: multipath_delay_to_lqa_code - >6 ms -> code 6 (saturation)..." << std::endl;
 
-    LQAMetrics metrics;
-    assert(metrics.multipath_delay_to_lqa_code(6.001f) == 6);
-    assert(metrics.multipath_delay_to_lqa_code(6.5f)   == 6);
-    assert(metrics.multipath_delay_to_lqa_code(100.0f) == 6);
+    assert(multipath_delay_to_lqa_code(6.001f) == 6);
+    assert(multipath_delay_to_lqa_code(6.5f)   == 6);
+    assert(multipath_delay_to_lqa_code(100.0f) == 6);
 
     std::cout << "  PASS" << std::endl;
 }
@@ -527,10 +521,9 @@ void test_multipath_code_above_six_saturation() {
 void test_multipath_code_range_never_outside_bounds() {
     std::cout << "Test: multipath_delay_to_lqa_code - no code outside [0,7] for any input..." << std::endl;
 
-    LQAMetrics metrics;
     // Sweep -2 ms to +20 ms in 0.1 ms steps
     for (float ms = -2.0f; ms <= 20.0f; ms += 0.1f)
-        assert(metrics.multipath_delay_to_lqa_code(ms) <= 7);
+        assert(multipath_delay_to_lqa_code(ms) <= 7);
 
     std::cout << "  PASS" << std::endl;
 }
@@ -539,10 +532,9 @@ void test_multipath_code_range_never_outside_bounds() {
 void test_multipath_code_codes_zero_to_six_reachable() {
     std::cout << "Test: multipath_delay_to_lqa_code - codes 0..6 reachable; 7 = not measured..." << std::endl;
 
-    LQAMetrics metrics;
     // Each code 0..6 is produced by its exact ms value
     for (int ms = 0; ms <= 6; ++ms) {
-        assert(metrics.multipath_delay_to_lqa_code(static_cast<float>(ms)) == static_cast<uint8_t>(ms));
+        assert(multipath_delay_to_lqa_code(static_cast<float>(ms)) == static_cast<uint8_t>(ms));
     }
     // Code 7 (kMpLqaNotMeasured) is NOT produced by this function — it is the
     // "not measured" sentinel, only set explicitly by callers.

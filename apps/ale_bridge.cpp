@@ -242,7 +242,9 @@ struct BridgeCtx {
     ALEController*                 ctrl;
     std::unique_ptr<AudioDevice>*  audio;
     std::unique_ptr<pal::IRadio>*  radio;
-    std::string                    lqa_path;  ///< empty = persistence disabled
+    std::string                    lqa_path;   ///< empty = persistence disabled
+    std::string                    audio_in;   ///< last successfully opened RX device
+    std::string                    audio_out;  ///< last successfully opened TX device
 };
 
 // ── Command dispatch ────────────────────────────────────────────────────────
@@ -507,6 +509,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("ptt_lead_ms"))            ctrl.set_ptt_lead_ms(static_cast<uint32_t>(msg.get_number("ptt_lead_ms")));
         if (msg.has("ptt_tail_ms"))            ctrl.set_ptt_tail_ms(static_cast<uint32_t>(msg.get_number("ptt_tail_ms")));
         if (msg.has("assumed_scan_channels"))  ctrl.set_assumed_scan_channels(static_cast<uint32_t>(msg.get_number("assumed_scan_channels")));
+        if (msg.has("sounding_use_twas"))      ctrl.set_sounding_use_twas(msg.get_bool("sounding_use_twas"));
         return mj::dump(make_reply(msg, true));
     }
 
@@ -544,9 +547,11 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         // symbol source / completion arming are torn down before close()).
         if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); }
         *ctx.audio = make_audio_device();
-        const bool ok = (*ctx.audio)->open(msg.get_string("in"), msg.get_string("out"));
-        if (ok) ctrl.set_audio_device(ctx.audio->get());
-        else    ctx.audio->reset();
+        const std::string in_dev  = msg.get_string("in");
+        const std::string out_dev = msg.get_string("out");
+        const bool ok = (*ctx.audio)->open(in_dev, out_dev);
+        if (ok) { ctrl.set_audio_device(ctx.audio->get()); ctx.audio_in = in_dev; ctx.audio_out = out_dev; }
+        else    { ctx.audio->reset(); ctx.audio_in.clear(); ctx.audio_out.clear(); }
         mj::Value r = make_reply(msg, ok);
         if (!ok) r.set("error", mj::Value::string("could not open audio device(s)"));
         return mj::dump(r);
@@ -623,8 +628,38 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     }
 
     // ── Settings ─────────────────────────────────────────────────────────
-    if (cmd == "SETTINGS_EXPORT") { return mj::dump(make_reply(msg, ctrl.export_settings(msg.get_string("path")))); }
-    if (cmd == "SETTINGS_IMPORT") { return mj::dump(make_reply(msg, ctrl.import_settings(msg.get_string("path")))); }
+    if (cmd == "SETTINGS_EXPORT") {
+        const std::string path = msg.get_string("path");
+        const bool ok = ctrl.export_settings(path);
+        if (ok && (!ctx.audio_in.empty() || !ctx.audio_out.empty())) {
+            std::ofstream fa(path, std::ios::app);
+            fa << "audio_in="  << ctx.audio_in  << "\n";
+            fa << "audio_out=" << ctx.audio_out << "\n";
+        }
+        return mj::dump(make_reply(msg, ok));
+    }
+    if (cmd == "SETTINGS_IMPORT") {
+        const std::string path = msg.get_string("path");
+        // Extract bridge-level keys (audio devices) before handing off to controller.
+        std::string audio_in, audio_out;
+        {
+            std::ifstream fa(path);
+            std::string ln;
+            while (std::getline(fa, ln)) {
+                if (ln.rfind("audio_in=", 0) == 0)  audio_in  = ln.substr(9);
+                else if (ln.rfind("audio_out=", 0) == 0) audio_out = ln.substr(10);
+            }
+        }
+        const bool ok = ctrl.import_settings(path);
+        if (ok && !audio_in.empty()) {
+            if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); }
+            *ctx.audio = make_audio_device();
+            const bool aok = (*ctx.audio)->open(audio_in, audio_out);
+            if (aok) { ctrl.set_audio_device(ctx.audio->get()); ctx.audio_in = audio_in; ctx.audio_out = audio_out; }
+            else      { ctx.audio->reset(); ctx.audio_in.clear(); ctx.audio_out.clear(); }
+        }
+        return mj::dump(make_reply(msg, ok));
+    }
     if (cmd == "DEBUG_RX")        { ctrl.set_debug_rx(msg.get_bool("on")); return mj::dump(make_reply(msg, true)); }
 
     mj::Value r = make_reply(msg, false);
@@ -760,6 +795,24 @@ int main(int argc, char* argv[]) {
         e.set("freq_hz",  mj::Value::number(ctrl.get_current_channel().rx_frequency_hz));
         ws.send_text(mj::dump(e));
     };
+    // ── Passive TX monitor ────────────────────────────────────────────────
+    // word_tx: fires for every ALE word the SM hands to the modem for TX
+    // (sounding/calling/ack/…). Mirrors word_decoded's payload (same preamble /
+    // addr / votes / fec fields) so the GUI can render sent and received rows
+    // with identical color coding; only freq_hz (tx) and the event name differ.
+    // frame_id is the controller's TX sequence counter, kept in a separate
+    // space from the RX monitor_frame_id_ so the two log streams don't collide.
+    ctrl.on_word_tx = [&](const ALEWord& w, uint32_t fid) {
+        mj::Value e = make_event("word_tx");
+        e.set("frame_id", mj::Value::number(fid));
+        e.set("preamble", mj::Value::string(WordParser::word_type_name(w.type)));
+        e.set("addr",     mj::Value::string(std::string(w.address)));
+        e.set("votes",    mj::Value::number(w.unanimous_votes));
+        e.set("fec",      mj::Value::number(w.fec_errors));
+        e.set("ts_ms",    mj::Value::number(w.timestamp_ms));
+        e.set("freq_hz",  mj::Value::number(ctrl.get_current_channel().tx_frequency_hz));
+        ws.send_text(mj::dump(e));
+    };
     // frame_decoded: fires once per assembled ALE frame with semantic summary.
     ctrl.on_frame_decoded = [&](const ALEMessage& frame, uint32_t fid) {
         mj::Value e = make_event("frame_decoded");
@@ -774,6 +827,25 @@ int main(int argc, char* argv[]) {
         for (const auto& a : frame.to_addresses)
             to_arr.push_back(mj::Value::string(a));
         e.set("to", std::move(to_arr));
+        ws.send_text(mj::dump(e));
+    };
+    // Active channel changed (scan hop, calling tune, or manual VFO change).
+    // Push event so the GUI frequency/channel readout tracks the real hop
+    // cadence instead of the 2 s VFO_GET poll. Fires from ctrl.update() on
+    // this main-loop thread (same as the events above).
+    ctrl.on_channel_changed = [&](const Channel& ch) {
+        mj::Value e = make_event("channel_changed");
+        e.set("channel_id", mj::Value::string(ch.id));
+        e.set("rx_hz",      mj::Value::number(ch.rx_frequency_hz));
+        e.set("tx_hz",      mj::Value::number(ch.tx_frequency_hz));
+        e.set("mode",       mj::Value::string(ch.rx_mode));
+        ws.send_text(mj::dump(e));
+    };
+    // PTT state changed (SM-driven TX or manual PTT) — replaces the VFO_GET
+    // poll's ptt field for the GUI PTT indicator.
+    ctrl.on_ptt_changed = [&](bool ptt_on) {
+        mj::Value e = make_event("ptt_changed");
+        e.set("ptt", mj::Value::boolean(ptt_on));
         ws.send_text(mj::dump(e));
     };
     // Fires inline from ctrl.feed_audio() below — i.e. on THIS main-loop thread,

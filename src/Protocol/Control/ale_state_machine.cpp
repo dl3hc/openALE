@@ -339,18 +339,24 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             linked_terminating_ = false;
             tx_drain_start_ms_ = 0;   // no TX drain pending on a fresh link
             allcall_silent_ = false;          // AllCall concluded → normal linked state
-            // Star-Group-Call (T-11): a group call is initiated with
-            // active_call_to = members.front() (initiate_group_call), but any
-            // member may answer.  The handshake records the actual responder in
-            // to_address (react_calling TIS_CALLER).  Bind termination/TWAS to
-            // that responder so the link is torn down with the station that
-            // actually holds it — otherwise terminate_link() / the Twa-timeout
-            // path would address members.front(), leaving the real peer unaware
-            // it should return to available.  Scoped to group calls only;
-            // individual calls already carry the single peer in active_call_to,
-            // and the responder path does not set active_call_is_group.
+            // Bind active_call_to to the actual linked peer so terminate_link()
+            // and the Twa-timeout TWAS address the right station.
+            //
+            // SAM (caller), individual: active_call_to already = target address
+            //   set at initiate_call() — no fixup needed.
+            //
+            // SAM (caller), group (T-11): active_call_to = members.front() but
+            //   the actual responder is in to_address (react_calling TIS_CALLER).
             if (active_call_is_group && !to_address.empty())
                 active_call_to = to_address;
+            //
+            // JOE (responder): react_scanning set active_call_to to the first
+            //   3 chars of our own TO address (the word that addressed us).
+            //   The caller's full address is in caller_address, collected from
+            //   their TIS conclusion in react_handshake WAIT_CYCLE_END.
+            //   Bind it here so termination frames address the actual peer.
+            if (!active_call_is_group && !caller_address.empty())
+                active_call_to = caller_address;
             if (rx_enabled_callback) rx_enabled_callback(true);
             break;
 
@@ -374,17 +380,6 @@ void ALEStateMachine::enter_state(ALEState new_state) {
 
 void ALEStateMachine::exit_state(ALEState old_state) {
     switch (old_state) {
-        case ALEState::CALLING:
-            if (rx_enabled_callback)
-                rx_enabled_callback(false);
-            break;
-
-        case ALEState::HANDSHAKE:
-            // Ensure RX/TX state is clean regardless of which sub-phase we exit from.
-            if (rx_enabled_callback)
-                rx_enabled_callback(false);
-            break;
-
         case ALEState::LINKED:
             active_call_to.clear();
             active_call_from.clear();
@@ -480,6 +475,7 @@ void ALEStateMachine::handle_calling() {
         // them without gaps.  Phase transitions happen in on_word_complete().
         // MESSAGE phase: AMD orderwire words built from active_message_ in
         // enqueue_call_sequence_() at tune-complete (AC-LINK-009-3 / A.5.7.2).
+        // RX was disabled at LBT→TUNING; no per-tick re-assertion needed.
         case CallingPhase::SCANNING_CALL:
         case CallingPhase::GROUP_SCANNING_CALL:
         case CallingPhase::LEADING_CALL:
@@ -879,12 +875,19 @@ void ALEStateMachine::handle_sounding() {
             sounding_phase_ = SoundingPhase::TRANSMITTING;
             if (rx_enabled_callback) rx_enabled_callback(false);
             if (!address_book.get_self_address().empty()) {
-                // Trs = 2 × Ta(caller): repeat conclusion twice for minimum redundancy (§A.5.3.1)
+                // A.5.3.1: Trs = 2×Ta (non-scan) or Tsrs = (n+2)×Ta (scan, §A.5.3.1).
+                // n = own scan channel count; Tss (n×Ta) covers the scan period of receivers,
+                // Trs (2×Ta) is the minimum redundant sound appended after it.
+                const size_t n    = channel_manager_.channel_count();
+                const size_t reps = (n > 0) ? (n + 2) : 2;
                 const ALESequence conclusion_seq =
-                    ALESequenceBuilder::conclusion(address_book.get_self_address());
+                    ALESequenceBuilder::conclusion(address_book.get_self_address(),
+                                                   sounding_use_twas_);
                 const auto& cw = conclusion_seq.words();
-                std::vector<ALEWord> tx(cw);
-                tx.insert(tx.end(), cw.begin(), cw.end());
+                std::vector<ALEWord> tx;
+                tx.reserve(cw.size() * reps);
+                for (size_t i = 0; i < reps; ++i)
+                    tx.insert(tx.end(), cw.begin(), cw.end());
                 // Append CMD NOISE when pending (AC-CHAN-004-002 / Block B3)
                 if (pending_noise_cmd_set_) {
                     const auto noise_seq = ALESequenceBuilder::lqa_cmd(pending_noise_cmd_raw_);
@@ -918,10 +921,10 @@ void ALEStateMachine::handle_sounding() {
     if (sounding_phase_ == SoundingPhase::TRANSMITTING) return;  // Wörter noch ausstehend
 
     // LISTENING: Trw-Fenster auf eingehenden Ruf warten (A.5.3.4)
-    if ((current_time_ms - sounding_listening_start_ms_) > ALETimingConstants::Trw_ms) {
-        if (rx_enabled_callback) rx_enabled_callback(false);
+    // RX state is set by the enter_state of whatever comes next (LBT re-arm or
+    // previous_state) — no explicit rx=false needed here.
+    if ((current_time_ms - sounding_listening_start_ms_) > ALETimingConstants::Trw_ms)
         process_event(ALEEvent::SOUNDING_COMPLETE);
-    }
 }
 
 // ============================================================================
@@ -1150,24 +1153,35 @@ void ALEStateMachine::handle_invalid_word() {
     }
 }
 
-void ALEStateMachine::react_scanning(const WordEvent& ev) {
+// Shared call-detection logic for IDLE and SCANNING states.
+// Both states can receive an incoming individual call (TO_SELF) or AllCall;
+// the response is identical regardless of whether we were idle on a fixed
+// channel or actively hopping.
+void ALEStateMachine::detect_incoming_call(const WordEvent& ev) {
     if (ev.type == WordEvent::Type::TO_SELF) {
         active_call_to = ev.address;
         process_event(ALEEvent::CALL_DETECTED);
         return;
     }
     // AllCall (A.5.5.4.4): one-way broadcast to the wildcard address @?@ / @A@.
-    // The receiver does NOT respond — it freezes scanning and collects the
-    // conclusion via HANDSHAKE/WAIT_CYCLE_END.  On a TIS conclusion the SM links
-    // directly to the caller (no response frame, handled in handle_handshake);
-    // on a TWAS conclusion the handshake aborts back to scanning.  The AllCall
-    // address itself never appears in the conclusion.  The decoder already
+    // The receiver does NOT respond — it freezes and collects the conclusion via
+    // HANDSHAKE/WAIT_CYCLE_END.  On a TIS conclusion the SM links directly to the
+    // caller (no response frame); on TWAS it aborts back.  The decoder already
     // decided selective pertinence (self address ends in the selector char).
     if (ev.type == WordEvent::Type::ALLCALL) {
         allcall_silent_ = true;
-        process_event(ALEEvent::CALL_DETECTED);  // SCANNING → HANDSHAKE
-        return;
+        process_event(ALEEvent::CALL_DETECTED);
     }
+}
+
+// IDLE: resting on a fixed channel — only incoming call detection applies.
+void ALEStateMachine::react_idle(const WordEvent& ev) {
+    detect_incoming_call(ev);
+}
+
+// SCANNING: actively hopping — call detection plus AllCall-pause recovery.
+void ALEStateMachine::react_scanning(const WordEvent& ev) {
+    detect_incoming_call(ev);
     // TWAS während AllCall-Pause → Pause beenden (A.5.5.4.4)
     if (scanning_phase_ == ScanningPhase::ALLCALL_PAUSE
         && ev.type == WordEvent::Type::TWAS_REJECTION) {
@@ -1326,7 +1340,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
     const WordEvent ev = decoder_.decode(word, ctx);
 
     switch (current_state) {
-        case ALEState::IDLE:      react_scanning(ev);        break;
+        case ALEState::IDLE:      react_idle(ev);            break;
         case ALEState::SCANNING:  react_scanning(ev);        break;
         case ALEState::CALLING:   react_calling(ev);         break;
         case ALEState::HANDSHAKE: react_handshake(ev, word); break;
@@ -1342,7 +1356,7 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
                 process_event(ALEEvent::SOUNDING_COMPLETE);
             } else if (sounding_phase_ == SoundingPhase::LISTENING) {
                 // T-08: im LISTENING-Fenster kann eine Station sofort zurückrufen (A.5.3.4)
-                react_scanning(ev);  // TO_SELF → CALL_DETECTED → HANDSHAKE
+                detect_incoming_call(ev);  // TO_SELF → CALL_DETECTED → HANDSHAKE
             }
             break;
         default: break;
@@ -1356,8 +1370,19 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
 }
 
 void ALEStateMachine::update_link_quality(const LinkQuality& lq) {
-    // Forward to LQAMetrics subsystem when attached.
-    if (lqa_metrics_) {
+    // Forward to LQAMetrics only when receiving from a settled, known remote station.
+    // CALLING: we are the transmitter; any received words before HANDSHAKE_COMPLETE
+    //   must not create DB entries (no confirmed peer yet, active_call_from = self or
+    //   tentative called-station address after first TIS — neither is a valid FROM key).
+    // IDLE/SCANNING/SOUNDING: controller-level commit_sounding_sample handles foreign
+    //   soundings; active_call_from is empty here, which would create "(sounding)" ghost
+    //   entries in the DB.
+    // HANDSHAKE: record once active_call_from is settled by the first TIS_CALLER word.
+    // LINKED: always valid — active_call_from is the confirmed peer.
+    if (lqa_metrics_
+            && !active_call_from.empty()
+            && (current_state == ALEState::HANDSHAKE
+                || current_state == ALEState::LINKED)) {
         MetricsSample sample;
         sample.snr_db               = lq.snr_db;
         sample.fec_errors_corrected = static_cast<int>(lq.fec_errors);
@@ -1534,16 +1559,26 @@ void ALEStateMachine::build_response_words() {
         transmit_words(ALESequenceBuilder::response(
             caller_address, address_book.get_self_address(), pending_reject_).words());
     } else {
-        // TO caller×2 + [CMD 'a'] + [CMD 'r' + DATA...] + TIS self
+        // A.5.5.3.3 / Fig A-30 base frame: TO caller×2 + TIS self [+ DATA/REP ext].
+        // Optional message section (A.5.2.5.5 / Fig A-14 + A.5.3.4 Tmmax):
+        //   [CMD 'a'] [CMD 'r' + DATA...] inserted BEFORE the conclusion (TIS/TWAS).
+        // → Full: TO caller×2 + [CMD 'a'] + [CMD 'r' + DATA...] + TIS self [+ DATA/REP ext]
         const auto base = ALESequenceBuilder::response(
             caller_address, address_book.get_self_address(), false);
         const auto& bw = base.words();
+        // Find where the conclusion section begins (first TIS or TWAS word).
+        size_t conc_start = bw.size();
+        for (size_t i = 0; i < bw.size(); ++i) {
+            if (bw[i].type == PreambleType::TIS || bw[i].type == PreambleType::TWAS) {
+                conc_start = i;
+                break;
+            }
+        }
         std::vector<ALEWord> words;
-        // All but the last word (TIS) — then insert CMD LQA + report — then TIS
-        for (size_t i = 0; i + 1 < bw.size(); ++i) words.push_back(bw[i]);
-        for (const auto& w : lqa_seq.words())    words.push_back(w);
-        for (const auto& w : report_seq.words()) words.push_back(w);
-        words.push_back(bw.back());
+        for (size_t i = 0; i < conc_start; ++i)         words.push_back(bw[i]);
+        for (const auto& w : lqa_seq.words())            words.push_back(w);
+        for (const auto& w : report_seq.words())         words.push_back(w);
+        for (size_t i = conc_start; i < bw.size(); ++i) words.push_back(bw[i]);
         transmit_words(words);
     }
     // Arm the TX-drain deadline: on_word_complete() normally fires WAIT_ACK /

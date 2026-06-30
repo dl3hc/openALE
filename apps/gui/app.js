@@ -89,17 +89,22 @@ function syncAllFromBridge() {
   syncSelfAddrsFromBridge();
   syncLqaFromBridge();
   syncVfoFromBridge();
+  syncFecFromBridge();              // pull FEC (Golay/votes/adaptive) state from core
+  syncRelinkFromBridge();           // pull Auto-Relink state from core
+  syncEnhFreqSelectFromBridge();    // pull Enhanced Freq-Select state from core
   pollRigStatus();   // establish initial radio-control lock state
   applyManualAcceptToBridge();  // push the GUI's accept-mode default to the SM
   applyTimingToBridge();        // push Timing settings (Sounding Interval etc.) to the core
   applySoundAuto();             // re-assert periodic-sounding mode if active
 }
 
-// No dedicated push event exists for VFO/PTT/audio-level changes (they're
-// either operator-driven from this same GUI, or — for PTT during a call —
-// fast-changing enough that polling beats adding a new event type for now).
-// Light poll only while connected.
-setInterval(() => { if (bridgeConnected) { syncVfoFromBridge(); pollRigStatus(); pollSignalQuality(); } }, 2000);
+// VFO/PTT frequency+mode+PTT display is now event-driven via the
+// `channel_changed` / `ptt_changed` push events (see onBridgeEvent). This
+// slow poll only covers what has no push event: rig-connection state (an
+// external signal PC-ALE can't be notified about — needs a heartbeat) and the
+// signal-quality panel. syncVfoFromBridge() is still called on connect
+// (syncAllFromBridge) and as a per-command ACK from manual VFO actions.
+setInterval(() => { if (bridgeConnected) { pollRigStatus(); pollSignalQuality(); } }, 2000);
 
 // Header SINAD: best LQA entry on the current frequency (any station).
 // sinad_db in the mapped entry already falls back to bilateral_sinad_db
@@ -231,8 +236,24 @@ function onBridgeEvent(e) {
       messages.unshift({ from: e.from, time: nowZulu(), text: e.text, own: false });
       renderMessages();
       break;
-    case 'word_decoded':  onAleLogWord(e);   break;
+    case 'word_decoded':  onAleLogWord(e, 'rx'); break;
+    case 'word_tx':       onAleLogWord(e, 'tx'); break;
     case 'frame_decoded': onAleLogFrame(e);  break;
+    case 'channel_changed':
+      // Push event from the core on every channel hop / manual VFO change —
+      // replaces the 2 s VFO_GET poll for the frequency/channel readout so the
+      // display tracks the real scan cadence (dwell-time, CAT-bound).
+      radioFreqHz = e.rx_hz;
+      radioMode   = e.mode;
+      updateRadioDisplay();
+      break;
+    case 'ptt_changed':
+      // Push event from the core on every PTT transition (SM-driven TX or
+      // manual PTT) — replaces the VFO_GET poll's ptt field for the indicator.
+      pttOn = !!e.ptt;
+      { const b = document.getElementById('pttBtn');
+        if (b) { b.classList.toggle('ptt-on', pttOn); b.textContent = pttOn ? '● TX' : '🎙 PTT'; } }
+      break;
   }
 }
 
@@ -545,11 +566,21 @@ function aleLogAppend(html) {
     aleLogCount + (aleLogCount === 1 ? ' entry' : ' entries');
 }
 
-function onAleLogWord(e) {
-  const fid = e.frame_id;
-  if (!aleLogFrameCh.has(fid) && e.freq_hz)
-    aleLogFrameCh.set(fid, e.freq_hz);
-  const freqHz = aleLogFrameCh.get(fid) || e.freq_hz || 0;
+function onAleLogWord(e, dir) {
+  dir = dir || 'rx';
+  const isTx = dir === 'tx';
+  const fid  = e.frame_id;
+  // RX words of one frame share a freq via aleLogFrameCh (later words may omit
+  // freq_hz). TX words always carry their own freq and live in a separate
+  // frame_id space — don't touch the RX map to avoid cross-stream collisions.
+  let freqHz;
+  if (isTx) {
+    freqHz = e.freq_hz || 0;
+  } else {
+    if (!aleLogFrameCh.has(fid) && e.freq_hz)
+      aleLogFrameCh.set(fid, e.freq_hz);
+    freqHz = aleLogFrameCh.get(fid) || e.freq_hz || 0;
+  }
   const chDisp = aleChLabel(freqHz);
   const ts  = new Date().toTimeString().slice(0, 8);
   const p   = (e.preamble || '').toLowerCase();
@@ -558,16 +589,21 @@ function onAleLogWord(e) {
                p === 'rep' ? 'pill-rep' : 'pill-data';
   const fec = e.fec || 0;
   const berCls = fec === 0 ? 'ale-ber-ok' : fec <= 1 ? 'ale-ber-warn' : 'ale-ber-bad';
+  const dirCls = isTx ? 'dir-tx' : 'dir-rx';
+  const dirSym = isTx ? '▶' : '◀';
   aleLogAppend(
-    `<div class="ale-entry">` +
+    `<div class="ale-entry${isTx ? ' ale-entry-tx' : ''}">` +
     `<span class="ale-entry-ts">${ts}</span>` +
     `<span class="ale-entry-ch">[${escapeHtml(chDisp)}]</span>` +
     `<span class="ale-entry-mode">[ALE]</span>` +
+    `<span class="ale-entry-dir ${dirCls}">${dirSym}</span>` +
     `<span class="ale-entry-word pill ${pill}">${escapeHtml(e.preamble)}</span>` +
     `<span class="ale-entry-addr">[${escapeHtml(e.addr)}]</span>` +
     `<span class="ale-entry-ber ${berCls}">BER: ${fec}</span>` +
     `</div>`);
-  if (!wfMarkers.some(m => m.frameId === fid)) {
+  // Waterfall markers are RX-only (received frames). Our own TX does not mark
+  // the RX spectrum.
+  if (!isTx && !wfMarkers.some(m => m.frameId === fid)) {
     wfMarkers.unshift({ frameId: fid, age: 0, color: '#7a9ab8' });
     if (wfMarkers.length > 500) wfMarkers.length = 500;
   }
@@ -1219,6 +1255,7 @@ function chCommit(i) {
   const rxHz = parseInt(c.rx, 10);
   if (!rxHz) return;  // nothing to sync yet — still being typed
   bridgeSend('CHANNEL_ADD', {
+    id: c.id,
     rx_hz: rxHz,
     tx_hz: parseInt(c.tx, 10) || rxHz,
     mode: c.mode,
@@ -1226,18 +1263,19 @@ function chCommit(i) {
     enabled: !(c.inhCall && c.inhSnd),
     voice_use: c.usage !== 'DATA',
     data_use: c.usage !== 'VOICE',
-  }, () => syncChannelsFromBridge());
+  });
 }
 
 function syncChannelsFromBridge() {
   bridgeSend('CHANNELS_LIST', {}, (r) => {
     if (!r.ok) return;
+    const prevById = new Map(channels.map(c => [c.id, c]));
     channels = r.data.map(c => ({
       id: c.id, rx: String(c.rx_hz), tx: String(c.tx_hz), mode: c.mode, label: c.label,
       usage: c.voice_use && c.data_use ? 'BOTH' : c.data_use ? 'DATA' : 'VOICE',
       dir: c.rx_only ? 'RX' : 'RX/TX',
-      self: '',                                   // Core has no per-channel self-address yet
-      inhCall: !c.enabled, inhSnd: !c.enabled,     // Core has one combined enabled flag, not two
+      self: prevById.get(c.id)?.self ?? '',       // preserved: core has no per-channel self-addr
+      inhCall: !c.enabled, inhSnd: !c.enabled,    // Core has one combined enabled flag, not two
     }));
     renderChannels();
     renderNets();
@@ -1330,8 +1368,28 @@ function delNet(i) {
 
 function loadAleFile()  { /* TODO: integrate with backend CMD:LOAD_CHANNELS */ }
 function saveAleFile()  { /* TODO: integrate with backend CMD:SAVE_CHANNELS */ }
-function exportConf()   { /* TODO: serialize all cfgXxx inputs to key=value */ }
-function importConf()   { /* TODO: parse uploaded file into cfgXxx inputs */ }
+function exportConf() {
+  const path = document.getElementById('cfgFile').value.trim() || 'ale.conf';
+  if (!bridgeConnected) { aleLogInfo('Export: bridge not connected'); return; }
+  if (!window.confirm('Konfiguration nach "' + path + '" exportieren?\nEine vorhandene Datei wird überschrieben.')) return;
+  bridgeSend('SETTINGS_EXPORT', { path }, (r) => {
+    if (r.ok) aleLogInfo('✓ Konfiguration exportiert → ' + path);
+    else      aleLogInfo('Export fehlgeschlagen: ' + (r.error || '?'));
+  });
+}
+function importConf() {
+  const path = document.getElementById('cfgFile').value.trim() || 'ale.conf';
+  if (!bridgeConnected) { aleLogInfo('Import: bridge not connected'); return; }
+  bridgeSend('SETTINGS_IMPORT', { path }, (r) => {
+    if (r.ok) {
+      syncAllFromBridge();
+      closeSettings();
+      aleLogInfo('✓ Konfiguration geladen ← ' + path);
+    } else {
+      aleLogInfo('Import fehlgeschlagen: ' + (r.error || '?'));
+    }
+  });
+}
 
 // Apply visible settings to the UI (real impl sends CMDs to WebSocket)
 // Auto-accept OFF ⇒ manual-accept gate ON (the SM pauses incoming calls in
@@ -1356,11 +1414,12 @@ function updateAutoAcceptUi() {
 
 function saveSettings() {
   applyManualAcceptToBridge();
-  applyTimingToBridge();      // Timing + Calling Policy → core
-  applyLqaToBridge();         // Record-LQA toggle → core (A.5.4.1.1)
-  applyRelinkToBridge();      // Auto-Relink toggle + threshold → core (A.5.4.5)
+  applyTimingToBridge();        // Timing + Calling Policy → core
+  applyFecToBridge();           // FEC (Golay/votes/adaptive) + Debug RX → core
+  applyLqaToBridge();           // Record-LQA toggle → core (A.5.4.1.1)
+  applyRelinkToBridge();        // Auto-Relink toggle + threshold → core (A.5.4.5)
   applyEnhFreqSelectToBridge(); // Enhanced Freq-Select → core (A.5.6.3.2)
-  applySoundAuto();           // interval may have changed → re-assert periodic mode
+  applySoundAuto();             // interval may have changed → re-assert periodic mode
   updateSelfHeader();
   closeSettings();
 }
@@ -1503,6 +1562,7 @@ function applyTimingToBridge() {
   if (!bridgeConnected) return;
   const num = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v > 0 ? v : null; };
   const args = {};
+  const d  = num('cfgDwell');       if (d)  args.scan_dwell_ms = d;          // → ALEController::set_scan_dwell_ms → SM ScanConfig.dwell_time_ms
   const s  = num('cfgSounding');    if (s)  args.sounding_interval_sec = s;
   const li = num('cfgLinkIdle');    if (li) args.link_idle_timeout_sec = li;
   const mt = num('cfgMaxTune');     if (mt) args.max_tune_time_ms = mt;
@@ -1511,6 +1571,8 @@ function applyTimingToBridge() {
   const pl = numZ('cfgPttLead');    if (pl !== null) args.ptt_lead_ms = pl;
   const pt = numZ('cfgPttTail');    if (pt !== null) args.ptt_tail_ms = pt;
   const sc = numZ('cfgTargetScan'); if (sc !== null) args.assumed_scan_channels = sc;
+  const concSel = document.getElementById('cfgSoundingConclusion');
+  if (concSel) args.sounding_use_twas = concSel.value === 'twas';
   bridgeSend('TIMING_SET', args);
 }
 
@@ -1539,6 +1601,36 @@ function syncRelinkFromBridge() {
     const elThr = document.getElementById('cfgRelinkThreshold');
     if (elOn  && typeof r.relink_enabled   === 'boolean') elOn.checked  = r.relink_enabled;
     if (elThr && typeof r.relink_threshold === 'number')  elThr.value   = r.relink_threshold;
+  });
+}
+
+// Push FEC settings (Golay mode, min votes, adaptive FEC) and Debug RX to the core.
+// Called from saveSettings(). GolayMode enum: Mode0_7=0, Mode1_6=1, Mode2_5=2, Mode3_4=3.
+function applyFecToBridge() {
+  if (!bridgeConnected) return;
+  const golayMap = { '3_4': 3, '2_5': 2, '1_6': 1, '0_7': 0 };
+  const golayVal = document.querySelector('input[name="golay"]:checked')?.value ?? '3_4';
+  const votes    = parseInt(document.getElementById('cfgVotes')?.value, 10);
+  bridgeSend('FEC_SET', {
+    golay_mode:          golayMap[golayVal] ?? 3,
+    min_unanimous_votes: Number.isFinite(votes) ? votes : 33,
+    adaptive_fec:        document.getElementById('cfgAdaptive')?.checked ?? true
+  });
+  bridgeSend('DEBUG_RX', { on: document.getElementById('cfgDebugRx')?.checked ?? false });
+}
+
+// Sync FEC state from core into the GUI (called on connect via syncAllFromBridge).
+function syncFecFromBridge() {
+  bridgeSend('FEC_GET', {}, (r) => {
+    if (!r.ok) return;
+    const golayNames = { 3: '3_4', 2: '2_5', 1: '1_6', 0: '0_7' };
+    const gName = golayNames[r.golay_mode] ?? '3_4';
+    const gEl = document.querySelector(`input[name="golay"][value="${gName}"]`);
+    if (gEl) gEl.checked = true;
+    const votesEl = document.getElementById('cfgVotes');
+    if (votesEl && typeof r.min_unanimous_votes === 'number') votesEl.value = r.min_unanimous_votes;
+    const adaptEl = document.getElementById('cfgAdaptive');
+    if (adaptEl && typeof r.adaptive_fec === 'boolean') adaptEl.checked = r.adaptive_fec;
   });
 }
 

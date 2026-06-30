@@ -763,6 +763,10 @@
     .ale-entry-mode { color: var(--accent);   flex-shrink: 0; width: 34px; font-size: 9px; }
     .ale-entry-word { flex-shrink: 0; }
     .ale-entry-addr { color: var(--tx);       flex-shrink: 0; min-width: 36px; }
+    .ale-entry-dir  { flex-shrink: 0; width: 10px; font-size: 11px; text-align: center; }
+    .dir-rx         { color: var(--s-linked); }   /* ◀ received */
+    .dir-tx         { color: var(--s-calling); } /* ▶ sent */
+    .ale-entry-tx   { background: rgba(255,202,40,.045); } /* subtle tint for sent rows */
     .ale-entry-ber  { color: var(--tx-muted); font-size: 9px; }
     .ale-entry.ale-info .ale-entry-mode { color: var(--accent); }
     .ale-entry.ale-info .ale-entry-addr { color: var(--tx-muted); flex: 1; white-space: normal; }
@@ -1383,6 +1387,12 @@
     .sound-opt:hover { background: var(--bg-hover); border-color: var(--border-md); }
     .sound-opt.active { background: var(--accent-glow-hi); border-color: var(--accent); color: var(--accent); }
     .sound-opt.sound-off { color: var(--tx-muted); }
+    .sound-sel {
+      font-family: var(--mono); font-size: 11px; background: var(--bg-panel);
+      color: var(--tx-main); border: 1px solid var(--border-lo); border-radius: 3px;
+      padding: 3px 5px; width: 100%; cursor: pointer;
+    }
+    .sound-sel:hover { border-color: var(--border-md); }
     .sound-sep {
       font-family: var(--mono); font-size: 8px; letter-spacing: 0.16em;
       text-transform: uppercase; color: var(--tx-dim); margin: 4px 0 2px;

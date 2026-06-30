@@ -1097,14 +1097,13 @@ bool test_always_listen_ac_gen_009_001() {
     }
 
     // 3. ERROR state after CALLING must restore RX (no dead state)
-    //    exit_state(CALLING) calls rx_enabled_callback(false);
     //    enter_state(ERROR) must call rx_enabled_callback(true).
     {
         auto sm = make_sm();
         sm.process_event(ALEEvent::CALL_REQUEST);   // → CALLING (sets rx=true for LBT)
         rx_callback_fired = false;
         sm.process_event(ALEEvent::ERROR_OCCURRED); // → ERROR
-        // exit_state(CALLING) fires rx=false, then enter_state(ERROR) must fire rx=true
+        // enter_state(ERROR) fires rx=true (AC-GEN-009-001: no dead state)
         const bool ok = rx_callback_fired && rx_current;
         std::cout << "  ERROR (after CALLING): rx_enabled=true (no dead state): "
                   << (ok ? "PASS" : "FAIL") << "\n";

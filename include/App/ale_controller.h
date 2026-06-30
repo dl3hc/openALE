@@ -343,12 +343,39 @@ public:
     std::function<void(const ALEWord& word, uint32_t frame_id)> on_word_decoded;
 
     /**
+     * Passive TX monitor — fires for every ALE word the state machine hands to
+     * the modem for transmission (sounding, calling, ack, …), at SM emit time
+     * (before PTT-lead buffering / flush).  frame_id is a per-instance TX
+     * sequence counter, kept in a distinct space from monitor_frame_id_ so the
+     * GUI can group sent and received log rows independently.  Companion to
+     * on_word_decoded: same payload shape, opposite direction.  Use for the
+     * ALE Monitor "sent" display so sent and received words render consistently.
+     */
+    std::function<void(const ALEWord& word, uint32_t frame_id)> on_word_tx;
+
+    /**
      * Fires once per complete assembled ALE frame (after the concluding TIS or
      * equivalent word), carrying the full semantic classification (call_type,
      * from_address, to_addresses, words).  Companion to on_word_decoded:
      * the same frame_id links the individual word events to the frame summary.
      */
     std::function<void(const ALEMessage& frame, uint32_t frame_id)> on_frame_decoded;
+
+    /**
+     * Active channel changed (scan hop, calling-channel tune, OR a manual VFO
+     * change from the operator).  Fires after the radio tune so the GUI can
+     * update the frequency/channel readout in the real hop cadence instead of
+     * polling.  channel_id is empty for pure VFO tuning (no named channel).
+     */
+    std::function<void(const Channel& ch)> on_channel_changed;
+
+    /**
+     * PTT state changed (SM-driven TX during a call/sounding, or manual PTT).
+     * Fires after radio_->set_ptt() so the GUI PTT indicator tracks without
+     * polling.  The existing emit_event(PTT_ON/OFF) path goes through a
+     * pal::IEventHandler the bridge does not set; this callback is the GUI path.
+     */
+    std::function<void(bool ptt_on)> on_ptt_changed;
 
     // ── GUI interfaces (CLI uses process_command) ────────────────────────
 
@@ -604,6 +631,9 @@ public:
     /** Set periodic sounding interval in seconds (LQAAnalyzer::AnalyzerConfig). */
     void set_sounding_interval_sec(uint32_t sec);
 
+    /** Select sounding conclusion type: false = TIS (invites return calls), true = TWAS (announce-only). */
+    void set_sounding_use_twas(bool use_twas);
+
     /**
      * Set link-idle timeout in seconds — Twa, ALEStateMachine::set_link_idle_timeout_ms().
      * Governs both LINKED-state inactivity auto-termination and the HANDSHAKE
@@ -830,6 +860,7 @@ private:
 
     // Passive channel monitor (on_word_decoded / on_frame_decoded)
     uint32_t                 monitor_frame_id_ = 0; // increments each time a frame completes
+    uint32_t                 tx_word_seq_      = 0; // TX monitor sequence (on_word_tx)
 
     // RX diagnostics (set_debug_rx)
     bool                     debug_rx_   = false;
@@ -919,6 +950,11 @@ private:
     void wire_callbacks();
     void on_sm_state_change(ALEState from, ALEState to);
     void on_operator_event(OperatorEvent ev);
+
+    // Assert/release PTT on the radio and notify the GUI via on_ptt_changed.
+    // Centralizes the radio_->set_ptt() + GUI-callback pair so every PTT
+    // transition (SM-driven and manual) reaches the display.
+    void set_ptt_and_notify(bool on);
 
     // Returns a CMD LQA payload populated from the LQA DB entry for freq_hz.
     // Fields default to "no-value" sentinels when no entry exists.

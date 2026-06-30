@@ -228,6 +228,12 @@ void ALEController::wire_callbacks()
     // When ptt_lead_deadline_ms_ is active (PTT just asserted, radio not yet in TX),
     // words are buffered in pending_tx_words_ and flushed by update() after the lead.
     sm_.set_transmit_callback([this](const ALEWord& w) {
+        // Passive TX monitor: notify exactly once per SM-emitted word, at emit
+        // time, regardless of PTT-lead buffering. Pairs with on_word_decoded so
+        // the ALE Monitor shows sent and received words with the same layout.
+        if (on_word_tx)
+            on_word_tx(w, tx_word_seq_++);
+
         if (ptt_lead_deadline_ms_ > 0) {
             pending_tx_words_.push_back({ w, audio_device_ != nullptr });
             return;
@@ -285,14 +291,14 @@ void ALEController::wire_callbacks()
                 ptt_tail_deadline_ms_ = now_ms_ + config_.ptt_tail_ms;
                 // actual PTT release + demod enable happen in update()
             } else {
-                if (radio_) radio_->set_ptt(false);
+                set_ptt_and_notify(false);
                 demodulator_.set_enabled(true);
             }
         } else {
             // RX→TX: cancel any pending tail, assert PTT, start lead
             ptt_tail_deadline_ms_ = 0;
             demodulator_.set_enabled(false);
-            if (radio_) radio_->set_ptt(true);
+            set_ptt_and_notify(true);
             ptt_lead_deadline_ms_ = (config_.ptt_lead_ms > 0)
                 ? now_ms_ + config_.ptt_lead_ms : 0;
         }
@@ -310,6 +316,7 @@ void ALEController::wire_callbacks()
         pal_ch.power        = ch.power_pct;
         pal_ch.antenna      = ch.antenna;
         radio_->set_channel(pal_ch);
+        if (on_channel_changed) on_channel_changed(ch);
     });
 }
 
@@ -352,6 +359,9 @@ bool ALEController::set_frequency(uint32_t hz)
     pc.rx_frequency = hz;
     pc.tx_frequency = hz;  // simplex
     radio_->set_channel(pc);
+    if (on_channel_changed)
+        on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
+                                   mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
     manual_channel_idx_ = -1;
     return true;
 }
@@ -362,6 +372,9 @@ bool ALEController::set_mode(const std::string& mode)
     pal::Channel pc = radio_->get_channel();
     pc.rx_mode = pc.tx_mode = mode_from_string(mode);
     radio_->set_channel(pc);
+    if (on_channel_changed)
+        on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
+                                   mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
     return true;
 }
 
@@ -377,6 +390,7 @@ bool ALEController::step_channel(int direction)
     pc.tx_frequency = target.effective_tx_hz();
     pc.rx_mode = pc.tx_mode = mode_from_string(target.rx_mode);
     radio_->set_channel(pc);
+    if (on_channel_changed) on_channel_changed(target);
     return true;
 }
 
@@ -397,6 +411,9 @@ void ALEController::nudge_frequency(int direction)
     const int64_t new_freq = static_cast<int64_t>(pc.rx_frequency) + direction * static_cast<int64_t>(tune_step_hz_);
     pc.rx_frequency = pc.tx_frequency = static_cast<uint32_t>(std::max<int64_t>(0, new_freq));
     radio_->set_channel(pc);
+    if (on_channel_changed)
+        on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
+                                   mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
     manual_channel_idx_ = -1;
 }
 
@@ -435,6 +452,7 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     set_debug_rx(cfg.debug_rx);
     set_scan_dwell_ms(cfg.scan_dwell_ms);
     set_sounding_interval_sec(cfg.sounding_interval_sec);
+    set_sounding_use_twas(cfg.sounding_use_twas);
     set_link_idle_timeout_sec(cfg.link_idle_timeout_sec);
     set_max_tune_time_ms(cfg.max_tune_time_ms);
     set_ptt_lead_ms(cfg.ptt_lead_ms);
@@ -470,10 +488,18 @@ void ALEController::start_scanning()
 {
     emit_status("Starting ALE scanner — channel hopping");
 
+    // Rebuild scan list from calling_channels_ (the single source of truth).
+    // add_channel/del_channel keep calling_channels_ current but only push to
+    // sm_.set_calling_channels(); the SM's channel_manager_ scan_list is never
+    // touched there, so we populate it fresh every time scanning starts.
+    ScanConfig cfg = sm_.get_scan_config();  // preserve dwell_time_ms etc.
+    cfg.scan_list.clear();
+    for (const auto& ch : calling_channels_)
+        if (ch.enabled) cfg.scan_list.push_back(ch);
+
     // A.5.4.5.3: sort scan channels by FROM-direction quality.
     // FROM score = locally measured SINAD from received soundings, stored
     // in the sounding entry (empty station key) sinad_db field.
-    ScanConfig cfg = sm_.get_scan_config();
     if (!cfg.scan_list.empty()) {
         std::stable_sort(cfg.scan_list.begin(), cfg.scan_list.end(),
             [this](const Channel& a, const Channel& b) {
@@ -696,20 +722,39 @@ void ALEController::emergency_stop()
     sm_.emergency_manual_control();
 }
 
+void ALEController::set_ptt_and_notify(bool on)
+{
+    if (radio_) radio_->set_ptt(on);
+    if (on_ptt_changed) on_ptt_changed(on);
+}
+
 void ALEController::set_manual_ptt(bool on)
 {
     manual_ptt_ = on;
     if (on) {
-        // Immediate TX override: cancel pending timing, disable demod, assert PTT
+        // Immediate TX override: cancel pending timing, disable demod, assert PTT.
+        // Also abort any active protocol operation so the SM stops queuing new words.
+        // LINKED is excluded — PTT during a link is for manual voice TX, not abort.
         ptt_tail_deadline_ms_ = 0;
         ptt_lead_deadline_ms_ = 0;
         pending_tx_words_.clear();
         demodulator_.set_enabled(false);
-        if (radio_) radio_->set_ptt(true);
+        set_ptt_and_notify(true);
+        {
+            const ALEState s = sm_.get_state();
+            if (s == ALEState::CALLING || s == ALEState::HANDSHAKE ||
+                s == ALEState::SOUNDING) {
+                sm_.emergency_manual_control();
+                // emergency_manual_control() fires rx_enabled_callback(true) via
+                // enter_state(IDLE), but manual_ptt_ is true so the callback emits
+                // only the PTT_OFF event without actually releasing PTT — PTT stays
+                // asserted until the operator releases via set_manual_ptt(false).
+            }
+        }
     } else {
         // Restore SM control: release PTT only if SM currently wants RX
         if (sm_rx_enabled_) {
-            if (radio_) radio_->set_ptt(false);
+            set_ptt_and_notify(false);
             demodulator_.set_enabled(true);
         }
         // If SM wants TX, the rx_enabled_callback already manages PTT — nothing to do
@@ -737,7 +782,7 @@ void ALEController::update(uint32_t now_ms)
     // PTT tail: release PTT + enable demodulator once audio buffer has drained
     if (ptt_tail_deadline_ms_ > 0 && !manual_ptt_ && now_ms >= ptt_tail_deadline_ms_) {
         ptt_tail_deadline_ms_ = 0;
-        if (radio_) radio_->set_ptt(false);
+        set_ptt_and_notify(false);
         demodulator_.set_enabled(true);
     }
 
@@ -1633,6 +1678,12 @@ void ALEController::set_sounding_interval_sec(uint32_t sec)
     lqa_analyzer_.set_config(cfg);
 }
 
+void ALEController::set_sounding_use_twas(bool use_twas)
+{
+    config_.sounding_use_twas = use_twas;
+    sm_.set_sounding_use_twas(use_twas);
+}
+
 void ALEController::set_scan_dwell_ms(uint32_t ms)
 {
     config_.scan_dwell_ms = ms;
@@ -1770,11 +1821,21 @@ bool ALEController::export_settings(const std::string& path)
     f << "manual_accept_timeout_ms=" << config_.accept_timeout_ms << "\n";
     f << "scan_dwell_ms=" << config_.scan_dwell_ms << "\n";
     f << "sounding_interval_sec=" << config_.sounding_interval_sec << "\n";
+    f << "sounding_use_twas=" << (config_.sounding_use_twas ? "1" : "0") << "\n";
     f << "link_idle_timeout_sec=" << config_.link_idle_timeout_sec << "\n";
     f << "max_tune_time_ms=" << config_.max_tune_time_ms << "\n";
+    f << "ptt_lead_ms=" << config_.ptt_lead_ms << "\n";
+    f << "ptt_tail_ms=" << config_.ptt_tail_ms << "\n";
+    f << "lqa_exchange_enabled=" << (config_.lqa_exchange_enabled ? 1 : 0) << "\n";
+    f << "lqa_enabled=" << (lqa_enabled() ? 1 : 0) << "\n";
     f << "relink_enabled=" << (config_.relink_enabled ? 1 : 0) << "\n";
     f << "relink_improvement_threshold=" << config_.relink_improvement_threshold << "\n";
     f << "enhanced_freq_select=" << (config_.enhanced_freq_select ? 1 : 0) << "\n";
+    for (const auto& net : nets()) {
+        f << "net=" << net.name << "\n";
+        for (const auto& ch_id : net.channel_ids)
+            f << "net_channel=" << net.name << ":" << ch_id << "\n";
+    }
     return f.good();
 }
 
@@ -1784,6 +1845,8 @@ bool ALEController::import_settings(const std::string& path)
     if (!f.is_open()) return false;
 
     ALEStationConfig cfg = config_;  // start from current defaults
+    bool has_lqa_enabled = false;
+    bool lqa_enabled_val = lqa_enabled();
 
     std::string line;
     while (std::getline(f, line)) {
@@ -1816,19 +1879,38 @@ bool ALEController::import_settings(const std::string& path)
             cfg.scan_dwell_ms = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "sounding_interval_sec") {
             cfg.sounding_interval_sec = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "sounding_use_twas") {
+            cfg.sounding_use_twas = (val == "1" || val == "true");
         } else if (key == "link_idle_timeout_sec") {
             cfg.link_idle_timeout_sec = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "max_tune_time_ms") {
             cfg.max_tune_time_ms = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "ptt_lead_ms") {
+            cfg.ptt_lead_ms = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "ptt_tail_ms") {
+            cfg.ptt_tail_ms = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "lqa_exchange_enabled") {
+            cfg.lqa_exchange_enabled = (val == "1");
+        } else if (key == "lqa_enabled") {
+            lqa_enabled_val = (val == "1");
+            has_lqa_enabled = true;
         } else if (key == "relink_enabled") {
             cfg.relink_enabled = (val == "1");
         } else if (key == "relink_improvement_threshold") {
             cfg.relink_improvement_threshold = std::stof(val);
         } else if (key == "enhanced_freq_select") {
             cfg.enhanced_freq_select = (val == "1");
+        } else if (key == "net") {
+            add_net(val);
+        } else if (key == "net_channel") {
+            const auto colon = val.find(':');
+            if (colon != std::string::npos)
+                assign_channel_to_net(val.substr(0, colon), val.substr(colon + 1));
         }
+        // audio_in / audio_out: bridge-level, silently ignored here
     }
     apply_config(cfg);
+    if (has_lqa_enabled) set_lqa_enabled(lqa_enabled_val);
     return true;
 }
 

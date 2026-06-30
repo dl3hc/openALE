@@ -264,6 +264,10 @@ public:
 
     bool send_sounding();
 
+    /// Select conclusion type for all sounding transmissions.
+    /// TIS (default, use_twas=false) invites return calls; TWAS (use_twas=true) is announce-only.
+    void set_sounding_use_twas(bool use_twas) { sounding_use_twas_ = use_twas; }
+
     /**
      * Transmit a sounding on each channel in @p channels in turn (multi-channel
      * sounding sweep, §A.5.3). The sweep tunes the radio to each channel via the
@@ -643,6 +647,7 @@ private:
     std::vector<Channel> sounding_sweep_chs_;
     size_t               sounding_sweep_idx_     = 0;
     bool                 sounding_sweep_active_  = false;
+    bool                 sounding_use_twas_      = false; ///< TIS (invite) vs TWAS (announce-only)
 
     // ── Target scan channels ──────────────────────────────────────────────
     uint32_t target_scan_channels;       ///< Assumed scan channels of target (for Tsc)
@@ -698,7 +703,9 @@ private:
 
     // ── Word-receive helpers ──────────────────────────────────────────────
     void handle_invalid_word();
-    void react_scanning(const WordEvent& ev);
+    void detect_incoming_call(const WordEvent& ev); ///< shared: TO_SELF / ALLCALL detection
+    void react_idle(const WordEvent& ev);           ///< IDLE state: call detection only
+    void react_scanning(const WordEvent& ev);       ///< SCANNING state: call detection + AllCall-pause recovery
     void react_calling(const WordEvent& ev);
     void react_handshake(const WordEvent& ev, const ALEWord& word);
 

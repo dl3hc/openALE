@@ -65,6 +65,11 @@
             <div class="sound-sep">Periodic multi-channel (net)</div>
             <div id="soundNetList"></div>
             <button class="sound-opt sound-off" onclick="soundAutoOff()">■ Stop periodic</button>
+            <div class="sound-sep">Conclusion type</div>
+            <select id="cfgSoundingConclusion" class="sound-sel" onchange="applyTimingToBridge()" title="TIS invites the listener to return-call; TWAS is announce-only (no response expected).">
+              <option value="tis">TIS — invite return calls</option>
+              <option value="twas">TWAS — announce only</option>
+            </select>
             <div class="fhint" style="margin-top:6px">Interval: Settings ▸ Timing ▸ Sounding Interval.</div>
           </div>
         </div>
@@ -591,7 +596,7 @@
           <div class="fg-row col3">
             <div>
               <label class="flabel">Scan Dwell (ms)</label>
-              <input class="finput" id="cfgDwell" type="number" value="392" min="100">
+              <input class="finput" id="cfgDwell" type="number" value="200" min="100">
               <div class="fhint">Time per channel while scanning.</div>
             </div>
             <div>

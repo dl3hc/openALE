@@ -43,6 +43,8 @@ struct ALEStationConfig {
     uint32_t  scan_dwell_ms          = 200;
     /// Sounding-Intervall (Sekunden); Standard = 300 s.
     uint32_t  sounding_interval_sec  = 300;
+    /// Sounding conclusion type: false = TIS (invites return calls), true = TWAS (announce-only).
+    bool      sounding_use_twas      = false;
     /// Link-Idle-Timeout: Verbindung wird nach dieser Zeit getrennt (Sekunden).
     /// Default 360 s — programmierbarer Twa-Override gem. MIL-STD-188-141B Level-5
     /// (entspricht PCALE TWA=360000 ms). Der SM-Spec-Default bleibt 30 s
