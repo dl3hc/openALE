@@ -1892,22 +1892,22 @@ uint32_t ALEController::get_call_duration_seconds() const
 ALEController::SignalQuality ALEController::get_current_signal_quality() const
 {
     SignalQuality q;
-    q.snr_db     = last_snr_db_;
-    q.ber        = last_ber_;
-    q.votes      = static_cast<int8_t>(last_votes_);
+    q.snr_db   = last_snr_db_;
+    q.ber      = last_ber_;
+    q.votes    = static_cast<int8_t>(last_votes_);
     q.fec_errors = last_fec_errors_;
+    q.sinad_db = last_snr_db_;  // votes-based SNR; upgraded below if LQA entry exists
 
     const Channel* ch = sm_.get_current_channel();
     if (ch) {
         const std::string peer = !sm_.get_to_address().empty()
             ? sm_.get_to_address() : sm_.get_caller_address();
         if (auto e = lqa_database_.get_entry(ch->rx_frequency_hz, peer)) {
-            // Prefer measured Goertzel SINAD; fall back to votes-based SNR
-            // approximation when no SINAD has been measured yet (A.5.4.1.4).
-            q.sinad_db     = e->sinad_db > 0.0f ? e->sinad_db : last_snr_db_;
-            q.multipath_ms = e->multipath_score;  // severity 0-1, not a measured delay
-        } else {
-            q.sinad_db = last_snr_db_;
+            // Prefer measured Goertzel SINAD (A.5.4.1.2) over votes-based approximation.
+            if (e->sinad_db > 0.0f) {
+                q.sinad_db     = e->sinad_db;
+                q.multipath_ms = e->multipath_score;
+            }
         }
     }
     return q;

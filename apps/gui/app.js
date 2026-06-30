@@ -184,6 +184,7 @@ function onBridgeEvent(e) {
     case 'link_established':
       document.getElementById('callCs').textContent = e.peer;
       updateLinkQualityFromLqa(e.peer);
+      pollSignalQuality();
       if (autoAcceptOn()) {
         // Auto-accept: the link is live — show the active-call panel + timer.
         stopTimer();
@@ -1979,7 +1980,7 @@ function syncLqaFromBridge() {
         sinad:   fromSinad || bilatSinad || '—',
         sinad_db: (typeof e.sinad_db === 'number' && e.sinad_db > 0) ? e.sinad_db
                 : (typeof e.snr_db === 'number' && e.snr_db > 0)   ? e.snr_db
-                : typeof e.bilateral_sinad_db === 'number' ? e.bilateral_sinad_db : 0,
+                : (typeof e.bilateral_sinad_db === 'number' && e.bilateral_sinad_db <= 30) ? e.bilateral_sinad_db : 0,
         snr_db:  typeof e.snr_db === 'number' ? e.snr_db : 0,
         ber:     fromBer   || bilatBer   || '—',
         mp,
