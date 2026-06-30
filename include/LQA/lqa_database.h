@@ -30,9 +30,12 @@ namespace ale {
  * therefore must never exceed LQA_QUALITY_MAX — only the explicit
  * LQA_QUALITY_UNKNOWN sentinel may take the value 31.
  *
- * (Note: the on-air SINAD/BER CMD-LQA fields use the spec's inverted "score"
- *  convention where 0 is best; see A.5.6.5. This constant governs the internal
- *  higher-is-better quality representation used for ranking and display.)
+ * (Note: the on-air CMD-LQA SINAD code uses 0 = ≤0 dB (worst) … 30 = 30 dB (best),
+ *  i.e. higher code = better SINAD.  The CMD BER code is the opposite: 0 = no errors
+ *  (best) … 30 = max errors (worst), i.e. lower code = better BER.  The Figure A-27
+ *  channel-selection aggregate sums both directions and picks the lowest total, which
+ *  is equivalent to our internal higher-is-better ranking — the two are just negations
+ *  of each other.  This constant governs the internal [0, 30] representation.)
  */
 static constexpr float LQA_QUALITY_MAX     = 30.0f;  ///< best measured quality
 static constexpr float LQA_QUALITY_MIN     = 0.0f;   ///< worst measured quality
@@ -48,7 +51,10 @@ struct LQAEntry {
     std::string remote_station;      ///< Remote station address (or "" for sounding)
     float snr_db;                    ///< Signal-to-Noise Ratio (dB)
     float ber;                       ///< Averaged non-unanimous 2/3-vote count (0.0–48.0, A.5.4.1.1)
-    float sinad_db;                  ///< SINAD (Signal+Noise+Distortion to Noise+Distortion)
+    float sinad_db;                  ///< FROM-direction SINAD in dB [0,30].  The lqa_metrics
+                                     ///< path stores the rounded CMD code (sinad_to_lqa_code);
+                                     ///< the sounding path stores the raw Goertzel dB value.
+                                     ///< Both are numerically identical on the [0,30] range.
     int fec_errors;                  ///< Total Golay FEC errors corrected
     int total_words;                 ///< Total ALE words received
     float multipath_score;           ///< Multipath severity (0.0=none, 1.0=severe)
@@ -236,7 +242,7 @@ public:
      *
      * @param frequency_hz      Channel frequency in Hz
      * @param remote_station    Station that sent the CMD LQA report
-     * @param sinad_code        SINAD code [0-30] (spec: 0=best, 30=worst); 31 = no value
+     * @param sinad_code        SINAD code [0-30] (0 = ≤0 dB, worst; 30 = 30 dB, best); 31 = no measurement
      * @param ber_code          BER code   [0-30]; 31 = no value
      * @param mp_code           MP code    [0-7]; 7 = not measured
      * @param timestamp_ms      Measurement timestamp (0 = current time)

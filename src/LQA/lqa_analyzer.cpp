@@ -52,6 +52,9 @@ void LQAAnalyzer::process_sounding(const std::string& station,
     // A.5.4.1.2: write measured SINAD via update_entry_extended so the sinad_db
     // field is populated for both the channel entry and the station entry.
     // multipath and noise-floor are not measured during sounding — use defaults.
+    // The empty-station entry is a channel-level aggregate used internally by
+    // is_sounding_due(); it is filtered from get_all_lqa_entries() so the GUI
+    // never receives it and cannot display it as a phantom "(sounding)" row.
     database_->update_entry_extended(frequency_hz, "", snr_db, ber, sinad_db,
                                      0.0f, -120.0f, 0, 1, now);
     database_->update_entry_extended(frequency_hz, station, snr_db, ber, sinad_db,
