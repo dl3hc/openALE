@@ -537,12 +537,21 @@ bool ALEController::send_sounding_sweep(const std::vector<Channel>& channels)
 }
 
 
-LQACmdPayload ALEController::compute_lqa_payload(uint32_t freq_hz) const {
+LQACmdPayload ALEController::compute_lqa_payload(uint32_t freq_hz,
+                                                   const std::string& target_station) const {
     LQACmdPayload p{};  // sentinels: sinad=31, ber=31, mp=7
-    const auto e = lqa_database_.get_entry(freq_hz, "");
+    // A.5.4.2: report what WE measured FROM target_station. Prefer a station-
+    // specific entry (populated by soundings or previous handshakes); fall back
+    // to the channel aggregate (empty-station sounding entry) when no station
+    // data exists yet.
+    auto e = (!target_station.empty())
+        ? lqa_database_.get_entry(freq_hz, target_station) : nullptr;
+    if (!e || e->total_words == 0)
+        e = lqa_database_.get_entry(freq_hz, "");
     if (!e) return p;
     if (e->sinad_db > 0.0f) {
-        // sinad_db is already stored as a float SINAD code (0-30) via update_entry_extended
+        // sinad_db holds dB on [0,30]; the CMD SINAD code is 1 LSB = 1 dB, so
+        // round-to-nearest and clamp gives the correct 5-bit field directly.
         const float s = e->sinad_db;
         p.sinad = (s <= 0.0f) ? 0u : (s >= 30.0f) ? 30u : static_cast<uint8_t>(s + 0.5f);
     }
@@ -618,7 +627,7 @@ bool ALEController::initiate_call(const std::string& target_addr)
     last_call_target_.clear();
     last_call_freq_hz_ = 0;
     if (!calling_channels_.empty() && config_.lqa_exchange_enabled) {
-        LQACmdPayload p = compute_lqa_payload(first_call_freq_hz);
+        LQACmdPayload p = compute_lqa_payload(first_call_freq_hz, target_addr);
         p.ka1 = true;
         sm_.set_pending_lqa_cmd(encode_lqa_cmd(p));
         sent_ka1_          = true;
@@ -644,7 +653,7 @@ bool ALEController::initiate_single_channel_call(const std::string& target_addr)
     last_call_target_.clear();
     last_call_freq_hz_ = 0;
     if (config_.lqa_exchange_enabled) {
-        LQACmdPayload p = compute_lqa_payload(cur.rx_frequency_hz);
+        LQACmdPayload p = compute_lqa_payload(cur.rx_frequency_hz, target_addr);
         p.ka1 = true;
         sm_.set_pending_lqa_cmd(encode_lqa_cmd(p));
         sent_ka1_         = true;
@@ -891,11 +900,40 @@ void ALEController::maybe_emit_call_alert()
     call_alert_fired_ = true;
     const std::string caller = sm_.get_caller_address();
 
+    // GAP 2 fix (A.5.4.1.1): JOE commits calling-frame FROM measurement NOW
+    // (before compute_lqa_payload reads the DB) so the fresh data is available
+    // for CMD 'a'. Reset the accumulator; on_sm_state_change provides the
+    // safety-net reset if the alert fires but LINKED is never reached.
+    if (op_params_.lqa_enabled && hs_call_ber_acc_.word_count() > 0) {
+        const std::string caller = sm_.get_caller_address();
+        if (!caller.empty() && !self_address_store_.matches_self(caller)) {
+            const Channel* ch = sm_.get_current_channel();
+            if (ch && ch->rx_frequency_hz > 0) {
+                const float n = static_cast<float>(hs_call_ber_acc_.word_count());
+                lqa_database_.update_entry_extended(hs_call_freq_hz_, caller,
+                    hs_call_snr_sum_ / n,
+                    static_cast<float>(hs_call_ber_acc_.ber_score()),
+                    hs_call_sinad_sum_ / n,
+                    0.0f, -120.0f, 0, static_cast<int>(hs_call_ber_acc_.word_count()), 0);
+                if (debug_rx_)
+                    emit_status("LQA calling-frame FROM: " + caller
+                                + " freq=" + std::to_string(hs_call_freq_hz_)
+                                + " ber=" + std::to_string(static_cast<int>(hs_call_ber_acc_.ber_score()))
+                                + " sinad=" + std::to_string(static_cast<int>(hs_call_sinad_sum_ / n)));
+            }
+        }
+    }
+    hs_call_ber_acc_.reset();
+    hs_call_snr_sum_ = hs_call_sinad_sum_ = 0.0f;
+    hs_call_freq_hz_ = 0;
+
     // Block A4 (responder) — queue CMD LQA (KA1=0) for the response frame.
+    // compute_lqa_payload now reads the fresh calling-frame measurement above.
     // Done here (once, at alert time) so it's set for both auto-accept and manual-accept.
     if (config_.lqa_exchange_enabled) {
         if (const Channel* ch = sm_.get_current_channel()) {
-            LQACmdPayload resp_p = compute_lqa_payload(ch->rx_frequency_hz);
+            LQACmdPayload resp_p = compute_lqa_payload(ch->rx_frequency_hz,
+                                                        sm_.get_caller_address());
             resp_p.ka1 = false;
             sm_.set_pending_lqa_cmd(encode_lqa_cmd(resp_p));
         }
@@ -1195,6 +1233,10 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         last_caller_.clear();
         call_alert_fired_           = false;
         pending_bilateral_valid_    = false;  // Block A5 — stale data from previous handshake
+        // Safety-net: discard any calling-frame accumulation that never fired an alert
+        hs_call_ber_acc_.reset();
+        hs_call_snr_sum_ = hs_call_sinad_sum_ = 0.0f;
+        hs_call_freq_hz_ = 0;
     }
 
     // Initialise AMD orderwire tracking when entering HANDSHAKE.
@@ -1206,6 +1248,17 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         amd_skip_count_ = 2 * (n - 1);
         amd_seen_count_ = 0;
         amd_text_acc_.clear();
+        // Fresh calling-frame accumulator for each new handshake.
+        hs_call_ber_acc_.reset();
+        hs_call_snr_sum_ = hs_call_sinad_sum_ = 0.0f;
+        hs_call_freq_hz_ = 0;
+    }
+
+    // Fresh response-frame accumulator for each new outgoing call.
+    if (to == ALEState::CALLING) {
+        hs_resp_ber_acc_.reset();
+        hs_resp_snr_sum_ = hs_resp_sinad_sum_ = 0.0f;
+        hs_resp_freq_hz_ = 0;
     }
 
     // LQA: when we enter SOUNDING, record the sounding timestamp so that
@@ -1257,6 +1310,32 @@ void ALEController::on_operator_event(OperatorEvent ev)
     switch (ev) {
         case OperatorEvent::LINK_ESTABLISHED:
         {
+            // GAP 1 fix: SAM commits response-frame FROM measurement for JOE
+            // (= get_to_address() = DF3SR). Only present on the SAM side;
+            // JOE committed hs_call in maybe_emit_call_alert() already.
+            if (op_params_.lqa_enabled && hs_resp_ber_acc_.word_count() > 0) {
+                const std::string peer = sm_.get_to_address();
+                if (!peer.empty() && !self_address_store_.matches_self(peer)) {
+                    const float n = static_cast<float>(hs_resp_ber_acc_.word_count());
+                    lqa_database_.update_entry_extended(hs_resp_freq_hz_, peer,
+                        hs_resp_snr_sum_ / n,
+                        static_cast<float>(hs_resp_ber_acc_.ber_score()),
+                        hs_resp_sinad_sum_ / n,
+                        0.0f, -120.0f, 0,
+                        static_cast<int>(hs_resp_ber_acc_.word_count()), 0);
+                    if (debug_rx_)
+                        emit_status("LQA response-frame FROM: " + peer
+                                    + " freq=" + std::to_string(hs_resp_freq_hz_)
+                                    + " ber=" + std::to_string(
+                                          static_cast<int>(hs_resp_ber_acc_.ber_score()))
+                                    + " sinad=" + std::to_string(
+                                          static_cast<int>(hs_resp_sinad_sum_ / n)));
+                }
+            }
+            hs_resp_ber_acc_.reset();
+            hs_resp_snr_sum_ = hs_resp_sinad_sum_ = 0.0f;
+            hs_resp_freq_hz_ = 0;
+
             // Block A5 — SAM side: if JOE sent CMD 'a' in the response frame, store it.
             if (config_.lqa_exchange_enabled && pending_bilateral_valid_) {
                 const std::string peer = sm_.get_to_address();
@@ -1303,6 +1382,23 @@ void ALEController::on_operator_event(OperatorEvent ev)
             break;
         }
         case OperatorEvent::CALL_REJECTED:
+            // GAP 1 fix: JOE's TWAS frame was received in CALLING/LISTENING →
+            // commit whatever response-frame quality was measured.
+            if (op_params_.lqa_enabled && hs_resp_ber_acc_.word_count() > 0) {
+                const std::string peer = sm_.get_to_address();
+                if (!peer.empty() && !self_address_store_.matches_self(peer)) {
+                    const float n = static_cast<float>(hs_resp_ber_acc_.word_count());
+                    lqa_database_.update_entry_extended(hs_resp_freq_hz_, peer,
+                        hs_resp_snr_sum_ / n,
+                        static_cast<float>(hs_resp_ber_acc_.ber_score()),
+                        hs_resp_sinad_sum_ / n,
+                        0.0f, -120.0f, 0,
+                        static_cast<int>(hs_resp_ber_acc_.word_count()), 0);
+                }
+            }
+            hs_resp_ber_acc_.reset();
+            hs_resp_snr_sum_ = hs_resp_sinad_sum_ = 0.0f;
+            hs_resp_freq_hz_ = 0;
             // Block A6 — flush any partial response metrics before marking
             commit_sounding_sample();
             if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
@@ -1313,6 +1409,10 @@ void ALEController::on_operator_event(OperatorEvent ev)
             emit_event(pal::EventType::ALE_LINK_TERMINATED, "Call rejected");
             break;
         case OperatorEvent::NO_CHANNELS_LEFT:
+            // No JOE response received on any channel → discard response-frame acc.
+            hs_resp_ber_acc_.reset();
+            hs_resp_snr_sum_ = hs_resp_sinad_sum_ = 0.0f;
+            hs_resp_freq_hz_ = 0;
             // Block A6 — flush any partial response metrics before marking
             commit_sounding_sample();
             if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
@@ -1547,13 +1647,9 @@ void ALEController::on_received_word(const ALEWord& word)
                     sounding_settle_ms_ = now_ms_;
                 }
             }
-        } else {
-            // ── Non-sounding transmission (handshake / linked frame) ──────────
-            // A.5.4.1.1: BER must be measured for EVERY received word after word
-            // sync — correctable words contribute their non-unanimous count (0–48);
-            // Golay-uncorrectable words contribute the max value 48.
-            // unanimous_votes is populated by the majority-voter for both word
-            // types and used as the SNR proxy in both cases.
+        } else if (cur_st == ALEState::LINKED) {
+            // ── Linked frame BER measurement ──────────────────────────────────
+            // A.5.4.1.1: accumulate BER only for in-link traffic (LINKED state).
             if (word.valid || word.golay_uncorrectable) {
                 const Channel* ch = sm_.get_current_channel();
                 if (ch && ch->rx_frequency_hz > 0) {
@@ -1567,6 +1663,51 @@ void ALEController::on_received_word(const ALEWord& word)
                     rx_ber_sinad_sum_ += word.sinad_db;
                     rx_ber_freq_hz_    = ch->rx_frequency_hz;
                     rx_ber_settle_ms_  = now_ms_;
+                }
+            }
+        } else if (cur_st == ALEState::CALLING
+                   && sm_.get_calling_phase() == CallingPhase::LISTENING) {
+            // ── GAP 1 fix: SAM measures JOE's response frame ──────────────────
+            // A.5.4.1.1: measure all words in the response frame received during
+            // CALLING/LISTENING. Committed to (get_to_address(), freq) at
+            // LINK_ESTABLISHED (or CALL_REJECTED). A TIS word marks the start of
+            // JOE's conclusion → restart accumulator so Trs redundancy keeps only
+            // the last (best) copy and failed-cycle noise is discarded.
+            if (word.valid || word.golay_uncorrectable) {
+                const Channel* ch = sm_.get_current_channel();
+                if (ch && ch->rx_frequency_hz > 0) {
+                    constexpr float kMaxVotes = 48.0f;
+                    if (word.valid && word.type == PreambleType::TIS) {
+                        hs_resp_ber_acc_.reset();
+                        hs_resp_snr_sum_   = 0.0f;
+                        hs_resp_sinad_sum_ = 0.0f;
+                    }
+                    const uint8_t non_unanimous = word.golay_uncorrectable
+                        ? 48u : (word.unanimous_votes <= 48u
+                                 ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
+                    hs_resp_ber_acc_.add_word(non_unanimous, word.golay_uncorrectable);
+                    hs_resp_snr_sum_   += (word.unanimous_votes / kMaxVotes) * 31.0f;
+                    hs_resp_sinad_sum_ += word.sinad_db;
+                    hs_resp_freq_hz_    = ch->rx_frequency_hz;
+                }
+            }
+        } else if (cur_st == ALEState::HANDSHAKE
+                   && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END) {
+            // ── GAP 2 fix: JOE measures SAM's calling frame ───────────────────
+            // A.5.4.1.1: measure all words in the calling frame received during
+            // HANDSHAKE/WAIT_CYCLE_END (TO, TIS, DATA, CMD words). Committed in
+            // maybe_emit_call_alert() so compute_lqa_payload() reads fresh data.
+            if (word.valid || word.golay_uncorrectable) {
+                const Channel* ch = sm_.get_current_channel();
+                if (ch && ch->rx_frequency_hz > 0) {
+                    constexpr float kMaxVotes = 48.0f;
+                    const uint8_t non_unanimous = word.golay_uncorrectable
+                        ? 48u : (word.unanimous_votes <= 48u
+                                 ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
+                    hs_call_ber_acc_.add_word(non_unanimous, word.golay_uncorrectable);
+                    hs_call_snr_sum_   += (word.unanimous_votes / kMaxVotes) * 31.0f;
+                    hs_call_sinad_sum_ += word.sinad_db;
+                    hs_call_freq_hz_   = ch->rx_frequency_hz;
                 }
             }
         }
@@ -1716,6 +1857,7 @@ std::vector<std::string> ALEController::get_all_lqa_entries() const
     std::vector<std::string> out;
     const uint32_t now = lqa_database_.get_current_time_ms();  // same clock as LQADatabase itself
     for (const auto& e : lqa_database_.get_all_entries()) {
+        if (e.remote_station.empty()) continue;  // internal channel-aggregate; not for GUI
         const uint32_t age_ms = (now > e.last_activity_ms()) ? (now - e.last_activity_ms()) : 0u;
         // Fields: freq|station|snr_db|ber|sinad_db|score|age_ms
         //        |bilateral_sinad|bilateral_ber|bilateral_mp|display_score

@@ -935,17 +935,34 @@ private:
     std::string              fs_peer_;
     bool                     fs_pending_cmd_rx_ = false;  // CMD 'f' recvd, waiting for DATA
 
-    // A.5.4.1.1 per-frame FROM-direction BER for received transmissions OTHER
-    // than soundings (handshake / linked frames — the sounding path in
-    // SCANNING/IDLE is handled by commit_sounding_sample()). Accumulates the
-    // non-unanimous 2/3-vote count per word; committed at frame settle (Tdrw of
-    // silence) to (peer, channel) via commit_rx_ber_sample(). Gated on
-    // op_params_.lqa_enabled.
+    // A.5.4.1.1 per-frame FROM-direction BER for in-link traffic (LINKED state).
+    // Committed at frame settle (Tdrw of silence) via commit_rx_ber_sample().
+    // Gated on op_params_.lqa_enabled.
     BerAccumulator           rx_ber_acc_;
     float                    rx_ber_snr_sum_    = 0.0f;
-    float                    rx_ber_sinad_sum_  = 0.0f;  ///< A.5.4.1.2 SINAD accumulator
+    float                    rx_ber_sinad_sum_  = 0.0f;
     uint32_t                 rx_ber_freq_hz_   = 0;
     uint32_t                 rx_ber_settle_ms_ = 0;
+
+    // A.5.4.1.1 FROM-direction BER for the JOE's response frame
+    // (CALLING/CALLING::LISTENING). Committed to (get_to_address(), freq) at
+    // LINK_ESTABLISHED (or CALL_REJECTED when JOE sent TWAS). Reset on failed
+    // calls and on entering CALLING. Gated on op_params_.lqa_enabled.
+    BerAccumulator           hs_resp_ber_acc_;
+    float                    hs_resp_snr_sum_   = 0.0f;
+    float                    hs_resp_sinad_sum_ = 0.0f;
+    uint32_t                 hs_resp_freq_hz_   = 0;
+
+    // A.5.4.1.1 FROM-direction BER for the SAM's calling frame
+    // (HANDSHAKE/HANDSHAKE::WAIT_CYCLE_END). Committed to (get_caller_address(),
+    // freq) in maybe_emit_call_alert() so compute_lqa_payload() can immediately
+    // read the fresh measurement for the response CMD 'a'. Reset on entering
+    // HANDSHAKE and when leaving HANDSHAKE without an alert. Gated on
+    // op_params_.lqa_enabled.
+    BerAccumulator           hs_call_ber_acc_;
+    float                    hs_call_snr_sum_   = 0.0f;
+    float                    hs_call_sinad_sum_ = 0.0f;
+    uint32_t                 hs_call_freq_hz_   = 0;
 
     void wire_callbacks();
     void on_sm_state_change(ALEState from, ALEState to);
@@ -956,9 +973,11 @@ private:
     // transition (SM-driven and manual) reaches the display.
     void set_ptt_and_notify(bool on);
 
-    // Returns a CMD LQA payload populated from the LQA DB entry for freq_hz.
-    // Fields default to "no-value" sentinels when no entry exists.
-    LQACmdPayload compute_lqa_payload(uint32_t freq_hz) const;
+    // Returns a CMD LQA payload for freq_hz, reporting our FROM-direction
+    // measurement of target_station (falls back to channel aggregate when no
+    // station-specific entry exists). Fields default to "no-value" sentinels.
+    LQACmdPayload compute_lqa_payload(uint32_t freq_hz,
+                                       const std::string& target_station = "") const;
 
     /// Resolve a net's scan/sounding-enabled channels (by id, from
     /// calling_channels_) for a multi-channel sounding sweep. Empty if the net
