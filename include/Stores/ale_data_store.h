@@ -94,14 +94,20 @@ private:
 
 /**
  * \struct Net
- * A named net (group) and the channel IDs assigned to it.
+ * A named net (group), its channel-ID membership, and per-net operating policy.
  *
- * Channels carry their own scan/sounding eligibility (Channel::enabled, the
- * Annex B "SCAN Y/N" flag); a net is just an ordered set of channel IDs.
+ * Policy fields (dwell_ms, scanning_enabled, sounding_enabled,
+ * sounding_interval_sec, calling_length_c) control scanning and calling
+ * behaviour when this net is the active scan/sound net.
  */
 struct Net {
     std::string              name;
     std::vector<std::string> channel_ids;
+    uint32_t dwell_ms              = 200;   ///< Scan dwell per channel (ms)
+    bool     scanning_enabled      = true;  ///< Include in active scan list
+    bool     sounding_enabled      = false; ///< Automatic periodic sounding
+    uint32_t sounding_interval_sec = 300;   ///< Sounding interval (s)
+    uint32_t calling_length_c      = 10;    ///< Tsc = C × 2 × Trw (MIL-STD max = 10)
 };
 
 /**
@@ -122,6 +128,9 @@ public:
     /** Add channel_id to net's member list (no-op, returns true, if already a member). */
     bool assign_channel(const std::string& net_name, const std::string& channel_id);
     bool unassign_channel(const std::string& net_name, const std::string& channel_id);
+
+    /** Update per-net policy fields (channel_ids unchanged). Returns false if not found. */
+    bool update_net(const Net& updated);
 
     /** Remove channel_id from every net's member list (e.g. after deleting a channel). */
     void unassign_channel_everywhere(const std::string& channel_id);
@@ -233,6 +242,47 @@ public:
 private:
     std::vector<SelfAddressEntry> entries_;
     std::string                   primary_;
+};
+
+// ── GroupCallStore ────────────────────────────────────────────────────────────
+
+/** Named list of callsigns for group-call dispatch. */
+struct GroupCallRoster {
+    std::string              name;
+    std::vector<std::string> members;
+};
+
+/**
+ * \class GroupCallStore
+ * Named group-call rosters: each roster is a list of callsigns that can be
+ * dispatched in one initiate_group_call() call.
+ */
+class GroupCallStore {
+public:
+    GroupCallStore() = default;
+
+    bool add_roster(const std::string& name);
+    bool remove_roster(const std::string& name);
+    bool add_member(const std::string& roster_name, const std::string& callsign);
+    bool remove_member(const std::string& roster_name, const std::string& callsign);
+
+    const GroupCallRoster*              find(const std::string& name) const;
+    const std::vector<GroupCallRoster>& all() const { return rosters_; }
+    size_t size()  const { return rosters_.size(); }
+    bool   empty() const { return rosters_.empty(); }
+    void   clear();
+
+private:
+    std::vector<GroupCallRoster> rosters_;
+    GroupCallRoster* find_mutable(const std::string& name);
+};
+
+// ── AllCallConfig ─────────────────────────────────────────────────────────────
+
+/** Persistent config for AllCall TX (stub) and RX acceptance. */
+struct AllCallConfig {
+    char selector = '?';   ///< '@' = global, letter = selective net ('?' = wildcard)
+    bool accept   = true;  ///< Whether to respond to ALLCALL / ANYCALL frames
 };
 
 // ── OtherStationStore ────────────────────────────────────────────────────────

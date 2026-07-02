@@ -88,6 +88,82 @@ private:
 };
 
 /**
+ * @brief Per-frame BER + SNR + SINAD accumulator with deferred uncorrectable words
+ *
+ * Feeds one entry per received ALE word during a handshake frame and yields the
+ * averaged BER/SNR/SINAD at frame end. Golay-uncorrectable words are held
+ * *tentatively* in a pending buffer and only committed to the averages when a
+ * later valid word flushes them — i.e. only words actually IN the frame count
+ * (A.5.4.1.1 "all received words in a frame shall be measured"). A trailing run
+ * of uncorrectable words with no following valid word (a post-frame phantom
+ * decoded during the Tlww settle after the conclusion, while the demodulator
+ * grid is still locked) is dropped at commit, so it cannot inflate the BER with
+ * the 48-vote penalty.
+ *
+ * BER/SNR/SINAD share the same committed word_count() divisor, so the three
+ * averages stay consistent.
+ *
+ * Algorithm:
+ *   - Golay-uncorrectable word → buffer (pending_count++, pending snr/sinad)
+ *   - Valid word               → flush the pending run (add 48 each), then add
+ *                                the valid word (non_unanimous = 48 − votes)
+ *   - ber_score()/snr_avg()/sinad_avg() exclude the still-pending trailing run
+ */
+class FrameQualityAccumulator {
+public:
+    FrameQualityAccumulator() = default;
+
+    /// Feed one decoded ALE word. unanimous_votes: 0–48; sinad_db: per-word Goertzel SINAD.
+    void add_word(uint8_t unanimous_votes, bool golay_uncorrectable, float sinad_db) {
+        constexpr float kMaxVotes = 48.0f;
+        const float snr_db = (static_cast<float>(unanimous_votes) / kMaxVotes) * 31.0f;
+        if (golay_uncorrectable) {
+            ++pending_count_;
+            pending_snr_   += snr_db;
+            pending_sinad_ += sinad_db;
+        } else {
+            // A later valid word confirms the pending run was mid-frame, not a
+            // trailing phantom → fold it into the committed sums.
+            for (uint32_t i = 0; i < pending_count_; ++i)
+                ber_.add_word(48u, true);
+            snr_sum_   += pending_snr_;
+            sinad_sum_ += pending_sinad_;
+            pending_count_ = 0;
+            pending_snr_   = 0.0;
+            pending_sinad_ = 0.0;
+            const uint8_t non_unanimous = (unanimous_votes <= 48u)
+                ? static_cast<uint8_t>(48u - unanimous_votes) : 0u;
+            ber_.add_word(non_unanimous, false);
+            snr_sum_   += snr_db;
+            sinad_sum_ += sinad_db;
+        }
+    }
+
+    void reset() {
+        ber_.reset();
+        snr_sum_ = 0.0; sinad_sum_ = 0.0;
+        pending_count_ = 0; pending_snr_ = 0.0; pending_sinad_ = 0.0;
+    }
+
+    /// Averaged BER score (0–48); excludes the pending trailing run.
+    uint8_t  ber_score()  const { return ber_.ber_score(); }
+    /// Committed word count (valid + flushed-uncorrectable); excludes pending.
+    uint32_t word_count() const { return ber_.word_count(); }
+    /// Averaged SNR (0–31 dB) over committed words; 0 when none.
+    float    snr_avg()   const { uint32_t n = ber_.word_count(); return n ? static_cast<float>(snr_sum_ / n) : 0.0f; }
+    /// Averaged SINAD (dB) over committed words; 0 when none.
+    float    sinad_avg() const { uint32_t n = ber_.word_count(); return n ? static_cast<float>(sinad_sum_ / n) : 0.0f; }
+
+private:
+    BerAccumulator ber_;
+    double snr_sum_ = 0.0;
+    double sinad_sum_ = 0.0;
+    uint32_t pending_count_ = 0;
+    double pending_snr_ = 0.0;
+    double pending_sinad_ = 0.0;
+};
+
+/**
  * @brief Configuration for LQA metrics collection
  */
 struct MetricsConfig {

@@ -380,6 +380,81 @@ void test_ber_accumulator_reset() {
     std::cout << "  PASS" << std::endl;
 }
 
+// --- FrameQualityAccumulator: deferred Golay-uncorrectable words (A.5.4.1.1) ---
+// A trailing run of post-frame phantom uncorrectable words is excluded from the
+// BER/SNR/SINAD averages unless a later valid word flushes it (mid-frame case).
+
+// Clean frame + trailing phantom: BER stays 0, phantom excluded.
+void test_frame_quality_trailing_phantom_excluded() {
+    std::cout << "Test: FrameQualityAccumulator - trailing phantom uncorrectable excluded..." << std::endl;
+
+    FrameQualityAccumulator acc;
+    acc.add_word(48, false, 5.0f);   // valid conclusion word (TIS), unanimous
+    acc.add_word(48, false, 5.0f);   // valid conclusion word (DATA), unanimous
+    acc.add_word(40, true,  2.0f);   // trailing Golay-uncorrectable phantom (no valid word follows)
+
+    assert(acc.word_count() == 2);   // phantom not committed
+    assert(acc.ber_score()  == 0);   // 0/2
+    // SNR/SINAD averaged over the 2 committed valid words only.
+    assert(acc.snr_avg()   == 31.0f);    // (31 + 31) / 2
+    assert(acc.sinad_avg() == 5.0f);     // (5 + 5) / 2
+
+    std::cout << "  BER=" << (int)acc.ber_score() << " wc=" << acc.word_count() << "  PASS" << std::endl;
+}
+
+// Mid-frame uncorrectable flushed by a later valid word: it IS counted (48/3 = 16).
+void test_frame_quality_mid_frame_uncorrectable_flushed() {
+    std::cout << "Test: FrameQualityAccumulator - mid-frame uncorrectable flushed by valid word..." << std::endl;
+
+    FrameQualityAccumulator acc;
+    acc.add_word(48, false, 5.0f);   // valid
+    acc.add_word(40, true,  2.0f);   // uncorrectable (tentative)
+    acc.add_word(48, false, 5.0f);   // valid → flushes the pending uncorrectable
+
+    assert(acc.word_count() == 3);   // 2 valid + 1 flushed uncorrectable
+    assert(acc.ber_score()  == 16);  // (0 + 48 + 0) / 3 = 16
+    // SNR/SINAD over 3 committed words: (31 + snr(40) + 31)/3, (5 + 2 + 5)/3.
+    assert(acc.sinad_avg() == 4.0f);     // (5 + 2 + 5) / 3 = 4
+
+    std::cout << "  BER=" << (int)acc.ber_score() << " wc=" << acc.word_count() << "  PASS" << std::endl;
+}
+
+// Only uncorrectable words (no valid) → nothing committed → ber_score 0, word_count 0.
+void test_frame_quality_only_uncorrectable() {
+    std::cout << "Test: FrameQualityAccumulator - only uncorrectable -> nothing committed..." << std::endl;
+
+    FrameQualityAccumulator acc;
+    acc.add_word(40, true, 2.0f);
+    acc.add_word(35, true, 1.0f);
+
+    assert(acc.word_count() == 0);
+    assert(acc.ber_score()  == 0);
+    assert(acc.snr_avg()   == 0.0f);
+    assert(acc.sinad_avg() == 0.0f);
+
+    std::cout << "  PASS" << std::endl;
+}
+
+// Reset clears pending + committed state.
+void test_frame_quality_reset() {
+    std::cout << "Test: FrameQualityAccumulator - reset clears pending..." << std::endl;
+
+    FrameQualityAccumulator acc;
+    acc.add_word(48, false, 5.0f);
+    acc.add_word(40, true,  2.0f);   // pending
+    assert(acc.word_count() == 1);
+
+    acc.reset();
+    assert(acc.word_count() == 0);
+    assert(acc.ber_score()  == 0);
+    // After reset, a valid word must not fold in the cleared pending.
+    acc.add_word(48, false, 5.0f);
+    assert(acc.word_count() == 1);
+    assert(acc.ber_score()  == 0);
+
+    std::cout << "  PASS" << std::endl;
+}
+
 // --- AC-CHAN-002-002: sinad_to_lqa_code range [0, 30] (REQ-CHAN-013) ---
 
 // Negative SINAD → code 0
@@ -730,6 +805,12 @@ int main() {
     test_ber_accumulator_range_clamped();
     test_ber_accumulator_reset();
     test_metrics_sample_ber_fields();
+
+    // FrameQualityAccumulator (deferred Golay-uncorrectable)
+    test_frame_quality_trailing_phantom_excluded();
+    test_frame_quality_mid_frame_uncorrectable_flushed();
+    test_frame_quality_only_uncorrectable();
+    test_frame_quality_reset();
 
     // AC-CHAN-002-002 sinad_to_lqa_code tests
     test_sinad_code_negative_clamped_to_zero();

@@ -49,7 +49,7 @@ static uint8_t detect_symbol(const int16_t* chunk)
     float   best_mag  = -1.0f;
     uint8_t best_rank = 0;
     for (uint8_t r = 0; r < NUM_TONES; ++r) {
-        float mag = goertzel(chunk, FFT_SIZE, static_cast<float>(TONE_FREQS_HZ[r]), 8000.0f);
+        float mag = goertzel(chunk, SAMPLES_PER_SYMBOL, static_cast<float>(TONE_FREQS_HZ[r]), 8000.0f);
         if (mag > best_mag) { best_mag = mag; best_rank = r; }
     }
     return FREQ_TO_SYMBOL[best_rank];
@@ -67,7 +67,7 @@ static WordDecodeResult decode_word_block(const int16_t* block)
     // Step 1: detect 49 symbols via Goertzel on each 64-sample chunk
     uint8_t sym[SYMBOLS_PER_WORD];
     for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k)
-        sym[k] = detect_symbol(block + k * FFT_SIZE);
+        sym[k] = detect_symbol(block + k * SAMPLES_PER_SYMBOL);
 
     // Step 2: extract 147-bit stream MSB-first from symbol values
     //   stream[3k+0] = bit2 (MSB), stream[3k+1] = bit1, stream[3k+2] = bit0 (LSB)
@@ -144,7 +144,7 @@ int main()
         uint8_t syms[SYMBOLS_PER_WORD];
         while (modem.pull_symbol_frame(syms)) {
             const size_t off = pcm.size();
-            pcm.resize(off + SYMBOLS_PER_WORD * FFT_SIZE);
+            pcm.resize(off + SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
             gen.generate_symbols(syms, SYMBOLS_PER_WORD, pcm.data() + off, TX_AMPLITUDE);
             sm.on_word_complete();
         }
@@ -153,7 +153,7 @@ int main()
             break;
     }
 
-    constexpr size_t WORD_SAMPLES = SYMBOLS_PER_WORD * FFT_SIZE;  // 49 × 64 = 3136
+    constexpr size_t WORD_SAMPLES = SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL;  // 49 × 64 = 3136
     constexpr size_t TOTAL_WORDS  = 5;
     constexpr size_t EXPECTED_PCM = TOTAL_WORDS * WORD_SAMPLES;   // 15680
 

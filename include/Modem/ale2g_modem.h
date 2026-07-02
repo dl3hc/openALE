@@ -24,8 +24,9 @@
  *
  * ── Demodulator ──────────────────────────────────────────────────────────────
  *
- * Accepts 8 kHz / mono / int16 PCM via push_samples().  Every DECODE_STEP (16)
- * samples it attempts to decode the last 3136 samples (one ALE word block) via
+ * Accepts 8 kHz / mono / int16 PCM via push_samples().  Every DECODE_STEP_COARSE
+ * (16) samples during acquisition, or DECODE_STEP_FINE (4) once grid-locked, it
+ * attempts to decode the last 3136 samples (one ALE word block) via
  * Goertzel detection + ALEDecoder (majority vote + Golay FEC).  Accepted words
  * are delivered via word_cb_.
  *
@@ -91,6 +92,9 @@ public:
 
     /** True if at least one symbol frame is pending. Thread-safe. */
     bool is_transmitting() const;
+
+    /** Immediately discard all pending TX frames. Thread-safe. */
+    void abort();
 
 private:
     mutable std::mutex   mtx_;
@@ -204,8 +208,9 @@ public:
     bool adaptive_fec() const      { return adaptive_; }
 
 private:
-    static constexpr uint32_t WORD_SAMPLES         = SYMBOLS_PER_WORD * FFT_SIZE; // 3136
-    static constexpr uint32_t DECODE_STEP          = FFT_SIZE / 4;                // 16
+    static constexpr uint32_t WORD_SAMPLES          = SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL; // 3136
+    static constexpr uint32_t DECODE_STEP_COARSE   = SAMPLES_PER_SYMBOL / 4;   // 16 — acquisition
+    static constexpr uint32_t DECODE_STEP_FINE     = SAMPLES_PER_SYMBOL / 16;  //  4 — grid-locked
     static constexpr uint32_t SILENCE_RESET_SAMPLES = 800;  // 100 ms at 8 kHz
     static constexpr int16_t  SILENCE_THRESHOLD    = 200;
 
@@ -256,7 +261,7 @@ private:
     //                    2048 →  3.9 Hz/bin,  64 bins/tone-gap — current default
     //                    4096 →  2.0 Hz/bin, 128 bins/tone-gap — higher resolution
     //                    8192 →  1.0 Hz/bin, 256 bins/tone-gap — maximum, 3× memory
-    //                  Increasing SPEC_FFT_N above WORD_SAMPLES+FFT_SIZE (3200)
+    //                  Increasing SPEC_FFT_N above WORD_SAMPLES+SAMPLES_PER_SYMBOL (3200)
     //                  automatically increases BUF_CAP (see below).
     //
     //   SPEC_INTERVAL — Samples consumed between consecutive FFT triggers.
@@ -269,7 +274,7 @@ private:
     //                   there is no visual gain beyond the display refresh rate.
     //
     //   BUF_CAP       — Derived; no manual tuning.  Automatically set to the larger
-    //                   of the decode window (WORD_SAMPLES+FFT_SIZE = 3200) and
+    //                   of the decode window (WORD_SAMPLES+SAMPLES_PER_SYMBOL = 3200) and
     //                   SPEC_FFT_N so that compute_spectrum_() can always read a
     //                   full SPEC_FFT_N-sample history from the ring buffer.
     //
@@ -288,11 +293,11 @@ private:
 
     static constexpr size_t   SPEC_FFT_N    = 2048;  // bins: 0–4000 Hz, ≈3.9 Hz/bin
     static constexpr uint32_t SPEC_INTERVAL = 800;   // samples between updates (~10 Hz)
-    // BUF_CAP must cover both the decode window (WORD_SAMPLES + FFT_SIZE = 3200)
+    // BUF_CAP must cover both the decode window (WORD_SAMPLES + SAMPLES_PER_SYMBOL = 3200)
     // and the spectrum window (SPEC_FFT_N = 2048); take the larger.
     static constexpr uint32_t BUF_CAP =
-        (WORD_SAMPLES + FFT_SIZE >= static_cast<uint32_t>(SPEC_FFT_N))
-        ? WORD_SAMPLES + FFT_SIZE
+        (WORD_SAMPLES + SAMPLES_PER_SYMBOL >= static_cast<uint32_t>(SPEC_FFT_N))
+        ? WORD_SAMPLES + SAMPLES_PER_SYMBOL
         : static_cast<uint32_t>(SPEC_FFT_N);  // 3200
 
     SpectrumCallback              spectrum_cb_;
@@ -304,7 +309,11 @@ private:
 
     void compute_spectrum_();
 
-    static float   goertzel_power(const int16_t* block, float freq_hz);
+    // Goertzel single-bin power |X(k)|^2 over M samples (default: one full
+    // 64-sample symbol). The symbol decision always uses the full window; SINAD
+    // is measured on a shorter centered sub-window — see symbol_from_block().
+    static float   goertzel_power(const int16_t* block, float freq_hz,
+                                  uint32_t M = SAMPLES_PER_SYMBOL);
     static uint8_t symbol_from_block(const int16_t* block, float& sinad_db_out);
     int16_t        ring_at(uint32_t abs_pos) const { return ring_[abs_pos % BUF_CAP]; }
     bool           try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes) const;

@@ -41,7 +41,8 @@
 #include "LQA/lqa_database.h"
 #include "LQA/lqa_analyzer.h"
 #include "LQA/lqa_metrics.h"
-#include "LQA/lqa_report.h"
+#include "LQA/lqa_exchange.h"
+#include "App/freq_select_manager.h"
 #include "Stores/ale_data_store.h"
 #include <functional>
 #include <string>
@@ -105,10 +106,13 @@ public:
 
     /** Ordered list of channels to try on no-reply (multi-channel calling). */
     void set_calling_channels(const std::vector<Channel>& channels);
+    /** Outbound channel list last pushed to the SM by initiate_call/group_call.
+     *  Exposed so the active-net scoping can be inspected/tested. */
+    const std::vector<Channel>& get_calling_channels() const { return sm_.get_calling_channels(); }
 
     /**
      * Add a channel to the calling list (replace if same rx_frequency_hz exists).
-     * Immediately reconfigures the SM and auto-saves to channel_file_ if set.
+     * Immediately reconfigures the SM and auto-saves to station_file_ if set.
      */
     bool add_channel(const Channel& ch);
 
@@ -119,31 +123,32 @@ public:
     const std::vector<Channel>& channels() const { return calling_channels_; }
 
     /**
-     * Load channel list from a .ale file.
-     * Format: one channel per line — rx_hz [tx_hz] [mode] [label]
-     * Lines starting with '#' are ignored.
-     * \return false if the file cannot be opened (non-fatal; old list kept).
+     * Load a station file (.ale): channels, nets, contacts, group rosters, allcall config.
+     * Lines starting with '#' are ignored.  Unknown tags are silently skipped (forward compat).
+     * \return false if the file cannot be opened (non-fatal; existing state kept).
      */
-    bool load_channels(const std::string& path);
+    bool load_station_file(const std::string& path);
+    bool load_channels(const std::string& path) { return load_station_file(path); }  // compat alias
 
     /**
-     * Save the current channel list to a .ale file.
+     * Save all station data to a .ale file (channels, nets, contacts, group rosters, allcall).
      * \return false on I/O error.
      */
-    bool save_channels(const std::string& path) const;
+    bool save_station_file(const std::string& path) const;
+    bool save_channels(const std::string& path) const { return save_station_file(path); }  // compat alias
 
     /**
-     * Set the default channel file path for auto-save.
-     * When set, add_channel / del_channel / clear_channels write to this path
-     * automatically so channel changes survive restarts.
+     * Set the station file path for auto-save.
+     * When set, any mutation (channels, contacts, rosters…) writes through to this file.
      */
-    void set_channel_file(const std::string& path) { channel_file_ = path; }
+    void set_station_file(const std::string& path) { station_file_ = path; }
+    void set_channel_file(const std::string& path) { station_file_ = path; }  // compat alias
 
     // ── Nets (A.5.5.4.3 group membership / scanning-call sizing) ───────────
     // A net is a named subset of channel IDs (see Channel::id). Used to derive
     // target_scan_channels automatically for calls to a registered Contact
     // (see add_contact()) — see initiate_call()'s docs. Auto-saved to
-    // channel_file_ alongside the channel list (NET: lines), same as channels.
+    // station_file_ alongside the channel list (NET: lines), same as channels.
 
     /** Add an empty net.  Returns false if a net with this name already exists. */
     bool add_net(const std::string& name);
@@ -159,6 +164,14 @@ public:
 
     /** Remove channel_id from net.  Returns false if the net doesn't exist. */
     bool unassign_channel_from_net(const std::string& net_name, const std::string& channel_id);
+
+    /** Update per-net policy (dwell, scan/sound enables, interval, calling-length C). */
+    bool update_net(const Net& updated);
+
+    /** Active scan/sound net — set by the GUI net picker; scopes start_scanning() to this net's
+     *  channels and dwell. Falls back to all enabled channels when empty. */
+    void        set_active_scan_net(const std::string& name) { active_scan_net_ = name; }
+    std::string get_active_scan_net() const                  { return active_scan_net_; }
 
     // ── LQA ─────────────────────────────────────────────────────────────────
 
@@ -195,6 +208,11 @@ public:
      */
     void set_automatic_sounding(bool on, uint32_t interval_sec,
                                 const std::string& net_name);
+    // Auto-sounding state getters — used by the bridge SOUND_AUTO_GET so the
+    // GUI can reflect core state after a settings import (no clobbering push).
+    bool        is_automatic_sounding() const        { return auto_sounding_on_; }
+    uint32_t    get_auto_sounding_interval_sec() const { return auto_sounding_interval_ms_ / 1000u; }
+    std::string get_auto_sounding_net() const          { return auto_sounding_net_; }
 
     /** Access the LQA analyzer for channel quality queries. */
     LQAAnalyzer& lqa_analyzer() { return lqa_analyzer_; }
@@ -274,6 +292,31 @@ public:
      */
     bool initiate_group_call(const std::vector<std::string>& members);
 
+    /** Dispatch a group call to the named roster's members. */
+    bool initiate_group_call(const std::string& roster_name);
+
+    /**
+     * Stub: initiate a broadcast AllCall. Builds TO address @?@ (global wildcard)
+     * or @<selector>@ (selective). TX path not yet wired — logs a warning and
+     * returns false. RX side (is_allcall_address / ALLCALL_PAUSE) already works.
+     */
+    bool initiate_all_call(char selector = '?');
+
+    // ── Group-call rosters ───────────────────────────────────────────────────
+
+    bool add_group_roster(const std::string& name);
+    bool del_group_roster(const std::string& name);
+    bool add_group_member(const std::string& roster_name, const std::string& callsign);
+    bool del_group_member(const std::string& roster_name, const std::string& callsign);
+    const std::vector<GroupCallRoster>& get_all_group_rosters() const { return group_call_store_.all(); }
+
+    // ── AllCall config ───────────────────────────────────────────────────────
+
+    void set_allcall_accept(bool on)  { all_call_config_.accept = on; }
+    bool get_allcall_accept() const   { return all_call_config_.accept; }
+    void set_allcall_selector(char s) { all_call_config_.selector = s; }
+    char get_allcall_selector() const { return all_call_config_.selector; }
+
     /**
      * Reject an incoming call with a TWAS frame.
      * Only valid during HANDSHAKE state; no-op otherwise.
@@ -282,6 +325,39 @@ public:
 
     /** Terminate the current link (if any). */
     void terminate_link();
+
+    /**
+     * Reset the LINKED-state idle (Twa) timer to the current clock and re-arm
+     * the idle warning.  Backs the GUI "reset timer" popup: restarts the full
+     * configured idle countdown.  No-op when not linked.
+     */
+    void reset_link_idle_timer();
+
+    /**
+     * Send an AMD orderwire message (MIL-STD-188-141B A.5.7.2).
+     *
+     * Two paths, decided by link state:
+     *  - LINKED: the AMD is carried in a linked-orderwire frame
+     *    `TO[peer] (+DATA/REP ext) + CMD AMD + message DATA/REP + TIS self`,
+     *    sent SINGLE (not doubled) so the peer decodes the text once. The active
+     *    peer (get_to_address()/get_caller_address()) is used; @p target is ignored.
+     *  - not LINKED: the AMD is queued as the pending message and a call is
+     *    initiated to @p target (existing in-call MESSAGE-section path).
+     *
+     * @p target  Peer address to call when not LINKED (Basic-38, 3–15 chars).
+     *            Ignored when LINKED.
+     * @p text    Message text, max 90 chars Expanded-64 (0x20–0x5F); sanitised
+     *            and truncated by encode_amd().
+     * @return "OK: ..." on success, "ERROR: ..." on validation failure.
+     */
+    std::string send_amd(const std::string& target, const std::string& text);
+
+    /**
+     * The currently linked peer address (get_to_address() falling back to
+     * get_caller_address()), or empty when not LINKED. Used by send_amd() and
+     * exposed to the GUI via the bridge STATUS reply.
+     */
+    std::string active_peer() const;
 
     /** Emergency manual override: immediately abort all ALE operations. */
     void emergency_stop();
@@ -324,12 +400,27 @@ public:
     std::function<void(const std::string& reason)> on_link_terminated;
 
     /**
-     * AMD orderwire message received (AC-LINK-009-3).
-     * Fires when a caller's MESSAGE section is decoded during handshake.
-     * \param from  Calling station address (first 3 chars at time of TIS conclusion).
-     * \param text  Assembled orderwire text (trailing padding stripped).
+     * Idle-timeout warning (AC-LINK-023): fires once, ~IDLE_WARNING_LEAD_MS
+     * before the configured Twa elapses while LINKED, so the GUI can offer a
+     * "reset timer" popup.  \p remaining_sec is whole seconds left before Twa.
+     * Re-arms on any link activity or reset_link_idle_timer().
      */
-    std::function<void(const std::string& from, const std::string& text)> on_amd_received;
+    std::function<void(uint32_t remaining_sec)> on_idle_warning;
+
+    /**
+     * AMD orderwire message received (AC-LINK-009-3).
+     * Fires when an incoming AMD is decoded — either from a caller's ACK frame
+     * during handshake (A.5.7.2.2, responder side) or from a linked-orderwire
+     * frame over an established link (A.5.7.2).  This is the boundary-layer
+     * SELF/PEER identity pair: \p self_address is the local station, \p peer_address
+     * is the remote station that sent the message.
+     * \param self_address  Local station address (the receiver).
+     * \param peer_address  Remote station address (the sender).
+     * \param text          Assembled orderwire text (trailing padding stripped).
+     */
+    std::function<void(const std::string& self_address,
+                       const std::string& peer_address,
+                       const std::string& text)> on_amd_received;
 
     /** Human-readable status change for logging or display. */
     std::function<void(const std::string& msg)> on_status_changed;
@@ -525,6 +616,36 @@ public:
      * an unanswered call must not silently link.
      */
     void set_manual_accept_mode(bool on, uint32_t decision_timeout_ms = 10000);
+    bool     get_manual_accept_mode() const  { return config_.manual_accept_mode; }
+    uint32_t get_accept_timeout_ms() const    { return config_.accept_timeout_ms; }
+
+    // ── Station position + propagation context ────────────────────────────
+
+    /** Set manual lat/lon and mark source as MANUAL. */
+    void set_station_position_manual(double lat_deg, double lon_deg);
+    /** Parse a Maidenhead grid locator, derive lat/lon, set source to MAIDENHEAD.
+     *  @return false if the grid string is invalid (source and position unchanged). */
+    bool set_station_position_grid(const std::string& grid);
+    /** Change the active position source. */
+    void set_position_source(ALEStationConfig::PositionSource src);
+    /** Configure gpsd connection parameters (host:port). */
+    void set_gpsd_config(const std::string& host, uint16_t port);
+    /** Configure NMEA serial port parameters. */
+    void set_nmea_config(const std::string& port, uint32_t baud);
+    /** Called from the bridge main loop (never from a worker thread) to deliver a
+     *  GPS fix update from GpsService. Updates the propagation context. */
+    void set_gps_fix(bool valid, double lat_deg, double lon_deg);
+    /** Called from the bridge main loop to deliver a new SFI value from SfiService. */
+    void set_current_sfi(float sfi);
+
+    ALEStationConfig::PositionSource get_position_source() const { return config_.position_source; }
+    double             get_station_lat()    const { return config_.station_lat_deg; }
+    double             get_station_lon()    const { return config_.station_lon_deg; }
+    const std::string& get_grid_locator()   const { return config_.grid_locator; }
+    bool               has_gps_fix()        const { return gps_fix_valid_; }
+    double             get_gps_lat()        const { return gps_lat_; }
+    double             get_gps_lon()        const { return gps_lon_; }
+    float              get_current_sfi()    const { return current_sfi_; }
 
     // ── Settings export/import ────────────────────────────────────────────
 
@@ -562,6 +683,23 @@ public:
 
     /** Get current radio mode as string (see get_current_channel()). */
     std::string get_current_mode() const;
+
+    /// Look up a configured channel by RX frequency in calling_channels_.
+    /// Returns nullptr if no configured channel matches. Use this to read the
+    /// per-channel inhibit flags — get_current_channel() is radio-backed and
+    /// does NOT carry them (it is rebuilt from radio_->get_channel()).
+    const Channel* find_channel_by_freq(uint32_t rx_hz) const;
+
+    /// True if the configured channel at rx_hz has inhibit_reporting set
+    /// (bilateral LQA CMD 'a' exchange suppressed). False if the channel is
+    /// not found or the flag is clear.
+    bool reporting_inhibited(uint32_t rx_hz) const;
+
+    /// True if the configured channel at rx_hz has inhibit_sounding set.
+    bool sounding_inhibited(uint32_t rx_hz) const;
+
+    /// True if the configured channel at rx_hz has inhibit_calling set.
+    bool calling_inhibited(uint32_t rx_hz) const;
 
     /**
      * Set frequency directly (VFO mode), simplex (RX=TX).
@@ -648,6 +786,16 @@ public:
     void set_ptt_lead_ms(uint32_t ms);
     /** PTT tail time in ms — delay between SM RX-enable and actual PTT release. */
     void set_ptt_tail_ms(uint32_t ms);
+
+    // Timing/TWAS getters — read config_ so they reflect imported settings
+    // (the setters above all write config_). Used by the bridge TIMING_GET.
+    uint32_t  get_scan_dwell_ms() const          { return config_.scan_dwell_ms; }
+    uint32_t  get_sounding_interval_sec() const { return config_.sounding_interval_sec; }
+    uint32_t  get_link_idle_timeout_sec() const  { return config_.link_idle_timeout_sec; }
+    uint32_t  get_max_tune_time_ms() const       { return config_.max_tune_time_ms; }
+    uint32_t  get_ptt_lead_ms() const            { return config_.ptt_lead_ms; }
+    uint32_t  get_ptt_tail_ms() const             { return config_.ptt_tail_ms; }
+    bool      get_sounding_use_twas() const       { return config_.sounding_use_twas; }
 
     // ── Audio device management ──────────────────────────────────────────
     // set_audio_input_device()/set_audio_output_device() are intentionally
@@ -823,10 +971,20 @@ private:
     // it (normal LINKED); reject calls terminate_link() (TWAS → AVAILABLE).
     bool                     pending_operator_accept_ = false;
 
-    // AMD orderwire tracking — active while in HANDSHAKE/WAIT_CYCLE_END
-    int          amd_skip_count_ = 0;  // leading-call DATA/REP words to skip (2×(n-1))
-    int          amd_seen_count_ = 0;  // DATA/REP words seen since HANDSHAKE entry
-    std::string  amd_text_acc_;        // raw AMD chunk bytes (3 per word, untrimmed)
+    // ACK-frame AMD orderwire RX — active while in HANDSHAKE/WAIT_ACK (A.5.7.2.2,
+    // responder side).  The caller's ACK frame is TO[self]×2 + CMD AMD + DATA/REP
+    // + TIS[caller]; we ignore the TO prefix and reassemble from CMD AMD onward.
+    bool        ack_amd_collecting_ = false;  // true between CMD AMD and TIS/next CMD
+    std::string ack_amd_acc_;                 // Expanded-64 chars (3 per word, untrimmed)
+    std::string ack_amd_peer_;                // caller to attribute the message to
+
+    // Linked AMD orderwire RX — active while LINKED (A.5.7.2 over an established link).
+    // The peer's linked-orderwire frame is TO[peer]+CMD AMD+DATA/REP+TIS[self-peer];
+    // we ignore the TO/address-extension prefix and reassemble from CMD AMD onward.
+    bool        linked_amd_collecting_ = false;  // true between CMD AMD and TIS/next CMD
+    std::string linked_amd_acc_;                 // Expanded-64 chars (3 per word, untrimmed)
+    uint32_t    linked_amd_settle_ms_ = 0;        // last-word time; Tdrw-silence commit deadline
+    std::string linked_amd_peer_;                // peer to attribute the message to
 
     // LQA
     LQADatabase              lqa_database_;
@@ -834,28 +992,23 @@ private:
     LQAMetrics               lqa_metrics_;        // standalone noise-floor tracking (no DB)
     LQAMetrics               lqa_db_metrics_;     // connected to lqa_database_; fed into the SM
     std::vector<Channel>     calling_channels_;  // cached here so initiate_call() can reorder
-    std::string              channel_file_;       // auto-save path (empty = no auto-save)
-
-    // Bilateral LQA exchange (Block A — CMD LQA char 'a')
-    LQACmdPayload            pending_bilateral_payload_{};
-    bool                     pending_bilateral_valid_    = false;
-    uint32_t                 pending_bilateral_freq_hz_  = 0;
-    bool                     sent_ka1_                   = false;
-    std::string              last_call_target_;
-    uint32_t                 last_call_freq_hz_          = 0;
-
-    // LQA Report decoder (Block C — CMD 'r' + DATA)
-    LQAReportDecoder         lqa_report_decoder_;
+    std::string              station_file_;       // auto-save path (empty = no auto-save)
 
     // Net / Contact / Self-address tables (GUI-facing address book + scanning-call sizing)
     NetStore                 net_store_;
     ContactStore             contact_store_;
     SelfAddressStore         self_address_store_;
     std::string              selected_contact_;
+    GroupCallStore           group_call_store_;
+    AllCallConfig            all_call_config_;
+
+    // Bilateral LQA exchange (CMD 'a' / Block C5) — see LQA/lqa_exchange.h.
+    // Declared after self_address_store_ so the is_self lambda is safe to call
+    // for the full controller lifetime.
+    LqaExchangeManager       lqa_exchange_;
 
     // Manual VFO bookkeeping (operator convenience, not radio state — see
     // "Radio / VFO control"; the actual frequency/mode lives in radio_).
-    int                      manual_channel_idx_ = -1;   // index into calling_channels_ set by step_channel(); -1 = none
     uint32_t                 tune_step_hz_       = 1000; // nudge_frequency() step size
 
     // Passive channel monitor (on_word_decoded / on_frame_decoded)
@@ -880,7 +1033,14 @@ private:
     bool                     auto_sounding_on_       = false;
     uint32_t                 auto_sounding_interval_ms_ = 0;
     std::string              auto_sounding_net_;
+    std::string              active_scan_net_;        ///< Active net for start_scanning() scoping
     uint32_t                 auto_sounding_last_ms_  = 0;
+
+    // ── GPS / SFI state (propagation-aware LQA scoring) ──────────────────────
+    double   gps_lat_       = 0.0;
+    double   gps_lon_       = 0.0;
+    bool     gps_fix_valid_ = false;
+    float    current_sfi_   = 0.0f;
 
     // Call/link timing (get_call_duration_seconds, is_link_active)
     uint32_t                 now_ms_        = 0;  // cached at top of update()
@@ -894,7 +1054,8 @@ private:
     std::vector<std::pair<ALEWord, bool>> pending_tx_words_; // word + had_audio_device flag, buffered during PTT lead
 
     // Last received word stats (get_current_signal_quality)
-    float                    last_snr_db_     = 0.0f;
+    float                    last_sinad_db_   = 0.0f;  ///< actual Goertzel SINAD (A.5.4.1.2)
+    float                    last_snr_db_     = 0.0f;  ///< votes-based SNR proxy (internal use)
     float                    last_ber_        = 0.0f;
     uint8_t                  last_votes_      = 0;
     int                      last_fec_errors_ = 0;
@@ -915,6 +1076,7 @@ private:
     float                    sounding_snr_sum_    = 0.0f;
     float                    sounding_ber_sum_    = 0.0f;
     float                    sounding_sinad_sum_  = 0.0f;  ///< A.5.4.1.2 SINAD accumulator
+    bool                     sounding_twas_       = false; ///< conclusion type of the frame being accumulated (true=TWAS, not available)
 
     // Run-time tunables (Stores/ale_data_store.h). Only lqa_enabled is consulted
     // here — it gates the per-frame FROM-direction BER/SNR measurement into the
@@ -927,13 +1089,7 @@ private:
     std::string              pending_relink_addr_;
 
     // Enhanced Frequency-Select (CMD 'f', A.5.6.3.2) post-link bilateral negotiation.
-    enum class FreqSelectPhase : uint8_t { IDLE, PROPOSED, EXECUTING };
-    FreqSelectPhase          fs_phase_          = FreqSelectPhase::IDLE;
-    uint32_t                 fs_proposed_hz_    = 0;
-    uint32_t                 fs_timeout_ms_     = 0;
-    uint32_t                 fs_cooldown_ms_    = 0;
-    std::string              fs_peer_;
-    bool                     fs_pending_cmd_rx_ = false;  // CMD 'f' recvd, waiting for DATA
+    FreqSelectManager        freq_select_;
 
     // A.5.4.1.1 per-frame FROM-direction BER for in-link traffic (LINKED state).
     // Committed at frame settle (Tdrw of silence) via commit_rx_ber_sample().
@@ -948,9 +1104,10 @@ private:
     // (CALLING/CALLING::LISTENING). Committed to (get_to_address(), freq) at
     // LINK_ESTABLISHED (or CALL_REJECTED when JOE sent TWAS). Reset on failed
     // calls and on entering CALLING. Gated on op_params_.lqa_enabled.
-    BerAccumulator           hs_resp_ber_acc_;
-    float                    hs_resp_snr_sum_   = 0.0f;
-    float                    hs_resp_sinad_sum_ = 0.0f;
+    // FrameQualityAccumulator defers Golay-uncorrectable words so a trailing
+    // post-frame phantom (decoded during the Tlww settle) is excluded from the
+    // BER/SNR/SINAD averages unless a later valid word flushes it.
+    FrameQualityAccumulator  hs_resp_acc_;
     uint32_t                 hs_resp_freq_hz_   = 0;
 
     // A.5.4.1.1 FROM-direction BER for the SAM's calling frame
@@ -959,10 +1116,11 @@ private:
     // read the fresh measurement for the response CMD 'a'. Reset on entering
     // HANDSHAKE and when leaving HANDSHAKE without an alert. Gated on
     // op_params_.lqa_enabled.
-    BerAccumulator           hs_call_ber_acc_;
-    float                    hs_call_snr_sum_   = 0.0f;
-    float                    hs_call_sinad_sum_ = 0.0f;
+    FrameQualityAccumulator  hs_call_acc_;
     uint32_t                 hs_call_freq_hz_   = 0;
+
+    /// Rebuild and push a PropagationContext to lqa_analyzer_ from current config_/GPS/SFI state.
+    void update_propagation_context();
 
     void wire_callbacks();
     void on_sm_state_change(ALEState from, ALEState to);
@@ -973,45 +1131,52 @@ private:
     // transition (SM-driven and manual) reaches the display.
     void set_ptt_and_notify(bool on);
 
-    // Returns a CMD LQA payload for freq_hz, reporting our FROM-direction
-    // measurement of target_station (falls back to channel aggregate when no
-    // station-specific entry exists). Fields default to "no-value" sentinels.
-    LQACmdPayload compute_lqa_payload(uint32_t freq_hz,
-                                       const std::string& target_station = "") const;
-
     /// Resolve a net's scan/sounding-enabled channels (by id, from
     /// calling_channels_) for a multi-channel sounding sweep. Empty if the net
     /// doesn't exist or has no enabled member channels.
     std::vector<Channel> resolve_net_sounding_channels(const std::string& net_name) const;
     void on_received_word(const ALEWord& word);
+
+    // ── update() concern handlers ─────────────────────────────────────────────
+    void tick_ptt_timing(uint32_t now_ms);      ///< PTT lead flush + PTT tail release
+    void tick_sm(uint32_t now_ms);              ///< sm_.update() + maybe_emit_call_alert()
+    void tick_frame_settle(uint32_t now_ms);    ///< sounding commit + RX-BER commit (Tdrw)
+    void tick_relink(uint32_t now_ms);          ///< EFS evaluate + EFS tick + auto-relink fire
+    void tick_sounding_sweep(uint32_t now_ms);  ///< periodic multi-channel sounding sweep
+    void tick_offline_completion();             ///< pull symbol frames in offline (no-audio) mode
+    void tick_lqa_update(uint32_t now_ms);      ///< throttled LQA DB prune + auto-sounding check
+
+    // ── on_received_word() concern handlers ──────────────────────────────────
+    void rx_log_word(const ALEWord& word);                   ///< debug_rx_ trace line
+    void rx_track_signal_quality(const ALEWord& word);       ///< last_sinad_db_ (Goertzel) / last_snr_db_ (votes proxy) / ber_ + passive monitor tap
+    void rx_accumulate_caller_identity(const ALEWord& word); ///< HANDSHAKE caller address reassembly
+    void rx_handle_lqa_exchange(const ALEWord& word);        ///< CMD 'a' / CMD 'n' / CMD 'r'+DATA
+    void rx_handle_freq_select(const ALEWord& word);         ///< CMD 'f' EFS sequence
+    void rx_accumulate_sounding(const ALEWord& word);        ///< TIS/TWAS sounding while SCANNING/IDLE
+    void rx_accumulate_frame_ber(const ALEWord& word);       ///< LINKED/CALLING/HANDSHAKE BER paths
+    void rx_accumulate_linked_amd(const ALEWord& word);      ///< LINKED-state AMD reassembly (A.5.7.2)
+    void commit_linked_amd();                               ///< trim + fire on_amd_received, reset
+    void rx_accumulate_ack_amd(const ALEWord& word);         ///< ACK-frame AMD reassembly (A.5.7.2.2, responder)
+    void commit_ack_amd();                                  ///< trim + fire on_amd_received, reset
+
     /**
      * Emit the incoming-call alert (on_call_received / ALE_CALL_RECEIVED) and any
      * collected AMD exactly once per handshake, once the caller's conclusion has
      * fully settled (SM left WAIT_CYCLE_END) so the reported address is complete.
-     * Called from update() after driving the state machine.
+     * Called from tick_sm() after driving the state machine.
      */
     void maybe_emit_call_alert();
     /// Commit the accumulated received-sounding frame (full address + averaged
     /// snr/ber) to the LQA DB and clear the reassembly buffer. No-op if nothing
-    /// is buffered. Called from update() once the frame has settled (Tdrw silence).
+    /// is buffered. Called from tick_frame_settle() once the frame has settled.
     void commit_sounding_sample();
     /// Evaluate whether the current link should be renegotiated to a better channel.
-    /// Called from update() while LINKED + relink_enabled. Sets pending_relink_addr_
-    /// and calls sm_.terminate_link() when a significantly better channel is found.
+    /// Called from tick_relink() while LINKED + relink_enabled.
     void evaluate_relink(uint32_t now_ms);
-    /// EFS: Propose a better channel to the peer via CMD 'f' (A.5.6.3.2).
-    /// Called from update() while LINKED + enhanced_freq_select + IDLE phase.
-    void evaluate_freq_proposal(uint32_t now_ms);
-    /// EFS: Handle the peer's CMD 'f' + DATA response (accept or reject).
-    void handle_freq_select_response(uint32_t freq_hz, uint32_t now_ms);
-    /// EFS: Handle an incoming CMD 'f' proposal from the peer.
-    void handle_freq_select_proposal(uint32_t freq_hz, const std::string& peer, uint32_t now_ms);
-    /// EFS: Queue CMD 'f' + DATA(freq_hz) as a linked orderwire via the SM.
-    void send_freq_select_orderwire(uint32_t freq_hz);
     /// Commit the accumulated non-sounding RX-frame BER/SNR (A.5.4.1.1 linear
     /// average) to the LQA DB for the measured peer + channel, then reset the
     /// accumulator. No-op if no words are buffered or no peer is resolvable.
-    /// Called from update() once the frame has settled (Tdrw silence).
+    /// Called from tick_frame_settle() once the frame has settled (Tdrw silence).
     void commit_rx_ber_sample();
     void emit_status(const std::string& msg);
     void emit_event(pal::EventType type, const std::string& msg = "", int32_t code = 0);

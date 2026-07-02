@@ -12,6 +12,7 @@
  */
 #pragma once
 #include <cstdint>
+#include <string>
 #include "FEC/golay.h"
 
 namespace ale {
@@ -57,11 +58,11 @@ struct ALEStationConfig {
     /// Zeit nach PTT-Assertion bevor Audio gesendet wird (ms).
     /// Kompensiert CAT/CI-V-Latenz beim Sounding (Calling hat bereits Tt als Lead).
     /// 0 = kein Delay.
-    uint32_t  ptt_lead_ms             = 25;
+    uint32_t  ptt_lead_ms             = 100;
     /// Zeit nach SM-RX-Freigabe bevor PTT deasserted wird (ms).
     /// Lässt den Audio-Buffer vollständig leerlaufen bevor auf RX umgeschaltet.
     /// 0 = sofortige PTT-Freigabe.
-    uint32_t  ptt_tail_ms             = 50;
+    uint32_t  ptt_tail_ms             = 350;
 
     // ── LQA-Austausch ─────────────────────────────────────────────────────
     /// true = CMD LQA / CMD NOISE / LQA Report aktiv senden und auswerten.
@@ -87,6 +88,25 @@ struct ALEStationConfig {
     /// Stationen läuft der Vorschlag in einen Timeout (kein Relink = Link bleibt).
     /// Nur sinnvoll wenn beide Stationen Enhanced-Mode aktiviert haben.
     bool      enhanced_freq_select = false;
+
+    // ── Station position (propagation-aware LQA scoring) ──────────────────
+    enum class PositionSource : uint8_t {
+        NONE        = 0,  ///< no position → propagation scoring disabled
+        MANUAL      = 1,  ///< user-entered lat/lon
+        MAIDENHEAD  = 2,  ///< derived from grid locator
+        GPSD        = 3,  ///< live from gpsd daemon
+        NMEA_SERIAL = 4,  ///< live from NMEA serial port
+    };
+
+    PositionSource position_source  = PositionSource::NONE;
+    double   station_lat_deg        = 0.0;        ///< positive = North
+    double   station_lon_deg        = 0.0;        ///< positive = East
+    std::string grid_locator        = "";         ///< Maidenhead, e.g. "IO91wm"
+    std::string gpsd_host           = "127.0.0.1";
+    uint16_t    gpsd_port           = 2947;
+    std::string nmea_port           = "";         ///< "COM3" / "/dev/ttyUSB0"
+    uint32_t    nmea_baud           = 4800;
+    bool        sfi_enabled         = false;      ///< enable NOAA SFI background fetch
 };
 
 } // namespace ale

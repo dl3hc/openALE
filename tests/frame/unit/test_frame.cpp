@@ -411,11 +411,12 @@ bool test_ac_001_3_phase_sequence_via_callback_only()
 }
 
 // ============================================================================
-// AC-FRAME-001-001 — Frame structure: Calling (mandatory) + Message (optional) +
-// Conclusion (mandatory) in this exact order.
+// AC-FRAME-001-001 — Frame structure: Calling (mandatory) + Conclusion (mandatory).
+// The calling frame carries NO message section (A.5.7.2.2): LQA CMD/Report and
+// AMD are placed in the ACK frame (build_ack_words), not in the calling frame.
 //
-// Case A: no AMD orderwire — phase log must be SCANNING_CALL → LEADING_CALL → CONCLUSION.
-// Case B: AMD message "HI" — MESSAGE must appear between LEADING_CALL and CONCLUSION.
+// Case A: no AMD — phase log must be SCANNING_CALL → LEADING_CALL → CONCLUSION.
+// Case B: AMD pending — calling frame still has no MESSAGE phase (same as Case A).
 // ============================================================================
 
 bool test_ac_frame_001_001_frame_structure_order()
@@ -464,7 +465,6 @@ bool test_ac_frame_001_001_frame_structure_order()
         for (int i = 0; i < (int)phases.size(); ++i) {
             if (phases[i] == CallingPhase::SCANNING_CALL && scan_first == -1) scan_first = i;
             if (phases[i] == CallingPhase::LEADING_CALL)                       lead_last  = i;
-            if (phases[i] == CallingPhase::MESSAGE      && msg_first  == -1) msg_first  = i;
             if (phases[i] == CallingPhase::CONCLUSION   && concl_idx  == -1) concl_idx  = i;
         }
 
@@ -488,8 +488,8 @@ bool test_ac_frame_001_001_frame_structure_order()
     }
 
     // ── Case B: AMD message "HI" ─────────────────────────────────────────────
-    // encode_amd("HI") = 1 word; MESSAGE must appear after LEADING_CALL,
-    // before CONCLUSION.
+    // AMD is in the ACK frame (A.5.7.2.2), not the calling frame.
+    // Calling frame phase log must be identical to Case A: no MESSAGE phase.
     {
         ALEStateMachine sm;
         sm.set_self_address("SAM");
@@ -510,29 +510,26 @@ bool test_ac_frame_001_001_frame_structure_order()
         for (int i = 0; i < (int)phases.size(); ++i) {
             if (phases[i] == CallingPhase::SCANNING_CALL && scan_first == -1) scan_first = i;
             if (phases[i] == CallingPhase::LEADING_CALL)                       lead_last  = i;
-            if (phases[i] == CallingPhase::MESSAGE      && msg_first  == -1) msg_first  = i;
             if (phases[i] == CallingPhase::CONCLUSION   && concl_idx  == -1) concl_idx  = i;
         }
 
-        bool scan_present     = (scan_first >= 0);
-        bool lead_present     = (lead_last  >= 0);
-        bool msg_present      = (msg_first  >= 0);
-        bool concl_present    = (concl_idx  >= 0);
-        bool scan_before_lead = scan_present && lead_present && (lead_last  > scan_first);
-        bool lead_before_msg  = lead_present && msg_present  && (msg_first  > lead_last);
-        bool msg_before_concl = msg_present  && concl_present && (concl_idx > msg_first);
+        bool scan_present      = (scan_first >= 0);
+        bool lead_present      = (lead_last  >= 0);
+        bool no_message        = (msg_first  == -1);
+        bool concl_present     = (concl_idx  >= 0);
+        bool scan_before_lead  = scan_present && lead_present  && (lead_last  > scan_first);
+        bool lead_before_concl = lead_present && concl_present && (concl_idx  > lead_last);
 
-        bool case_b_ok = scan_present && lead_present && msg_present && concl_present
-                      && scan_before_lead && lead_before_msg && msg_before_concl;
+        bool case_b_ok = scan_present && lead_present && no_message && concl_present
+                      && scan_before_lead && lead_before_concl;
         all_ok &= case_b_ok;
 
-        std::cout << "  [AMD]    SCANNING_CALL present: "          << (scan_present     ? "PASS" : "FAIL") << "\n";
-        std::cout << "  [AMD]    LEADING_CALL present: "           << (lead_present     ? "PASS" : "FAIL") << "\n";
-        std::cout << "  [AMD]    MESSAGE present: "                << (msg_present      ? "PASS" : "FAIL") << "\n";
-        std::cout << "  [AMD]    CONCLUSION present: "             << (concl_present    ? "PASS" : "FAIL") << "\n";
-        std::cout << "  [AMD]    SCANNING before LEADING: "        << (scan_before_lead ? "PASS" : "FAIL") << "\n";
-        std::cout << "  [AMD]    LEADING before MESSAGE: "         << (lead_before_msg  ? "PASS" : "FAIL") << "\n";
-        std::cout << "  [AMD]    MESSAGE before CONCLUSION: "      << (msg_before_concl ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    SCANNING_CALL present: "            << (scan_present      ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    LEADING_CALL present: "             << (lead_present      ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    No MESSAGE in calling frame: "      << (no_message        ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    CONCLUSION present: "               << (concl_present     ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    SCANNING before LEADING: "          << (scan_before_lead  ? "PASS" : "FAIL") << "\n";
+        std::cout << "  [AMD]    LEADING before CONCLUSION: "        << (lead_before_concl ? "PASS" : "FAIL") << "\n";
     }
 
     return all_ok;
@@ -542,7 +539,7 @@ bool test_ac_frame_001_001_frame_structure_order()
 // AC-FRAME-001-4 (row 1) — Deterministic render contract: the complete TX
 // sequence is enqueued at tune-complete and consumed as contiguous symbol
 // frames.  Word boundaries are defined by the sample stream (one word =
-// SYMBOLS_PER_WORD × FFT_SIZE samples), so word N starts exactly at sample
+// SYMBOLS_PER_WORD × SAMPLES_PER_SYMBOL samples), so word N starts exactly at sample
 // N × 3136 — no wall-clock scheduling involved.
 // ============================================================================
 

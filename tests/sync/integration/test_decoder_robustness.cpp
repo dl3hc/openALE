@@ -160,7 +160,7 @@ int main()
     // Build the FEC-stressed frames and render them as clean 8 kHz tones.
     ToneGenerator gen;
     std::vector<int16_t> pcm;
-    pcm.assign(64, 0);   // small leading silence (multiple of DECODE_STEP and 64)
+    pcm.assign(64, 0);   // small leading silence (multiple of DECODE_STEP_COARSE and 64)
 
     uint8_t min_unanimous = SYMBOLS_PER_WORD;
     for (const auto& w : seq) {
@@ -174,7 +174,7 @@ int main()
                     WordParser::word_type_name(w.type), w.addr, uv, SYMBOLS_PER_WORD);
 
         const size_t off = pcm.size();
-        pcm.resize(off + SYMBOLS_PER_WORD * FFT_SIZE);
+        pcm.resize(off + SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
         gen.generate_symbols(frame.data(), SYMBOLS_PER_WORD, pcm.data() + off, TX_AMPLITUDE);
     }
     pcm.insert(pcm.end(), 4096, 0);   // trailing silence

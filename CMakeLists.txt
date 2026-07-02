@@ -142,6 +142,8 @@ add_library(ale_lqa
     src/LQA/lqa_database.cpp
     src/LQA/lqa_metrics.cpp
     src/LQA/lqa_analyzer.cpp
+    src/LQA/lqa_exchange.cpp
+    src/LQA/solar_position.cpp
 )
 
 target_include_directories(ale_lqa PUBLIC
@@ -315,6 +317,9 @@ endif()
 
 add_library(ale_app_core
     src/App/ale_controller.cpp
+    src/App/freq_select_manager.cpp
+    src/App/gps_service.cpp
+    src/App/sfi_service.cpp
 )
 
 target_include_directories(ale_app_core PUBLIC
@@ -324,6 +329,13 @@ target_include_directories(ale_app_core PUBLIC
 target_link_libraries(ale_app_core
     ale_link ale_modem ale_protocol ale_fsk_core ale_fec
 )
+
+if(WIN32)
+    target_link_libraries(ale_app_core ws2_32)
+    if(NOT MSVC)
+        target_link_libraries(ale_app_core winhttp)
+    endif()
+endif()
 
 # ── Audio I/O device (platform-specific) ──────────────────────────────────────
 
@@ -469,6 +481,16 @@ target_link_libraries(test_amd_orderwire_tx ale_link ale_protocol ale_fsk_core a
 target_include_directories(test_amd_orderwire_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AMDOrderwireTx COMMAND test_amd_orderwire_tx)
 
+add_executable(test_amd_linked_orderwire tests/gen/unit/test_amd_linked_orderwire.cpp)
+target_link_libraries(test_amd_linked_orderwire ale_link ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_amd_linked_orderwire PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AMDLinkedOrderwire COMMAND test_amd_linked_orderwire)
+
+add_executable(test_amd_send tests/gen/unit/test_amd_send.cpp)
+target_link_libraries(test_amd_send ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_amd_send PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AMDSend COMMAND test_amd_send)
+
 add_executable(test_dtm_orderwire_tx tests/gen/unit/test_dtm_orderwire_tx.cpp)
 target_link_libraries(test_dtm_orderwire_tx ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_dtm_orderwire_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -598,6 +620,11 @@ target_link_libraries(test_word_sync ale_modem ale_codec ale_protocol ale_fsk_co
 target_include_directories(test_word_sync PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME WordSync COMMAND test_word_sync)
 
+add_executable(test_sinad_rework tests/waveform/e2e/test_sinad_rework.cpp)
+target_link_libraries(test_sinad_rework ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_sinad_rework PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME SinadRework COMMAND test_sinad_rework)
+
 add_executable(test_architecture tests/gen/integration/test_layering.cpp)
 target_compile_definitions(test_architecture PRIVATE PROJECT_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME Architecture COMMAND test_architecture)
@@ -606,6 +633,26 @@ add_executable(test_message_assembler tests/monitor/unit/test_message_assembler.
 target_link_libraries(test_message_assembler ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_message_assembler PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME MessageAssembler COMMAND test_message_assembler)
+
+add_executable(test_solar_position tests/lqa/unit/test_solar_position.cpp)
+target_link_libraries(test_solar_position ale_lqa ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_solar_position PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME SolarPosition COMMAND test_solar_position)
+
+add_executable(test_propagation_scoring tests/lqa/unit/test_propagation_scoring.cpp)
+target_link_libraries(test_propagation_scoring ale_lqa ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_propagation_scoring PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME PropagationScoring COMMAND test_propagation_scoring)
+
+add_executable(test_gps_parsers tests/chan/unit/test_gps_parsers.cpp)
+target_link_libraries(test_gps_parsers ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_gps_parsers PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME GpsParsers COMMAND test_gps_parsers)
+
+add_executable(test_sfi_service tests/chan/unit/test_sfi_service.cpp)
+target_link_libraries(test_sfi_service ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_sfi_service PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME SfiService COMMAND test_sfi_service)
 
 # ── Examples ──────────────────────────────────────────────────────────────────
 

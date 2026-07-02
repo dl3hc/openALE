@@ -92,9 +92,12 @@ private:
     // Design the windowed-sinc lowpass prototype and split it into L polyphase
     // sub-filters of K taps each (phase-major layout: phase_[p*K + j]).
     void design_prototype(uint32_t in_rate, uint32_t out_rate) {
-        constexpr int      Q        = 64;     // taps per polyphase phase — 64 gives
-                                              // ~41 Hz transition BW at 8↔48 kHz and
-                                              // ~74 dB stopband (Blackman window).
+        constexpr int      Q        = 16;     // taps per polyphase phase — 16 gives
+                                              // 16-sample (2 ms, ¼ symbol) ringing at 8 kHz,
+                                              // vs 64-sample (8 ms, 1 symbol) at Q=64.
+                                              // Transition BW ~4× wider than Q=64; stopband
+                                              // still ~74 dB (Blackman).  ALE tones (750–
+                                              // 2500 Hz) are well inside the 4 kHz passband.
         constexpr int      MAX_TAPS = 8192;   // cap for extreme (non-integer) ratios
 
         const int max_lm = (L_ > M_) ? L_ : M_;

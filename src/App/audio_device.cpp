@@ -296,8 +296,8 @@ bool WasapiDevice::open(const std::string& in_device, const std::string& out_dev
     rx_resampler_    = std::make_unique<Resampler>(c_rate_, MODEM_RATE);
 
     // Pre-reserve audio-thread scratch buffers to avoid RT allocations.
-    at_pcm_8k_.reserve(SYMBOLS_PER_WORD * FFT_SIZE);
-    at_pcm_filt_.reserve(SYMBOLS_PER_WORD * FFT_SIZE);
+    at_pcm_8k_.reserve(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
+    at_pcm_filt_.reserve(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
     at_tx_filter_.reset();
 
     std::fprintf(stderr,
@@ -467,14 +467,14 @@ void WasapiDevice::service_render()
             }
 
             if (pulled) {
-                at_pcm_8k_.resize(SYMBOLS_PER_WORD * FFT_SIZE);
+                at_pcm_8k_.resize(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
                 at_tone_gen_.generate_symbols(syms, SYMBOLS_PER_WORD,
                                               at_pcm_8k_.data(), TX_AMPLITUDE);
                 // SSB-audio band-pass (750–2500 Hz): strips the sub-300 Hz keying
                 // skirt and out-of-band content without touching the 8-FSK keying.
                 at_pcm_filt_.clear();
                 at_tx_filter_.process(at_pcm_8k_.data(),
-                                      SYMBOLS_PER_WORD * FFT_SIZE,
+                                      SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL,
                                       at_pcm_filt_);
                 at_render_buf_.clear();
                 at_tx_resampler_->process(at_pcm_filt_.data(),

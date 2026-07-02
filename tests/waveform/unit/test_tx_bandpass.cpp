@@ -108,7 +108,7 @@ static float goertzel(const int16_t* s, uint32_t N, float f, float sr) {
 static uint8_t detect_symbol(const int16_t* chunk) {
     float best = -1.0f; uint8_t rank = 0;
     for (uint8_t r = 0; r < NUM_TONES; ++r) {
-        float m = goertzel(chunk, FFT_SIZE, static_cast<float>(TONE_FREQS_HZ[r]), 8000.0f);
+        float m = goertzel(chunk, SAMPLES_PER_SYMBOL, static_cast<float>(TONE_FREQS_HZ[r]), 8000.0f);
         if (m > best) { best = m; rank = r; }
     }
     return FREQ_TO_SYMBOL[rank];
@@ -139,7 +139,7 @@ bool test_decode_survives_filter_004_004c() {
     const uint32_t skip = 2;                        // ignore first symbols (startup)
     for (uint32_t k = skip; k < NSYM; ++k) {
         const size_t off = gd + static_cast<size_t>(k) * SAMPLES_PER_SYMBOL;
-        if (off + FFT_SIZE > filt.size()) break;
+        if (off + SAMPLES_PER_SYMBOL > filt.size()) break;
         if (detect_symbol(filt.data() + off) != tx[k]) ++errors;
         ++checked;
     }

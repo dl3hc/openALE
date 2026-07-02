@@ -38,26 +38,36 @@
     <div class="hdr-right">
       <!-- Channel steppers flanking the Scan toggle -->
       <div class="hdr-group">
-        <button class="hdr-icon" onclick="stepChannel(-1)" title="Step back a channel">◀</button>
+        <button class="hdr-icon" onclick="stepChannel(-1)" title="Step back a channel"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
         <button class="hdr-btn" id="scanBtn" onclick="toggleScan()">▶ Scan</button>
-        <button class="hdr-icon" onclick="stepChannel(1)" title="Step forward a channel">▶</button>
+        <button class="hdr-icon" onclick="stepChannel(1)" title="Step forward a channel"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></button>
       </div>
 
-      <!-- Current channel frequency + signal quality, beside the Scan controls -->
+      <!-- Current channel frequency, beside the Scan controls -->
       <div class="hdr-stats">
         <div class="hdr-stat freq">
-          <span class="hdr-stat-val"><span id="freqVal">14.109</span><span class="hdr-stat-suf">MHz</span></span>
+          <span class="hdr-stat-val"><span id="freqVal">14.109.000</span><span class="hdr-stat-suf" id="freqUnit">MHz</span></span>
           <span class="hdr-stat-sub" id="freqSub">CH 1 · USB</span>
         </div>
-        <div class="hdr-stat snr">
-          <span class="hdr-stat-val"><span id="snrVal">+18</span><span class="hdr-stat-suf">dB</span></span>
-          <span class="hdr-stat-sub">SINAD</span>
+      </div>
+
+      <!-- Network picker — selects the active net that scopes scan / sound / call -->
+      <div class="radio-wrap" id="netWrap">
+        <button class="hdr-btn net-btn" id="netBtn" onclick="toggleNetPanel()" title="Select the active network (scopes scanning, sounding, calling)">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span id="netBtnLbl">No net</span><span class="caret" id="netCaret">▸</span>
+        </button>
+        <div class="radio-panel" id="netPanel">
+          <div class="radio-head">Network <span>SCAN · SOUND · CALL SCOPE</span></div>
+          <div id="netPillList"></div>
+          <button class="sound-opt" onclick="selectNet('')">■ No active net — all channels</button>
+          <div class="fhint" style="margin-top:6px">Scanning, sounding and calling use the selected net's channels.</div>
         </div>
       </div>
 
       <!-- Sounding — dropdown (single current channel / periodic multi-channel per net) -->
       <div class="radio-wrap" id="soundWrap">
-        <button class="hdr-btn" id="soundBtn" onclick="toggleSoundPanel()" title="Transmit a sounding (LQA probe). Single channel, or periodic multi-channel over a net.">📢 Sound ▸</button>
+        <button class="hdr-btn" id="soundBtn" onclick="toggleSoundPanel()" title="Transmit a sounding (LQA probe). Single channel, or periodic multi-channel over a net."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg> Sound ▸</button>
         <div class="radio-panel" id="soundPanel">
           <div class="radio-head">Sounding <span>CHANNEL SELECTION</span></div>
           <div class="sound-body">
@@ -78,11 +88,11 @@
       <button class="hdr-btn" id="pttBtn"
               onmousedown="setPtt(true)" onmouseup="setPtt(false)" onmouseleave="setPtt(false)"
               ontouchstart="setPtt(true)" ontouchend="setPtt(false)"
-              title="Push to talk (hold)">🎙 PTT</button>
+              title="Push to talk (hold)"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg> PTT</button>
 
       <!-- Manual radio control — VFO dropdown -->
       <div class="radio-wrap" id="radioWrap">
-        <button class="hdr-btn" id="radioToggle" onclick="toggleRadioPanel()" title="Manually control radio assets">📻 Radio ▸</button>
+        <button class="hdr-btn" id="radioToggle" onclick="toggleRadioPanel()" title="Manually control radio assets"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg> Radio ▸</button>
         <div class="radio-panel" id="radioPanel">
           <div class="radio-head">Radio Control <span>VFO · MANUAL TUNE</span></div>
 
@@ -140,8 +150,8 @@
         </div>
       </div>
 
-      <button class="hdr-btn" onclick="openSettings()">⚙ Settings</button>
-      <button class="hdr-btn">? Help</button>
+      <button class="hdr-btn" onclick="openSettings()"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Settings</button>
+      <button class="hdr-btn"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Help</button>
       <div class="status-chip">
         <div class="dot scanning" id="statusDot"></div>
         <span class="status-text" id="statusText">Scanning</span>
@@ -160,19 +170,19 @@
         <div class="plabel">Incoming <span>INDIVIDUAL / SELECTIVE CALL</span></div>
         <div class="pbody" style="padding:8px">
           <div class="inc-empty" id="incEmpty">
-            <div class="inc-empty-icon">📡</div>
+            <div class="inc-empty-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg></div>
             <span>Monitoring — no incoming call</span>
           </div>
           <div class="inc-alert hidden" id="incAlert">
             <div class="inc-row">
-              <div class="ring-icon">📞</div>
+              <div class="ring-icon"><svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></div>
               <div>
                 <div class="inc-callsign" id="incCs">W1ABC</div>
                 <div class="inc-sub" id="incName">Net Control Station</div>
               </div>
             </div>
             <div class="inc-btns">
-              <button class="btn btn-answer" onclick="answerCall()">Answer</button>
+              <button class="btn btn-answer" onclick="answerCall()">Accept</button>
               <button class="btn btn-decline" onclick="declineCall()">Decline</button>
             </div>
           </div>
@@ -182,21 +192,23 @@
       <!-- Messages -->
       <div class="panel panel-messages">
         <div class="plabel">
-          <span style="opacity:1;font-weight:700">Messages <em style="font-style:normal;font-weight:400;opacity:.7">AMD / ORDERWIRE</em></span>
+          Messages <em>AMD / ORDERWIRE</em>
           <button class="plabel-btn" onclick="clearMessages()">Clear All</button>
         </div>
         <div class="pbody" id="msgList"></div>
         <div class="msg-compose">
           <input class="msg-input" id="msgInput" type="text" placeholder="AMD message — max 90 chars, caps…" maxlength="90"
+            oninput="updateMsgCount()"
             onkeydown="if(event.key==='Enter')sendAmd()">
           <button class="btn-send" onclick="sendAmd()">Send</button>
+          <span class="msg-count" id="msgCount">0/90</span>
         </div>
       </div>
 
       <!-- Heard Stations -->
       <div class="panel panel-heard">
         <div class="plabel">
-          <span style="opacity:1;font-weight:700">Heard <em style="font-style:normal;font-weight:400;opacity:.7">STATIONS / LQA</em></span>
+          Heard <em>STATIONS / LQA</em>
           <button class="plabel-btn" onclick="clearHeard()">Clear All</button>
         </div>
         <div class="pbody" id="heardList">
@@ -212,7 +224,7 @@
       <!-- Contacts -->
       <div class="panel panel-contacts">
         <div class="plabel">
-          <span style="opacity:1;font-weight:700">Contacts <em style="font-style:normal;font-weight:400;opacity:.7">ADDRESS BOOK</em></span>
+          Contacts <em>ADDRESS BOOK</em>
           <button class="plabel-btn" onclick="openContactEditor()">+ Add</button>
         </div>
         <div class="search-wrap">
@@ -220,6 +232,11 @@
         </div>
         <div class="pbody" style="padding:0 8px 8px">
           <div class="contact-list" id="contactList"></div>
+        </div>
+        <div class="pbody" style="padding:0 8px 8px;border-top:1px solid var(--border)">
+          <div class="plabel" style="padding:6px 0 4px;font-size:.72rem;opacity:.7;letter-spacing:.04em">GROUP ROSTERS</div>
+          <div id="groupRosterList"></div>
+          <button class="plabel-btn" style="margin-top:4px" onclick="addGroupRoster()">+ Add Roster</button>
         </div>
         <div class="call-zone" id="callZone">
           <div class="call-mode-panel hidden" id="callModePanel">
@@ -233,16 +250,16 @@
             </button>
           </div>
           <button class="btn-call" id="callBtn" onclick="toggleCallModePanel()" disabled>
-            📞 Call ▸
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> Call ▸
           </button>
         </div>
       </div>
 
       <!-- Active Call (hidden until linked) -->
       <div class="panel panel-call hidden" id="callPanel">
-        <div class="plabel" style="color:var(--s-linked)">
+        <div class="plabel plabel-linked">
           ● Active Link
-          <span id="callFreqLbl" style="color:var(--tx-dim)">14.109 MHz · USB</span>
+          <span id="callFreqLbl" style="color:var(--tx-dim)">14.109.000 MHz · USB</span>
         </div>
         <div class="call-body">
           <div class="call-to-lbl">Connected to</div>
@@ -257,7 +274,7 @@
             <span class="qlabel" id="qualityLbl">Good · +18 dB</span>
           </div>
         </div>
-        <button class="btn-end" onclick="endCall()">⬤ End Link</button>
+        <button class="btn-end" onclick="endCall()"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="23" y1="1" x2="1" y2="23"/></svg> End Link</button>
       </div>
 
     </div><!-- /right-col -->
@@ -308,7 +325,7 @@
   <div class="modal">
 
     <div class="modal-hdr">
-      <span class="modal-title">⚙ Settings</span>
+      <span class="modal-title"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Settings</span>
       <button class="modal-close" onclick="closeSettings()">✕</button>
     </div>
 
@@ -318,38 +335,41 @@
       <nav class="snav">
         <div class="snav-section-hdr">Station</div>
         <div class="snav-item active" data-sec="identity" onclick="showSec('identity')">
-          <span class="snav-icon">🪪</span><span class="snav-label">Identity</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><span class="snav-label">Identity</span>
         </div>
         <div class="snav-item" data-sec="audio" onclick="showSec('audio')">
-          <span class="snav-icon">🎙</span><span class="snav-label">Audio</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg></span><span class="snav-label">Audio</span>
         </div>
         <div class="snav-item" data-sec="radio" onclick="showSec('radio')">
-          <span class="snav-icon">📻</span><span class="snav-label">Radio / CAT</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg></span><span class="snav-label">Radio / CAT</span>
+        </div>
+        <div class="snav-item" data-sec="location" onclick="showSec('location')">
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span><span class="snav-label">Location</span>
         </div>
 
         <div class="snav-section-hdr">ALE</div>
         <div class="snav-item" data-sec="channels" onclick="showSec('channels')">
-          <span class="snav-icon">📡</span><span class="snav-label">Channels</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span><span class="snav-label">Channels</span>
         </div>
         <div class="snav-item" data-sec="nets" onclick="showSec('nets')">
-          <span class="snav-icon">🔗</span><span class="snav-label">Nets</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></span><span class="snav-label">Nets</span>
         </div>
         <div class="snav-item" data-sec="timing" onclick="showSec('timing')">
-          <span class="snav-icon">⏱</span><span class="snav-label">Timing</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span><span class="snav-label">Timing</span>
         </div>
         <div class="snav-item" data-sec="policy" onclick="showSec('policy')">
-          <span class="snav-icon">🛡</span><span class="snav-label">Policy</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><span class="snav-label">Policy</span>
         </div>
         <div class="snav-item" data-sec="lqa" onclick="showSec('lqa')">
-          <span class="snav-icon">📊</span><span class="snav-label">LQA</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="snav-label">LQA</span>
         </div>
 
         <div class="snav-section-hdr">RX / Modem</div>
         <div class="snav-item" data-sec="fec" onclick="showSec('fec')">
-          <span class="snav-icon">⚡</span><span class="snav-label">FEC / Sync</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span class="snav-label">FEC / Sync</span>
         </div>
         <div class="snav-item" data-sec="advanced" onclick="showSec('advanced')">
-          <span class="snav-icon">🔧</span><span class="snav-label">Advanced</span>
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span><span class="snav-label">Advanced</span>
         </div>
       </nav>
 
@@ -437,7 +457,7 @@
           </div>
 
           <div style="display:flex;gap:8px;margin-top:4px">
-            <button class="btn-sm accent" id="audioConnectBtn" onclick="openAudioDevice()">🔌 Connect Audio</button>
+            <button class="btn-sm accent" id="audioConnectBtn" onclick="openAudioDevice()"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg> Connect Audio</button>
             <button class="btn-sm" onclick="testAudio()">▶ Level Test</button>
             <button class="btn-sm" onclick="enumDevices()">↺ Refresh List</button>
           </div>
@@ -546,7 +566,7 @@
 
           <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
             <button class="btn-sm" onclick="testRig()">↺ Test Connection</button>
-            <button class="btn-sm accent" id="rigConnectBtn" onclick="connectRig()">🔌 Connect</button>
+            <button class="btn-sm accent" id="rigConnectBtn" onclick="connectRig()"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg> Connect</button>
             <div class="conn-status hidden" id="rigConnStatus"></div>
           </div>
           <div class="fhint" style="margin-top:8px">
@@ -556,19 +576,151 @@
           </div>
         </div><!-- /radio -->
 
+        <!-- ── Location ── -->
+        <div class="ssec" data-sec="location">
+          <div class="ssec-title">Station Location &amp; Propagation</div>
+
+          <div class="fg">
+            <label class="flabel">Position Source</label>
+            <div class="fradio-group">
+              <label class="fradio-opt">
+                <input type="radio" name="posSource" value="0" checked onchange="onPositionSourceChange()">
+                <span class="fradio-dot"></span> None
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="posSource" value="1" onchange="onPositionSourceChange()">
+                <span class="fradio-dot"></span> LAT/LON
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="posSource" value="2" onchange="onPositionSourceChange()">
+                <span class="fradio-dot"></span> Grid
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="posSource" value="gps" onchange="onPositionSourceChange()">
+                <span class="fradio-dot"></span> GPS
+              </label>
+            </div>
+          </div>
+
+          <!-- Source-specific fields — only one group visible at a time -->
+          <div id="locManualRow" style="display:none">
+            <div class="fg-row col2">
+              <div>
+                <label class="flabel" for="cfgLatDeg">Latitude (°)</label>
+                <input class="finput" type="number" id="cfgLatDeg" step="0.0001" min="-90" max="90" placeholder="51.5082" oninput="onLatLonInput()">
+              </div>
+              <div>
+                <label class="flabel" for="cfgLonDeg">Longitude (°)</label>
+                <input class="finput" type="number" id="cfgLonDeg" step="0.0001" min="-180" max="180" placeholder="-0.1271" oninput="onLatLonInput()">
+              </div>
+            </div>
+            <div class="fhint" style="margin-top:-10px;margin-bottom:18px">Grid locator is derived automatically.</div>
+          </div>
+
+          <div id="locGridRow" style="display:none">
+            <div class="fg">
+              <label class="flabel" for="cfgGridLocator">Grid Locator</label>
+              <input class="finput" type="text" id="cfgGridLocator" maxlength="6" placeholder="IO91wm" oninput="onGridInput()">
+              <div class="fhint">4- or 6-character Maidenhead locator. Lat/Lon is derived automatically.</div>
+            </div>
+          </div>
+
+          <div id="locGpsRow" style="display:none">
+            <div class="fg">
+              <label class="flabel">GPS Method</label>
+              <div class="fradio-group">
+                <label class="fradio-opt">
+                  <input type="radio" name="gpsMethod" value="3" checked onchange="onGpsMethodChange()">
+                  <span class="fradio-dot"></span> gpsd (TCP)
+                </label>
+                <label class="fradio-opt">
+                  <input type="radio" name="gpsMethod" value="4" onchange="onGpsMethodChange()">
+                  <span class="fradio-dot"></span> NMEA Serial
+                </label>
+              </div>
+            </div>
+
+            <div id="locGpsdFields">
+              <div class="fg-row col2">
+                <div>
+                  <label class="flabel" for="cfgGpsdHost">gpsd Host</label>
+                  <input class="finput" type="text" id="cfgGpsdHost" placeholder="127.0.0.1">
+                </div>
+                <div>
+                  <label class="flabel" for="cfgGpsdPort">gpsd Port</label>
+                  <input class="finput" type="number" id="cfgGpsdPort" min="1" max="65535" value="2947">
+                </div>
+              </div>
+            </div>
+
+            <div id="locNmeaFields" style="display:none">
+              <div class="fg-row col2">
+                <div>
+                  <label class="flabel" for="cfgNmeaPort">Serial Port</label>
+                  <input class="finput" type="text" id="cfgNmeaPort" placeholder="COM3">
+                </div>
+                <div>
+                  <label class="flabel" for="cfgNmeaBaud">Baud Rate</label>
+                  <select class="fselect" id="cfgNmeaBaud">
+                    <option value="4800">4800 (NMEA standard)</option>
+                    <option value="9600">9600</option>
+                    <option value="19200">19200</option>
+                    <option value="38400">38400</option>
+                    <option value="57600">57600</option>
+                    <option value="115200">115200</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="fg">
+              <label class="flabel">GPS Status</label>
+              <div class="loc-status" id="locGpsStatus">—</div>
+            </div>
+          </div>
+
+          <hr class="fsep">
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Fetch Solar Flux Index</div>
+              <div class="ftoggle-desc">Daily 10.7 cm solar flux from NOAA SWPC — refines propagation scoring</div>
+            </div>
+            <label class="ftoggle"><input type="checkbox" id="cfgSfiEnabled"><span class="ftrack"></span></label>
+          </div>
+          <div class="fg" style="margin-top:8px">
+            <div class="loc-status" id="locSfiStatus">—</div>
+          </div>
+
+          <div class="fhint" style="margin-top:16px">
+            Propagation-aware LQA scoring weights recent channel measurements by solar-elevation
+            similarity. When enabled, channels measured under similar ionospheric conditions
+            (same time of day) receive a scoring bonus of up to 2×.
+            SFI (10.7 cm solar flux) refines the scoring via NOAA SWPC daily data.
+            All sources degrade gracefully — position is optional.
+          </div>
+
+          <div style="display:flex;gap:8px;align-items:center;margin-top:16px">
+            <button class="btn-sm accent" onclick="applyLocationToBridge()">Apply</button>
+          </div>
+        </div><!-- /location -->
+
         <!-- ── Channels ── -->
         <div class="ssec" data-sec="channels">
           <div class="ssec-title">Scanning Channels</div>
 
           <div id="chBody"></div>
 
+          <div class="ch-add-row" style="margin-bottom:4px">
+            <input class="finput" id="cfgStationFile" type="text" placeholder="station.ale" style="flex:1;font-size:.75rem;padding:3px 6px">
+          </div>
           <div class="ch-add-row">
             <button class="btn-sm accent" onclick="addCh()">+ Add Channel</button>
-            <button class="btn-sm" onclick="loadAleFile()">↑ Load .ale File</button>
-            <button class="btn-sm" onclick="saveAleFile()">↓ Save .ale File</button>
+            <button class="btn-sm" onclick="loadAleFile()">↑ Load .ale</button>
+            <button class="btn-sm" onclick="saveAleFile()">↓ Save .ale</button>
           </div>
           <div class="fhint" style="margin-top:10px">
-            Per channel: <code style="font-family:var(--mono);color:var(--accent)">id · rx_hz [tx_hz] · mode · usage · direction · self_addr · label</code>, plus inhibit-calling / inhibit-sounding flags. CMD:ADD_CHANNEL / CMD:DEL_CHANNEL also update this list at runtime.
+            Per channel: <code style="font-family:var(--mono);color:var(--accent)">id · rx_hz [tx_hz] · mode · usage · direction · self_addr · label</code>, plus inhibit-calling / inhibit-sounding / inhibit-reporting flags. CMD:ADD_CHANNEL / CMD:DEL_CHANNEL also update this list at runtime.
           </div>
         </div><!-- /channels -->
 
@@ -650,12 +802,12 @@
           <div class="fg-row col3">
             <div>
               <label class="flabel">PTT Lead (ms)</label>
-              <input class="finput" id="cfgPttLead" type="number" value="25" min="0">
+              <input class="finput" id="cfgPttLead" type="number" value="100" min="0">
               <div class="fhint">Delay after PTT assert before audio TX (CAT/CI-V latency).</div>
             </div>
             <div>
               <label class="flabel">PTT Tail (ms)</label>
-              <input class="finput" id="cfgPttTail" type="number" value="50" min="0">
+              <input class="finput" id="cfgPttTail" type="number" value="350" min="0">
               <div class="fhint">Delay after SM RX-enable before PTT release (buffer drain).</div>
             </div>
             <div></div>
@@ -695,7 +847,7 @@
                 <div class="ftoggle-name">Accept AllCall</div>
                 <div class="ftoggle-desc">AcceptAllcall — react to broadcast ALLCALL / ANYCALL frames</div>
               </div>
-              <label class="ftoggle"><input type="checkbox" id="cfgAcceptAll" checked><span class="ftrack"></span></label>
+              <label class="ftoggle"><input type="checkbox" id="cfgAcceptAll" checked onchange="applyAllCallAcceptToBridge()"><span class="ftrack"></span></label>
             </div>
             <div class="ftoggle-row">
               <div class="ftoggle-info">
@@ -720,14 +872,9 @@
 
           <div class="ssec-subtitle">Calling Policy</div>
           <div class="fg">
-            <label class="flabel">Scanning-Call Length (C)</label>
-            <input class="finput" id="cfgTargetScan" type="number" value="10" min="0" max="10"
-              style="width:120px">
             <div class="fhint">
-              Assumed scan channels of the called station — sets Tsc = C × 784 ms.
-              <strong>10</strong> (MIL-STD max, PCALE default) ensures delivery to any station scanning up to 10 channels.
-              Overridden automatically per call when the contact's net channel count is known.
-              0 = target is on a fixed channel (no scanning section).
+              Scanning-Call Length (C) is now configured per net in the <strong>Nets</strong> section.
+              The fallback when no net policy is found is C=10 (MIL-STD max, PCALE default).
             </div>
           </div>
         </div><!-- /policy -->
@@ -792,15 +939,20 @@
           <table class="ch-table" style="margin-top:6px">
             <thead>
               <tr>
-                <th>LqaAddr</th><th>LqaChannel</th><th>Score</th>
-                <th>SINAD</th><th>BER</th><th>Multipath</th><th>Age</th>
+                <th>LqaAddr</th><th>Ch</th><th>Avail</th><th>Score</th>
+                <th>SINAD<br>FROM</th><th>SINAD<br>TO</th>
+                <th>BER<br>FROM</th><th>BER<br>TO</th><th>MP</th><th>Age</th>
               </tr>
             </thead>
             <tbody id="lqaBody"></tbody>
           </table>
 
           <div class="fhint" style="margin-top:8px">
-            LqaMatrix is indexed by LqaAddr × LqaChannel. Populated from passive listening and active sounding; restored from the LQA database file (Identity tab) on startup. Score 0–31; SINAD/BER/Multipath are the LqaSINAD / LqaBER / LqaMultipath metrics.
+            LqaMatrix indexed by LqaAddr × LqaChannel, four-level per MIL-STD-188-141B App. A.
+            <strong>FROM</strong> = locally measured (SINAD dB, BER = raw 0–48 2/3-vote count A.5.4.1.1);
+            <strong>TO</strong> = peer-reported via CMD LQA (A.5.4.2: SINAD dB, BER decoded from 5-bit Table A-XIII code, MP ms).
+            <strong>Score</strong> 0–30, higher = better (operator display; internal ranking is inverted per Fig. A-27).
+            <strong>Avail</strong> = sounding conclusion (TIS = available, TWAS = not). Colours: green = better → red = worse.
           </div>
           <button class="btn-sm" style="margin-top:10px" onclick="renderLqa()">↺ Refresh</button>
           <button class="btn-sm" style="margin-top:10px;margin-left:6px" onclick="clearLqa()">⌫ Clear LQA</button>
@@ -943,6 +1095,30 @@
 
   </div><!-- /modal -->
 </div><!-- /settings modal -->
+
+<!-- ══════ LINK IDLE-TIMEOUT WARNING MODAL ══════ -->
+<!-- Shown on the `idle_warning` bridge event (~30s before Twa elapses).
+     Reset Timer → CMD:RESET_IDLE_TIMER restarts the full idle period; Dismiss
+     closes the popup but the link still times out (re-appears next cycle). -->
+<div class="modal-overlay hidden" id="idleWarnModal" onclick="if(event.target===this)hideIdleWarn()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-hdr">
+      <span class="modal-title"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Link idle timeout</span>
+      <button class="modal-close" onclick="hideIdleWarn()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="line-height:1.5">
+        The link to <strong id="idleWarnPeer">—</strong> will close in
+        <strong id="idleWarnRemaining">—</strong>s due to inactivity.
+        Reset the timer to keep the link active, or dismiss to let it close.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="hideIdleWarn()">Dismiss</button>
+      <button class="btn-save" onclick="resetIdleTimer()">Reset Timer</button>
+    </div>
+  </div><!-- /modal -->
+</div><!-- /idle-warning modal -->
 
 <!-- ══════ CONTACT EDITOR MODAL ══════ -->
 <div class="modal-overlay hidden" id="contactModal" onclick="if(event.target===this)closeContactEditor()">

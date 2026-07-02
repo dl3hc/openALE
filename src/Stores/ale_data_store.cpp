@@ -135,6 +135,17 @@ Net* NetStore::find_mutable(const std::string& name) {
     return nullptr;
 }
 
+bool NetStore::update_net(const Net& updated) {
+    Net* n = find_mutable(updated.name);
+    if (!n) return false;
+    n->dwell_ms              = updated.dwell_ms;
+    n->scanning_enabled      = updated.scanning_enabled;
+    n->sounding_enabled      = updated.sounding_enabled;
+    n->sounding_interval_sec = updated.sounding_interval_sec;
+    n->calling_length_c      = updated.calling_length_c;
+    return true;
+}
+
 bool NetStore::assign_channel(const std::string& net_name, const std::string& channel_id) {
     Net* n = find_mutable(net_name);
     if (!n) return false;
@@ -174,6 +185,48 @@ uint32_t net_scan_channel_count(const Net& net, const std::vector<Channel>& chan
             if (ch.id == id && ch.enabled) { ++count; break; }
     return count;
 }
+
+// ── GroupCallStore ────────────────────────────────────────────────────────────
+
+bool GroupCallStore::add_roster(const std::string& name) {
+    if (find(name)) return false;
+    rosters_.push_back(GroupCallRoster{name, {}});
+    return true;
+}
+
+bool GroupCallStore::remove_roster(const std::string& name) {
+    const size_t before = rosters_.size();
+    rosters_.erase(std::remove_if(rosters_.begin(), rosters_.end(),
+        [&](const GroupCallRoster& r) { return r.name == name; }), rosters_.end());
+    return rosters_.size() != before;
+}
+
+GroupCallRoster* GroupCallStore::find_mutable(const std::string& name) {
+    for (auto& r : rosters_) if (r.name == name) return &r;
+    return nullptr;
+}
+
+bool GroupCallStore::add_member(const std::string& roster_name, const std::string& callsign) {
+    GroupCallRoster* r = find_mutable(roster_name);
+    if (!r) return false;
+    if (std::find(r->members.begin(), r->members.end(), callsign) == r->members.end())
+        r->members.push_back(callsign);
+    return true;
+}
+
+bool GroupCallStore::remove_member(const std::string& roster_name, const std::string& callsign) {
+    GroupCallRoster* r = find_mutable(roster_name);
+    if (!r) return false;
+    r->members.erase(std::remove(r->members.begin(), r->members.end(), callsign), r->members.end());
+    return true;
+}
+
+const GroupCallRoster* GroupCallStore::find(const std::string& name) const {
+    for (const auto& r : rosters_) if (r.name == name) return &r;
+    return nullptr;
+}
+
+void GroupCallStore::clear() { rosters_.clear(); }
 
 // ── ContactStore ─────────────────────────────────────────────────────────────
 

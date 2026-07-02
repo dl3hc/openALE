@@ -164,7 +164,7 @@ void test_no_crash_without_callback()
     // ALEController is not instantiated here; we verify the MessageAssembler
     // lower layer (which has no callback) handles AMD cleanly, meaning that
     // higher-layer code that registers on_amd_received = nullptr must not crash.
-    // The controller guards: if (!amd_text_acc_.empty() && on_amd_received)
+    // The controller guards its commit helpers on the callback being set.
     // This test confirms the lower-level assembly succeeds without side effects.
 
     MessageAssembler asm_;

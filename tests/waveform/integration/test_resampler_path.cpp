@@ -47,11 +47,11 @@ int main()
     uint8_t syms[SYMBOLS_PER_WORD];
     while (modem.pull_symbol_frame(syms)) {
         const size_t off = pcm8.size();
-        pcm8.resize(off + SYMBOLS_PER_WORD * FFT_SIZE);
+        pcm8.resize(off + SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
         gen.generate_symbols(syms, SYMBOLS_PER_WORD, pcm8.data() + off, TX_AMPLITUDE);
         sm.on_word_complete();
     }
-    const size_t n_words = pcm8.size() / (SYMBOLS_PER_WORD * FFT_SIZE);
+    const size_t n_words = pcm8.size() / (SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
     std::printf("  TX words rendered: %zu (%zu samples @ 8 kHz)\n\n",
                 n_words, pcm8.size());
 

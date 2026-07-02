@@ -4,8 +4,11 @@
 
 #include "App/ale_controller.h"
 #include "LQA/lqa_metrics.h"
+#include "LQA/solar_position.h"
 #include "PAL/radio.h"
 #include "Protocol/Control/ale_freq_select.h"
+#include "Protocol/Message/ale_orderwire_protocols.h"
+#include "Word/address_encoder.h"
 #include "Word/ale_word.h"
 #include <algorithm>
 #include <cmath>
@@ -32,8 +35,8 @@ static bool is_valid_ale_address(const std::string& addr) {
 
 static bool is_ale_mode(const std::string& s) {
     static const char* kModes[] = {
-        "USB","LSB","AM","FM","FMW","CW","CW_R",
-        "FSK","RTTY","DATA_USB","DATA_LSB", nullptr
+        "USB","LSB","AM","FM","FMW","CWU","CWL",
+        "FSK","RTTY","USB-D","LSB-D", nullptr
     };
     for (int i = 0; kModes[i]; ++i)
         if (s == kModes[i]) return true;
@@ -74,8 +77,12 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
         if (toks.empty()) return std::nullopt;
     }
 
-    // first token: rx_hz or rx_hz:tx_hz
+    // first token: rx_hz, or rx_hz:tx_hz (colon-joined). format_channel_line()
+    // writes rx and tx as two separate tokens, so also accept a following
+    // all-digits token as tx_hz (keeps the written form self-consistent and
+    // stays backward-compatible with old `rx tx mode [label]` files).
     uint32_t rx_hz = 0, tx_hz = 0;
+    size_t next = 1;  // index of the next unconsumed token
     auto colon = toks[0].find(':');
     if (colon != std::string::npos) {
         rx_hz = static_cast<uint32_t>(std::stoul(toks[0].substr(0, colon)));
@@ -83,15 +90,58 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
         tx_hz = tx_str.empty() ? 0u : static_cast<uint32_t>(std::stoul(tx_str));
     } else {
         rx_hz = static_cast<uint32_t>(std::stoul(toks[0]));
+        if (toks.size() > 1 && !toks[1].empty()
+            && toks[1].find_first_not_of("0123456789") == std::string::npos) {
+            tx_hz = static_cast<uint32_t>(std::stoul(toks[1]));
+            next = 2;
+        }
     }
     if (rx_hz == 0) return std::nullopt;
 
-    // second token (optional): mode string
+    // next token (optional): mode string
     std::string mode = "USB";
-    size_t label_start = 1;
-    if (toks.size() > 1 && is_ale_mode(toks[1])) {
-        mode = toks[1];
-        label_start = 2;
+    size_t label_start = next;
+    if (toks.size() > next && is_ale_mode(toks[next])) {
+        mode = toks[next];
+        label_start = next + 1;
+    }
+
+    ale::Channel ch(rx_hz, tx_hz, mode, mode);
+    ch.id = id;
+
+    // optional bracketed flags token [OFF,RX,IC,IS,IR] (written by
+    // format_channel_line). Treated as flags only when every comma-separated
+    // code is a known code; otherwise the token is left as part of the label
+    // (so a label that legitimately starts with "[...]" is not swallowed).
+    if (label_start < toks.size() && !toks[label_start].empty()
+        && toks[label_start].front() == '[' && toks[label_start].back() == ']') {
+        const std::string body = toks[label_start].substr(1, toks[label_start].size() - 2);
+        std::istringstream fss(body);
+        std::string code;
+        std::vector<std::string> codes;
+        bool all_recognized = true;
+        bool any_code = false;
+        while (std::getline(fss, code, ',')) {
+            const auto a = code.find_first_not_of(" \t");
+            const auto b = code.find_last_not_of(" \t");
+            if (a == std::string::npos) continue;
+            code = code.substr(a, b - a + 1);
+            codes.push_back(code);
+            any_code = true;
+            if (code != "OFF" && code != "RX" && code != "IC"
+                && code != "IS" && code != "IR")
+                all_recognized = false;
+        }
+        if (any_code && all_recognized) {
+            for (const auto& c : codes) {
+                if      (c == "OFF") ch.enabled          = false;
+                else if (c == "RX")  ch.rx_only          = true;
+                else if (c == "IC")  ch.inhibit_calling   = true;
+                else if (c == "IS")  ch.inhibit_sounding  = true;
+                else if (c == "IR")  ch.inhibit_reporting = true;
+            }
+            ++label_start;
+        }
     }
 
     // remaining tokens: label
@@ -100,14 +150,16 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
         if (!label.empty()) label += ' ';
         label += toks[i];
     }
-
-    ale::Channel ch(rx_hz, tx_hz, mode, mode);
     ch.label = label;
-    ch.id    = id;
     return ch;
 }
 
-// Serialize one Channel to a file line ([ID:id] rx_hz tx_hz mode [label])
+// Serialize one Channel to a file line:
+//   [ID:id] rx_hz tx_hz mode [flags] [label]
+// where [flags] is a bracketed, comma-separated code list emitted only when any
+// per-channel flag is non-default (backward-compatible: old files have no token).
+// Codes: OFF (enabled=false), RX (rx_only), IC (inhibit_calling),
+//         IS (inhibit_sounding), IR (inhibit_reporting).
 static std::string format_channel_line(const ale::Channel& ch)
 {
     char buf[64];
@@ -118,6 +170,19 @@ static std::string format_channel_line(const ale::Channel& ch)
     std::string line;
     if (!ch.id.empty()) { line += "ID:"; line += ch.id; line += ' '; }
     line += buf;
+    // Per-channel flags — omitted when all default (keeps old files unchanged).
+    std::string flags;
+    if (!ch.enabled)            flags += "OFF,";
+    if (ch.rx_only)             flags += "RX,";
+    if (ch.inhibit_calling)     flags += "IC,";
+    if (ch.inhibit_sounding)    flags += "IS,";
+    if (ch.inhibit_reporting)   flags += "IR,";
+    if (!flags.empty()) {
+        flags.pop_back();  // drop trailing comma
+        line += " [";
+        line += flags;
+        line += "]";
+    }
     if (!ch.label.empty()) { line += ' '; line += ch.label; }
     return line;
 }
@@ -152,6 +217,21 @@ static std::vector<std::string> split_csv(const std::string& s)
     return out;
 }
 
+// Split a pipe-separated string (used for CONTACT: fields).
+static std::vector<std::string> split_pipe(const std::string& s)
+{
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (true) {
+        const size_t pipe = s.find('|', start);
+        const size_t end  = (pipe == std::string::npos) ? s.size() : pipe;
+        out.push_back(s.substr(start, end - start));
+        if (pipe == std::string::npos) break;
+        start = pipe + 1;
+    }
+    return out;
+}
+
 // Join channel IDs back into the same comma-separated form split_csv() expects.
 static std::string join_csv(const std::vector<std::string>& items)
 {
@@ -164,16 +244,16 @@ static std::string join_csv(const std::vector<std::string>& items)
 }
 
 static pal::RadioMode mode_from_string(const std::string& s) {
-    if (s == "LSB")      return pal::RadioMode::LSB;
-    if (s == "CW")       return pal::RadioMode::CW;
-    if (s == "CW_R")     return pal::RadioMode::CW_R;
-    if (s == "FM")       return pal::RadioMode::FM;
-    if (s == "FMW")      return pal::RadioMode::FMW;
-    if (s == "AM")       return pal::RadioMode::AM;
-    if (s == "FSK")      return pal::RadioMode::FSK;
-    if (s == "RTTY")     return pal::RadioMode::RTTY;
-    if (s == "DATA_LSB") return pal::RadioMode::DATA_LSB;
-    if (s == "DATA_USB") return pal::RadioMode::DATA_USB;
+    if (s == "LSB")   return pal::RadioMode::LSB;
+    if (s == "CWU")   return pal::RadioMode::CW;
+    if (s == "CWL")   return pal::RadioMode::CW_R;
+    if (s == "FM")    return pal::RadioMode::FM;
+    if (s == "FMW")   return pal::RadioMode::FMW;
+    if (s == "AM")    return pal::RadioMode::AM;
+    if (s == "FSK")   return pal::RadioMode::FSK;
+    if (s == "RTTY")  return pal::RadioMode::RTTY;
+    if (s == "LSB-D") return pal::RadioMode::DATA_LSB;
+    if (s == "USB-D") return pal::RadioMode::DATA_USB;
     return pal::RadioMode::USB;
 }
 
@@ -181,16 +261,17 @@ static pal::RadioMode mode_from_string(const std::string& s) {
 // controller never has to keep a second copy of "current mode" itself.
 static std::string mode_to_string(pal::RadioMode m) {
     switch (m) {
+        case pal::RadioMode::USB:      return "USB";
         case pal::RadioMode::LSB:      return "LSB";
-        case pal::RadioMode::CW:       return "CW";
-        case pal::RadioMode::CW_R:     return "CW_R";
+        case pal::RadioMode::CW:       return "CWU";
+        case pal::RadioMode::CW_R:     return "CWL";
         case pal::RadioMode::FM:       return "FM";
         case pal::RadioMode::FMW:      return "FMW";
         case pal::RadioMode::AM:       return "AM";
         case pal::RadioMode::FSK:      return "FSK";
         case pal::RadioMode::RTTY:     return "RTTY";
-        case pal::RadioMode::DATA_LSB: return "DATA_LSB";
-        case pal::RadioMode::DATA_USB: return "DATA_USB";
+        case pal::RadioMode::DATA_LSB: return "LSB-D";
+        case pal::RadioMode::DATA_USB: return "USB-D";
         default:                       return "USB";
     }
 }
@@ -201,6 +282,16 @@ namespace ale {
 
 ALEController::ALEController()
     : lqa_analyzer_(&lqa_database_)
+    , lqa_exchange_(lqa_database_,
+                    [this](const std::string& a){ return self_address_store_.matches_self(a); },
+                    [this](uint32_t w){ sm_.set_pending_lqa_cmd(w); },
+                    [this](ALESequence s){ sm_.set_pending_lqa_report_seq(s); })
+    , freq_select_(sm_,
+                   lqa_analyzer_,
+                   [this](){ return self_address_store_.primary(); },
+                   [this](const std::string& a){ return self_address_store_.matches_self(a); },
+                   [this](const std::string& peer){ pending_relink_addr_ = peer; },
+                   [this](const std::string& m){ emit_status(m); })
 {
     wire_callbacks();
 
@@ -214,7 +305,8 @@ ALEController::ALEController()
     // currently dwelling on a channel that has stale (or absent) LQA data.
     lqa_analyzer_.set_sounding_callback([this](uint32_t freq) {
         const Channel* ch = sm_.get_current_channel();
-        if (ch && ch->rx_frequency_hz == freq)
+        // Per-channel inhibit_sounding suppresses auto-sounding on this channel.
+        if (ch && ch->rx_frequency_hz == freq && !sounding_inhibited(freq))
             sm_.send_sounding();
     });
 }
@@ -305,6 +397,12 @@ void ALEController::wire_callbacks()
         emit_event(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
     });
 
+    // Idle-timeout warning (Twa lead) → forward to the controller callback so
+    // the bridge can push an `idle_warning` event to the GUI popup.
+    sm_.set_idle_warning_callback([this](uint32_t remaining_sec) {
+        if (on_idle_warning) on_idle_warning(remaining_sec);
+    });
+
     // Channel hops (scan / calling) → radio frequency/mode change
     sm_.set_channel_callback([this](const Channel& ch) {
         if (!radio_) return;
@@ -352,6 +450,32 @@ std::string ALEController::get_current_mode() const
     return get_current_channel().rx_mode;
 }
 
+const Channel* ALEController::find_channel_by_freq(uint32_t rx_hz) const
+{
+    if (rx_hz == 0) return nullptr;
+    for (const auto& ch : calling_channels_)
+        if (ch.rx_frequency_hz == rx_hz) return &ch;
+    return nullptr;
+}
+
+bool ALEController::reporting_inhibited(uint32_t rx_hz) const
+{
+    const Channel* ch = find_channel_by_freq(rx_hz);
+    return ch && ch->inhibit_reporting;
+}
+
+bool ALEController::sounding_inhibited(uint32_t rx_hz) const
+{
+    const Channel* ch = find_channel_by_freq(rx_hz);
+    return ch && ch->inhibit_sounding;
+}
+
+bool ALEController::calling_inhibited(uint32_t rx_hz) const
+{
+    const Channel* ch = find_channel_by_freq(rx_hz);
+    return ch && ch->inhibit_calling;
+}
+
 bool ALEController::set_frequency(uint32_t hz)
 {
     if (!radio_ || hz == 0) return false;
@@ -362,7 +486,6 @@ bool ALEController::set_frequency(uint32_t hz)
     if (on_channel_changed)
         on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
                                    mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
-    manual_channel_idx_ = -1;
     return true;
 }
 
@@ -381,11 +504,39 @@ bool ALEController::set_mode(const std::string& mode)
 bool ALEController::step_channel(int direction)
 {
     if (!radio_ || calling_channels_.empty()) return false;
-    const int n = static_cast<int>(calling_channels_.size());
-    manual_channel_idx_ = ((manual_channel_idx_ < 0 ? 0 : manual_channel_idx_) + direction % n + n) % n;
 
-    const Channel& target = calling_channels_[manual_channel_idx_];
-    pal::Channel pc = radio_->get_channel();
+    // Build the channel set to step through: the active net's assigned channels
+    // when a net is selected, otherwise all calling_channels_. Mirrors the scoping
+    // applied to start_scanning() / initiate_call() so manual stepping, scanning,
+    // sounding and calling all iterate the same net's channels. The net's
+    // membership (channel_ids) is the set the operator configured in Settings.
+    std::vector<Channel> step_set;
+    if (!active_scan_net_.empty()) {
+        if (const Net* net = net_store_.find(active_scan_net_)) {
+            for (const auto& ch : calling_channels_)
+                if (std::find(net->channel_ids.begin(), net->channel_ids.end(), ch.id)
+                        != net->channel_ids.end())
+                    step_set.push_back(ch);
+        }
+    }
+    if (step_set.empty()) {
+        // No active net, or the net has no assigned channels → step through all.
+        for (const auto& ch : calling_channels_) step_set.push_back(ch);
+    }
+    if (step_set.empty()) return false;
+
+    const int n = static_cast<int>(step_set.size());
+    // Position = the radio's current channel if it is in the step set, else 0.
+    // Frequency-match is robust to external retunes and net-membership changes
+    // (an index cached across calls would be invalidated by either).
+    pal::Channel cur = radio_->get_channel();
+    int idx = 0;
+    for (int i = 0; i < n; ++i)
+        if (step_set[i].rx_frequency_hz == cur.rx_frequency) { idx = i; break; }
+    idx = (idx + direction % n + n) % n;
+
+    const Channel& target = step_set[idx];
+    pal::Channel pc = cur;
     pc.rx_frequency = target.rx_frequency_hz;
     pc.tx_frequency = target.effective_tx_hz();
     pc.rx_mode = pc.tx_mode = mode_from_string(target.rx_mode);
@@ -414,7 +565,6 @@ void ALEController::nudge_frequency(int direction)
     if (on_channel_changed)
         on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
                                    mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
-    manual_channel_idx_ = -1;
 }
 
 bool ALEController::get_ptt_state() const
@@ -461,6 +611,16 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.relink_enabled               = cfg.relink_enabled;
     config_.relink_improvement_threshold = cfg.relink_improvement_threshold;
     config_.enhanced_freq_select         = cfg.enhanced_freq_select;
+    config_.position_source              = cfg.position_source;
+    config_.station_lat_deg              = cfg.station_lat_deg;
+    config_.station_lon_deg              = cfg.station_lon_deg;
+    config_.grid_locator                 = cfg.grid_locator;
+    config_.gpsd_host                    = cfg.gpsd_host;
+    config_.gpsd_port                    = cfg.gpsd_port;
+    config_.nmea_port                    = cfg.nmea_port;
+    config_.nmea_baud                    = cfg.nmea_baud;
+    config_.sfi_enabled                  = cfg.sfi_enabled;
+    update_propagation_context();
 }
 
 void ALEController::set_calling_channels(const std::vector<Channel>& channels)
@@ -492,10 +652,28 @@ void ALEController::start_scanning()
     // add_channel/del_channel keep calling_channels_ current but only push to
     // sm_.set_calling_channels(); the SM's channel_manager_ scan_list is never
     // touched there, so we populate it fresh every time scanning starts.
-    ScanConfig cfg = sm_.get_scan_config();  // preserve dwell_time_ms etc.
+    ScanConfig cfg = sm_.get_scan_config();
     cfg.scan_list.clear();
-    for (const auto& ch : calling_channels_)
-        if (ch.enabled) cfg.scan_list.push_back(ch);
+
+    const Net* scan_net = active_scan_net_.empty() ? nullptr : net_store_.find(active_scan_net_);
+    if (scan_net) {
+        cfg.dwell_time_ms = scan_net->dwell_ms;
+        for (const auto& ch : calling_channels_) {
+            if (!ch.enabled) continue;
+            if (std::find(scan_net->channel_ids.begin(), scan_net->channel_ids.end(), ch.id)
+                    == scan_net->channel_ids.end()) continue;
+            cfg.scan_list.push_back(ch);
+        }
+        if (cfg.scan_list.empty()) {
+            // Active net has no enabled channels — fall back to all enabled.
+            cfg.dwell_time_ms = config_.scan_dwell_ms;
+            for (const auto& ch : calling_channels_)
+                if (ch.enabled) cfg.scan_list.push_back(ch);
+        }
+    } else {
+        for (const auto& ch : calling_channels_)
+            if (ch.enabled) cfg.scan_list.push_back(ch);
+    }
 
     // A.5.4.5.3: sort scan channels by FROM-direction quality.
     // FROM score = locally measured SINAD from received soundings, stored
@@ -517,6 +695,10 @@ void ALEController::start_scanning()
 
 bool ALEController::send_sounding()
 {
+    if (sounding_inhibited(get_current_frequency())) {
+        emit_status("Manual sounding rejected — current channel is inhibit-sounding");
+        return false;
+    }
     if (!sm_.send_sounding()) {
         emit_status("Manual sounding rejected — only available while IDLE or scanning");
         return false;
@@ -537,103 +719,86 @@ bool ALEController::send_sounding_sweep(const std::vector<Channel>& channels)
 }
 
 
-LQACmdPayload ALEController::compute_lqa_payload(uint32_t freq_hz,
-                                                   const std::string& target_station) const {
-    LQACmdPayload p{};  // sentinels: sinad=31, ber=31, mp=7
-    // A.5.4.2: report what WE measured FROM target_station. Prefer a station-
-    // specific entry (populated by soundings or previous handshakes); fall back
-    // to the channel aggregate (empty-station sounding entry) when no station
-    // data exists yet.
-    auto e = (!target_station.empty())
-        ? lqa_database_.get_entry(freq_hz, target_station) : nullptr;
-    if (!e || e->total_words == 0)
-        e = lqa_database_.get_entry(freq_hz, "");
-    if (!e) return p;
-    if (e->sinad_db > 0.0f) {
-        // sinad_db holds dB on [0,30]; the CMD SINAD code is 1 LSB = 1 dB, so
-        // round-to-nearest and clamp gives the correct 5-bit field directly.
-        const float s = e->sinad_db;
-        p.sinad = (s <= 0.0f) ? 0u : (s >= 30.0f) ? 30u : static_cast<uint8_t>(s + 0.5f);
-    }
-    if (e->total_words > 0) {
-        // ber is stored as averaged non-unanimous vote count (0.0–48.0, A.5.4.1.1).
-        // total_words>0 means a real measurement exists, so BER=0 is a valid
-        // result (code 0 = best) and must be reported — not the 31 "no value"
-        // sentinel (A.5.4.2.1 / Table A-XIII).
-        const auto ber_score = static_cast<uint8_t>(std::min(48.0f, std::max(0.0f, e->ber)));
-        p.ber = ber_score_to_lqa_code(ber_score);
-    }
-    if (e->multipath_score > 0.0f) {
-        p.mp = multipath_delay_to_lqa_code(e->multipath_score * 6.0f);
-    }
-    return p;
-}
-
 bool ALEController::initiate_call(const std::string& target_addr)
 {
-    // TODO A.5.4.5.2: when one-way broadcast mode is added, call
-    // rank_channels_for_station(target, SelectionMode::BROADCAST) here.
+    // TODO A.5.4.5.2: when one-way broadcast mode is added, pass
+    // SelectionMode::BROADCAST to rank_channels_for_call() here.
     if (!is_valid_ale_address(target_addr)) {
         emit_status("ERROR: address '" + target_addr
                     + "' invalid — must be 3–15 Basic-38 characters (A-Z, 0-9, @, ?)");
         return false;
     }
 
-    // Channel ordering: always use LQA data when available (Spec: mandatory).
-    // Priority: 1) station-specific bilateral scores (A.5.4.5), 2) aggregate
-    // channel scores (soundings from any station), 3) user-configured order.
-    uint32_t first_call_freq_hz = calling_channels_.empty()
-        ? 0u : calling_channels_.front().rx_frequency_hz;
-    if (!calling_channels_.empty()) {
-        auto ranked = lqa_analyzer_.rank_channels_for_station(target_addr);
-        const bool has_station_data = !ranked.empty();
+    // Channel ordering: always use LQA data when available (A.5.4.5, mandatory).
+    // Per-channel inhibit_calling excludes a channel from the outbound call
+    // set (it may still scan / sound). Build the callable subset first. If the
+    // channel list is non-empty but every channel is inhibit-calling, abort;
+    // an empty list (no channels configured) is left to proceed as before so
+    // downstream behaviour is unchanged.
+    std::vector<Channel> callable;
+    callable.reserve(calling_channels_.size());
+    for (const auto& ch : calling_channels_)
+        if (!ch.inhibit_calling) callable.push_back(ch);
+    if (!calling_channels_.empty() && callable.empty()) {
+        emit_status("No callable channels — all channels inhibit-calling");
+        return false;
+    }
 
-        auto score_for = [&ranked](uint32_t freq) -> float {
-            for (const auto& r : ranked)
-                if (r.frequency_hz == freq) return r.score;
-            return -1.0f;  // unlisted: sort after all ranked entries
-        };
-
-        std::vector<Channel> ordered = calling_channels_;
-        std::stable_sort(ordered.begin(), ordered.end(),
-            [&](const Channel& a, const Channel& b) {
-                const float sa = score_for(a.rx_frequency_hz);
-                const float sb = score_for(b.rx_frequency_hz);
-                // Tier 1: both have station-specific bilateral data
-                if (sa >= 0.0f && sb >= 0.0f) return sa > sb;
-                // Tier 2: only one has station-specific data — that one goes first
-                if (sa >= 0.0f) return true;
-                if (sb >= 0.0f) return false;
-                // Tier 3: neither has station data — fall back to aggregate sounding scores
-                const float agg_a = lqa_analyzer_.compute_channel_aggregate_score(a.rx_frequency_hz);
-                const float agg_b = lqa_analyzer_.compute_channel_aggregate_score(b.rx_frequency_hz);
-                if (agg_a > 0.0f || agg_b > 0.0f) return agg_a > agg_b;
-                return false;  // no LQA at all: preserve original order (A.5.4 fallback)
-            });
-        sm_.set_calling_channels(ordered);
-        first_call_freq_hz = ordered.front().rx_frequency_hz;
-        if (has_station_data) {
-            emit_status("LQA: channel order optimised for " + target_addr
-                        + " (best: " + std::to_string(first_call_freq_hz) + " Hz)");
+    // Scope the outbound channel sweep to the active net when one is selected
+    // (mirrors start_scanning()). The operator's Network pill drives this. A
+    // misconfigured net with no callable channels falls back to all callable
+    // channels so calling is never blocked by the selection. C (target scan
+    // channels) is left to the contact's-net resolution below — it is a peer
+    // property, not ours.
+    if (!active_scan_net_.empty()) {
+        if (const Net* net = net_store_.find(active_scan_net_)) {
+            std::vector<Channel> scoped;
+            scoped.reserve(callable.size());
+            for (const auto& ch : callable)
+                if (std::find(net->channel_ids.begin(), net->channel_ids.end(), ch.id)
+                        != net->channel_ids.end())
+                    scoped.push_back(ch);
+            if (!scoped.empty()) {
+                callable = std::move(scoped);
+                emit_status("Call scoped to net '" + active_scan_net_ + "' ("
+                            + std::to_string(callable.size()) + " channel(s))");
+            } else {
+                emit_status("Active net '" + active_scan_net_
+                            + "' has no callable channels — using all");
+            }
         }
     }
 
-    sm_.set_target_scan_channels(config_.assumed_scan_channels);
-    emit_status("Scanning call: C=" + std::to_string(config_.assumed_scan_channels) + " channel(s)");
+    uint32_t first_call_freq_hz = 0u;
+    if (!callable.empty()) {
+        first_call_freq_hz = callable.front().rx_frequency_hz;
+        const bool has_station_data =
+            !lqa_analyzer_.rank_channels_for_station(target_addr).empty();
+        auto ordered = lqa_analyzer_.rank_channels_for_call(target_addr, callable);
+        sm_.set_calling_channels(ordered);
+        first_call_freq_hz = ordered.front().rx_frequency_hz;
+        if (has_station_data)
+            emit_status("LQA: channel order optimised for " + target_addr
+                        + " (best: " + std::to_string(first_call_freq_hz) + " Hz)");
+    } else {
+        // No channels configured — pass the (empty) list through unchanged so
+        // the SM handles the no-channel case as it did before inhibit-gating.
+        sm_.set_calling_channels(calling_channels_);
+    }
+
+    uint32_t C = config_.assumed_scan_channels;
+    if (const Contact* ct = contact_store_.find(target_addr))
+        for (const auto& nm : ct->net_members)
+            if (const Net* n = net_store_.find(nm)) { C = n->calling_length_c; break; }
+    sm_.set_target_scan_channels(C);
+    emit_status("Scanning call: C=" + std::to_string(C) + " channel(s)");
 
     // Block A4 — Queue CMD LQA (KA1=1) for the calling station's frame.
-    // Gated on lqa_exchange_enabled; channel ranking above is always active.
-    sent_ka1_ = false;
-    last_call_target_.clear();
-    last_call_freq_hz_ = 0;
-    if (!calling_channels_.empty() && config_.lqa_exchange_enabled) {
-        LQACmdPayload p = compute_lqa_payload(first_call_freq_hz, target_addr);
-        p.ka1 = true;
-        sm_.set_pending_lqa_cmd(encode_lqa_cmd(p));
-        sent_ka1_          = true;
-        last_call_target_  = target_addr;
-        last_call_freq_hz_ = first_call_freq_hz;
-    }
+    // Gated on lqa_exchange_enabled and the channel's inhibit_reporting flag
+    // (bilateral LQA CMD 'a' exchange suppressed per-channel). Channel ranking
+    // above is always active.
+    if (config_.lqa_exchange_enabled && !reporting_inhibited(first_call_freq_hz))
+        lqa_exchange_.encode_outgoing(first_call_freq_hz, target_addr, true);
 
     emit_status("Initiating call to " + target_addr);
     return sm_.initiate_call(target_addr);
@@ -648,18 +813,16 @@ bool ALEController::initiate_single_channel_call(const std::string& target_addr)
     }
     Channel cur = get_current_channel();
     sm_.set_calling_channels({ cur });
-    sm_.set_target_scan_channels(config_.assumed_scan_channels);
-    sent_ka1_ = false;
-    last_call_target_.clear();
-    last_call_freq_hz_ = 0;
-    if (config_.lqa_exchange_enabled) {
-        LQACmdPayload p = compute_lqa_payload(cur.rx_frequency_hz, target_addr);
-        p.ka1 = true;
-        sm_.set_pending_lqa_cmd(encode_lqa_cmd(p));
-        sent_ka1_         = true;
-        last_call_target_ = target_addr;
-        last_call_freq_hz_ = cur.rx_frequency_hz;
-    }
+    uint32_t C = config_.assumed_scan_channels;
+    if (const Contact* ct = contact_store_.find(target_addr))
+        for (const auto& nm : ct->net_members)
+            if (const Net* n = net_store_.find(nm)) { C = n->calling_length_c; break; }
+    sm_.set_target_scan_channels(C);
+    // Operator-override single-channel call: inhibit_calling does NOT block it
+    // (the operator explicitly chose this channel), but inhibit_reporting still
+    // suppresses the bilateral LQA CMD 'a' exchange for this channel.
+    if (config_.lqa_exchange_enabled && !reporting_inhibited(cur.rx_frequency_hz))
+        lqa_exchange_.encode_outgoing(cur.rx_frequency_hz, target_addr, true);
     emit_status("Initiating single-channel call to " + target_addr);
     return sm_.initiate_call(target_addr);
 }
@@ -675,8 +838,38 @@ bool ALEController::initiate_group_call(const std::vector<std::string>& members)
         }
     }
 
-    sm_.set_target_scan_channels(config_.assumed_scan_channels);
-    emit_status("Scanning call: C=" + std::to_string(config_.assumed_scan_channels) + " channel(s)");
+    uint32_t C = config_.assumed_scan_channels;
+    [&]() {
+        for (const auto& m : members)
+            if (const Contact* ct = contact_store_.find(m))
+                for (const auto& nm : ct->net_members)
+                    if (const Net* n = net_store_.find(nm)) { C = n->calling_length_c; return; }
+    }();
+    sm_.set_target_scan_channels(C);
+    emit_status("Scanning call: C=" + std::to_string(C) + " channel(s)");
+
+    // Scope the outbound sweep to the active net when one is selected (mirrors
+    // initiate_call / start_scanning). The SM's calling channel set is whatever
+    // was last set; set it explicitly so the group call actually sweeps the
+    // active net's channels. Empty net → fall back to all callable channels.
+    {
+        std::vector<Channel> callable;
+        callable.reserve(calling_channels_.size());
+        for (const auto& ch : calling_channels_)
+            if (!ch.inhibit_calling) callable.push_back(ch);
+        if (!active_scan_net_.empty()) {
+            if (const Net* net = net_store_.find(active_scan_net_)) {
+                std::vector<Channel> scoped;
+                scoped.reserve(callable.size());
+                for (const auto& ch : callable)
+                    if (std::find(net->channel_ids.begin(), net->channel_ids.end(), ch.id)
+                            != net->channel_ids.end())
+                        scoped.push_back(ch);
+                if (!scoped.empty()) callable = std::move(scoped);
+            }
+        }
+        if (!callable.empty()) sm_.set_calling_channels(callable);
+    }
 
     emit_status("Initiating group call (" + std::to_string(members.size()) + " members)");
     return sm_.initiate_group_call(members);
@@ -725,10 +918,61 @@ void ALEController::terminate_link()
     sm_.terminate_link();  // T-07: sendet TO×2+TWAS, dann LINK_TERMINATED
 }
 
+std::string ALEController::active_peer() const
+{
+    if (sm_.get_state() != ALEState::LINKED) return {};
+    const std::string& to = sm_.get_to_address();
+    return !to.empty() ? to : sm_.get_caller_address();
+}
+
+std::string ALEController::send_amd(const std::string& target, const std::string& text)
+{
+    if (text.empty())
+        return "ERROR: AMD requires message text (max 90 chars, Expanded-64)";
+
+    // ── LINKED: send AMD over the established link as a single-burst ─────────
+    // orderwire frame.  TO[peer] (+DATA/REP ext) + CMD AMD + message + TIS self
+    // (the TIS:SELF conclusion is appended by trigger_linked_orderwire()).
+    if (sm_.get_state() == ALEState::LINKED) {
+        const std::string peer = active_peer();
+        if (peer.empty())
+            return "ERROR: LINKED but no active peer address available";
+        std::vector<ALEWord> words = AddressEncoder::encode(peer, PreambleType::TO);
+        const auto amd = encode_amd(text);   // authoritative encoder (sanitise/truncate)
+        if (amd.empty())
+            return "ERROR: AMD text has no encodable characters";
+        words.insert(words.end(), amd.begin(), amd.end());
+        // Single-burst (false): a doubled AMD frame would display the text twice.
+        sm_.trigger_linked_orderwire(words, /*double_burst=*/false);
+        sm_.on_link_activity();   // reset Twa while the burst is queued
+        return "OK: AMD sent over linked orderwire to " + peer;
+    }
+
+    // ── Not LINKED: queue AMD as the pending message and place a call. ───────
+    // A.5.7.2.2: AMD is sent in the ACK frame (third handshake frame), not the calling frame.
+    if (!is_valid_ale_address(target))
+        return "ERROR: target address invalid — 3–15 Basic-38 chars (A-Z, 0-9, @, ?)";
+    ALEStateMachine::PendingMessage msg;
+    msg.type    = ALEStateMachine::PendingMessage::Type::AMD;
+    msg.content = text;   // encode_amd() sanitises/truncates downstream in the SM
+    sm_.set_pending_message(msg);
+    if (!initiate_call(target))
+        return std::string("ERROR: cannot call in state ")
+               + ALEStateMachine::state_name(state());
+    return "OK: AMD queued, calling " + target;
+}
+
 void ALEController::emergency_stop()
 {
     emit_status("EMERGENCY STOP — aborting all ALE operations");
-    sm_.emergency_manual_control();
+    sm_.emergency_manual_control();   // SM → IDLE (sends TWAS if LINKED)
+    pending_tx_words_.clear();        // drop buffered words not yet sent to modulator
+    modulator_.abort();               // flush modulator TX queue
+    ptt_lead_deadline_ms_ = 0;
+    ptt_tail_deadline_ms_ = 0;
+    manual_ptt_ = false;
+    set_ptt_and_notify(false);        // PTT → RX
+    demodulator_.set_enabled(true);   // re-arm demodulator
 }
 
 void ALEController::set_ptt_and_notify(bool on)
@@ -776,7 +1020,17 @@ void ALEController::set_manual_ptt(bool on)
 void ALEController::update(uint32_t now_ms)
 {
     now_ms_ = now_ms;
+    tick_ptt_timing(now_ms);
+    tick_sm(now_ms);
+    tick_frame_settle(now_ms);
+    tick_relink(now_ms);
+    tick_sounding_sweep(now_ms);
+    tick_offline_completion();
+    tick_lqa_update(now_ms);
+}
 
+void ALEController::tick_ptt_timing(uint32_t now_ms)
+{
     // PTT lead: flush buffered TX words once the lead time has elapsed
     if (ptt_lead_deadline_ms_ > 0 && now_ms >= ptt_lead_deadline_ms_) {
         ptt_lead_deadline_ms_ = 0;
@@ -794,11 +1048,16 @@ void ALEController::update(uint32_t now_ms)
         set_ptt_and_notify(false);
         demodulator_.set_enabled(true);
     }
+}
 
+void ALEController::tick_sm(uint32_t now_ms)
+{
     sm_.update(now_ms);
-
     maybe_emit_call_alert();
+}
 
+void ALEController::tick_frame_settle(uint32_t now_ms)
+{
     // Commit a settled received-sounding frame to the LQA DB (full address +
     // frame-averaged snr/ber). Checked every tick — cheap, and time-sensitive.
     if (!sounding_caller_acc_.empty() && sounding_settle_ms_ > 0
@@ -814,26 +1073,33 @@ void ALEController::update(uint32_t now_ms)
         commit_rx_ber_sample();
     }
 
+    // Linked AMD RX fallback: if a CMD AMD was seen but no TIS conclusion
+    // arrived (corrupted/missed), commit after Tdrw silence.  The TIS path in
+    // rx_accumulate_linked_amd() is the primary commit; this is belt-and-suspenders.
+    if (linked_amd_collecting_ && linked_amd_settle_ms_ > 0
+        && (now_ms - linked_amd_settle_ms_) >= ALETimingConstants::Tdrw_ms) {
+        commit_linked_amd();
+    }
+}
+
+void ALEController::tick_relink(uint32_t now_ms)
+{
     // Auto-Relink / Enhanced Frequency-Select: evaluate channel renegotiation.
     // Only while LINKED, LQA enabled, no relink already pending, and EFS IDLE.
     if ((config_.relink_enabled || config_.enhanced_freq_select)
         && op_params_.lqa_enabled
         && sm_.get_state() == ALEState::LINKED
         && pending_relink_addr_.empty()
-        && fs_phase_ == FreqSelectPhase::IDLE) {
+        && freq_select_.is_idle()) {
         config_.enhanced_freq_select
-            ? evaluate_freq_proposal(now_ms)
+            ? freq_select_.evaluate(now_ms, rx_ber_settle_ms_, config_.relink_improvement_threshold)
             : evaluate_relink(now_ms);
     }
 
-    // EFS: proposal timeout — no response → stay on current channel.
-    if (fs_phase_ == FreqSelectPhase::PROPOSED && now_ms > fs_timeout_ms_) {
-        fs_phase_ = FreqSelectPhase::IDLE;
-        emit_status("EFS: no response from peer — staying on current channel");
-    }
+    freq_select_.tick(now_ms);
 
-    // Auto-Relink: after TWAS completes and SM is back to IDLE/SCANNING,
-    // re-initiate the call to pending_relink_addr_ on the now-best channel.
+    // After TWAS completes and SM is back to IDLE/SCANNING, re-initiate the call
+    // to pending_relink_addr_ on the now-best channel.
     if (!pending_relink_addr_.empty()) {
         const ALEState st = sm_.get_state();
         if (st == ALEState::IDLE || st == ALEState::SCANNING) {
@@ -842,7 +1108,10 @@ void ALEController::update(uint32_t now_ms)
             initiate_call(addr);
         }
     }
+}
 
+void ALEController::tick_sounding_sweep(uint32_t now_ms)
+{
     // Periodic multi-channel sounding sweep (set_automatic_sounding). Start a
     // sweep over the configured net's channels every interval, gated on IDLE/
     // SCANNING. A running sweep holds the SM in SOUNDING, which blocks re-entry.
@@ -861,7 +1130,10 @@ void ALEController::update(uint32_t now_ms)
             auto_sounding_last_ms_ = now_ms_;
         }
     }
+}
 
+void ALEController::tick_offline_completion()
+{
     // Offline mode: no audio device, so drive word-completion directly by
     // pulling all pending symbol frames and firing on_word_complete per frame.
     if (!audio_device_) {
@@ -869,13 +1141,18 @@ void ALEController::update(uint32_t now_ms)
         while (modulator_.pull_symbol_frame(syms))
             sm_.on_word_complete();
     }
+}
 
-    // LQA: prune stale entries and trigger auto-sounding when enabled.
+void ALEController::tick_lqa_update(uint32_t now_ms)
+{
     // Throttled to once per second — the database is small but no need to
     // iterate every audio frame.
     if (now_ms - lqa_update_ms_ >= 1000u) {
         lqa_analyzer_.update();
         lqa_update_ms_ = now_ms;
+        // Refresh propagation context so solar-elevation is computed against
+        // the current clock rather than the time of the last position update.
+        update_propagation_context();
     }
 }
 
@@ -901,89 +1178,50 @@ void ALEController::maybe_emit_call_alert()
     const std::string caller = sm_.get_caller_address();
 
     // GAP 2 fix (A.5.4.1.1): JOE commits calling-frame FROM measurement NOW
-    // (before compute_lqa_payload reads the DB) so the fresh data is available
+    // (before encode_outgoing reads the DB) so the fresh data is available
     // for CMD 'a'. Reset the accumulator; on_sm_state_change provides the
     // safety-net reset if the alert fires but LINKED is never reached.
-    if (op_params_.lqa_enabled && hs_call_ber_acc_.word_count() > 0) {
-        const std::string caller = sm_.get_caller_address();
+    if (op_params_.lqa_enabled && hs_call_acc_.word_count() > 0) {
         if (!caller.empty() && !self_address_store_.matches_self(caller)) {
-            const Channel* ch = sm_.get_current_channel();
-            if (ch && ch->rx_frequency_hz > 0) {
-                const float n = static_cast<float>(hs_call_ber_acc_.word_count());
+            // Commit uses hs_call_freq_hz_ (set by the accumulator above via the
+            // radio-backed get_current_channel()), so guard on that — not on
+            // sm_.get_current_channel(), which is nullptr on no-scan links and would
+            // silently drop the calling-frame FROM measurement (cf. 1562ea9).
+            if (hs_call_freq_hz_ > 0) {
                 lqa_database_.update_entry_extended(hs_call_freq_hz_, caller,
-                    hs_call_snr_sum_ / n,
-                    static_cast<float>(hs_call_ber_acc_.ber_score()),
-                    hs_call_sinad_sum_ / n,
-                    0.0f, -120.0f, 0, static_cast<int>(hs_call_ber_acc_.word_count()), 0);
+                    hs_call_acc_.snr_avg(),
+                    static_cast<float>(hs_call_acc_.ber_score()),
+                    hs_call_acc_.sinad_avg(),
+                    0.0f, -120.0f, 0, static_cast<int>(hs_call_acc_.word_count()), 0);
                 if (debug_rx_)
                     emit_status("LQA calling-frame FROM: " + caller
                                 + " freq=" + std::to_string(hs_call_freq_hz_)
-                                + " ber=" + std::to_string(static_cast<int>(hs_call_ber_acc_.ber_score()))
-                                + " sinad=" + std::to_string(static_cast<int>(hs_call_sinad_sum_ / n)));
+                                + " ber=" + std::to_string(static_cast<int>(hs_call_acc_.ber_score()))
+                                + " sinad=" + std::to_string(static_cast<int>(hs_call_acc_.sinad_avg())));
             }
         }
     }
-    hs_call_ber_acc_.reset();
-    hs_call_snr_sum_ = hs_call_sinad_sum_ = 0.0f;
+    hs_call_acc_.reset();
     hs_call_freq_hz_ = 0;
 
     // Block A4 (responder) — queue CMD LQA (KA1=0) for the response frame.
-    // compute_lqa_payload now reads the fresh calling-frame measurement above.
-    // Done here (once, at alert time) so it's set for both auto-accept and manual-accept.
+    // encode_outgoing reads the fresh calling-frame measurement committed above.
+    // Done here (once, at alert time) so it applies for both auto-accept and manual-accept.
     if (config_.lqa_exchange_enabled) {
-        if (const Channel* ch = sm_.get_current_channel()) {
-            LQACmdPayload resp_p = compute_lqa_payload(ch->rx_frequency_hz,
-                                                        sm_.get_caller_address());
-            resp_p.ka1 = false;
-            sm_.set_pending_lqa_cmd(encode_lqa_cmd(resp_p));
-        }
+        const Channel cur_blka4_ch = get_current_channel();
+        // Per-channel inhibit_reporting suppresses the bilateral CMD 'a'
+        // exchange (both encode and apply) for this channel.
+        if (cur_blka4_ch.rx_frequency_hz > 0
+            && !reporting_inhibited(cur_blka4_ch.rx_frequency_hz))
+            lqa_exchange_.encode_outgoing(cur_blka4_ch.rx_frequency_hz,
+                                          sm_.get_caller_address(), false);
     }
 
-    // Block A5 — store bilateral SINAD/BER/MP received from caller's CMD 'a'.
-    if (config_.lqa_exchange_enabled && pending_bilateral_valid_) {
-        if (!caller.empty() && !self_address_store_.matches_self(caller)) {
-            const auto& bp = pending_bilateral_payload_;
-            lqa_database_.update_bilateral(pending_bilateral_freq_hz_, caller,
-                                            bp.sinad, bp.ber, bp.mp, 0u);
-            emit_status("LQA bilateral RX: " + caller
-                        + " SINAD=" + std::to_string(bp.sinad));
+    // Block A5 — apply bilateral received from caller's CMD 'a'; Block C5 if KA1=true.
+    if (config_.lqa_exchange_enabled && !reporting_inhibited(get_current_frequency()))
+        lqa_exchange_.apply_pending(caller, true,
+                                     [this](const std::string& m){ emit_status(m); });
 
-            // Block C5 TX — if caller set KA1=1, generate and queue LQA Report.
-            if (bp.ka1) {
-                const auto entries = lqa_database_.get_entries_for_station(caller, 25.0f);
-                if (!entries.empty()) {
-                    const uint32_t now = lqa_database_.get_current_time_ms();
-                    std::vector<LQAReport> reports;
-                    for (const auto& e : entries) {
-                        LQAReport r;
-                        r.frequency_hz = e.frequency_hz;
-                        r.age   = lqa_age_code(e.last_contact_ms, now);
-                        r.sinad = (e.sinad_db > 0.0f)
-                            ? static_cast<uint8_t>(std::min(30.0f, e.sinad_db)) : kSinadLqaNoValue;
-                        // ber stored as averaged non-unanimous vote count (0.0–48.0);
-                        // total_words>0 → real measurement, so BER=0 reports as code 0
-                        // (not the 31 "no value" sentinel) per A.5.4.2.1 / Table A-XIII.
-                        r.ber   = (e.total_words > 0)
-                            ? ber_score_to_lqa_code(
-                                  static_cast<uint8_t>(std::min(48.0f, std::max(0.0f, e.ber))))
-                            : kBerLqaNoValue;
-                        r.mp    = multipath_delay_to_lqa_code(e.multipath_score * 6.0f);
-                        reports.push_back(r);
-                    }
-                    sm_.set_pending_lqa_report_seq(ALESequenceBuilder::lqa_report(reports));
-                    emit_status("LQA Report queued for " + caller + " ("
-                                + std::to_string(reports.size()) + " channels)");
-                }
-            }
-        }
-        pending_bilateral_valid_ = false;
-    }
-
-    if (!amd_text_acc_.empty() && on_amd_received) {
-        const auto p = amd_text_acc_.find_last_not_of(" @");
-        if (p != std::string::npos)
-            on_amd_received(caller, amd_text_acc_.substr(0, p + 1));
-    }
     if (on_call_received) on_call_received(caller);
     emit_event(pal::EventType::ALE_CALL_RECEIVED, caller);
 }
@@ -1002,20 +1240,24 @@ void ALEController::commit_sounding_sample()
         sounding_snr_sum_    = 0.0f;
         sounding_ber_sum_    = 0.0f;
         sounding_sinad_sum_  = 0.0f;
+        sounding_twas_       = false;
         return;
     }
     const float n        = static_cast<float>(sounding_word_count_);
     const float avg_snr  = sounding_snr_sum_  / n;
     const float avg_ber  = sounding_ber_sum_  / n;
     const float avg_sinad = sounding_sinad_sum_ / n;
+    // Forward the sounding's conclusion type so the LQA entry is flagged
+    // available (TIS) / not available (TWAS) for active link establishment.
     lqa_analyzer_.process_sounding(sounding_caller_acc_, sounding_freq_hz_,
-                                   avg_snr, avg_ber, avg_sinad);
+                                   avg_snr, avg_ber, avg_sinad, sounding_twas_);
     sounding_caller_acc_.clear();
     sounding_settle_ms_  = 0;
     sounding_word_count_ = 0;
     sounding_snr_sum_    = 0.0f;
     sounding_ber_sum_    = 0.0f;
     sounding_sinad_sum_  = 0.0f;
+    sounding_twas_       = false;
 }
 
 void ALEController::commit_rx_ber_sample()
@@ -1038,7 +1280,8 @@ void ALEController::commit_rx_ber_sample()
 
     // Skip when no peer is known yet or the address is our own (Fig. A-27: the
     // LQA matrix records remote stations only).
-    if (!sender.empty() && !self_address_store_.matches_self(sender)) {
+    if (!sender.empty() && !self_address_store_.matches_self(sender)
+        && rx_ber_freq_hz_ > 0) {
         const float n        = static_cast<float>(words);
         const float avg_ber  = static_cast<float>(rx_ber_acc_.ber_score());
         const float avg_snr  = rx_ber_snr_sum_  / n;
@@ -1096,98 +1339,6 @@ void ALEController::evaluate_relink(uint32_t now_ms) {
     }
 }
 
-void ALEController::evaluate_freq_proposal(uint32_t now_ms) {
-    if (rx_ber_settle_ms_ == 0
-        || (now_ms - rx_ber_settle_ms_) < ALETimingConstants::Tdrw_ms * 4u)
-        return;
-    if (fs_cooldown_ms_ > 0 && now_ms < fs_cooldown_ms_) return;
-
-    const std::string peer = !sm_.get_to_address().empty()
-        ? sm_.get_to_address() : sm_.get_caller_address();
-    if (peer.empty() || self_address_store_.matches_self(peer)) return;
-
-    const Channel* ch = sm_.get_current_channel();
-    if (!ch || ch->rx_frequency_hz == 0) return;
-
-    const auto ranked = lqa_analyzer_.rank_channels_for_station(peer);
-    if (ranked.empty()) return;
-
-    float cur_score = 0.0f;
-    for (const auto& r : ranked)
-        if (r.frequency_hz == ch->rx_frequency_hz) { cur_score = r.score; break; }
-
-    const float best_score = ranked.front().score;
-    const uint32_t best_hz = ranked.front().frequency_hz;
-
-    if (best_hz != ch->rx_frequency_hz
-        && best_score > cur_score + config_.relink_improvement_threshold) {
-        fs_peer_        = peer;
-        fs_proposed_hz_ = best_hz;
-        fs_phase_       = FreqSelectPhase::PROPOSED;
-        fs_timeout_ms_  = now_ms + 3000u;
-        emit_status("EFS: proposing " + std::to_string(best_hz / 1000u) + " kHz to " + peer
-                    + " (score " + std::to_string(static_cast<int>(best_score))
-                    + " > cur " + std::to_string(static_cast<int>(cur_score)) + ")");
-        send_freq_select_orderwire(best_hz);
-    }
-}
-
-void ALEController::handle_freq_select_response(uint32_t freq_hz, uint32_t now_ms) {
-    if (fs_phase_ != FreqSelectPhase::PROPOSED) return;
-    if (freq_hz > 0 && freq_hz == fs_proposed_hz_) {
-        // Accept — coordinated TWAS + re-call on freq_hz (via pending_relink_addr_)
-        fs_phase_            = FreqSelectPhase::EXECUTING;
-        pending_relink_addr_ = fs_peer_;
-        emit_status("EFS: peer accepted " + std::to_string(freq_hz / 1000u) + " kHz — relinking");
-        sm_.terminate_link();
-    } else if (freq_hz == 0) {
-        // Reject — stay on current channel, apply cooldown
-        fs_phase_       = FreqSelectPhase::IDLE;
-        fs_cooldown_ms_ = now_ms + 60000u;
-        emit_status("EFS: rejected by peer — staying on current channel");
-    }
-    // Other freq_hz values: unexpected — ignore (peer may have sent own proposal after our collision)
-}
-
-void ALEController::handle_freq_select_proposal(uint32_t freq_hz, const std::string& peer, uint32_t now_ms) {
-    if (freq_hz == 0) return;
-    const Channel* ch = sm_.get_current_channel();
-    if (!ch || ch->rx_frequency_hz == 0 || peer.empty()) return;
-
-    // Collision: both stations proposed simultaneously — lexicographically lower address defers
-    if (fs_phase_ == FreqSelectPhase::PROPOSED) {
-        const std::string self = get_primary_self_address();
-        if (self < fs_peer_) {
-            // We defer — discard our own proposal, evaluate peer's proposal instead
-            fs_phase_       = FreqSelectPhase::IDLE;
-            fs_proposed_hz_ = 0;
-        } else {
-            return;  // We take priority; peer should defer
-        }
-    }
-
-    const auto ranked = lqa_analyzer_.rank_channels_for_station(peer);
-    float cur_score = 0.0f, proposed_score = 0.0f;
-    for (const auto& r : ranked) {
-        if (r.frequency_hz == ch->rx_frequency_hz) cur_score      = r.score;
-        if (r.frequency_hz == freq_hz)             proposed_score = r.score;
-    }
-
-    if (proposed_score > cur_score + config_.relink_improvement_threshold) {
-        emit_status("EFS: accepting proposal for " + std::to_string(freq_hz / 1000u) + " kHz");
-        send_freq_select_orderwire(freq_hz);  // echo-accept
-    } else {
-        emit_status("EFS: rejecting proposal for " + std::to_string(freq_hz / 1000u) + " kHz");
-        send_freq_select_orderwire(0u);       // reject
-    }
-
-    (void)now_ms;  // reserved for future cooldown on outbound rejections
-}
-
-void ALEController::send_freq_select_orderwire(uint32_t freq_hz) {
-    sm_.trigger_linked_orderwire(build_freq_select_sequence(freq_hz));
-}
-
 void ALEController::feed_audio(const int16_t* samples, uint32_t count)
 {
     if (count) {
@@ -1231,33 +1382,22 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     // Reset caller tracking when leaving HANDSHAKE
     if (from == ALEState::HANDSHAKE) {
         last_caller_.clear();
-        call_alert_fired_           = false;
-        pending_bilateral_valid_    = false;  // Block A5 — stale data from previous handshake
+        call_alert_fired_ = false;
         // Safety-net: discard any calling-frame accumulation that never fired an alert
-        hs_call_ber_acc_.reset();
-        hs_call_snr_sum_ = hs_call_sinad_sum_ = 0.0f;
+        hs_call_acc_.reset();
         hs_call_freq_hz_ = 0;
     }
 
-    // Initialise AMD orderwire tracking when entering HANDSHAKE.
-    // amd_skip_count_ = 2×(n-1) where n = words in own encoded address.
-    // These are the leading-call DATA/REP extension words to skip before
-    // the message section begins (see on_received_word AMD block).
+    // Fresh calling-frame accumulator for each new handshake.
     if (to == ALEState::HANDSHAKE) {
-        const int n    = static_cast<int>((self_addr_.length() + 2) / 3);
-        amd_skip_count_ = 2 * (n - 1);
-        amd_seen_count_ = 0;
-        amd_text_acc_.clear();
-        // Fresh calling-frame accumulator for each new handshake.
-        hs_call_ber_acc_.reset();
-        hs_call_snr_sum_ = hs_call_sinad_sum_ = 0.0f;
+        hs_call_acc_.reset();
         hs_call_freq_hz_ = 0;
+        lqa_exchange_.on_handshake_start();
     }
 
     // Fresh response-frame accumulator for each new outgoing call.
     if (to == ALEState::CALLING) {
-        hs_resp_ber_acc_.reset();
-        hs_resp_snr_sum_ = hs_resp_sinad_sum_ = 0.0f;
+        hs_resp_acc_.reset();
         hs_resp_freq_hz_ = 0;
     }
 
@@ -1313,41 +1453,35 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // GAP 1 fix: SAM commits response-frame FROM measurement for JOE
             // (= get_to_address() = DF3SR). Only present on the SAM side;
             // JOE committed hs_call in maybe_emit_call_alert() already.
-            if (op_params_.lqa_enabled && hs_resp_ber_acc_.word_count() > 0) {
+            if (op_params_.lqa_enabled && hs_resp_acc_.word_count() > 0) {
                 const std::string peer = sm_.get_to_address();
-                if (!peer.empty() && !self_address_store_.matches_self(peer)) {
-                    const float n = static_cast<float>(hs_resp_ber_acc_.word_count());
+                if (!peer.empty() && !self_address_store_.matches_self(peer)
+                    && hs_resp_freq_hz_ > 0) {
                     lqa_database_.update_entry_extended(hs_resp_freq_hz_, peer,
-                        hs_resp_snr_sum_ / n,
-                        static_cast<float>(hs_resp_ber_acc_.ber_score()),
-                        hs_resp_sinad_sum_ / n,
+                        hs_resp_acc_.snr_avg(),
+                        static_cast<float>(hs_resp_acc_.ber_score()),
+                        hs_resp_acc_.sinad_avg(),
                         0.0f, -120.0f, 0,
-                        static_cast<int>(hs_resp_ber_acc_.word_count()), 0);
+                        static_cast<int>(hs_resp_acc_.word_count()), 0);
                     if (debug_rx_)
                         emit_status("LQA response-frame FROM: " + peer
                                     + " freq=" + std::to_string(hs_resp_freq_hz_)
                                     + " ber=" + std::to_string(
-                                          static_cast<int>(hs_resp_ber_acc_.ber_score()))
+                                          static_cast<int>(hs_resp_acc_.ber_score()))
                                     + " sinad=" + std::to_string(
-                                          static_cast<int>(hs_resp_sinad_sum_ / n)));
+                                          static_cast<int>(hs_resp_acc_.sinad_avg())));
                 }
             }
-            hs_resp_ber_acc_.reset();
-            hs_resp_snr_sum_ = hs_resp_sinad_sum_ = 0.0f;
+            hs_resp_acc_.reset();
             hs_resp_freq_hz_ = 0;
 
             // Block A5 — SAM side: if JOE sent CMD 'a' in the response frame, store it.
-            if (config_.lqa_exchange_enabled && pending_bilateral_valid_) {
+            // Per-channel inhibit_reporting suppresses the bilateral exchange.
+            if (config_.lqa_exchange_enabled && !reporting_inhibited(get_current_frequency())) {
                 const std::string peer = sm_.get_to_address();
-                if (!peer.empty() && !self_address_store_.matches_self(peer)) {
-                    const auto& bp = pending_bilateral_payload_;
-                    lqa_database_.update_bilateral(pending_bilateral_freq_hz_, peer,
-                                                   bp.sinad, bp.ber, bp.mp, 0u);
-                    emit_status("LQA bilateral RX: " + peer
-                                + " SINAD=" + std::to_string(bp.sinad));
-                }
+                lqa_exchange_.apply_pending(peer, false,
+                                             [this](const std::string& m){ emit_status(m); });
             }
-            pending_bilateral_valid_ = false;
 
             // Block A6 — successful call: bilateral data was (or wasn't) received.
             // Flush any pending response-frame word metrics BEFORE marking bilateral
@@ -1355,9 +1489,8 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // quality so mark_bilateral_attempted finds a real entry to annotate
             // instead of creating a zero-score stub (which scores ~6 recency-only).
             commit_sounding_sample();
-            if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
-                lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
-            sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
+            if (config_.lqa_exchange_enabled)
+                lqa_exchange_.on_call_concluded();
 
             // SAM side: to_address holds the responding station.
             // JOE side: caller_address holds the calling station.
@@ -1384,47 +1517,43 @@ void ALEController::on_operator_event(OperatorEvent ev)
         case OperatorEvent::CALL_REJECTED:
             // GAP 1 fix: JOE's TWAS frame was received in CALLING/LISTENING →
             // commit whatever response-frame quality was measured.
-            if (op_params_.lqa_enabled && hs_resp_ber_acc_.word_count() > 0) {
+            if (op_params_.lqa_enabled && hs_resp_acc_.word_count() > 0) {
                 const std::string peer = sm_.get_to_address();
-                if (!peer.empty() && !self_address_store_.matches_self(peer)) {
-                    const float n = static_cast<float>(hs_resp_ber_acc_.word_count());
+                if (!peer.empty() && !self_address_store_.matches_self(peer)
+                    && hs_resp_freq_hz_ > 0) {
                     lqa_database_.update_entry_extended(hs_resp_freq_hz_, peer,
-                        hs_resp_snr_sum_ / n,
-                        static_cast<float>(hs_resp_ber_acc_.ber_score()),
-                        hs_resp_sinad_sum_ / n,
+                        hs_resp_acc_.snr_avg(),
+                        static_cast<float>(hs_resp_acc_.ber_score()),
+                        hs_resp_acc_.sinad_avg(),
                         0.0f, -120.0f, 0,
-                        static_cast<int>(hs_resp_ber_acc_.word_count()), 0);
+                        static_cast<int>(hs_resp_acc_.word_count()), 0);
                 }
             }
-            hs_resp_ber_acc_.reset();
-            hs_resp_snr_sum_ = hs_resp_sinad_sum_ = 0.0f;
+            hs_resp_acc_.reset();
             hs_resp_freq_hz_ = 0;
             // Block A6 — flush any partial response metrics before marking
             commit_sounding_sample();
-            if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
-                lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
-            sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
+            if (config_.lqa_exchange_enabled)
+                lqa_exchange_.on_call_concluded();
             emit_status("Call rejected by remote station (TWAS)");
             if (on_link_terminated) on_link_terminated("Call rejected");
             emit_event(pal::EventType::ALE_LINK_TERMINATED, "Call rejected");
             break;
         case OperatorEvent::NO_CHANNELS_LEFT:
             // No JOE response received on any channel → discard response-frame acc.
-            hs_resp_ber_acc_.reset();
-            hs_resp_snr_sum_ = hs_resp_sinad_sum_ = 0.0f;
+            hs_resp_acc_.reset();
             hs_resp_freq_hz_ = 0;
             // Block A6 — flush any partial response metrics before marking
             commit_sounding_sample();
-            if (config_.lqa_exchange_enabled && sent_ka1_ && !last_call_target_.empty())
-                lqa_database_.mark_bilateral_attempted(last_call_freq_hz_, last_call_target_);
-            // A.5.4.5.1: all tried channels failed → record handshake failure so
-            // rank_channels_for_station() can deprioritise them for the next attempt.
-            if (!last_call_target_.empty()) {
-                for (const auto& ch : calling_channels_)
-                    lqa_database_.record_handshake_fail(ch.rx_frequency_hz,
-                                                        last_call_target_, now_ms_);
+            if (config_.lqa_exchange_enabled) {
+                // A.5.4.5.1: all tried channels failed → deprioritise for next attempt.
+                const std::string& tgt = lqa_exchange_.call_target();
+                if (!tgt.empty()) {
+                    for (const auto& ch : calling_channels_)
+                        lqa_database_.record_handshake_fail(ch.rx_frequency_hz, tgt, now_ms_);
+                }
+                lqa_exchange_.on_call_concluded();
             }
-            sent_ka1_ = false; last_call_target_.clear(); last_call_freq_hz_ = 0;
             emit_status("No reply — all calling channels exhausted");
             if (on_link_terminated) on_link_terminated("No reply");
             emit_event(pal::EventType::ALE_LINK_TERMINATED, "No reply");
@@ -1438,35 +1567,52 @@ void ALEController::on_operator_event(OperatorEvent ev)
 
 void ALEController::on_received_word(const ALEWord& word)
 {
-    if (debug_rx_) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf),
-                      "[RX word] %-4s '%s' unanimous=%u fec_err=%u valid=%d state=%s",
-                      WordParser::word_type_name(word.type), word.address,
-                      static_cast<unsigned>(word.unanimous_votes),
-                      static_cast<unsigned>(word.fec_errors),
-                      word.valid ? 1 : 0,
-                      ALEStateMachine::state_name(sm_.get_state()));
-        emit_status(buf);
-    }
+    rx_log_word(word);
+    rx_track_signal_quality(word);
+    rx_accumulate_caller_identity(word);
+    rx_handle_lqa_exchange(word);
+    rx_handle_freq_select(word);
+    rx_accumulate_sounding(word);
+    rx_accumulate_frame_ber(word);
+    rx_accumulate_linked_amd(word);
+    rx_accumulate_ack_amd(word);
+    sm_.process_received_word(word);
+}
 
-    // Track latest signal-quality stats (get_current_signal_quality) — same
-    // unanimous-votes/fec_errors → snr/ber approximation used by the LQA
-    // sounding path below, but kept for any valid word, not just TIS.
-    if (word.valid) {
-        constexpr float kMaxVotes = 48.0f;
-        last_votes_      = word.unanimous_votes;
-        last_fec_errors_ = word.fec_errors;
-        last_snr_db_     = (word.unanimous_votes / kMaxVotes) * 31.0f;
-        last_ber_        = (word.fec_errors > 0) ? static_cast<float>(word.fec_errors) / 50.0f : 0.0f;
+void ALEController::rx_log_word(const ALEWord& word)
+{
+    if (!debug_rx_) return;
+    char buf[128];
+    std::snprintf(buf, sizeof(buf),
+                  "[RX word] %-4s '%s' unanimous=%u fec_err=%u valid=%d state=%s",
+                  WordParser::word_type_name(word.type), word.address,
+                  static_cast<unsigned>(word.unanimous_votes),
+                  static_cast<unsigned>(word.fec_errors),
+                  word.valid ? 1 : 0,
+                  ALEStateMachine::state_name(sm_.get_state()));
+    emit_status(buf);
+}
 
-        // ── Passive monitor tap: neutral decoded-word notification ──────────
-        // Fires for every successfully decoded word regardless of local protocol
-        // state. Does not consult self_address, expected_caller, or any SM gate.
-        if (on_word_decoded)
-            on_word_decoded(word, monitor_frame_id_);
-    }
+void ALEController::rx_track_signal_quality(const ALEWord& word)
+{
+    if (!word.valid) return;
 
+    // Track latest signal-quality stats (get_current_signal_quality).
+    constexpr float kMaxVotes = 48.0f;
+    last_votes_      = word.unanimous_votes;
+    last_fec_errors_ = word.fec_errors;
+    last_sinad_db_   = word.sinad_db;                            // actual Goertzel SINAD (A.5.4.1.2)
+    last_snr_db_     = (word.unanimous_votes / kMaxVotes) * 31.0f; // votes proxy (internal use only)
+    last_ber_        = (word.fec_errors > 0) ? static_cast<float>(word.fec_errors) / 50.0f : 0.0f;
+
+    // Passive monitor tap: neutral decoded-word notification.
+    // Fires regardless of local protocol state or address match.
+    if (on_word_decoded)
+        on_word_decoded(word, monitor_frame_id_);
+}
+
+void ALEController::rx_accumulate_caller_identity(const ALEWord& word)
+{
     // Capture caller identity as it arrives word-by-word in HANDSHAKE/WAIT_CYCLE_END.
     //
     // Protocol (A.5.2.3.2.1):  TIS:XXX [DATA:YYY [REP:ZZZ [DATA:... [REP:...]]]]
@@ -1474,253 +1620,385 @@ void ALEController::on_received_word(const ALEWord& word)
     //   - DATA/REP alternates for chars 4-6, 7-9, 10-12, 13-15
     //   - Trailing '@' stuffing is stripped by trim_ale_address()
     //
-    // Caller identity is accumulated here word-by-word but NOT emitted yet: the
-    // conclusion may carry a >3-char address (TIS + DATA/REP), so emitting at the
-    // TIS word would report a truncated caller (e.g. "DL3" for "DL3HC"). The
-    // single on_call_received / on_amd_received emission happens in update() once
-    // the conclusion has fully settled (WAIT_CYCLE_END → AWAIT_ACCEPT/SLOT_WAIT),
-    // using the authoritative sm_.get_caller_address(). See maybe_emit_call_alert().
-    if (sm_.get_state() == ALEState::HANDSHAKE
-        && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END)
+    // Identity is accumulated here but NOT emitted yet — the single alert fires
+    // in tick_sm() once the conclusion has fully settled (WAIT_CYCLE_END exits).
+    if (sm_.get_state() != ALEState::HANDSHAKE
+        || sm_.get_handshake_phase() != HandshakePhase::WAIT_CYCLE_END)
+        return;
+
+    // ── Caller identity (gated on word.valid) ──────────────────────────
+    // AMD no longer rides in the calling frame — A.5.7.2.2 places it in the
+    // ACK frame, which the responder decodes in rx_accumulate_ack_amd().
+    if (word.valid) {
+        const std::string chunk = trim_ale_address(word.address);
+
+        if (word.type == PreambleType::TIS && last_caller_.empty()) {
+            last_caller_ = chunk;   // conclusion anchor (first 3 chars)
+        } else if ((word.type == PreambleType::DATA || word.type == PreambleType::REP)
+                   && !last_caller_.empty()) {
+            last_caller_ += chunk;  // caller-address extension after TIS
+        }
+    }
+}
+
+// ── Linked AMD orderwire RX (A.5.7.2 over an established link) ───────────────
+// Reassembles an AMD message that arrives in a linked-orderwire frame
+//   TO[peer] (+DATA/REP ext) + CMD AMD + message DATA/REP + TIS[peer]
+// We ignore the TO/address-extension prefix (the peer is already known from the
+// link state) and collect from the CMD AMD header onward.  A new CMD or the TIS
+// conclusion commits the message; Tdrw silence is the fallback (tick_frame_settle).
+//
+// CMD discrimination: AMD has no fixed identifier (its first 3 chars are message
+// content, Expanded-64).  We exclude CMD words owned by other protocols — EFS 'f',
+// LQA 'a'/'n'/'r' (handled by rx_handle_lqa_exchange / rx_handle_freq_select) and
+// the DTM/DBM identifiers ("DTM"/"DBM", decoded as Basic-38).  This mirrors the
+// inherent A.5.7.2.3 ambiguity: an AMD whose text begins with "DTM"/"DBM" is
+// misclassified — documented limitation, TX remains correct.
+void ALEController::rx_accumulate_linked_amd(const ALEWord& word)
+{
+    if (sm_.get_state() != ALEState::LINKED) {
+        if (linked_amd_collecting_) commit_linked_amd();   // best-effort on exit
+        return;
+    }
+
+    // Any received word while collecting refreshes the settle deadline.
+    if (linked_amd_collecting_)
+        linked_amd_settle_ms_ = now_ms_;
+
+    if (word.type == PreambleType::CMD) {
+        const uint8_t cc = cmd_char_code(word);
+        // CMD 'f'/'a'/'n'/'r' belong to EFS/LQA handlers — they end an in-progress
+        // AMD but are not consumed here.
+        if (cc == 'f' || cc == 'a' || cc == 'n' || cc == 'r') {
+            if (linked_amd_collecting_) commit_linked_amd();
+            return;
+        }
+        // DTM/DBM identifiers (Basic-38) — not AMD.
+        char basic38[4] = {};
+        if (WordParser::decode_ascii(word.raw_payload, PreambleType::CMD, basic38)
+            && (std::string(basic38, 3) == "DTM"
+                || std::string(basic38, 3) == "DBM")) {
+            if (linked_amd_collecting_) commit_linked_amd();
+            return;
+        }
+        // AMD CMD header — begin a new message (commit any prior first).
+        if (linked_amd_collecting_) commit_linked_amd();
+        char exp64[4];
+        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64)) {
+            linked_amd_collecting_ = true;
+            linked_amd_acc_        = std::string(exp64, 3);
+            linked_amd_peer_       = active_peer();
+            linked_amd_settle_ms_  = now_ms_;
+        }
+        return;
+    }
+
+    if (!linked_amd_collecting_)
+        return;   // pre-CMD TO/address-extension or stray word — ignore
+
+    if (word.type == PreambleType::DATA || word.type == PreambleType::REP) {
+        char exp64[4];
+        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64))
+            linked_amd_acc_ += std::string(exp64, 3);
+        linked_amd_settle_ms_ = now_ms_;
+        return;
+    }
+
+    // TIS/TWAS conclusion = frame end → commit immediately.
+    if (word.type == PreambleType::TIS || word.type == PreambleType::TWAS)
+        commit_linked_amd();
+}
+
+void ALEController::commit_linked_amd()
+{
+    if (!linked_amd_collecting_) return;
+    linked_amd_collecting_ = false;
+    linked_amd_settle_ms_ = 0;
+    const auto p = linked_amd_acc_.find_last_not_of(" @");
+    if (p != std::string::npos) linked_amd_acc_ = linked_amd_acc_.substr(0, p + 1);
+    if (!linked_amd_acc_.empty() && on_amd_received)
+        on_amd_received(get_primary_self_address(), linked_amd_peer_, linked_amd_acc_);
+    linked_amd_acc_.clear();
+    linked_amd_peer_.clear();
+}
+
+// ── ACK-frame AMD RX (A.5.7.2.2, responder side) ─────────────────────────────
+// The caller places AMD in the ACK frame (the third handshake frame):
+//   TO[self] ×2 + [CMD 'a'] + [CMD 'r'+DATA…] + [CMD AMD + DATA/REP…] + TIS[caller]
+// We receive that frame while in HANDSHAKE/WAIT_ACK.  The leading TO[self] words
+// are ignored (the caller identity is already known from WAIT_CYCLE_END); we
+// reassemble from the CMD AMD header onward and commit at the TIS conclusion.
+// CMD discrimination mirrors rx_accumulate_linked_amd: skip EFS 'f' and LQA
+// 'a'/'n'/'r' (handled by rx_handle_lqa_exchange) and DTM/DBM identifiers.
+void ALEController::rx_accumulate_ack_amd(const ALEWord& word)
+{
+    if (sm_.get_state() != ALEState::HANDSHAKE
+        || sm_.get_handshake_phase() != HandshakePhase::WAIT_ACK) {
+        if (ack_amd_collecting_) commit_ack_amd();   // best-effort on exit
+        return;
+    }
+
+    if (word.type == PreambleType::CMD) {
+        const uint8_t cc = cmd_char_code(word);
+        // CMD 'f'/'a'/'n'/'r' belong to EFS/LQA handlers — they end an in-progress
+        // AMD but are not consumed here.
+        if (cc == 'f' || cc == 'a' || cc == 'n' || cc == 'r') {
+            if (ack_amd_collecting_) commit_ack_amd();
+            return;
+        }
+        // DTM/DBM identifiers (Basic-38) — not AMD.
+        char basic38[4] = {};
+        if (WordParser::decode_ascii(word.raw_payload, PreambleType::CMD, basic38)
+            && (std::string(basic38, 3) == "DTM"
+                || std::string(basic38, 3) == "DBM")) {
+            if (ack_amd_collecting_) commit_ack_amd();
+            return;
+        }
+        // AMD CMD header — begin a new message (commit any prior first).
+        if (ack_amd_collecting_) commit_ack_amd();
+        char exp64[4];
+        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64)) {
+            ack_amd_collecting_ = true;
+            ack_amd_acc_        = std::string(exp64, 3);
+            ack_amd_peer_       = sm_.get_caller_address();
+        }
+        return;
+    }
+
+    if (!ack_amd_collecting_)
+        return;   // pre-CMD TO[self]/address-extension or stray word — ignore
+
+    if (word.type == PreambleType::DATA || word.type == PreambleType::REP) {
+        char exp64[4];
+        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64))
+            ack_amd_acc_ += std::string(exp64, 3);
+        return;
+    }
+
+    // TIS/TWAS conclusion = ACK frame end → commit immediately.
+    if (word.type == PreambleType::TIS || word.type == PreambleType::TWAS)
+        commit_ack_amd();
+}
+
+void ALEController::commit_ack_amd()
+{
+    if (!ack_amd_collecting_) return;
+    ack_amd_collecting_ = false;
+    const auto p = ack_amd_acc_.find_last_not_of(" @");
+    if (p != std::string::npos) ack_amd_acc_ = ack_amd_acc_.substr(0, p + 1);
+    if (!ack_amd_acc_.empty() && on_amd_received)
+        on_amd_received(get_primary_self_address(), ack_amd_peer_, ack_amd_acc_);
+    ack_amd_acc_.clear();
+    ack_amd_peer_.clear();
+}
+
+void ALEController::rx_handle_lqa_exchange(const ALEWord& word)
+{
+    if (!config_.lqa_exchange_enabled) return;
+
+    // ── Block A5 — CMD LQA (char 'a') bilateral RX ───────────────────────
+    // Captures in HANDSHAKE/WAIT_CYCLE_END (JOE receiving SAM's CMD 'a')
+    // and in CALLING/LISTENING (SAM receiving JOE's CMD 'a' in the response).
+    // cmd_char_code() reads raw_payload bits directly: CMD 'a'=0x61 is in the
+    // b7b6="11" range and fails Basic38/Expanded64 validation, so address[0]
+    // is '?' for received words; raw_payload is always correct.
     {
-        // ── Caller identity + DATA/REP AMD text (gated on word.valid) ──────
-        if (word.valid) {
-            const std::string chunk = trim_ale_address(word.address);
-
-            if (word.type == PreambleType::TIS && last_caller_.empty()) {
-                last_caller_ = chunk;   // conclusion anchor (first 3 chars)
-            } else if ((word.type == PreambleType::DATA || word.type == PreambleType::REP)
-                       && !last_caller_.empty()) {
-                last_caller_ += chunk;  // caller-address extension after TIS
-            } else if ((word.type == PreambleType::DATA || word.type == PreambleType::REP)
-                       && last_caller_.empty()) {
-                // Before TIS: skip leading-call DATA/REP extensions (2×(n-1) words),
-                // then collect AMD message body words (DATA/REP after CMD AMD).
-                if (amd_seen_count_ >= amd_skip_count_)
-                    amd_text_acc_ += std::string(word.address, 3);
-                ++amd_seen_count_;
-            }
-        }
-
-        // ── CMD AMD word — first message word (A.5.7.2.2) ─────────────────
-        // CMD AMD carries Expanded-64 content (0x20-0x5F) in a CMD preamble
-        // word.  Basic-38 validation marks it invalid when the first 3 chars
-        // include spaces or symbols, so we re-decode from raw_payload regardless
-        // of word.valid.  Only collect once we are past the leading-call section.
-        if (word.type == PreambleType::CMD && last_caller_.empty()
-                && amd_seen_count_ >= amd_skip_count_) {
-            char exp64[4];
-            if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64))
-                amd_text_acc_ += std::string(exp64, 3);
+        const ALEState cur_st = sm_.get_state();
+        const bool in_bilateral_window =
+            (cur_st == ALEState::HANDSHAKE
+                && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END)
+            || (cur_st == ALEState::CALLING
+                && sm_.get_calling_phase() == CallingPhase::LISTENING);
+        if (word.type == PreambleType::CMD && cmd_char_code(word) == 'a'
+                && in_bilateral_window) {
+            const Channel cur_bilat_ch = get_current_channel();
+            // Per-channel inhibit_reporting: do not decode peer's CMD 'a' here.
+            if (cur_bilat_ch.rx_frequency_hz > 0
+                && !reporting_inhibited(cur_bilat_ch.rx_frequency_hz))
+                lqa_exchange_.on_word_lqa_cmd(word.raw_payload,
+                                               cur_bilat_ch.rx_frequency_hz);
         }
     }
 
-    if (config_.lqa_exchange_enabled) {
-        // ── Block A5 — CMD LQA (char 'a') bilateral RX ───────────────────────
-        // Captures in HANDSHAKE/WAIT_CYCLE_END (JOE receiving SAM's CMD 'a')
-        // and in CALLING/LISTENING (SAM receiving JOE's CMD 'a' in the response).
-        // cmd_char_code() reads raw_payload bits directly: CMD 'a'=0x61 is in the
-        // b7b6="11" range and fails Basic38/Expanded64 validation, so address[0]
-        // is '?' for received words; raw_payload is always correct.
-        {
-            const ALEState  cur_st = sm_.get_state();
-            const bool in_hs_wce  = (cur_st == ALEState::HANDSHAKE
-                                      && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END);
-            const bool in_ca_lst  = (cur_st == ALEState::CALLING
-                                      && sm_.get_calling_phase() == CallingPhase::LISTENING);
-            if (word.type == PreambleType::CMD && cmd_char_code(word) == 'a'
-                    && (in_hs_wce || in_ca_lst)) {
-                const Channel* ch = sm_.get_current_channel();
-                if (ch && ch->rx_frequency_hz > 0) {
-                    pending_bilateral_payload_  = decode_lqa_cmd(word.raw_payload);
-                    pending_bilateral_valid_    = true;
-                    pending_bilateral_freq_hz_  = ch->rx_frequency_hz;
-                }
-            }
-        }
-
-        // ── Block B4 — CMD NOISE (char 'n') RX ───────────────────────────────
-        if (word.type == PreambleType::CMD && cmd_char_code(word) == 'n') {
-            if (const Channel* ch = sm_.get_current_channel()) {
-                const uint8_t max_db  = (word.raw_payload >> 7) & 0x7Fu;
-                const uint8_t mean_db =  word.raw_payload       & 0x7Fu;
-                lqa_database_.update_noise_floor(ch->rx_frequency_hz, max_db, mean_db,
-                                                  word.timestamp_ms);
-            }
-        }
-
-        // ── Block C5 RX — LQA Report (CMD 'r' header + DATA payloads) ────────
-        if (word.type == PreambleType::CMD && cmd_char_code(word) == 'r') {
-            lqa_report_decoder_.start(word.raw_payload);
-        }
-        if (lqa_report_decoder_.active() && word.type == PreambleType::DATA) {
-            if (lqa_report_decoder_.feed(word.raw_payload)) {
-                // Determine sender: SAM→JOE (CALLING/LISTENING) or JOE→SAM (HANDSHAKE/WAIT_CYCLE_END)
-                const std::string sender = !sm_.get_to_address().empty()
-                    ? sm_.get_to_address()
-                    : sm_.get_caller_address();
-                if (!sender.empty() && !self_address_store_.matches_self(sender)) {
-                    for (const auto& r : lqa_report_decoder_.reports())
-                        lqa_database_.update_bilateral(r.frequency_hz, sender,
-                                                       r.sinad, r.ber, r.mp, 0u);
-                    emit_status("LQA Report RX from " + sender + ": "
-                                + std::to_string(lqa_report_decoder_.reports().size()) + " channels");
-                }
-                lqa_report_decoder_.reset();
-            }
+    // ── Block B4 — CMD NOISE (char 'n') RX ───────────────────────────────
+    if (word.type == PreambleType::CMD && cmd_char_code(word) == 'n') {
+        if (const Channel* ch = sm_.get_current_channel()) {
+            const uint8_t max_db  = (word.raw_payload >> 7) & 0x7Fu;
+            const uint8_t mean_db =  word.raw_payload       & 0x7Fu;
+            lqa_database_.update_noise_floor(ch->rx_frequency_hz, max_db, mean_db,
+                                              word.timestamp_ms);
         }
     }
 
-    // ── EFS: CMD 'f' + DATA 2-word sequence capture (A.5.6.3.2) ─────────────
-    // Only active while LINKED and enhanced_freq_select enabled.
-    // CMD 'f' char code = 0x66 (b7b6="11" range — not in Basic38/Expanded64;
-    // detected via raw_payload bits, not word.address[0]).
-    if (config_.enhanced_freq_select && sm_.get_state() == ALEState::LINKED) {
-        if (word.type == PreambleType::CMD && cmd_char_code(word) == 'f') {
-            fs_pending_cmd_rx_ = true;
-        } else if (fs_pending_cmd_rx_) {
-            fs_pending_cmd_rx_ = false;
-            if (word.type == PreambleType::DATA) {
-                const uint32_t freq_hz = decode_freq_data_word(word.raw_payload);
-                const std::string peer = !sm_.get_to_address().empty()
-                    ? sm_.get_to_address() : sm_.get_caller_address();
-                if (fs_phase_ == FreqSelectPhase::PROPOSED) {
-                    handle_freq_select_response(freq_hz, now_ms_);
-                } else if (!peer.empty() && !self_address_store_.matches_self(peer)) {
-                    handle_freq_select_proposal(freq_hz, peer, now_ms_);
-                }
-            }
-            // Non-DATA word after CMD 'f': ignore (robustness)
+    // ── Block C5 RX — LQA Report (CMD 'r' header + DATA payloads) ────────
+    // Per-channel inhibit_reporting suppresses the bilateral LQA report exchange.
+    if (!reporting_inhibited(get_current_frequency())) {
+        if (word.type == PreambleType::CMD && cmd_char_code(word) == 'r')
+            lqa_exchange_.on_report_cmd(word.raw_payload);
+        else if (word.type == PreambleType::DATA) {
+            const std::string sender = !sm_.get_to_address().empty()
+                ? sm_.get_to_address() : sm_.get_caller_address();
+            lqa_exchange_.on_report_data(word.raw_payload, sender,
+                                          [this](const std::string& m){ emit_status(m); });
         }
-    } else if (!config_.enhanced_freq_select) {
-        fs_pending_cmd_rx_ = false;
     }
+}
 
-    // LQA sounding: accumulate a foreign sounding frame (TIS + DATA/REP
-    // extension words) received while listening. A sounding is the sender's
-    // self-address conclusion (§A.5.3.1), so a >3-char self address arrives as
-    // TIS:XXX + DATA:YYY [+ REP:ZZZ ...]. Capturing only the TIS word (the old
-    // behaviour) truncated the address to 3 chars in the LQA DB. The full
-    // address is committed once the frame settles (Tdrw of silence after the
-    // last word) — see commit_sounding_sample(), driven from update().
+void ALEController::rx_handle_freq_select(const ALEWord& word)
+{
+    // ── EFS: CMD 'f' + DATA 2-word sequence capture (A.5.6.3.2) ─────────
+    if (config_.enhanced_freq_select)
+        freq_select_.on_word(word, now_ms_, config_.relink_improvement_threshold);
+    else
+        freq_select_.reset_pending_cmd();
+}
+
+void ALEController::rx_accumulate_sounding(const ALEWord& word)
+{
+    // Accumulate a foreign sounding frame (TIS + DATA/REP extension words)
+    // received while SCANNING/IDLE (A.5.3.1). Full address committed once the
+    // frame settles (Tdrw silence) — see commit_sounding_sample() in tick_frame_settle().
     //
     // BER (A.5.4.1.1): averaged non-unanimous 2/3-vote count across all words.
-    // non_unanimous = 48 - unanimous_votes for correctable words; 48 for
-    // Golay-uncorrectable words. SNR is mapped from unanimous_votes. The whole
-    // FROM-direction measurement is gated on lqa_enabled (OperatingParameters).
-    if (op_params_.lqa_enabled) {
-        const ALEState cur_st = sm_.get_state();
-        if (cur_st == ALEState::SCANNING || cur_st == ALEState::IDLE) {
-            const bool is_tis  = word.valid && (word.type == PreambleType::TIS);
-            const bool is_ext  = word.valid && (word.type == PreambleType::DATA
-                                                || word.type == PreambleType::REP);
-            const bool is_uncorr = word.golay_uncorrectable && !sounding_caller_acc_.empty();
+    if (!op_params_.lqa_enabled) return;
+    const ALEState cur_st = sm_.get_state();
+    if (cur_st != ALEState::SCANNING && cur_st != ALEState::IDLE) return;
 
-            if (is_tis || (is_ext && !sounding_caller_acc_.empty()) || is_uncorr) {
-                const Channel* ch = sm_.get_current_channel();
-                if (ch && ch->rx_frequency_hz > 0) {
-                    // A.5.4.1.1: non_unanimous votes = 48 − unanimous_votes for
-                    // correctable words; uncorrectable half(s) → contribute 48.
-                    constexpr float kMaxVotes = 48.0f;
-                    const float snr_db = word.valid
-                        ? (word.unanimous_votes / kMaxVotes) * 31.0f : 0.0f;
-                    const float ber = word.golay_uncorrectable
-                        ? 48.0f
-                        : static_cast<float>(48u - word.unanimous_votes);
+    // TIS (individual) and TWAS (net/group) both carry the sender's self-address
+    // and start a new sounding frame in the accumulator.
+    const bool is_conclusion = word.valid && (word.type == PreambleType::TIS
+                                              || word.type == PreambleType::TWAS);
+    const bool is_ext  = word.valid && (word.type == PreambleType::DATA
+                                        || word.type == PreambleType::REP);
+    const bool is_uncorr = word.golay_uncorrectable && !sounding_caller_acc_.empty();
 
-                    if (is_tis) {
-                        // A new TIS restarts the frame (Trs redundancy: last copy wins).
-                        sounding_caller_acc_  = trim_ale_address(word.address);
-                        sounding_freq_hz_     = ch->rx_frequency_hz;
-                        sounding_word_count_  = 1;
-                        sounding_snr_sum_     = snr_db;
-                        sounding_ber_sum_     = ber;
-                        sounding_sinad_sum_   = word.sinad_db;
-                    } else {
-                        if (is_ext)
-                            sounding_caller_acc_ += trim_ale_address(word.address);
-                        sounding_word_count_ += 1;
-                        sounding_snr_sum_    += snr_db;
-                        sounding_ber_sum_    += ber;
-                        sounding_sinad_sum_  += word.sinad_db;
-                    }
-                    sounding_settle_ms_ = now_ms_;
-                }
-            }
-        } else if (cur_st == ALEState::LINKED) {
-            // ── Linked frame BER measurement ──────────────────────────────────
-            // A.5.4.1.1: accumulate BER only for in-link traffic (LINKED state).
-            if (word.valid || word.golay_uncorrectable) {
-                const Channel* ch = sm_.get_current_channel();
-                if (ch && ch->rx_frequency_hz > 0) {
-                    constexpr float kMaxVotes = 48.0f;
-                    const uint8_t non_unanimous = word.golay_uncorrectable
-                        ? 48u
-                        : (word.unanimous_votes <= 48u
-                           ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
-                    rx_ber_acc_.add_word(non_unanimous, word.golay_uncorrectable);
-                    rx_ber_snr_sum_   += (word.unanimous_votes / kMaxVotes) * 31.0f;
-                    rx_ber_sinad_sum_ += word.sinad_db;
-                    rx_ber_freq_hz_    = ch->rx_frequency_hz;
-                    rx_ber_settle_ms_  = now_ms_;
-                }
-            }
-        } else if (cur_st == ALEState::CALLING
-                   && sm_.get_calling_phase() == CallingPhase::LISTENING) {
-            // ── GAP 1 fix: SAM measures JOE's response frame ──────────────────
-            // A.5.4.1.1: measure all words in the response frame received during
-            // CALLING/LISTENING. Committed to (get_to_address(), freq) at
-            // LINK_ESTABLISHED (or CALL_REJECTED). A TIS word marks the start of
-            // JOE's conclusion → restart accumulator so Trs redundancy keeps only
-            // the last (best) copy and failed-cycle noise is discarded.
-            if (word.valid || word.golay_uncorrectable) {
-                const Channel* ch = sm_.get_current_channel();
-                if (ch && ch->rx_frequency_hz > 0) {
-                    constexpr float kMaxVotes = 48.0f;
-                    if (word.valid && word.type == PreambleType::TIS) {
-                        hs_resp_ber_acc_.reset();
-                        hs_resp_snr_sum_   = 0.0f;
-                        hs_resp_sinad_sum_ = 0.0f;
-                    }
-                    const uint8_t non_unanimous = word.golay_uncorrectable
-                        ? 48u : (word.unanimous_votes <= 48u
-                                 ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
-                    hs_resp_ber_acc_.add_word(non_unanimous, word.golay_uncorrectable);
-                    hs_resp_snr_sum_   += (word.unanimous_votes / kMaxVotes) * 31.0f;
-                    hs_resp_sinad_sum_ += word.sinad_db;
-                    hs_resp_freq_hz_    = ch->rx_frequency_hz;
-                }
-            }
-        } else if (cur_st == ALEState::HANDSHAKE
-                   && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END) {
-            // ── GAP 2 fix: JOE measures SAM's calling frame ───────────────────
-            // A.5.4.1.1: measure all words in the calling frame received during
-            // HANDSHAKE/WAIT_CYCLE_END (TO, TIS, DATA, CMD words). Committed in
-            // maybe_emit_call_alert() so compute_lqa_payload() reads fresh data.
-            if (word.valid || word.golay_uncorrectable) {
-                const Channel* ch = sm_.get_current_channel();
-                if (ch && ch->rx_frequency_hz > 0) {
-                    constexpr float kMaxVotes = 48.0f;
-                    const uint8_t non_unanimous = word.golay_uncorrectable
-                        ? 48u : (word.unanimous_votes <= 48u
-                                 ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
-                    hs_call_ber_acc_.add_word(non_unanimous, word.golay_uncorrectable);
-                    hs_call_snr_sum_   += (word.unanimous_votes / kMaxVotes) * 31.0f;
-                    hs_call_sinad_sum_ += word.sinad_db;
-                    hs_call_freq_hz_   = ch->rx_frequency_hz;
-                }
-            }
-        }
+    if (!is_conclusion && !(is_ext && !sounding_caller_acc_.empty()) && !is_uncorr)
+        return;
+
+    // Radio-backed channel (cf. 1562ea9): sm_.get_current_channel()
+    // returns nullptr in IDLE state (scan list empty after a
+    // single-channel call) so fall back to radio_->get_channel().
+    const Channel cur_snd_ch = get_current_channel();
+    if (cur_snd_ch.rx_frequency_hz == 0) return;
+
+    // A.5.4.1.1: non_unanimous votes = 48 − unanimous_votes for
+    // correctable words; uncorrectable half(s) → contribute 48.
+    constexpr float kMaxVotes = 48.0f;
+    const float snr_db = word.valid
+        ? (word.unanimous_votes / kMaxVotes) * 31.0f : 0.0f;
+    const float ber = word.golay_uncorrectable
+        ? 48.0f
+        : static_cast<float>(48u - word.unanimous_votes);
+
+    if (is_conclusion) {
+        // A new TIS/TWAS restarts the frame (Trs: last copy wins).
+        sounding_caller_acc_  = trim_ale_address(word.address);
+        sounding_freq_hz_     = cur_snd_ch.rx_frequency_hz;
+        sounding_word_count_  = 1;
+        sounding_snr_sum_     = snr_db;
+        sounding_ber_sum_     = ber;
+        sounding_sinad_sum_   = word.sinad_db;
+        // Capture the conclusion type: TWAS = announce-only (not available),
+        // TIS = invites return calls (available). Committed with the sample.
+        sounding_twas_        = (word.type == PreambleType::TWAS);
+    } else {
+        if (is_ext)
+            sounding_caller_acc_ += trim_ale_address(word.address);
+        sounding_word_count_ += 1;
+        sounding_snr_sum_    += snr_db;
+        sounding_ber_sum_    += ber;
+        sounding_sinad_sum_  += word.sinad_db;
     }
+    sounding_settle_ms_ = now_ms_;
+}
 
-    sm_.process_received_word(word);
+void ALEController::rx_accumulate_frame_ber(const ALEWord& word)
+{
+    // A.5.4.1.1 FROM-direction BER for active protocol frames (not soundings):
+    //   LINKED            → rx_ber_acc_ (in-link traffic)
+    //   CALLING/LISTENING → hs_resp_acc_ (SAM measures JOE's response)
+    //   HANDSHAKE/WAIT    → hs_call_acc_ (JOE measures SAM's calling frame)
+    if (!op_params_.lqa_enabled) return;
+    if (!word.valid && !word.golay_uncorrectable) return;
+
+    const ALEState cur_st = sm_.get_state();
+
+    if (cur_st == ALEState::LINKED) {
+        // Radio-backed channel (cf. 1562ea9): sm_.get_current_channel() returns
+        // nullptr on no-scan / single-channel links, which would silently drop
+        // every LINKED-traffic measurement. get_current_channel() falls back to
+        // radio_->get_channel() (cached), which reports the tuned frequency even
+        // without a scan list, so the FROM-direction SINAD/BER is accumulated.
+        const Channel cur_ch = get_current_channel();
+        if (cur_ch.rx_frequency_hz == 0) return;
+        constexpr float kMaxVotes = 48.0f;
+        const uint8_t non_unanimous = word.golay_uncorrectable
+            ? 48u
+            : (word.unanimous_votes <= 48u
+               ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
+        rx_ber_acc_.add_word(non_unanimous, word.golay_uncorrectable);
+        rx_ber_snr_sum_   += (word.unanimous_votes / kMaxVotes) * 31.0f;
+        rx_ber_sinad_sum_ += word.sinad_db;
+        rx_ber_freq_hz_    = cur_ch.rx_frequency_hz;
+        rx_ber_settle_ms_  = now_ms_;
+
+    } else if (cur_st == ALEState::CALLING
+               && sm_.get_calling_phase() == CallingPhase::LISTENING) {
+        // GAP 1 fix: SAM measures JOE's response frame (A.5.4.1.1).
+        // Committed to (get_to_address(), freq) at LINK_ESTABLISHED or CALL_REJECTED.
+        // A TIS word marks JOE's conclusion → restart so Trs redundancy keeps only
+        // the last (best) copy and failed-cycle noise is discarded.
+        //
+        // Radio-backed channel (cf. 1562ea9): sm_.get_current_channel() is nullptr
+        // on no-scan / single-channel links; without this fallback the response-frame
+        // FROM measurement is never accumulated and only a bilateral stub survives.
+        const Channel cur_ch = get_current_channel();
+        if (cur_ch.rx_frequency_hz == 0) return;
+        if (word.valid && word.type == PreambleType::TIS)
+            hs_resp_acc_.reset();
+        // FrameQualityAccumulator defers Golay-uncorrectable words: a trailing
+        // post-frame phantom is excluded unless a later valid word flushes it.
+        hs_resp_acc_.add_word(word.unanimous_votes,
+                              word.golay_uncorrectable, word.sinad_db);
+        hs_resp_freq_hz_ = cur_ch.rx_frequency_hz;
+
+    } else if (cur_st == ALEState::HANDSHAKE
+               && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END) {
+        // GAP 2 fix: JOE measures SAM's calling frame (A.5.4.1.1), all word types
+        // (TO, TIS, DATA, CMD). Committed in maybe_emit_call_alert() so
+        // encode_outgoing() reads fresh data.
+        //
+        // Radio-backed channel (cf. 1562ea9): sm_.get_current_channel() is nullptr
+        // on no-scan / single-channel links; without this fallback the calling-frame
+        // FROM measurement (JOE side) is never accumulated.
+        const Channel cur_ch = get_current_channel();
+        if (cur_ch.rx_frequency_hz == 0) return;
+        // FrameQualityAccumulator defers Golay-uncorrectable words so a trailing
+        // post-frame phantom is excluded unless a later valid word flushes it.
+        hs_call_acc_.add_word(word.unanimous_votes,
+                              word.golay_uncorrectable, word.sinad_db);
+        hs_call_freq_hz_ = cur_ch.rx_frequency_hz;
+    }
 }
 
 std::string ALEController::display_state() const
 {
     const ALEState st = sm_.get_state();
-    if (st == ALEState::HANDSHAKE)
+    if (st == ALEState::HANDSHAKE) {
+        // Called station: WAIT_CYCLE_END (listening for the caller's conclusion)
+        // and AWAIT_ACCEPT (operator decision gate) are the "incoming" phase —
+        // the call has been detected but the response exchange hasn't begun. The
+        // response-exchange phases (SLOT_WAIT → CHANNEL_CHECK → SENDING_RESPONSE
+        // → WAIT_ACK) are the active "handshake". Splitting here gives the GUI
+        // pill the sequence Incoming → Handshake → Linked the operator expects
+        // (the call_received alert fires only after WAIT_CYCLE_END, so without
+        // this the pill would show Handshake first, then Incoming overwriting
+        // it for the rest of the exchange).
+        const HandshakePhase hp = sm_.get_handshake_phase();
+        if (hp == HandshakePhase::WAIT_CYCLE_END || hp == HandshakePhase::AWAIT_ACCEPT)
+            return "INCOMING";
         return "HANDSHAKE";
+    }
     if (st == ALEState::CALLING) {
         const CallingPhase cp = sm_.get_calling_phase();
         if (cp == CallingPhase::LISTENING || cp == CallingPhase::SENDING_ACK)
@@ -1802,7 +2080,7 @@ std::vector<Channel> ALEController::resolve_net_sounding_channels(
     if (!net) return out;
     for (const auto& ch_id : net->channel_ids) {
         for (const auto& ch : calling_channels_) {
-            if (ch.id == ch_id && ch.enabled) {
+            if (ch.id == ch_id && ch.enabled && !ch.inhibit_sounding) {
                 out.push_back(ch);
                 break;
             }
@@ -1841,6 +2119,11 @@ void ALEController::set_link_idle_timeout_sec(uint32_t sec)
     sm_.set_timing_parameters(tp);
 }
 
+void ALEController::reset_link_idle_timer()
+{
+    sm_.reset_link_idle_timer();
+}
+
 void ALEController::set_max_tune_time_ms(uint32_t ms)
 {
     config_.max_tune_time_ms = ms;
@@ -1860,19 +2143,25 @@ std::vector<std::string> ALEController::get_all_lqa_entries() const
         if (e.remote_station.empty()) continue;  // internal channel-aggregate; not for GUI
         const uint32_t age_ms = (now > e.last_activity_ms()) ? (now - e.last_activity_ms()) : 0u;
         // Fields: freq|station|snr_db|ber|sinad_db|score|age_ms
-        //        |bilateral_sinad|bilateral_ber|bilateral_mp|display_score
+        //        |bilateral_sinad|bilateral_ber|bilateral_mp|display_score|available
         // score already incorporates the bilateral fallback (see compute_score),
         // so display_score == score; bilateral_* are shipped so the GUI can show
         // the peer-reported SINAD/BER/MP when no local FROM measurement exists.
+        // available: sounding-conclusion availability flag — 1 = TIS (available
+        // for active link establishment), 0 = TWAS (not available), -1 = no
+        // sounding heard from this station (entry from a contact only).
+        const int available = (e.last_sounding_ms > 0)
+            ? (e.sounding_twas ? 0 : 1)
+            : -1;
         char buf[200];
         std::snprintf(buf, sizeof(buf),
-                      "%u|%s|%.1f|%.4f|%.1f|%.1f|%u|%u|%u|%u|%.1f",
+                      "%u|%s|%.1f|%.4f|%.1f|%.1f|%u|%u|%u|%u|%.1f|%d",
                       e.frequency_hz, e.remote_station.c_str(),
                       e.snr_db, e.ber, e.sinad_db, e.score, age_ms,
                       static_cast<unsigned>(e.bilateral_sinad),
                       static_cast<unsigned>(e.bilateral_ber),
                       static_cast<unsigned>(e.bilateral_mp),
-                      e.score);
+                      e.score, available);
         out.push_back(buf);
     }
     return out;
@@ -1896,7 +2185,7 @@ ALEController::SignalQuality ALEController::get_current_signal_quality() const
     q.ber      = last_ber_;
     q.votes    = static_cast<int8_t>(last_votes_);
     q.fec_errors = last_fec_errors_;
-    q.sinad_db = last_snr_db_;  // votes-based SNR; upgraded below if LQA entry exists
+    q.sinad_db = last_sinad_db_;  // Goertzel SINAD (A.5.4.1.2); upgraded below if LQA entry exists
 
     const Channel* ch = sm_.get_current_channel();
     if (ch) {
@@ -1947,13 +2236,79 @@ std::string ALEController::get_rig_connection_status() const
     return radio_->is_ready() ? "ready" : "not ready";
 }
 
+// ── Station position + propagation context ────────────────────────────────────
+
+void ALEController::update_propagation_context() {
+    using PS = ALEStationConfig::PositionSource;
+    PropagationContext ctx;
+    ctx.now_ms      = now_ms_;
+    ctx.sfi_current = current_sfi_;
+
+    if (config_.position_source == PS::GPSD || config_.position_source == PS::NMEA_SERIAL) {
+        ctx.position_valid = gps_fix_valid_;
+        ctx.lat_deg        = gps_lat_;
+        ctx.lon_deg        = gps_lon_;
+    } else if (config_.position_source != PS::NONE) {
+        ctx.position_valid = true;
+        ctx.lat_deg        = config_.station_lat_deg;
+        ctx.lon_deg        = config_.station_lon_deg;
+    }
+    lqa_analyzer_.set_propagation_context(ctx);
+}
+
+void ALEController::set_station_position_manual(double lat_deg, double lon_deg) {
+    config_.station_lat_deg = lat_deg;
+    config_.station_lon_deg = lon_deg;
+    config_.position_source = ALEStationConfig::PositionSource::MANUAL;
+    update_propagation_context();
+}
+
+bool ALEController::set_station_position_grid(const std::string& grid) {
+    double lat, lon;
+    if (!ale::maidenhead_to_latlon(grid, lat, lon)) return false;
+    config_.grid_locator    = grid;
+    config_.station_lat_deg = lat;
+    config_.station_lon_deg = lon;
+    config_.position_source = ALEStationConfig::PositionSource::MAIDENHEAD;
+    update_propagation_context();
+    return true;
+}
+
+void ALEController::set_position_source(ALEStationConfig::PositionSource src) {
+    config_.position_source = src;
+    update_propagation_context();
+}
+
+void ALEController::set_gpsd_config(const std::string& host, uint16_t port) {
+    config_.gpsd_host = host;
+    config_.gpsd_port = port;
+}
+
+void ALEController::set_nmea_config(const std::string& port, uint32_t baud) {
+    config_.nmea_port = port;
+    config_.nmea_baud = baud;
+}
+
+void ALEController::set_gps_fix(bool valid, double lat_deg, double lon_deg) {
+    gps_fix_valid_ = valid;
+    if (valid) { gps_lat_ = lat_deg; gps_lon_ = lon_deg; }
+    update_propagation_context();
+}
+
+void ALEController::set_current_sfi(float sfi) {
+    current_sfi_ = sfi;
+    update_propagation_context();
+}
+
 bool ALEController::export_settings(const std::string& path)
 {
     std::ofstream f(path);
     if (!f.is_open()) return false;
     f << "# ALE settings export\n";
-    f << "self_address=" << get_primary_self_address() << "\n";
-    f << "channel_file=" << channel_file_ << "\n";
+    for (const auto& e : self_address_store_.all())
+        f << "self_address=" << e.address << "\n";
+    if (!station_file_.empty())
+        f << "station_file=" << station_file_ << "\n";
     f << "assumed_scan_channels=" << config_.assumed_scan_channels << "\n";
     f << "golay_mode=" << static_cast<int>(config_.golay_mode) << "\n";
     f << "min_unanimous_votes=" << static_cast<int>(config_.min_unanimous_votes) << "\n";
@@ -1973,11 +2328,15 @@ bool ALEController::export_settings(const std::string& path)
     f << "relink_enabled=" << (config_.relink_enabled ? 1 : 0) << "\n";
     f << "relink_improvement_threshold=" << config_.relink_improvement_threshold << "\n";
     f << "enhanced_freq_select=" << (config_.enhanced_freq_select ? 1 : 0) << "\n";
-    for (const auto& net : nets()) {
-        f << "net=" << net.name << "\n";
-        for (const auto& ch_id : net.channel_ids)
-            f << "net_channel=" << net.name << ":" << ch_id << "\n";
-    }
+    f << "position_source=" << static_cast<int>(config_.position_source) << "\n";
+    f << "station_lat_deg=" << config_.station_lat_deg << "\n";
+    f << "station_lon_deg=" << config_.station_lon_deg << "\n";
+    f << "grid_locator=" << config_.grid_locator << "\n";
+    f << "gpsd_host=" << config_.gpsd_host << "\n";
+    f << "gpsd_port=" << config_.gpsd_port << "\n";
+    f << "nmea_port=" << config_.nmea_port << "\n";
+    f << "nmea_baud=" << config_.nmea_baud << "\n";
+    f << "sfi_enabled=" << (config_.sfi_enabled ? 1 : 0) << "\n";
     return f.good();
 }
 
@@ -1989,6 +2348,8 @@ bool ALEController::import_settings(const std::string& path)
     ALEStationConfig cfg = config_;  // start from current defaults
     bool has_lqa_enabled = false;
     bool lqa_enabled_val = lqa_enabled();
+    std::string station_file_to_load;
+    bool first_self_addr = true;
 
     std::string line;
     while (std::getline(f, line)) {
@@ -1999,10 +2360,13 @@ bool ALEController::import_settings(const std::string& path)
         const std::string val = line.substr(eq + 1);
 
         if (key == "self_address" && !val.empty()) {
+            if (first_self_addr) { self_address_store_.clear(); first_self_addr = false; }
             add_self_address(val);
             set_primary_self_address(val);
-        } else if (key == "channel_file") {
-            channel_file_ = val;
+        } else if (key == "station_file" && !val.empty()) {
+            station_file_to_load = val;
+        } else if (key == "channel_file" && !val.empty()) {
+            station_file_to_load = val;  // legacy alias
         } else if (key == "assumed_scan_channels" || key == "target_scan_channels") {
             cfg.assumed_scan_channels = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "golay_mode") {
@@ -2042,17 +2406,33 @@ bool ALEController::import_settings(const std::string& path)
             cfg.relink_improvement_threshold = std::stof(val);
         } else if (key == "enhanced_freq_select") {
             cfg.enhanced_freq_select = (val == "1");
-        } else if (key == "net") {
-            add_net(val);
-        } else if (key == "net_channel") {
-            const auto colon = val.find(':');
-            if (colon != std::string::npos)
-                assign_channel_to_net(val.substr(0, colon), val.substr(colon + 1));
+        } else if (key == "position_source") {
+            cfg.position_source = static_cast<ALEStationConfig::PositionSource>(std::stoi(val));
+        } else if (key == "station_lat_deg") {
+            cfg.station_lat_deg = std::stod(val);
+        } else if (key == "station_lon_deg") {
+            cfg.station_lon_deg = std::stod(val);
+        } else if (key == "grid_locator") {
+            cfg.grid_locator = val;
+        } else if (key == "gpsd_host") {
+            cfg.gpsd_host = val;
+        } else if (key == "gpsd_port") {
+            cfg.gpsd_port = static_cast<uint16_t>(std::stoul(val));
+        } else if (key == "nmea_port") {
+            cfg.nmea_port = val;
+        } else if (key == "nmea_baud") {
+            cfg.nmea_baud = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "sfi_enabled") {
+            cfg.sfi_enabled = (val == "1");
         }
+        // net= / net_channel=: legacy keys, silently ignored (nets now in station file)
         // audio_in / audio_out: bridge-level, silently ignored here
     }
     apply_config(cfg);
     if (has_lqa_enabled) set_lqa_enabled(lqa_enabled_val);
+    if (!station_file_to_load.empty())
+        load_station_file(station_file_to_load);  // sets station_file_ on success
+    update_propagation_context();
     return true;
 }
 
@@ -2069,7 +2449,7 @@ bool ALEController::add_channel(const Channel& ch)
     calling_channels_.push_back(ch2);
 apply:
     sm_.set_calling_channels(calling_channels_);
-    if (!channel_file_.empty()) save_channels(channel_file_);
+    if (!station_file_.empty()) save_channels(station_file_);
     return true;
 }
 
@@ -2088,29 +2468,92 @@ bool ALEController::del_channel(uint32_t rx_hz)
 
     if (!removed_id.empty()) net_store_.unassign_channel_everywhere(removed_id);
     sm_.set_calling_channels(calling_channels_);
-    if (!channel_file_.empty()) save_channels(channel_file_);
+    if (!station_file_.empty()) save_channels(station_file_);
     return true;
 }
 
-bool ALEController::load_channels(const std::string& path)
+bool ALEController::load_station_file(const std::string& path)
 {
     std::ifstream f(path);
     if (!f.is_open()) return false;
 
     std::vector<Channel> loaded;
     net_store_.clear();
+    contact_store_.clear();
+    group_call_store_.clear();
+
     std::string line;
     while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
         if (line.rfind("NET:", 0) == 0) {
             std::istringstream iss(line.substr(4));
-            std::string name, ids;
+            std::string name;
             iss >> name;
-            std::getline(iss, ids);  // remainder of the line (leading space trimmed by split_csv)
+            if (name.empty()) continue;
             net_store_.add_net(name);
-            for (const auto& id : split_csv(ids))
-                net_store_.assign_channel(name, id);
+            Net policy;
+            policy.name = name;
+            std::string tok;
+            while (iss >> tok) {
+                const auto eq = tok.find('=');
+                if (eq != std::string::npos) {
+                    const std::string key = tok.substr(0, eq);
+                    const std::string val = tok.substr(eq + 1);
+                    try {
+                        if      (key == "dwell")  policy.dwell_ms              = static_cast<uint32_t>(std::stoul(val));
+                        else if (key == "scan")   policy.scanning_enabled       = (val != "0");
+                        else if (key == "sound")  policy.sounding_enabled       = (val != "0");
+                        else if (key == "sndint") policy.sounding_interval_sec  = static_cast<uint32_t>(std::stoul(val));
+                        else if (key == "c")      policy.calling_length_c       = static_cast<uint32_t>(std::stoul(val));
+                    } catch (...) {}
+                } else {
+                    for (const auto& id : split_csv(tok))
+                        net_store_.assign_channel(name, id);
+                }
+            }
+            net_store_.update_net(policy);
             continue;
         }
+
+        if (line.rfind("CONTACT:", 0) == 0) {
+            // CONTACT:callsign|name|status|net_members_csv|valid_channels_csv
+            const auto fields = split_pipe(line.substr(8));
+            if (fields.empty() || fields[0].empty()) continue;
+            const std::string cs      = fields[0];
+            const std::string name    = fields.size() > 1 ? fields[1] : "";
+            const std::string status  = fields.size() > 2 ? fields[2] : "enabled";
+            const std::string nets    = fields.size() > 3 ? fields[3] : "";
+            const std::string chans   = fields.size() > 4 ? fields[4] : "ALL";
+            add_contact(cs, name, status, nets, chans);
+            continue;
+        }
+
+        if (line.rfind("GROUP:", 0) == 0) {
+            // GROUP:name:member1,member2,...
+            const std::string rest = line.substr(6);
+            const auto colon = rest.find(':');
+            if (colon == std::string::npos) continue;
+            const std::string roster_name = rest.substr(0, colon);
+            if (roster_name.empty()) continue;
+            group_call_store_.add_roster(roster_name);
+            for (const auto& m : split_csv(rest.substr(colon + 1)))
+                group_call_store_.add_member(roster_name, m);
+            continue;
+        }
+
+        if (line.rfind("ALLCALL:", 0) == 0) {
+            // ALLCALL:key=val
+            const std::string kv = line.substr(8);
+            const auto eq = kv.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string key = kv.substr(0, eq);
+            const std::string val = kv.substr(eq + 1);
+            if (key == "accept")   all_call_config_.accept   = (val != "0");
+            else if (key == "selector" && !val.empty()) all_call_config_.selector = val[0];
+            continue;
+        }
+
         auto ch = parse_channel_spec(line);
         if (ch) loaded.push_back(*ch);
     }
@@ -2118,22 +2561,48 @@ bool ALEController::load_channels(const std::string& path)
         if (ch.id.empty()) ch.id = next_free_channel_id(loaded);
     calling_channels_ = std::move(loaded);
     sm_.set_calling_channels(calling_channels_);
+    station_file_ = path;
     return true;
 }
 
-bool ALEController::save_channels(const std::string& path) const
+bool ALEController::save_station_file(const std::string& path) const
 {
     std::ofstream f(path);
     if (!f.is_open()) return false;
-    f << "# ALE channel list — MIL-STD-188-141B\n";
-    f << "# ID:id rx_hz tx_hz mode [label]\n";
+    f << "# PC-ALE station file — MIL-STD-188-141B\n";
+    f << "# ID:id rx_hz tx_hz mode [flags] [label]   flags=[OFF,RX,IC,IS,IR]\n";
     for (const auto& ch : calling_channels_)
         f << format_channel_line(ch) << '\n';
     if (!net_store_.empty()) {
-        f << "# NET:name id,id,...\n";
-        for (const auto& net : net_store_.all())
-            f << "NET:" << net.name << ' ' << join_csv(net.channel_ids) << '\n';
+        f << "# NET:name id,id,...  [dwell=ms] [scan=0|1] [sound=0|1] [sndint=sec] [c=N]\n";
+        for (const auto& net : net_store_.all()) {
+            f << "NET:" << net.name << ' ' << join_csv(net.channel_ids);
+            f << " dwell=" << net.dwell_ms;
+            f << " scan="  << (net.scanning_enabled  ? '1' : '0');
+            f << " sound=" << (net.sounding_enabled   ? '1' : '0');
+            f << " sndint=" << net.sounding_interval_sec;
+            f << " c=" << net.calling_length_c;
+            f << '\n';
+        }
     }
+    if (!contact_store_.empty()) {
+        f << "# CONTACT:callsign|name|status|net_members|valid_channels\n";
+        for (const auto& c : contact_store_.all()) {
+            f << "CONTACT:" << c.callsign << '|' << c.name
+              << '|' << (c.enabled ? "enabled" : "disabled")
+              << '|' << join_csv(c.net_members)
+              << '|' << (c.all_channels ? "ALL" : join_csv(c.valid_channels))
+              << '\n';
+        }
+    }
+    if (!group_call_store_.empty()) {
+        f << "# GROUP:name:member1,member2,...\n";
+        for (const auto& r : group_call_store_.all())
+            f << "GROUP:" << r.name << ':' << join_csv(r.members) << '\n';
+    }
+    f << "# ALLCALL:key=val\n";
+    f << "ALLCALL:selector=" << all_call_config_.selector << '\n';
+    f << "ALLCALL:accept=" << (all_call_config_.accept ? '1' : '0') << '\n';
     return f.good();
 }
 
@@ -2142,29 +2611,82 @@ bool ALEController::save_channels(const std::string& path) const
 bool ALEController::add_net(const std::string& name)
 {
     const bool added = net_store_.add_net(name);
-    if (added && !channel_file_.empty()) save_channels(channel_file_);
+    if (added && !station_file_.empty()) save_channels(station_file_);
     return added;
 }
 
 bool ALEController::del_net(const std::string& name)
 {
     const bool removed = net_store_.remove_net(name);
-    if (removed && !channel_file_.empty()) save_channels(channel_file_);
+    if (removed && !station_file_.empty()) save_channels(station_file_);
     return removed;
 }
 
 bool ALEController::assign_channel_to_net(const std::string& net_name, const std::string& channel_id)
 {
     const bool ok = net_store_.assign_channel(net_name, channel_id);
-    if (ok && !channel_file_.empty()) save_channels(channel_file_);
+    if (ok && !station_file_.empty()) save_channels(station_file_);
     return ok;
 }
 
 bool ALEController::unassign_channel_from_net(const std::string& net_name, const std::string& channel_id)
 {
     const bool ok = net_store_.unassign_channel(net_name, channel_id);
-    if (ok && !channel_file_.empty()) save_channels(channel_file_);
+    if (ok && !station_file_.empty()) save_channels(station_file_);
     return ok;
+}
+
+bool ALEController::update_net(const Net& updated)
+{
+    const bool ok = net_store_.update_net(updated);
+    if (ok && !station_file_.empty()) save_channels(station_file_);
+    return ok;
+}
+
+// ── Group-call rosters ────────────────────────────────────────────────────────
+
+bool ALEController::add_group_roster(const std::string& name)
+{
+    const bool ok = group_call_store_.add_roster(name);
+    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    return ok;
+}
+
+bool ALEController::del_group_roster(const std::string& name)
+{
+    const bool ok = group_call_store_.remove_roster(name);
+    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    return ok;
+}
+
+bool ALEController::add_group_member(const std::string& roster_name, const std::string& callsign)
+{
+    const bool ok = group_call_store_.add_member(roster_name, callsign);
+    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    return ok;
+}
+
+bool ALEController::del_group_member(const std::string& roster_name, const std::string& callsign)
+{
+    const bool ok = group_call_store_.remove_member(roster_name, callsign);
+    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    return ok;
+}
+
+bool ALEController::initiate_group_call(const std::string& roster_name)
+{
+    const GroupCallRoster* r = group_call_store_.find(roster_name);
+    if (!r || r->members.empty()) {
+        emit_status("Group roster '" + roster_name + "' not found or empty");
+        return false;
+    }
+    return initiate_group_call(r->members);
+}
+
+bool ALEController::initiate_all_call(char selector)
+{
+    emit_status(std::string("AllCall TX not yet implemented (stub) — selector='") + selector + "'");
+    return false;
 }
 
 // ── Contact / address book ────────────────────────────────────────────────────
@@ -2183,13 +2705,16 @@ bool ALEController::add_contact(const std::string& callsign,
     c.net_members  = split_csv(net_members);
     c.all_channels = (valid_channels.empty() || valid_channels == "ALL");
     if (!c.all_channels) c.valid_channels = split_csv(valid_channels);
-    return contact_store_.add_or_update(c);
+    const bool ok = contact_store_.add_or_update(c);
+    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    return ok;
 }
 
 bool ALEController::remove_contact(const std::string& callsign)
 {
     const bool removed = contact_store_.remove(callsign);
     if (removed && selected_contact_ == callsign) selected_contact_.clear();
+    if (removed && !station_file_.empty()) save_station_file(station_file_);
     return removed;
 }
 
@@ -2353,12 +2878,12 @@ std::string ALEController::process_command(const std::string& raw)
     if (cmd == "CMD:CLEAR_CHANNELS") {
         calling_channels_.clear();
         sm_.set_calling_channels(calling_channels_);
-        if (!channel_file_.empty()) save_channels(channel_file_);
+        if (!station_file_.empty()) save_channels(station_file_);
         return "OK: channel list cleared";
     }
     if (cmd.rfind("CMD:SAVE_CHANNELS", 0) == 0) {
         std::string path = cmd_trim(cmd.substr(17));
-        if (path.empty()) path = channel_file_;
+        if (path.empty()) path = station_file_;
         if (path.empty()) return "ERROR: CMD:SAVE_CHANNELS requires a path";
         if (!save_channels(path))
             return "ERROR: cannot write to '" + path + "'";

@@ -98,6 +98,15 @@ bool Modulator::is_transmitting() const
     return word_enqueued_ || !tx49_queue_.empty();
 }
 
+void Modulator::abort()
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    tx49_queue_ = {};
+    word_enqueued_ = false;
+    pending_tx49_  = 0;
+    symbol_buf_.fill(0);
+}
+
 void Modulator::enqueue_tx49_(uint64_t tx49)
 {
     if (word_enqueued_) {
@@ -192,7 +201,7 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
             silence_count_ = 0;
         }
 
-        if (++step_accum_ >= DECODE_STEP) {
+        if (++step_accum_ >= (grid_locked_ ? DECODE_STEP_FINE : DECODE_STEP_COARSE)) {
             step_accum_ = 0;
             if (write_pos_ < WORD_SAMPLES) continue;
 
@@ -219,10 +228,21 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
                 // grid_anchor_ — a failed word does not re-anchor the sync grid.
                 // uncorr_anchor_ prevents re-firing for the same word slot.
                 const uint32_t samples_since = write_pos_ - grid_anchor_;
-                const uint32_t min_sp        = WORD_SAMPLES - FFT_SIZE;
+                const uint32_t min_sp        = WORD_SAMPLES - SAMPLES_PER_SYMBOL;
                 if (samples_since >= min_sp) {
                     const uint32_t phase = samples_since % WORD_SAMPLES;
-                    if (((phase <= FFT_SIZE) || (phase >= WORD_SAMPLES - FFT_SIZE))
+                    // On-grid check: a REAL word slot is always at phase==0 (since
+                    // is an exact multiple of WORD_SAMPLES, and the 4-sample decode
+                    // grid lands on it exactly because 3136/4 is integer). The
+                    // neighbors at phase 4 / phase WORD_SAMPLES-4 are one-step
+                    // straddles of the inter-word boundary — Golay-uncorrectable
+                    // mashes of two adjacent words, not real words. The previous
+                    // ±1-symbol tolerance admitted those straddles, double-counting
+                    // each boundary as a spurious "uncorrectable word" (and
+                    // inflating BER by 48 per fire per A.5.4.1.1). Fire only at the
+                    // exact slot so straddles are dropped but a genuine on-grid
+                    // uncorrectable word (still phase 0) is still reported.
+                    if ((phase == 0u)
                             && (write_pos_ - uncorr_anchor_ >= min_sp)) {
                         uncorr_anchor_ = write_pos_;
                         if (word_cb_) word_cb_(word);
@@ -267,12 +287,12 @@ void Demodulator::compute_spectrum_()
     spectrum_cb_(spec_bins_.data(), kBins, kHzPerBin);
 }
 
-float Demodulator::goertzel_power(const int16_t* block, float freq_hz)
+float Demodulator::goertzel_power(const int16_t* block, float freq_hz, uint32_t M)
 {
     const float w     = 2.0f * static_cast<float>(M_PI) * freq_hz / 8000.0f;
     const float coeff = 2.0f * std::cos(w);
     float q1 = 0.0f, q2 = 0.0f;
-    for (uint32_t n = 0; n < FFT_SIZE; ++n) {
+    for (uint32_t n = 0; n < M; ++n) {
         const float q0 = coeff * q1 - q2 + static_cast<float>(block[n]);
         q2 = q1; q1 = q0;
     }
@@ -281,18 +301,61 @@ float Demodulator::goertzel_power(const int16_t* block, float freq_hz)
 
 uint8_t Demodulator::symbol_from_block(const int16_t* block, float& sinad_db_out)
 {
-    // A.5.4.1.2: compute all 8 Goertzel powers in a single pass to measure SINAD.
-    // Signal power = winning-tone power; Noise+Distortion = sum of the other 7 tones.
-    // SINAD = total / (total − signal) in dB.
-    float total = 0.0f, best = -1.0f;
+    // Symbol decision (A.5.2.6.3): the winning tone is the one with the largest
+    // Goertzel power over the full 64-sample symbol block. This is unchanged.
+    float best = -1.0f;
     uint8_t rank = 0;
     for (uint8_t r = 0; r < NUM_TONES; ++r) {
-        float p = goertzel_power(block, static_cast<float>(TONE_FREQS_HZ[r]));
-        total += p;
+        const float p = goertzel_power(block, static_cast<float>(TONE_FREQS_HZ[r]));
         if (p > best) { best = p; rank = r; }
     }
-    const float nd = total - best;
-    sinad_db_out = (nd > 0.0f) ? 10.0f * std::log10f(total / nd) : 30.0f;
+
+    // ── A.5.4.1.2 true-SINAD on a centered guard-limited sub-window ───────────
+    // The previous SINAD used the sum of the 7 non-winning tone bins as
+    // "noise+distortion". On a clean loopback ~25 % of the winning-tone energy
+    // leaks off-fundamental at the 64-sample window edges (sub-symbol straddle +
+    // resampling ISI), so that ratio read only ~6–7 dB even for a flawless,
+    // error-free decode — purely a receiver artifact, not link quality.
+    //
+    // Measure SINAD instead on the central 32 samples (drop 16 at each edge where
+    // the ringing lives), keeping the decision on the full 64-sample block.
+    // M = 32 preserves 8-tone orthogonality: 250 Hz spacing over 32 samples at
+    // 8 kHz is exactly one DFT bin, and every tone is an integer number of cycles
+    // (750 Hz = 3 cyc … 2500 Hz = 10 cyc) over the window — so a clean tone
+    // still leaks ~0 into the others and a clean decode reads a high SINAD.
+    // Real channel noise is present throughout the window (not just the edges),
+    // so it is captured and lowers SINAD as it should (true (S+N+D)/(N+D)).
+    constexpr uint32_t SINAD_M      = SAMPLES_PER_SYMBOL / 2;   // 32 samples
+    constexpr uint32_t SINAD_OFFSET = SAMPLES_PER_SYMBOL / 4;  // 16 → block[16..47]
+    const int16_t* win = block + SINAD_OFFSET;
+
+    // Signal (winning tone) average power. Goertzel returns |X(k)|^2; for a real
+    // sinusoid on-bin over M samples, average power = 2·|X(k)|^2 / M^2.
+    const float f_win       = static_cast<float>(TONE_FREQS_HZ[rank]);
+    const float goertzel_sq = goertzel_power(win, f_win, SINAD_M);
+    const float s_avg       = 2.0f * goertzel_sq
+                              / static_cast<float>(SINAD_M * SINAD_M);
+
+    // Total (S+N+D) average power from the time-domain samples, DC-removed so a
+    // static offset is not counted as noise+distortion.
+    float sum_x = 0.0f, sum_sq = 0.0f;
+    for (uint32_t n = 0; n < SINAD_M; ++n) {
+        const float x = static_cast<float>(win[n]);
+        sum_x  += x;
+        sum_sq += x * x;
+    }
+    const float mean      = sum_x / static_cast<float>(SINAD_M);
+    const float total_avg = (sum_sq / static_cast<float>(SINAD_M)) - mean * mean;
+
+    // SINAD = total / (total − S), in dB, clamped to the [0, 30] LQA scale.
+    // Guard against numerical total ≤ S on a near-pure tone (clean decode →
+    // ratio diverges → clamps to 30, the "best" code).
+    constexpr float kEps = 1e-3f;
+    const float nd     = std::max(total_avg - s_avg, kEps);
+    const float ratio  = (total_avg > 0.0f) ? (total_avg / nd) : 0.0f;
+    sinad_db_out = (ratio > 1.0f) ? 10.0f * std::log10f(ratio) : 0.0f;
+    if (sinad_db_out > 30.0f) sinad_db_out = 30.0f;   // LQA_QUALITY_MAX
+    if (sinad_db_out < 0.0f)  sinad_db_out = 0.0f;    // LQA_QUALITY_MIN
     return FREQ_TO_SYMBOL[rank];
 }
 
@@ -345,10 +408,10 @@ bool Demodulator::accept_word_(const Golay::DecodeResult& fec, const ALEWord& wo
     // words are one WORD_SAMPLES apart on the grid.
     const uint32_t samples_since_last_word = write_pos_ - grid_anchor_;
 
-    // The FFT window slides forward every DECODE_STEP samples, so the same word
-    // would otherwise be decoded many times in a row.  Ignore any candidate
-    // closer than (almost) one full word to the previous accepted word.
-    const uint32_t min_spacing = WORD_SAMPLES - FFT_SIZE;  // one word, minus one symbol of slack
+    // The Goertzel window slides every DECODE_STEP_COARSE/FINE samples, so the
+    // same word would otherwise be decoded many times in a row.  Ignore any
+    // candidate closer than (almost) one full word to the previous accepted word.
+    const uint32_t min_spacing = WORD_SAMPLES - SAMPLES_PER_SYMBOL;  // one word, minus one symbol of slack
     if (samples_since_last_word < min_spacing)
         return false;
 
@@ -359,11 +422,11 @@ bool Demodulator::accept_word_(const Golay::DecodeResult& fec, const ALEWord& wo
     }
 
     // A FEC-corrected decode is trusted only when it lands on the word grid,
-    // i.e. within one symbol (FFT_SIZE samples) of an expected word boundary
+    // i.e. within one symbol (SAMPLES_PER_SYMBOL samples) of an expected word boundary
     // (A.5.2.6.3 criterion 9: correct triple-redundant word phase).
     const uint32_t phase_in_word    = samples_since_last_word % WORD_SAMPLES;
-    const bool     on_word_boundary = (phase_in_word <= FFT_SIZE) ||
-                                      (phase_in_word >= WORD_SAMPLES - FFT_SIZE);
+    const bool     on_word_boundary = (phase_in_word <= SAMPLES_PER_SYMBOL) ||
+                                      (phase_in_word >= WORD_SAMPLES - SAMPLES_PER_SYMBOL);
     if (on_word_boundary) {
         grid_anchor_ = write_pos_;
         return true;
@@ -374,12 +437,12 @@ bool Demodulator::accept_word_(const Golay::DecodeResult& fec, const ALEWord& wo
 bool Demodulator::try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes) const
 {
     const uint32_t base = write_pos_ - WORD_SAMPLES;
-    int16_t blk[FFT_SIZE];
+    int16_t blk[SAMPLES_PER_SYMBOL];
     uint8_t sym[SYMBOLS_PER_WORD];
     float sinad_sum = 0.0f;
     for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
-        const uint32_t bk = base + k * FFT_SIZE;
-        for (uint32_t j = 0; j < FFT_SIZE; ++j)
+        const uint32_t bk = base + k * SAMPLES_PER_SYMBOL;
+        for (uint32_t j = 0; j < SAMPLES_PER_SYMBOL; ++j)
             blk[j] = ring_at(bk + j);
         float sym_sinad;
         sym[k] = symbol_from_block(blk, sym_sinad);

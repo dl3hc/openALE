@@ -97,16 +97,52 @@ void HamlibRadio::stop() {
 bool HamlibRadio::set_channel(const Channel& channel) {
     if (!rig_) return false;
 
-    if (rig_set_freq(rig_, RIG_VFO_CURR,
-                     static_cast<freq_t>(channel.tx_frequency)) != RIG_OK)
-        return false;
+    const bool freq_changed = channel.tx_frequency != current_channel_.tx_frequency;
+    const bool mode_changed = channel.tx_mode      != current_channel_.tx_mode;
+    const bool tcp          = !is_serial_port();
 
-    const rmode_t mode = to_hamlib_mode(channel.tx_mode);
-    if (rig_set_mode(rig_, RIG_VFO_CURR, mode, RIG_PASSBAND_NORMAL) != RIG_OK)
-        return false;
+    int freq_ret = RIG_OK;
+    int mode_ret = RIG_OK;
 
+    if (freq_changed) {
+        freq_ret = rig_set_freq(rig_, RIG_VFO_CURR,
+                                static_cast<freq_t>(channel.tx_frequency));
+        if (freq_ret != RIG_OK)
+            std::fprintf(stderr, "[HamlibRadio] rig_set_freq(%u) failed: %s\n",
+                         channel.tx_frequency, rigerror(freq_ret));
+    }
+
+    // Send mode whenever freq changes, even if tx_mode appears unchanged. Over
+    // TCP the mode is a separate command (not bundled with the freq command as
+    // some serial CAT protocols do), so it must be sent explicitly on every
+    // channel hop. This also resets any manual mode the operator set: the next
+    // channel hop (scan or step arrow) always applies the channel's own mode.
+    if (mode_changed || freq_changed) {
+        // Over TCP/netrigctl a preceding rig_set_freq timeout can leave the
+        // socket in an inconsistent state (stale RPRT response in buffer, or
+        // connection reset). Allow the connection to settle, then send mode.
+        if (tcp && freq_changed && freq_ret != RIG_OK)
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+        const rmode_t mode = to_hamlib_mode(channel.tx_mode);
+        mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, mode, RIG_PASSBAND_NORMAL);
+        if (mode_ret != RIG_OK && tcp) {
+            // Single retry — connection may have auto-recovered after the sleep.
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, mode, RIG_PASSBAND_NORMAL);
+        }
+        if (mode_ret != RIG_OK)
+            std::fprintf(stderr, "[HamlibRadio] rig_set_mode failed: %s\n",
+                         rigerror(mode_ret));
+    }
+
+    // Always track the intended state regardless of return codes. Over TCP,
+    // hamlib frequently reports failure even when rigctld applied the command.
+    // Leaving current_channel_ stale causes callers that read get_channel()
+    // (set_frequency, step_channel) to send the wrong mode on their next call,
+    // overriding what the channel hop correctly set on the radio.
     current_channel_ = channel;
-    return true;
+    return freq_ret == RIG_OK && mode_ret == RIG_OK;
 }
 
 Channel HamlibRadio::get_channel() const {
@@ -145,6 +181,7 @@ bool HamlibRadio::is_serial_port() const {
 
 rmode_t HamlibRadio::to_hamlib_mode(RadioMode mode) const {
     switch (mode) {
+        case RadioMode::USB:      return RIG_MODE_USB;
         case RadioMode::LSB:      return RIG_MODE_LSB;
         case RadioMode::CW:       return RIG_MODE_CW;
         case RadioMode::CW_R:     return RIG_MODE_CWR;

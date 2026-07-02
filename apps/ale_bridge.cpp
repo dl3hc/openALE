@@ -23,6 +23,8 @@
 
 #include "App/ale_controller.h"
 #include "App/audio_device.h"
+#include "App/gps_service.h"
+#include "App/sfi_service.h"
 #include "PAL/radio.h"
 #include "PAL/timer.h"
 #include "bridge/ws_server.h"
@@ -38,6 +40,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -148,18 +151,20 @@ static mj::Value self_addr_line_to_json(const std::string& line) {
     return v;
 }
 
-// "freq|station|snr|ber|sinad|score|age_ms|bilat_sinad|bilat_ber|bilat_mp|display_score"
+// "freq|station|snr|ber|sinad|score|age_ms|bilat_sinad|bilat_ber|bilat_mp|display_score|available"
 // -> object (see ALEController::get_all_lqa_entries()). The bilateral_* fields are
 // the peer-reported CMD-LQA metrics (A.5.4.2): SINAD code [0-30] dB higher=better
 // (31 = no measurement), BER code [0-30] 2/3-vote count lower=better (31 = no
 // value), MP code [0-6] ms (7 = not measured). Shipped so the GUI can display a
-// real measurement when no local FROM-direction snr/sinad exists.
+// real measurement when no local FROM-direction snr/sinad exists. available is
+// the sounding-conclusion flag: 1 = TIS (available), 0 = TWAS (not available),
+// -1 = no sounding heard from this station.
 static mj::Value lqa_line_to_json(const std::string& line) {
     std::vector<std::string> f;
     std::stringstream ss(line);
     std::string tok;
     while (std::getline(ss, tok, '|')) f.push_back(tok);
-    f.resize(11);
+    f.resize(12);
     mj::Value v = mj::obj();
     v.set("freq_hz", mj::Value::number(std::atof(f[0].c_str())));
     v.set("station", mj::Value::string(f[1]));
@@ -172,6 +177,7 @@ static mj::Value lqa_line_to_json(const std::string& line) {
     v.set("bilateral_ber", mj::Value::number(std::atof(f[8].c_str())));
     v.set("bilateral_mp", mj::Value::number(std::atof(f[9].c_str())));
     v.set("display_score", mj::Value::number(std::atof(f[10].c_str())));
+    v.set("available", mj::Value::number(std::atoi(f[11].c_str())));
     return v;
 }
 
@@ -186,13 +192,21 @@ static mj::Value channel_to_json(const Channel& c) {
     v.set("rx_only", mj::Value::boolean(c.rx_only));
     v.set("voice_use", mj::Value::boolean(c.voice_use));
     v.set("data_use", mj::Value::boolean(c.data_use));
+    v.set("inhibit_calling",   mj::Value::boolean(c.inhibit_calling));
+    v.set("inhibit_sounding",  mj::Value::boolean(c.inhibit_sounding));
+    v.set("inhibit_reporting", mj::Value::boolean(c.inhibit_reporting));
     return v;
 }
 
 static mj::Value net_to_json(const Net& n) {
     mj::Value v = mj::obj();
-    v.set("name", mj::Value::string(n.name));
-    v.set("channel_ids", string_array(n.channel_ids));
+    v.set("name",                 mj::Value::string(n.name));
+    v.set("channel_ids",          string_array(n.channel_ids));
+    v.set("dwell_ms",             mj::Value::number(n.dwell_ms));
+    v.set("scanning_enabled",     mj::Value::boolean(n.scanning_enabled));
+    v.set("sounding_enabled",     mj::Value::boolean(n.sounding_enabled));
+    v.set("sounding_interval_sec",mj::Value::number(n.sounding_interval_sec));
+    v.set("calling_length_c",     mj::Value::number(n.calling_length_c));
     return v;
 }
 
@@ -234,6 +248,18 @@ static std::string build_radio_spec(const mj::Value& msg) {
          + ":" + msg.get_string("port", "4532");
 }
 
+// Thread-safe mailbox: GPS/SFI worker callbacks write here; the main loop
+// drains it and calls the single-threaded ALEController from the main thread.
+struct PendingUpdate {
+    std::mutex mtx;
+    bool   gps_dirty = false;
+    bool   gps_acq   = false;
+    double gps_lat   = 0.0;
+    double gps_lon   = 0.0;
+    bool   sfi_dirty = false;
+    float  sfi       = 0.0f;
+};
+
 // The bridge owns the audio device and radio (both runtime-settable from the
 // GUI now that there are no startup flags). dispatch_command() needs to reach
 // them — not just the controller — to open/close/connect on command. Pointers,
@@ -245,15 +271,81 @@ struct BridgeCtx {
     std::string                    lqa_path;   ///< empty = persistence disabled
     std::string                    audio_in;   ///< last successfully opened RX device
     std::string                    audio_out;  ///< last successfully opened TX device
+    // GPS / SFI services and shared pending-update mailbox
+    GpsService*       gps_svc  = nullptr;
+    SfiService*       sfi_svc  = nullptr;
+    PendingUpdate*    pending  = nullptr;
+    bridge::WsServer* ws       = nullptr;  ///< for GPS/SFI push events from STATION_LOC_SET
 };
 
 // ── Command dispatch ────────────────────────────────────────────────────────
 //
+// Restart GPS and/or SFI services to match the current ALEController config.
+// Call after any config change that may affect position source or sfi_enabled.
+// Safe to call on a fresh BridgeCtx (stop() on un-started services is no-op).
+static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
+    using PS = ALEStationConfig::PositionSource;
+    const auto& cfg = ctrl.get_config();
+
+    // ── GPS ──────────────────────────────────────────────────────────────────
+    if (ctx.gps_svc && ctx.pending) {
+        ctx.gps_svc->stop();
+        const PS src = ctrl.get_position_source();
+        if (src == PS::GPSD || src == PS::NMEA_SERIAL) {
+            GpsService::Config gcfg;
+            gcfg.gpsd_enabled = (src == PS::GPSD);
+            gcfg.gpsd_host    = cfg.gpsd_host;
+            gcfg.gpsd_port    = cfg.gpsd_port;
+            gcfg.nmea_enabled = (src == PS::NMEA_SERIAL);
+            gcfg.nmea_port    = cfg.nmea_port;
+            gcfg.nmea_baud    = cfg.nmea_baud;
+            std::printf("[ale_bridge] GPS service: starting (%s)\n",
+                        src == PS::GPSD ? "gpsd" : "NMEA serial");
+            PendingUpdate*    pend   = ctx.pending;
+            bridge::WsServer* ws_ptr = ctx.ws;
+            ctx.gps_svc->start(gcfg, [pend, ws_ptr](bool acq, double lat, double lon) {
+                { std::lock_guard<std::mutex> g(pend->mtx);
+                  pend->gps_dirty = true; pend->gps_acq = acq;
+                  pend->gps_lat = lat;   pend->gps_lon = lon; }
+                if (ws_ptr) {
+                    mj::Value e = make_event("gps_fix");
+                    e.set("acquired", mj::Value::boolean(acq));
+                    if (acq) {
+                        e.set("lat", mj::Value::number(lat));
+                        e.set("lon", mj::Value::number(lon));
+                    }
+                    ws_ptr->send_text(mj::dump(e));
+                }
+            });
+        }
+    }
+
+    // ── SFI ──────────────────────────────────────────────────────────────────
+    if (ctx.sfi_svc && ctx.pending) {
+        ctx.sfi_svc->stop();   // always stop first; start() below will spawn fresh thread
+        if (cfg.sfi_enabled) {
+            std::printf("[ale_bridge] SFI service: starting fetch thread\n");
+            PendingUpdate*    pend   = ctx.pending;
+            bridge::WsServer* ws_ptr = ctx.ws;
+            ctx.sfi_svc->start([pend, ws_ptr](float sfi) {
+                { std::lock_guard<std::mutex> g(pend->mtx);
+                  pend->sfi_dirty = true; pend->sfi = sfi; }
+                if (ws_ptr) {
+                    mj::Value e = make_event("sfi_update");
+                    e.set("sfi", mj::Value::number(sfi));
+                    ws_ptr->send_text(mj::dump(e));
+                }
+            });
+        } else {
+            std::printf("[ale_bridge] SFI service: disabled\n");
+        }
+    }
+}
+
 // Every command's reply is {"id":<echo>,"ok":bool,...}. "id" is whatever the
 // GUI sent (number or absent — JS request counters are the expected case).
-// AMD is the one command that goes through process_command() instead of a
-// typed method, because AMD-queueing has no dedicated typed entry point on
-// ALEController (see process_command()'s CMD:AMD handling).
+// AMD dispatches to the typed ALEController::send_amd() (linked orderwire when
+// LINKED, else queue + call); CMD:AMD still exists for CLI/legacy queue-only use.
 //
 // Runs on the main-loop thread (commands drained in the loop), so AUDIO_OPEN's
 // close+reopen is sequential with audio->tick() — no race.
@@ -266,6 +358,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("state", mj::Value::string(ALEStateMachine::state_name(ctrl.state())));
         r.set("self", mj::Value::string(ctrl.self()));
         r.set("link_active", mj::Value::boolean(ctrl.is_link_active()));
+        r.set("peer", mj::Value::string(ctrl.active_peer()));
         r.set("call_duration_s", mj::Value::number(ctrl.get_call_duration_seconds()));
         return mj::dump(r);
     }
@@ -293,7 +386,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
                 if (n.name == net) {
                     for (const auto& id : n.channel_ids)
                         for (const auto& c : ctrl.channels())
-                            if (c.id == id && c.enabled) { sweep.push_back(c); break; }
+                            if (c.id == id && c.enabled && !c.inhibit_sounding) { sweep.push_back(c); break; }
                     break;
                 }
             ok = !sweep.empty() && ctrl.send_sounding_sweep(sweep);
@@ -306,6 +399,13 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             msg.get_string("net"));
         return mj::dump(make_reply(msg, true));
     }
+    if (cmd == "SOUND_AUTO_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("on",           mj::Value::boolean(ctrl.is_automatic_sounding()));
+        r.set("interval_sec", mj::Value::number(ctrl.get_auto_sounding_interval_sec()));
+        r.set("net",          mj::Value::string(ctrl.get_auto_sounding_net()));
+        return mj::dump(r);
+    }
 
     if (cmd == "CALL") {
         const bool single = msg.get_bool("single_channel", false);
@@ -315,13 +415,63 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "GROUP_CALL") {
+        if (msg.find("roster")) {
+            const bool ok = ctrl.initiate_group_call(msg.get_string("roster"));
+            return mj::dump(make_reply(msg, ok));
+        }
         const mj::Value* members = msg.find("members");
         const bool ok = members && ctrl.initiate_group_call(members->as_string_array());
         return mj::dump(make_reply(msg, ok));
     }
+    if (cmd == "GROUP_ROSTERS_LIST") {
+        const auto& rosters = ctrl.get_all_group_rosters();
+        mj::Value r = make_reply(msg, true);
+        mj::Value arr = mj::arr();
+        for (const auto& roster : rosters) {
+            mj::Value v = mj::obj();
+            v.set("name", mj::Value::string(roster.name));
+            v.set("members", string_array(roster.members));
+            arr.push_back(std::move(v));
+        }
+        r.set("rosters", std::move(arr));
+        return mj::dump(r);
+    }
+    if (cmd == "GROUP_ROSTER_ADD") {
+        return mj::dump(make_reply(msg, ctrl.add_group_roster(msg.get_string("name"))));
+    }
+    if (cmd == "GROUP_ROSTER_DEL") {
+        return mj::dump(make_reply(msg, ctrl.del_group_roster(msg.get_string("name"))));
+    }
+    if (cmd == "GROUP_ROSTER_MEMBER_ADD") {
+        return mj::dump(make_reply(msg, ctrl.add_group_member(msg.get_string("name"), msg.get_string("callsign"))));
+    }
+    if (cmd == "GROUP_ROSTER_MEMBER_DEL") {
+        return mj::dump(make_reply(msg, ctrl.del_group_member(msg.get_string("name"), msg.get_string("callsign"))));
+    }
+    if (cmd == "ALLCALL_INITIATE") {
+        const std::string sel = msg.get_string("selector");
+        const char s = sel.empty() ? '?' : sel[0];
+        return mj::dump(make_reply(msg, ctrl.initiate_all_call(s)));
+    }
+    if (cmd == "ALLCALL_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("accept",   mj::Value::boolean(ctrl.get_allcall_accept()));
+        r.set("selector", mj::Value::string(std::string(1, ctrl.get_allcall_selector())));
+        return mj::dump(r);
+    }
+    if (cmd == "ALLCALL_SET") {
+        if (msg.find("accept"))
+            ctrl.set_allcall_accept(msg.get_bool("accept", true));
+        if (msg.find("selector")) {
+            const std::string sel = msg.get_string("selector");
+            if (!sel.empty()) ctrl.set_allcall_selector(sel[0]);
+        }
+        return mj::dump(make_reply(msg, true));
+    }
     if (cmd == "ACCEPT")          { ctrl.accept_call();     return mj::dump(make_reply(msg, true)); }
     if (cmd == "REJECT")          { ctrl.reject_call();     return mj::dump(make_reply(msg, true)); }
     if (cmd == "TERMINATE")       { ctrl.terminate_link();  return mj::dump(make_reply(msg, true)); }
+    if (cmd == "RESET_IDLE_TIMER"){ ctrl.reset_link_idle_timer(); return mj::dump(make_reply(msg, true)); }
     if (cmd == "EMERGENCY_STOP")  { ctrl.emergency_stop();  return mj::dump(make_reply(msg, true)); }
     if (cmd == "SET_PTT") {
         ctrl.set_manual_ptt(msg.get_bool("on", false));
@@ -329,13 +479,26 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     }
 
     if (cmd == "AMD") {
-        const std::string resp = ctrl.process_command("CMD:AMD " + msg.get_string("text"));
-        return mj::dump(make_reply(msg, resp.rfind("OK", 0) == 0));
+        // Typed dispatch: if LINKED, send AMD over the established link; otherwise
+        // queue it and place a call to `to`. `to` is the selected contact (or the
+        // active peer when LINKED — ignored by send_amd in that case).
+        const std::string to   = msg.get_string("to");
+        const std::string text = msg.get_string("text");
+        const std::string resp = ctrl.send_amd(to, text);
+        mj::Value r = make_reply(msg, resp.rfind("OK:", 0) == 0);
+        r.set("msg", mj::Value::string(resp));
+        return mj::dump(r);
     }
     if (cmd == "MANUAL_ACCEPT_MODE") {
         ctrl.set_manual_accept_mode(msg.get_bool("on"),
             static_cast<uint32_t>(msg.get_number("timeout_ms", 10000)));
         return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "MANUAL_ACCEPT_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("on",         mj::Value::boolean(ctrl.get_manual_accept_mode()));
+        r.set("timeout_ms", mj::Value::number(ctrl.get_accept_timeout_ms()));
+        return mj::dump(r);
     }
 
     // ── Channels ─────────────────────────────────────────────────────────
@@ -352,10 +515,13 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
                    msg.get_string("mode", "USB"), msg.get_string("mode", "USB"));
         ch.id = msg.get_string("id");
         ch.label = msg.get_string("label");
-        if (msg.has("enabled"))   ch.enabled   = msg.get_bool("enabled", true);
-        if (msg.has("rx_only"))   ch.rx_only   = msg.get_bool("rx_only", false);
-        if (msg.has("voice_use")) ch.voice_use = msg.get_bool("voice_use", true);
-        if (msg.has("data_use"))  ch.data_use  = msg.get_bool("data_use", true);
+        if (msg.has("enabled"))           ch.enabled           = msg.get_bool("enabled", true);
+        if (msg.has("rx_only"))           ch.rx_only           = msg.get_bool("rx_only", false);
+        if (msg.has("voice_use"))         ch.voice_use         = msg.get_bool("voice_use", true);
+        if (msg.has("data_use"))          ch.data_use          = msg.get_bool("data_use", true);
+        if (msg.has("inhibit_calling"))   ch.inhibit_calling   = msg.get_bool("inhibit_calling", false);
+        if (msg.has("inhibit_sounding"))  ch.inhibit_sounding  = msg.get_bool("inhibit_sounding", false);
+        if (msg.has("inhibit_reporting")) ch.inhibit_reporting = msg.get_bool("inhibit_reporting", false);
         const bool ok = ctrl.add_channel(ch);
         return mj::dump(make_reply(msg, ok));
     }
@@ -363,12 +529,12 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         const bool ok = ctrl.del_channel(static_cast<uint32_t>(msg.get_number("rx_hz")));
         return mj::dump(make_reply(msg, ok));
     }
-    if (cmd == "CHANNELS_LOAD") {
-        const bool ok = ctrl.load_channels(msg.get_string("path"));
+    if (cmd == "STATION_LOAD" || cmd == "CHANNELS_LOAD") {
+        const bool ok = ctrl.load_station_file(msg.get_string("path"));
         return mj::dump(make_reply(msg, ok));
     }
-    if (cmd == "CHANNELS_SAVE") {
-        const bool ok = ctrl.save_channels(msg.get_string("path"));
+    if (cmd == "STATION_SAVE" || cmd == "CHANNELS_SAVE") {
+        const bool ok = ctrl.save_station_file(msg.get_string("path"));
         return mj::dump(make_reply(msg, ok));
     }
 
@@ -389,6 +555,25 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "NET_UNASSIGN") {
         const bool ok = ctrl.unassign_channel_from_net(msg.get_string("net"), msg.get_string("channel_id"));
         return mj::dump(make_reply(msg, ok));
+    }
+    if (cmd == "NET_UPDATE") {
+        Net updated;
+        updated.name                 = msg.get_string("name");
+        updated.dwell_ms             = static_cast<uint32_t>(msg.get_number("dwell_ms", 200));
+        updated.scanning_enabled     = msg.get_bool("scanning_enabled", true);
+        updated.sounding_enabled     = msg.get_bool("sounding_enabled", false);
+        updated.sounding_interval_sec= static_cast<uint32_t>(msg.get_number("sounding_interval_sec", 300));
+        updated.calling_length_c     = static_cast<uint32_t>(msg.get_number("calling_length_c", 10));
+        return mj::dump(make_reply(msg, ctrl.update_net(updated)));
+    }
+    if (cmd == "SCAN_NET_SET") {
+        ctrl.set_active_scan_net(msg.get_string("net"));
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "SCAN_NET_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("net", mj::Value::string(ctrl.get_active_scan_net()));
+        return mj::dump(r);
     }
 
     // ── Contacts ─────────────────────────────────────────────────────────
@@ -510,6 +695,70 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("ptt_tail_ms"))            ctrl.set_ptt_tail_ms(static_cast<uint32_t>(msg.get_number("ptt_tail_ms")));
         if (msg.has("assumed_scan_channels"))  ctrl.set_assumed_scan_channels(static_cast<uint32_t>(msg.get_number("assumed_scan_channels")));
         if (msg.has("sounding_use_twas"))      ctrl.set_sounding_use_twas(msg.get_bool("sounding_use_twas"));
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "TIMING_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("scan_dwell_ms",         mj::Value::number(ctrl.get_scan_dwell_ms()));
+        r.set("sounding_interval_sec", mj::Value::number(ctrl.get_sounding_interval_sec()));
+        r.set("link_idle_timeout_sec", mj::Value::number(ctrl.get_link_idle_timeout_sec()));
+        r.set("max_tune_time_ms",      mj::Value::number(ctrl.get_max_tune_time_ms()));
+        r.set("ptt_lead_ms",           mj::Value::number(ctrl.get_ptt_lead_ms()));
+        r.set("ptt_tail_ms",           mj::Value::number(ctrl.get_ptt_tail_ms()));
+        r.set("assumed_scan_channels", mj::Value::number(ctrl.get_assumed_scan_channels()));
+        r.set("sounding_use_twas",     mj::Value::boolean(ctrl.get_sounding_use_twas()));
+        return mj::dump(r);
+    }
+
+    // ── Station location / propagation context ───────────────────────────
+    if (cmd == "STATION_LOC_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("position_source", mj::Value::number(
+            static_cast<double>(static_cast<int>(ctrl.get_position_source()))));
+        r.set("lat_deg",      mj::Value::number(ctrl.get_station_lat()));
+        r.set("lon_deg",      mj::Value::number(ctrl.get_station_lon()));
+        r.set("grid_locator", mj::Value::string(ctrl.get_grid_locator()));
+        r.set("gpsd_host",    mj::Value::string(ctrl.get_config().gpsd_host));
+        r.set("gpsd_port",    mj::Value::number(ctrl.get_config().gpsd_port));
+        r.set("nmea_port",    mj::Value::string(ctrl.get_config().nmea_port));
+        r.set("nmea_baud",    mj::Value::number(ctrl.get_config().nmea_baud));
+        r.set("sfi_enabled",  mj::Value::boolean(ctrl.get_config().sfi_enabled));
+        r.set("has_fix",      mj::Value::boolean(ctrl.has_gps_fix()));
+        r.set("fix_lat",      mj::Value::number(ctrl.get_gps_lat()));
+        r.set("fix_lon",      mj::Value::number(ctrl.get_gps_lon()));
+        r.set("sfi",          mj::Value::number(ctrl.get_current_sfi()));
+        return mj::dump(r);
+    }
+    if (cmd == "STATION_LOC_SET") {
+        using PS = ALEStationConfig::PositionSource;
+        if (msg.has("position_source"))
+            ctrl.set_position_source(static_cast<PS>(
+                static_cast<int>(msg.get_number("position_source"))));
+        if (msg.has("lat_deg") && msg.has("lon_deg"))
+            ctrl.set_station_position_manual(msg.get_number("lat_deg"),
+                                             msg.get_number("lon_deg"));
+        if (msg.has("grid_locator"))
+            ctrl.set_station_position_grid(msg.get_string("grid_locator"));
+        if (msg.has("gpsd_host") || msg.has("gpsd_port")) {
+            const auto& cfg = ctrl.get_config();
+            ctrl.set_gpsd_config(
+                msg.has("gpsd_host") ? msg.get_string("gpsd_host") : cfg.gpsd_host,
+                msg.has("gpsd_port") ? static_cast<uint16_t>(msg.get_number("gpsd_port"))
+                                     : cfg.gpsd_port);
+        }
+        if (msg.has("nmea_port") || msg.has("nmea_baud")) {
+            const auto& cfg = ctrl.get_config();
+            ctrl.set_nmea_config(
+                msg.has("nmea_port") ? msg.get_string("nmea_port") : cfg.nmea_port,
+                msg.has("nmea_baud") ? static_cast<uint32_t>(msg.get_number("nmea_baud"))
+                                     : cfg.nmea_baud);
+        }
+        if (msg.has("sfi_enabled")) {
+            ALEStationConfig cfg = ctrl.get_config();
+            cfg.sfi_enabled = msg.get_bool("sfi_enabled");
+            ctrl.apply_config(cfg);
+        }
+        restart_location_services(ctx, ctrl);
         return mj::dump(make_reply(msg, true));
     }
 
@@ -658,6 +907,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             if (aok) { ctrl.set_audio_device(ctx.audio->get()); ctx.audio_in = audio_in; ctx.audio_out = audio_out; }
             else      { ctx.audio->reset(); ctx.audio_in.clear(); ctx.audio_out.clear(); }
         }
+        if (ok) restart_location_services(ctx, ctrl);
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "DEBUG_RX")        { ctrl.set_debug_rx(msg.get_bool("on")); return mj::dump(make_reply(msg, true)); }
@@ -752,7 +1002,14 @@ int main(int argc, char* argv[]) {
     if (ctrl.load_lqa(lqa_path))
         std::printf("[ale_bridge] LQA loaded from %s\n", lqa_path.c_str());
 
-    BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path };
+    // GPS / SFI services — started on demand from STATION_LOC_SET
+    GpsService     gps_svc;
+    SfiService     sfi_svc;
+    PendingUpdate  pending;
+
+    BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path,
+                   /*audio_in*/"", /*audio_out*/"",
+                   &gps_svc, &sfi_svc, &pending, &ws };
 
     // ── Event push ───────────────────────────────────────────────────────
     ctrl.on_status_changed = [&](const std::string& m) {
@@ -775,9 +1032,17 @@ int main(int argc, char* argv[]) {
         e.set("reason", mj::Value::string(reason));
         ws.send_text(mj::dump(e));
     };
-    ctrl.on_amd_received = [&](const std::string& from, const std::string& text) {
+    ctrl.on_idle_warning = [&](uint32_t remaining_sec) {
+        mj::Value e = make_event("idle_warning");
+        e.set("remaining_sec", mj::Value::number(remaining_sec));
+        ws.send_text(mj::dump(e));
+    };
+    ctrl.on_amd_received = [&](const std::string& self_address,
+                               const std::string& peer_address,
+                               const std::string& text) {
         mj::Value e = make_event("amd_received");
-        e.set("from", mj::Value::string(from));
+        e.set("self", mj::Value::string(self_address));
+        e.set("peer", mj::Value::string(peer_address));
         e.set("text", mj::Value::string(text));
         ws.send_text(mj::dump(e));
     };
@@ -874,6 +1139,21 @@ int main(int argc, char* argv[]) {
     std::string last_state = ctrl.display_state();
     while (g_running) {
         const uint32_t t = static_cast<uint32_t>(timer->get_time_ms());
+
+        // Drain GPS/SFI updates from worker threads — MUST happen on main thread
+        // before ctrl.update() so the propagation context is fresh each tick.
+        {
+            std::lock_guard<std::mutex> g(pending.mtx);
+            if (pending.gps_dirty) {
+                ctrl.set_gps_fix(pending.gps_acq, pending.gps_lat, pending.gps_lon);
+                pending.gps_dirty = false;
+            }
+            if (pending.sfi_dirty) {
+                ctrl.set_current_sfi(pending.sfi);
+                pending.sfi_dirty = false;
+            }
+        }
+
         ctrl.update(t);
 
         if (audio) {
@@ -904,6 +1184,8 @@ int main(int argc, char* argv[]) {
     }
 
     ctrl.emergency_stop();
+    gps_svc.stop();
+    sfi_svc.stop();
     if (radio) radio->stop();
     if (audio) audio->close();
     ws.stop();

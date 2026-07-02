@@ -153,7 +153,7 @@ bool test_ac_addr_001_003_group_call_validation()
     {
         ALEController ctrl;
         ctrl.set_self_address("SAM");
-        const bool rejected = !ctrl.initiate_group_call({"BOB", "BAD!"});
+        const bool rejected = !ctrl.initiate_group_call(std::vector<std::string>{"BOB", "BAD!"});
         all_ok &= rejected;
         std::cout << "  member with ! rejected: " << (rejected ? "PASS" : "FAIL") << "\n";
     }

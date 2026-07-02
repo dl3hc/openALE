@@ -3,7 +3,7 @@
  * \brief AC-SYNC-002-001 — Empfangsseitige 49-Symbol-Wortsynchronisation
  *
  * The Demodulator (ale2g_modem.cpp) implements word-sync via a sliding Goertzel
- * decode (DECODE_STEP = 16 samples = FFT_SIZE/4): every 16 samples it decodes
+ * decode (DECODE_STEP_COARSE=16/FINE=4 samples): during acquisition every 16 samples it decodes
  * the last 3136-sample window and gates acceptance on:
  *   1. unanimous 2/3-vote count >= threshold  — enforces correct stride-49 phase;
  *      a window offset by even 1 symbol (64 samples) scrambles the three redundant
@@ -53,10 +53,10 @@ void test_ac_sync_002_001_sync_within_two_words()
 {
     std::printf("[AC-SYNC-002-001] Word-sync within first 2 received ALE words\n");
 
-    // Leading silence: sub-symbol (< FFT_SIZE=64) so alignment is non-trivial
+    // Leading silence: sub-symbol (< SAMPLES_PER_SYMBOL=64) so alignment is non-trivial
     // but realistic for any TX path.
     constexpr uint32_t SILENCE      = 16;
-    constexpr uint32_t WORD_SAMPLES = SYMBOLS_PER_WORD * FFT_SIZE;   // 3136
+    constexpr uint32_t WORD_SAMPLES = SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL;   // 3136
     constexpr uint32_t FEED_LIMIT   = SILENCE + 2 * WORD_SAMPLES;    // 6288
 
     // Build 2 identical clean TO "SAM" words (preamble required for acquisition).
@@ -73,7 +73,7 @@ void test_ac_sync_002_001_sync_within_two_words()
                              pcm.data() + static_cast<ptrdiff_t>(off), TX_AMPLITUDE);
     }
 
-    // Feed to the Demodulator in 16-sample chunks (= DECODE_STEP); track the
+    // Feed to the Demodulator in 16-sample chunks (= DECODE_STEP_COARSE); track the
     // sample position at which the first word callback fires.
     ALE2GModem::Demodulator demod;
     uint32_t fed            = 0;

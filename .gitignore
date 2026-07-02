@@ -6,6 +6,10 @@ build_*/
 Testing/
 diag_wav/
 
+# Root-level test-capture binary artifacts
+/*.raw
+/*.wav
+
 # Hamlib Build-Artefakte (via scripts/build_hamlib.sh erstellt)
 libs/hamlib-src/
 libs/hamlib-build/

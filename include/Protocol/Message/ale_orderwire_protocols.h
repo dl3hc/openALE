@@ -3,7 +3,7 @@
  * \brief ALE orderwire message protocols (MIL-STD-188-141B A.5.7)
  *
  * Encoding for Basic Orderwire message types transmitted in the
- * Message section of an ALE calling frame (CallingPhase::MESSAGE)
+ * Message section of an ALE ACK frame (A.5.7.2.2)
  * or in the ORDERWIRE sub-phase of an established link (LinkedPhase::ORDERWIRE).
  *
  *   AMD — Automatic Message Display (A.5.7.2)
@@ -26,7 +26,7 @@ namespace ale {
  *   IDLE       — Link established, no active orderwire session.
  *   ORDERWIRE  — Orderwire message exchange in progress (A.5.7).
  *                AMD/DTM/DBM may only be initiated from this sub-state
- *                (or from CallingPhase::MESSAGE for in-call messages).
+ *                (AMD in the ACK frame is an exception per A.5.7.2.2).
  */
 enum class LinkedPhase {
     IDLE,       ///< No active orderwire session
@@ -51,9 +51,9 @@ enum class LinkedPhase {
  * - Returns an empty vector if \p text is empty.
  *
  * This function is the single authoritative AMD encoder for the stack.
- * ALEStateMachine::enqueue_call_sequence_() delegates to it exclusively so
- * that AMD words are guaranteed to be placed only in message_seq_ — never
- * in the scanning, leading, or conclusion sections.
+ * ALEStateMachine::build_ack_words() delegates to it exclusively so that
+ * AMD words are guaranteed to be placed only in the ACK frame (A.5.7.2.2) —
+ * never in the calling frame's scanning, leading, or conclusion sections.
  *
  * \param text  ASCII text to encode (up to 90 characters).
  * \return      Ordered list of ALEWords for the Message section.

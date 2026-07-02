@@ -84,7 +84,6 @@ enum class OperatorEvent {
  *   TUNING            tune delay Tt (1045 ms blind) — AC-LINK-017-2
  *   SCANNING_CALL     TO first-word × (C × 2 Trw)  — AC-LINK-017-5/6
  *   LEADING_CALL      full TO address × 2 (Tlc)    — AC-LINK-017-7
- *   MESSAGE           optional AMD/DTM/DBM orderwire (stub — AC-LINK-009-3)
  *   CONCLUSION        TIS SAM — frame terminator
  *   LISTENING         Twr/Twrt RX window for JOE's response
  *                       ├─ "TO SAM" detected → arm Tlww (AC-LINK-019-6)
@@ -100,7 +99,6 @@ enum class CallingPhase {
     SCANNING_CALL,      ///< Tsc: TO first word only per A.5.2.5.1, C×2 slots
     GROUP_SCANNING_CALL,///< Tsc: THRU/REP-Paare für Star-Group-Call, rotieren bis Tsc (T-11)
     LEADING_CALL,       ///< Tlc: full TO address, sent twice (2×Tc)
-    MESSAGE,            ///< Optional AMD/DTM orderwire (stub, see AC-LINK-009-3)
     CONCLUSION,         ///< TIS SAM — frame terminator, invites response
     LISTENING,          ///< Twr/Twrt: RX window, waiting for called station response
     SENDING_ACK,        ///< Third handshake frame: TO JOE × 2 + TIS SAM (REQ-LINK-008)
@@ -168,7 +166,7 @@ enum class HandshakePhase {
  */
 class ALEStateMachine {
 public:
-    /** Pending orderwire message for the MESSAGE phase (AMD). */
+    /** Pending AMD orderwire message — sent in the ACK frame per A.5.7.2.2. */
     struct PendingMessage {
         enum class Type { NONE, AMD } type;
         std::string content;
@@ -335,9 +333,14 @@ public:
         calling_channels      = channels;
         calling_channel_index = 0;
     }
+    /** Ordered outbound channel list most recently set by set_calling_channels()
+     *  (by initiate_call / initiate_group_call / manual VFO). Exposed for
+     *  inspection/tests so the active-net scoping can be verified. */
+    const std::vector<Channel>& get_calling_channels() const { return calling_channels; }
 
     /**
-     * Queue an orderwire message to be sent in the MESSAGE phase of the next call.
+     * Queue an AMD orderwire message to be sent in the ACK frame of the next call
+     * (A.5.7.2.2: AMD follows the complete calling+response cycle, not the calling frame).
      * Calling set_pending_message with type=NONE removes any queued message.
      */
     void set_pending_message(const PendingMessage& msg) { pending_message = msg; }
@@ -373,13 +376,18 @@ public:
     void clear_pending_noise_cmd() { pending_noise_cmd_set_ = false; }
 
     /**
-     * Queue a word sequence (e.g. CMD 'f' + DATA) to be sent as a brief
-     * orderwire burst while LINKED, followed by TIS:SELF (×2 for reliability).
-     * Used by Enhanced Frequency-Select (A.5.6.3.2) to propose/accept/reject a
-     * channel while the link remains active.
+     * Queue a word sequence (e.g. CMD 'f' + DATA, or an AMD orderwire frame) to
+     * be sent as a brief orderwire burst while LINKED, followed by TIS:SELF.
+     * Used by Enhanced Frequency-Select (A.5.6.3.2) and by AMD-over-link (A.5.7.2).
+     *
+     * @p double_burst  EFS passes true (default) to send the payload+conclusion
+     *                  twice for reliability (the historic behaviour). AMD text
+     *                  passes false so the peer decodes the message exactly once
+     *                  — a doubled AMD frame would concatenate the text twice.
      * No-op if not in LINKED state or termination already in progress.
      */
-    void trigger_linked_orderwire(std::vector<ALEWord> words);
+    void trigger_linked_orderwire(std::vector<ALEWord> words,
+                                  bool double_burst = true);
 
     /**
      * Emergency manual override per REQ-LINK-007 / A.5.5.1.
@@ -401,6 +409,14 @@ public:
      * so it cannot observe voice or data activity on its own.
      */
     void on_link_activity();
+
+    /**
+     * Reset the Twa idle timer to the current SM clock and re-arm the idle
+     * warning.  Same effect as on_link_activity() plus clearing the one-shot
+     * warning flag, exposed as a named operation for the GUI "reset timer"
+     * popup.  No-op outside LINKED (the timer is only meaningful while linked).
+     */
+    void reset_link_idle_timer();
 
     void process_received_word(const ALEWord& word);
     void update_link_quality(const LinkQuality& lq);
@@ -472,6 +488,16 @@ public:
     }
 
     /**
+     * Fired once per idle period, IDLE_WARNING_LEAD_MS before the configured Twa
+     * elapses, to let the GUI present a "reset timer" popup.  Re-arms on any link
+     * activity (ALE word / TX orderwire / on_link_activity() / reset_link_idle_timer()).
+     * \p remaining_sec is the whole seconds left before Twa fires (>=1).
+     */
+    void set_idle_warning_callback(std::function<void(uint32_t)> callback) {
+        idle_warning_cb_ = callback;
+    }
+
+    /**
      * Called for operator-level events (REQ-LINK-007, REQ-LINK-008).
      * See OperatorEvent for event types.
      */
@@ -532,6 +558,14 @@ private:
     // 0 = no drain in progress (not armed).
     uint32_t         tx_drain_start_ms_ = 0;
 
+    // ── Idle-warning (Twa) ────────────────────────────────────────────────
+    // Fires on_idle_warning_cb_() once, IDLE_WARNING_LEAD_MS before Twa elapses.
+    // Re-arms whenever last_word_time_ms advances (any link activity).  Tracked
+    // against last_seen_word_time_ms_ so the re-arm logic lives entirely in
+    // handle_linked() without touching every site that moves last_word_time_ms.
+    bool             idle_warning_sent_    = false;
+    uint32_t         last_seen_word_time_ms_ = 0;
+
     // ── Calling sub-state (MIL-STD A.5.5.3.1) ────────────────────────────
     CallingPhase calling_phase;          ///< Current phase within CALLING
     bool         active_call_is_net;     ///< true = net call (TWAS), false = individual (TO)
@@ -554,7 +588,6 @@ private:
     // conclusion_seq_ — TIS own address, sent once (§A.5.2.3.2.2)
     ALESequence scanning_seq_;    ///< scan_channels×2 words — TO first-word repeated
     ALESequence leading_seq_;     ///< 2×wpa words — full TO address doubled (Tlc)
-    ALESequence message_seq_;     ///< AMD orderwire words — DATA/REP (empty when no message)
     ALESequence conclusion_seq_;  ///< TIS/TWAS own address — sent once
     ALESequence group_scan_seq_;  ///< THRU/REP pairs for GROUP_SCANNING_CALL (T-11)
 
@@ -626,6 +659,7 @@ private:
     std::vector<ALEWord> pending_orderwire_words_;
     bool                 orderwire_pending_      = false;
     bool                 orderwire_transmitting_ = false;
+    bool                 orderwire_double_burst_ = true;  ///< EFS=true; AMD=false (single)
 
     // ── Scanning sub-state (T-10) ────────────────────────────────────────
     ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING
@@ -672,6 +706,7 @@ private:
     std::function<void(OperatorEvent)>       operator_callback;
     std::function<void(const std::string&)>  trace_cb_;
     std::function<void(const ALEMessage&)>   frame_assembled_cb_;
+    std::function<void(uint32_t)>           idle_warning_cb_;
 
     // ── Internals ─────────────────────────────────────────────────────────
     void enter_state(ALEState new_state);
@@ -750,8 +785,10 @@ private:
     void enqueue_call_sequence_();
 
     /**
-     * SENDING_ACK: third handshake frame §A.5.5.3.4 / Figure A-31.
-     * Sequence: TO [to_address] × 2 + TIS [self]
+     * SENDING_ACK: third handshake frame §A.5.5.3.4 / Figure A-31 + A.5.7.2.2.
+     * Sequence: TO [to_address] × 2 + [CMD 'a'] + [CMD 'r'+DATA...] + [CMD AMD+DATA/REP...] + TIS [self]
+     * Message section (LQA CMD/Report + AMD) inserted before TIS conclusion when present.
+     * A.5.7.2.2: complete calling+response cycle precedes all message content.
      * Built at send time because to_address is set during LISTENING phase.
      */
     void build_ack_words();

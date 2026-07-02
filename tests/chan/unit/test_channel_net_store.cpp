@@ -11,10 +11,12 @@
 
 #include "Stores/ale_data_store.h"
 #include "App/ale_controller.h"
+#include "PAL/radios/mock_radio.h"
 #include <iostream>
 #include <iomanip>
 #include <fstream>
 #include <cstdio>
+#include <algorithm>
 
 namespace ale {
 
@@ -364,17 +366,93 @@ bool test_ale_legacy_file_without_ids_still_loads()
 }
 
 // ============================================================================
-// End-to-end: assumed_scan_channels is the sole authority for scanning-call length
+// .ale persistence — per-channel inhibit flags + rx_only round-trip
 // ============================================================================
 
-bool test_initiate_call_uses_assumed_scan_channels()
+bool test_ale_roundtrip_inhibit_flags()
 {
-    std::cout << "\n[target_scan_channels] initiate_call always uses assumed_scan_channels\n";
+    std::cout << "\n[.ale persistence] per-channel inhibit flags + rx_only round-trip\n";
+
+    const std::string path = "test_channel_flags_roundtrip.ale";
+
+    {
+        ALEController ctrl;
+        Channel a(14250000, 0, "USB", "USB");
+        a.id = "C-1"; a.inhibit_calling = true; a.label = "40m-Calling";
+        ctrl.add_channel(a);
+
+        Channel b(7100000, 0, "USB", "USB");
+        b.id = "C-2"; b.inhibit_sounding = true; b.inhibit_reporting = true; b.rx_only = true;
+        ctrl.add_channel(b);
+
+        Channel c(3500000, 0, "USB", "USB");
+        c.id = "C-3"; c.enabled = false;  // master off via the OFF code
+        ctrl.add_channel(c);
+
+        ctrl.save_channels(path);
+    }
+
+    ALEController reloaded;
+    bool loaded = reloaded.load_channels(path);
+    const auto& ch = reloaded.channels();
+    bool count_ok = (ch.size() == 3);
+    bool c1 = (ch[0].id == "C-1" && ch[0].inhibit_calling
+               && !ch[0].inhibit_sounding && !ch[0].inhibit_reporting
+               && !ch[0].rx_only && ch[0].enabled && ch[0].label == "40m-Calling");
+    bool c2 = (ch[1].id == "C-2" && ch[1].inhibit_sounding && ch[1].inhibit_reporting
+               && ch[1].rx_only && !ch[1].inhibit_calling && ch[1].enabled
+               && ch[1].label.empty());
+    bool c3 = (ch[2].id == "C-3" && !ch[2].enabled
+               && !ch[2].inhibit_calling && !ch[2].inhibit_sounding
+               && !ch[2].inhibit_reporting && !ch[2].rx_only);
+
+    std::cout << "  file loads: " << (loaded ? "PASS" : "FAIL") << "\n";
+    std::cout << "  3 channels: " << (count_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  C-1 inhibit_calling only: " << (c1 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  C-2 inhibit_sounding+reporting+rx_only: " << (c2 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  C-3 enabled=false (OFF): " << (c3 ? "PASS" : "FAIL") << "\n";
+
+    std::remove(path.c_str());
+    return loaded && count_ok && c1 && c2 && c3;
+}
+
+// A bracketed label that is NOT all-recognized flag codes must be preserved as
+// the label text (not swallowed as flags).
+bool test_ale_bracketed_label_not_swallowed()
+{
+    std::cout << "\n[.ale persistence] bracketed non-flag token kept as label\n";
+
+    const std::string path = "test_channel_bracket_label.ale";
+    {
+        std::ofstream f(path);
+        f << "ID:C-1 14250000 0 USB [40m] Backup Channel\n";
+    }
+
+    ALEController ctrl;
+    bool loaded = ctrl.load_channels(path);
+    const auto& ch = ctrl.channels();
+    bool ok = (ch.size() == 1 && ch[0].id == "C-1"
+               && ch[0].label == "[40m] Backup Channel"
+               && ch[0].enabled && !ch[0].inhibit_calling && !ch[0].rx_only);
+
+    std::cout << "  file loads: " << (loaded ? "PASS" : "FAIL") << "\n";
+    std::cout << "  bracketed label preserved: " << (ok ? "PASS" : "FAIL") << "\n";
+
+    std::remove(path.c_str());
+    return loaded && ok;
+}
+
+// ============================================================================
+// End-to-end: per-net calling_length_c drives scanning-call length
+// ============================================================================
+
+bool test_initiate_call_uses_net_calling_length_c()
+{
+    std::cout << "\n[target_scan_channels] initiate_call uses net's calling_length_c\n";
 
     ALEController ctrl;
     ctrl.set_self_address("SAM");
 
-    // Contact with a net — net channel count must NOT override the policy value.
     for (int i = 0; i < 5; ++i) {
         Channel ch(14250000 + i * 1000);
         ch.enabled = (i != 4);
@@ -385,12 +463,19 @@ bool test_initiate_call_uses_assumed_scan_channels()
         ctrl.assign_channel_to_net("XYZ", c.id);
     ctrl.add_contact("BOB", "Bob", "enabled", "XYZ", "ALL");
 
-    ctrl.set_target_scan_channels(7);  // policy value
+    // Set net's calling_length_c to 7; global assumed_scan_channels to 4.
+    // The net's value must win over the global fallback.
+    Net policy;
+    policy.name = "XYZ";
+    policy.calling_length_c = 7;
+    ctrl.update_net(policy);
+    ctrl.set_assumed_scan_channels(4);  // global fallback — must NOT win when net is known
+
     bool started = ctrl.initiate_call("BOB");
-    bool used    = (ctrl.get_target_scan_channels() == 7);  // net (4) must NOT win
+    bool used    = (ctrl.get_target_scan_channels() == 7);  // net C=7, not global 4
 
     std::cout << "  call started: " << (started ? "PASS" : "FAIL") << "\n";
-    std::cout << "  assumed_scan_channels=7 used (net count 4 ignored): "
+    std::cout << "  net calling_length_c=7 used (global assumed=4 ignored): "
               << (used ? "PASS" : "FAIL")
               << " (got " << ctrl.get_target_scan_channels() << ")\n";
 
@@ -416,9 +501,154 @@ bool test_initiate_call_without_contact_leaves_target_scan_channels_untouched()
     return started && unchanged;
 }
 
-// ============================================================================
-// ChannelStore — capacity (AC-GEN-004-001)
-// ============================================================================
+// Active-net scoping: with set_active_scan_net() set, initiate_call() must
+// push only that net's channels to the SM (get_calling_channels()), while C
+// still comes from the contact's net. Empty/missing active net → all callable
+// channels (fallback). Locks in the GUI Network-pill behaviour.
+bool test_initiate_call_scoped_to_active_scan_net()
+{
+    std::cout << "\n[active_scan_net] initiate_call scopes outbound channels to the active net\n";
+
+    ALEController ctrl;
+    ctrl.set_self_address("SAM");
+
+    // 6 enabled channels; net ABC gets the first 3, net XYZ gets all 6.
+    for (int i = 0; i < 6; ++i) {
+        Channel ch(14250000 + i * 1000);
+        ch.enabled = true;
+        ctrl.add_channel(ch);
+    }
+    std::vector<std::string> allIds;
+    for (const auto& c : ctrl.channels()) allIds.push_back(c.id);
+    ctrl.add_net("ABC");
+    ctrl.add_net("XYZ");
+    for (int i = 0; i < 3; ++i) ctrl.assign_channel_to_net("ABC", allIds[i]);
+    for (const auto& id : allIds) ctrl.assign_channel_to_net("XYZ", id);
+
+    // Contact BOB belongs to XYZ with calling_length_c=7 — C must stay 7 even
+    // though the active net (ABC) is different.
+    ctrl.add_contact("BOB", "Bob", "enabled", "XYZ", "ALL");
+    Net policy;
+    policy.name = "XYZ";
+    policy.calling_length_c = 7;
+    ctrl.update_net(policy);
+    ctrl.set_assumed_scan_channels(4);
+
+    auto ids_of = [](const std::vector<Channel>& v) {
+        std::vector<std::string> ids;
+        for (const auto& c : v) ids.push_back(c.id);
+        std::sort(ids.begin(), ids.end());
+        return ids;
+    };
+
+    // 1) Active net = ABC → SM gets only ABC's 3 channels; C still 7.
+    //    The first call drives the SM into CALLING (no fake peer completes the
+    //    handshake), so later calls' return value is dominated by SM state —
+    //    what we assert is the calling-channel set the controller pushes, which
+    //    is set before the SM state check. So we don't gate on the return value.
+    ctrl.set_active_scan_net("ABC");
+    bool started1 = ctrl.initiate_call("BOB");
+    auto  got1    = ids_of(ctrl.get_calling_channels());
+    std::vector<std::string> abcIds(allIds.begin(), allIds.begin() + 3);
+    std::sort(abcIds.begin(), abcIds.end());
+    bool scoped  = (got1 == abcIds);
+    bool cStill7 = (ctrl.get_target_scan_channels() == 7);
+
+    std::cout << "  scoped to ABC (3 ch): " << (scoped ? "PASS" : "FAIL") << "\n";
+    std::cout << "  C still 7 (contact's net, not active net): "
+              << (cStill7 ? "PASS" : "FAIL")
+              << " (got " << ctrl.get_target_scan_channels() << ")\n";
+
+    // 2) Active net cleared → fallback to all 6 callable channels.
+    ctrl.set_active_scan_net("");
+    (void)ctrl.initiate_call("BOB");
+    auto  got2    = ids_of(ctrl.get_calling_channels());
+    std::vector<std::string> sortedAll = allIds;
+    std::sort(sortedAll.begin(), sortedAll.end());
+    bool fallback = (got2 == sortedAll);
+
+    std::cout << "  fallback to all channels (6 ch): " << (fallback ? "PASS" : "FAIL") << "\n";
+
+    // 3) Active net with no assigned callable channels → also falls back (never blocks).
+    ctrl.add_net("EMPTY");
+    ctrl.set_active_scan_net("EMPTY");
+    (void)ctrl.initiate_call("BOB");
+    auto  got3    = ids_of(ctrl.get_calling_channels());
+    bool fbEmpty  = (got3 == sortedAll);
+    std::cout << "  empty active net falls back (not blocked): " << (fbEmpty ? "PASS" : "FAIL") << "\n";
+
+    return started1 && scoped && cStill7 && fallback && fbEmpty;
+}
+
+// step_channel() must iterate ONLY the active net's channels when a net is
+// selected, and all calling_channels_ when no net is selected. The operator's
+// header step arrows must not wander outside the selected net. Uses MockRadio
+// (radio_ is required by step_channel) and captures targets via on_channel_changed.
+bool test_step_channel_scoped_to_active_scan_net()
+{
+    std::cout << "\n[active_scan_net] step_channel iterates only the active net's channels\n";
+
+    ALEController ctrl;
+    ctrl.set_self_address("SAM");
+
+    // 6 channels C-1..C-6; net ABC gets only C-3 and C-5.
+    for (int i = 0; i < 6; ++i) {
+        Channel ch(14000000 + i * 1000);   // C-1=14000000, C-2=14001000, ... C-6=14005000
+        ch.enabled = true;
+        ctrl.add_channel(ch);
+    }
+    std::vector<std::string> allIds;
+    for (const auto& c : ctrl.channels()) allIds.push_back(c.id);
+    ctrl.add_net("ABC");
+    ctrl.assign_channel_to_net("ABC", allIds[2]);   // C-3
+    ctrl.assign_channel_to_net("ABC", allIds[4]);   // C-5
+
+    pal::MockRadio radio;
+    ctrl.set_radio(&radio);
+
+    uint32_t lastRx = 0;
+    ctrl.on_channel_changed = [&](const Channel& ch) { lastRx = ch.rx_frequency_hz; };
+
+    auto stepN = [&](int dir, int n) {
+        std::vector<uint32_t> seq;
+        for (int i = 0; i < n; ++i) { ctrl.step_channel(dir); seq.push_back(lastRx); }
+        return seq;
+    };
+    auto allIn = [](const std::vector<uint32_t>& seq, const std::vector<uint32_t>& allow) {
+        for (uint32_t f : seq) if (std::find(allow.begin(), allow.end(), f) == allow.end()) return false;
+        return true;
+    };
+    auto visitsAll = [](const std::vector<uint32_t>& seq, const std::vector<uint32_t>& allow) {
+        for (uint32_t f : allow) if (std::find(seq.begin(), seq.end(), f) == seq.end()) return false;
+        return true;
+    };
+
+    const uint32_t c3 = 14002000, c5 = 14004000;
+    const std::vector<uint32_t> abcHz = {c3, c5};
+
+    // 1) Active net = ABC → every step lands inside ABC, and both channels visit.
+    ctrl.set_active_scan_net("ABC");
+    auto seq1 = stepN(+1, 6);
+    bool scoped  = allIn(seq1, abcHz);
+    bool covers = visitsAll(seq1, abcHz);
+    std::cout << "  +1 x6 stays within ABC {C-3,C-5}: " << (scoped ? "PASS" : "FAIL") << "\n";
+    std::cout << "  both ABC channels visited: " << (covers ? "PASS" : "FAIL") << "\n";
+
+    // 2) Reverse direction also stays within ABC.
+    auto seq2 = stepN(-1, 6);
+    bool scopedRev = allIn(seq2, abcHz);
+    std::cout << "  -1 x6 stays within ABC: " << (scopedRev ? "PASS" : "FAIL") << "\n";
+
+    // 3) Clear active net → stepping visits ALL 6 channels.
+    ctrl.set_active_scan_net("");
+    auto seq3 = stepN(+1, 8);   // >6 steps to guarantee a full cycle
+    std::vector<uint32_t> allHz;
+    for (int i = 0; i < 6; ++i) allHz.push_back(14000000 + i * 1000);
+    bool visitsAll6 = visitsAll(seq3, allHz);
+    std::cout << "  no net → all 6 channels visited: " << (visitsAll6 ? "PASS" : "FAIL") << "\n";
+
+    return scoped && covers && scopedRev && visitsAll6;
+}
 
 bool test_channel_store_min_capacity_100()
 {
@@ -974,11 +1204,17 @@ int run_all_tests()
 
     run(".ale round-trip: IDs and nets survive",    test_ale_roundtrip_ids_and_nets());
     run(".ale legacy file still loads",             test_ale_legacy_file_without_ids_still_loads());
+    run(".ale round-trip: inhibit flags + rx_only", test_ale_roundtrip_inhibit_flags());
+    run(".ale bracketed non-flag label kept",       test_ale_bracketed_label_not_swallowed());
 
-    run("initiate_call uses assumed_scan_channels (net count ignored)",
-        test_initiate_call_uses_assumed_scan_channels());
+    run("initiate_call uses net's calling_length_c (global assumed is fallback)",
+        test_initiate_call_uses_net_calling_length_c());
     run("initiate_call without contact leaves target_scan_channels untouched",
         test_initiate_call_without_contact_leaves_target_scan_channels_untouched());
+    run("initiate_call scopes outbound channels to the active scan net",
+        test_initiate_call_scoped_to_active_scan_net());
+    run("step_channel iterates only the active net's channels",
+        test_step_channel_scoped_to_active_scan_net());
 
     std::cout << "\n";
     std::cout << "================================================================\n";

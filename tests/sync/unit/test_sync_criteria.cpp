@@ -71,13 +71,13 @@ static std::vector<int16_t> make_pcm(const ALEWord& word)
     ToneGenerator gen;
     constexpr uint32_t SILENCE = 16;
     std::vector<int16_t> pcm(SILENCE, 0);
-    pcm.resize(SILENCE + SYMBOLS_PER_WORD * FFT_SIZE);
+    pcm.resize(SILENCE + SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
     gen.generate_symbols(frame.data(), SYMBOLS_PER_WORD,
                          pcm.data() + SILENCE, TX_AMPLITUDE);
     return pcm;
 }
 
-// Feed all PCM to demodulator in DECODE_STEP-sized chunks.
+// Feed all PCM to demodulator in DECODE_STEP_COARSE-sized chunks (acquisition stride).
 static void feed(ALE2GModem::Demodulator& d, const std::vector<int16_t>& pcm)
 {
     constexpr uint32_t STEP = 16;
@@ -387,12 +387,12 @@ void test_criteria_5_6_7_basic38_character_gate()
 // Criterion 8 — history / state / expectations / protocol (grid state)
 //
 // Gate: accept_word_() tracks grid_locked_ + grid_anchor_ + a min_spacing
-//       window.  Without this gate, the sliding FFT window (stride = 16
-//       samples) would fire a callback for every DECODE_STEP pass over the
-//       same word boundary — roughly WORD_SAMPLES/DECODE_STEP = 196 times
+//       window.  Without this gate, the sliding Goertzel window (COARSE stride
+//       = 16 samples) would fire a callback for every pass over the same word
+//       boundary — roughly WORD_SAMPLES/DECODE_STEP_COARSE = 196 times
 //       for a single physical word.
 //
-// The min_spacing gate (WORD_SAMPLES - FFT_SIZE = 3072 samples) prevents
+// The min_spacing gate (WORD_SAMPLES - SAMPLES_PER_SYMBOL = 3072 samples) prevents
 // re-accepting the same word boundary until almost one full word-interval
 // has elapsed.
 //
@@ -406,7 +406,7 @@ void test_criteria_5_6_7_basic38_character_gate()
 //   scrambles the three redundant copies of every bit, dropping
 //   unanimous_votes to near zero, which the threshold rejects.
 //   (b) for grid-locked FEC-corrected words, accept_word_() additionally
-//   applies an on_word_boundary check (± FFT_SIZE of expected boundary).
+//   applies an on_word_boundary check (± SAMPLES_PER_SYMBOL of expected boundary).
 //
 // These behaviours are verified end-to-end by AC-SYNC-002-001
 // (tests/sync/integration/test_word_sync.cpp), which proves that only the
@@ -428,8 +428,8 @@ void test_criteria_8_9_grid_state_and_phase()
         d.set_word_callback([&](const ALEWord&) { ++count; });
         feed(d, pcm);
 
-        // Without the grid / min_spacing gate, the sliding DECODE_STEP window
-        // would fire ~(WORD_SAMPLES / DECODE_STEP) = 196 times for this one word.
+        // Without the grid / min_spacing gate, the sliding Goertzel window
+        // would fire ~(WORD_SAMPLES / DECODE_STEP_COARSE) = 196 times for this one word.
         check(count == 1,
               "criterion 8: one physical word must produce exactly 1 callback "
               "(grid state prevents duplicate decode of same boundary)");

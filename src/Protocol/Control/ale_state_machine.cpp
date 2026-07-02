@@ -339,6 +339,9 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             linked_terminating_ = false;
             tx_drain_start_ms_ = 0;   // no TX drain pending on a fresh link
             allcall_silent_ = false;          // AllCall concluded → normal linked state
+            // Fresh link: arm the idle warning (fires IDLE_WARNING_LEAD_MS before Twa).
+            idle_warning_sent_      = false;
+            last_seen_word_time_ms_ = current_time_ms;
             // Bind active_call_to to the actual linked peer so terminate_link()
             // and the Twa-timeout TWAS address the right station.
             //
@@ -473,13 +476,11 @@ void ALEStateMachine::handle_calling() {
         // ── TX phases ─────────────────────────────────────────────────────
         // All words were enqueued at tune-complete; the audio layer renders
         // them without gaps.  Phase transitions happen in on_word_complete().
-        // MESSAGE phase: AMD orderwire words built from active_message_ in
-        // enqueue_call_sequence_() at tune-complete (AC-LINK-009-3 / A.5.7.2).
-        // RX was disabled at LBT→TUNING; no per-tick re-assertion needed.
+        // TX phases: all words were enqueued at tune-complete; on_word_complete()
+        // drives all phase transitions.  RX was disabled at LBT→TUNING.
         case CallingPhase::SCANNING_CALL:
         case CallingPhase::GROUP_SCANNING_CALL:
         case CallingPhase::LEADING_CALL:
-        case CallingPhase::MESSAGE:
         case CallingPhase::CONCLUSION:
             break;
 
@@ -827,14 +828,40 @@ void ALEStateMachine::handle_linked() {
             address_book.get_self_address());
         for (const auto& w : concl.words())
             tx.push_back(w);
-        const auto once = tx;
-        tx.insert(tx.end(), once.begin(), once.end());
+        // EFS doubles the whole burst for reliability; AMD passes double_burst=false
+        // so the peer displays the text once (a doubled AMD frame concatenates twice).
+        if (orderwire_double_burst_) {
+            const auto once = tx;
+            tx.insert(tx.end(), once.begin(), once.end());
+        }
         transmit_words(tx);
         // Arm the drain deadline (skipped harmlessly if nothing was enqueued —
         // the words_pending == 0 branch above clears it next tick).
         if (words_pending > 0)
             tx_drain_start_ms_ = current_time_ms;
         return;
+    }
+
+    // ── Idle warning (Twa lead) ─────────────────────────────────────────────
+    // Any link activity moves last_word_time_ms (ALE word RX, TX orderwire,
+    // on_link_activity(), reset_link_idle_timer()).  Detect that here and re-arm
+    // the one-shot warning without touching every activity site.  Fires once,
+    // IDLE_WARNING_LEAD_MS before Twa elapses, so the GUI can offer a reset.
+    if (last_word_time_ms != last_seen_word_time_ms_) {
+        last_seen_word_time_ms_ = last_word_time_ms;
+        idle_warning_sent_      = false;
+    }
+    if (!linked_terminating_ && !idle_warning_sent_ && idle_warning_cb_) {
+        const uint32_t idle_ms = current_time_ms - last_word_time_ms;
+        const uint32_t warn_at = (timing_.Twa_ms > ALETimingConstants::IDLE_WARNING_LEAD_MS)
+                                   ? (timing_.Twa_ms - ALETimingConstants::IDLE_WARNING_LEAD_MS)
+                                   : 0u;
+        if (idle_ms >= warn_at) {
+            idle_warning_sent_ = true;
+            const uint32_t remaining_sec =
+                (timing_.Twa_ms > idle_ms) ? ((timing_.Twa_ms - idle_ms) / 1000u) : 0u;
+            idle_warning_cb_(remaining_sec);
+        }
     }
 
     // ── Twa inactivity timeout (AC-LINK-023) ─────────────────────────────────
@@ -852,10 +879,12 @@ void ALEStateMachine::handle_linked() {
     }
 }
 
-void ALEStateMachine::trigger_linked_orderwire(std::vector<ALEWord> words) {
+void ALEStateMachine::trigger_linked_orderwire(std::vector<ALEWord> words,
+                                               bool double_burst) {
     check_thread_();
     if (current_state != ALEState::LINKED || linked_terminating_) return;
     pending_orderwire_words_ = std::move(words);
+    orderwire_double_burst_  = double_burst;
     orderwire_pending_       = true;
     last_word_time_ms        = current_time_ms;  // reset Twa to prevent timeout during TX
 }
@@ -866,6 +895,17 @@ void ALEStateMachine::on_link_activity() {
     // this covers activity the ALE layer cannot observe directly.
     if (current_state == ALEState::LINKED)
         last_word_time_ms = current_time_ms;
+}
+
+void ALEStateMachine::reset_link_idle_timer() {
+    // Named GUI-facing operation: restart the full Twa countdown and re-arm the
+    // idle warning.  No-op outside LINKED (the timer is only meaningful while
+    // linked).  Equivalent to on_link_activity() plus flag cleanup; done here so
+    // handle_linked()'s re-arm detection picks it up next tick.
+    if (current_state != ALEState::LINKED) return;
+    last_word_time_ms        = current_time_ms;
+    idle_warning_sent_       = false;
+    last_seen_word_time_ms_  = current_time_ms;
 }
 
 void ALEStateMachine::handle_sounding() {
@@ -1309,9 +1349,16 @@ void ALEStateMachine::process_received_word(const ALEWord& word) {
     last_word_time_ms = current_time_ms;
 
     LinkQuality lq;
-    lq.fec_errors   = word.fec_errors;
-    lq.total_words  = 1;
-    lq.timestamp_ms = current_time_ms;
+    lq.fec_errors          = word.fec_errors;
+    lq.total_words         = 1;
+    lq.timestamp_ms        = current_time_ms;
+    lq.sinad_db            = word.sinad_db;
+    lq.snr_db              = (word.unanimous_votes / 48.0f) * 31.0f;
+    lq.golay_uncorrectable = word.golay_uncorrectable;
+    lq.non_unanimous_count = word.golay_uncorrectable
+        ? 48u
+        : (word.unanimous_votes <= 48u
+            ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
     update_link_quality(lq);
 
     const bool lbt_active =
@@ -1385,6 +1432,9 @@ void ALEStateMachine::update_link_quality(const LinkQuality& lq) {
                 || current_state == ALEState::LINKED)) {
         MetricsSample sample;
         sample.snr_db               = lq.snr_db;
+        sample.sinad_db             = lq.sinad_db;
+        sample.non_unanimous_count  = lq.non_unanimous_count;
+        sample.golay_uncorrectable  = lq.golay_uncorrectable;
         sample.fec_errors_corrected = static_cast<int>(lq.fec_errors);
         sample.decode_success       = (lq.fec_errors <= MAX_GOLAY_ERRORS);
         sample.timestamp_ms         = lq.timestamp_ms;
@@ -1417,10 +1467,16 @@ bool ALEStateMachine::check_link_timeout() {
         case ALEState::HANDSHAKE:
             return (current_time_ms - state_entry_time_ms) > timing_.Twa_ms;
         case ALEState::LINKED:
-            // handle_linked() already handles Twa=30s (AC-LINK-023) with TWAS.
-            // LINK_TIMEOUT_MS is a defensive safety net — it fires only if
-            // handle_linked() is somehow not reached within its window.
-            return (current_time_ms - last_word_time_ms) > ALETimingConstants::LINK_TIMEOUT_MS;
+            // handle_linked() owns the spec-compliant Twa timeout (AC-LINK-023):
+            // it sends TWAS, then transitions out.  Twa is user-configurable
+            // (set_link_idle_timeout_sec → timing_.Twa_ms, default 360 s in the
+            // GUI).  This defensive safety net only matters if handle_linked()
+            // is somehow not reached within its window — so it must never fire
+            // *before* Twa.  Using max(Twa, LINK_TIMEOUT_MS) guarantees that: when
+            // Twa > 120 s the net is inert and handle_linked()'s TWAS termination
+            // governs; when Twa < 120 s the net still backstops a stalled SM.
+            return (current_time_ms - last_word_time_ms)
+                   > std::max(timing_.Twa_ms, ALETimingConstants::LINK_TIMEOUT_MS);
         default:
             return false;
     }
@@ -1485,47 +1541,64 @@ void ALEStateMachine::try_next_calling_channel() {
 // initiate_call() time, so ALESequenceBuilder is called at send time.
 
 // AMD word building is delegated to encode_amd() in ale_orderwire_protocols.cpp
-// (AC-GEN-014-002). The Message section guard in enqueue_call_sequence_() ensures
-// AMD words are placed exclusively in message_seq_, never in scanning/leading/conclusion.
+// (AC-GEN-014-002). Per A.5.7.2.2, AMD is placed in the message section of the
+// ACK frame (build_ack_words()), not in the calling frame — the complete calling
+// cycle (call + response) must precede the AMD content.
 
 void ALEStateMachine::enqueue_call_sequence_() {
     // scanning_seq_ and leading_seq_ are pre-built by initiate_call*():
     //   scanning_seq_  — scan_channels × 2 words (§A.5.2.5.1 / §A.5.5.4.3)
     //   leading_seq_   — full address × 2 (Tlc = 2×Tc, §A.5.5.3.1)
-    //   message_seq_   — AMD orderwire DATA/REP words (AC-LINK-009-3), empty if none
     //   conclusion_seq_ — TIS self address (§A.5.2.3.2.2)
     // All words enqueued back-to-back; Trw grid emerges from the audio stream
     // (49 symbols × 8 ms per word).  on_word_complete() advances phase counters
     // against exactly these word counts.
-    // Build the message section: CMD LQA (char 'a') + LQA Report (CMD 'r' + DATA) + AMD.
-    // Ordering per plan §Block C4: [CMD 'a'] [CMD 'r' + DATA...] [AMD DATA/REP...]
-    {
-        std::vector<ALEWord> msg;
-        for (const auto& w : active_lqa_cmd_seq_.words())    msg.push_back(w);
-        for (const auto& w : active_lqa_report_seq_.words()) msg.push_back(w);
-        if (active_message_.type == PendingMessage::Type::AMD
-                && !active_message_.content.empty()) {
-            const auto amd = encode_amd(active_message_.content);
-            msg.insert(msg.end(), amd.begin(), amd.end());
-        }
-        message_seq_ = ALESequence(std::move(msg));
-    }
-    // active_message_ / active_lqa_cmd_seq_ / active_lqa_report_seq_ are NOT
-    // cleared here — they survive across channel retries.
+    // The calling frame carries NO message section — LQA CMD/Report and AMD
+    // are both inserted in the ACK frame by build_ack_words() (A.5.7.2.2).
+    // active_message_ / active_lqa_cmd_seq_ / active_lqa_report_seq_ survive
+    // channel retries and are consumed by build_ack_words() at SENDING_ACK.
 
     transmit_words(scanning_seq_.words());
     transmit_words(leading_seq_.words());
-    transmit_words(message_seq_.words());
     transmit_words(conclusion_seq_.words());
 }
 
 void ALEStateMachine::build_ack_words() {
-    // ACK frame per REQ-LINK-008 / §A.5.5.3.4 / Figure A-31:
-    //   TO [to_address] × 2 + TIS [self_address]
+    // ACK frame per REQ-LINK-008 / §A.5.5.3.4 / Figure A-31 + A.5.7.2.2:
+    //   TO [to_address] × 2 + [CMD 'a'] + [CMD 'r' + DATA...] + [CMD AMD + DATA/REP...] + TIS [self]
     // to_address is set during the LISTENING phase (process_received_word),
     // so it is encoded here at send time, not pre-computed.
-    transmit_words(ALESequenceBuilder::ack(
-        to_address, address_book.get_self_address()).words());
+    // All message content (LQA CMD/Report from SAM + AMD) is inserted before the
+    // TIS conclusion: the complete calling+response cycle precedes it (A.5.7.2.2).
+    const bool has_lqa = !active_lqa_cmd_seq_.empty() || !active_lqa_report_seq_.empty();
+    const bool has_amd = (active_message_.type == PendingMessage::Type::AMD)
+                      && !active_message_.content.empty();
+    if (has_lqa || has_amd) {
+        const auto base = ALESequenceBuilder::ack(
+            to_address, address_book.get_self_address());
+        const auto& bw = base.words();
+        // Find where the conclusion section begins (first TIS or TWAS word).
+        size_t conc_start = bw.size();
+        for (size_t i = 0; i < bw.size(); ++i) {
+            if (bw[i].type == PreambleType::TIS || bw[i].type == PreambleType::TWAS) {
+                conc_start = i;
+                break;
+            }
+        }
+        std::vector<ALEWord> words;
+        for (size_t i = 0; i < conc_start; ++i)              words.push_back(bw[i]);
+        for (const auto& w : active_lqa_cmd_seq_.words())    words.push_back(w);
+        for (const auto& w : active_lqa_report_seq_.words()) words.push_back(w);
+        if (has_amd) {
+            const auto amd = encode_amd(active_message_.content);
+            words.insert(words.end(), amd.begin(), amd.end());
+        }
+        for (size_t i = conc_start; i < bw.size(); ++i)      words.push_back(bw[i]);
+        transmit_words(words);
+    } else {
+        transmit_words(ALESequenceBuilder::ack(
+            to_address, address_book.get_self_address()).words());
+    }
     // Arm the TX-drain deadline: on_word_complete() normally fires
     // HANDSHAKE_COMPLETE once the frame drains; if the audio stalls or the
     // completion is never armed, handle_calling SENDING_ACK force-aborts after
@@ -1689,28 +1762,12 @@ void ALEStateMachine::on_word_complete() {
 
             case CallingPhase::LEADING_CALL: {
                 // leading_seq_ is pre-doubled (Tlc = 2×Tc, §A.5.5.3.1); its size
-                // equals 2×wpa.  After leading, enter MESSAGE if AMD words were queued.
+                // equals 2×wpa.  Calling frame carries no message section — any
+                // message content (LQA, AMD) is in the ACK frame (build_ack_words).
                 const uint32_t tlc_slots = static_cast<uint32_t>(leading_seq_.size());
                 if (call_cycles_in_phase >= tlc_slots) {
-                    if (!message_seq_.empty()) {
-                        SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → MESSAGE (msg_words="
-                                 + std::to_string(message_seq_.size()) + ")\n");
-                        calling_phase = CallingPhase::MESSAGE;
-                    } else {
-                        SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → CONCLUSION (tlc_slots="
-                                 + std::to_string(tlc_slots) + ")\n");
-                        calling_phase = CallingPhase::CONCLUSION;
-                    }
-                    call_cycles_in_phase = 0;
-                }
-                break;
-            }
-
-            case CallingPhase::MESSAGE: {
-                const uint32_t msg_slots = static_cast<uint32_t>(message_seq_.size());
-                if (call_cycles_in_phase >= msg_slots) {
-                    SM_TRACE("[TRACE] on_word_complete: MESSAGE → CONCLUSION (msg_slots="
-                             + std::to_string(msg_slots) + ")\n");
+                    SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → CONCLUSION (tlc_slots="
+                             + std::to_string(tlc_slots) + ")\n");
                     calling_phase        = CallingPhase::CONCLUSION;
                     call_cycles_in_phase = 0;
                 }

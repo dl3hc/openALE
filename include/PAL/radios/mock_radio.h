@@ -69,16 +69,16 @@ private:
         switch (m) {
             case RadioMode::USB:      return "USB";
             case RadioMode::LSB:      return "LSB";
-            case RadioMode::CW:       return "CW";
-            case RadioMode::CW_R:     return "CW-R";
+            case RadioMode::CW:       return "CWU";
+            case RadioMode::CW_R:     return "CWL";
             case RadioMode::FM:       return "FM";
-            case RadioMode::FMW:      return "FM-W";
+            case RadioMode::FMW:      return "FMW";
             case RadioMode::AM:       return "AM";
             case RadioMode::FSK:      return "FSK";
             case RadioMode::RTTY:     return "RTTY";
             case RadioMode::FSK_R:    return "FSK-R";
-            case RadioMode::DATA_USB: return "DATA-USB";
-            case RadioMode::DATA_LSB: return "DATA-LSB";
+            case RadioMode::DATA_USB: return "USB-D";
+            case RadioMode::DATA_LSB: return "LSB-D";
             case RadioMode::DIG:      return "DIG";
             case RadioMode::TUNE:     return "TUNE";
             default:                  return "???";

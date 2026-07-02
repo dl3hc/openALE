@@ -164,6 +164,11 @@ constexpr uint32_t Twa_ms = 30000u;  // Twa = 30 s
 // Link maintenance timeout  (implementation-defined — not a spec symbol)
 constexpr uint32_t LINK_TIMEOUT_MS = 120000u;  // 120 s
 
+// Idle-warning lead time: the SM fires on_idle_warning() this far before the
+// configured Twa elapses, so the GUI can offer a "reset timer" popup.  Kept
+// short relative to any realistic Twa (default GUI setting 360 s).
+constexpr uint32_t IDLE_WARNING_LEAD_MS = 30000u;  // 30 s
+
 // LINKED TX-drain safety-net timeout (implementation-defined — not a spec
 // symbol).  terminate_link() and trigger_linked_orderwire() rely on
 // on_word_complete() draining the TX burst; if that never happens (audio stall
@@ -313,6 +318,7 @@ namespace ALETimingConstants {
     constexpr uint32_t Twa_ms  = ale::Twa_ms;         // 30 000 ms
     constexpr uint32_t Tps_ms  = ale::Tps_ms;         // 2 700 000 ms (45 min)
     constexpr uint32_t LINK_TIMEOUT_MS = ale::LINK_TIMEOUT_MS;  // 120 000 ms
+    constexpr uint32_t IDLE_WARNING_LEAD_MS = ale::IDLE_WARNING_LEAD_MS;  // 30 000 ms
     constexpr uint32_t TX_DRAIN_TIMEOUT_MS = ale::TX_DRAIN_TIMEOUT_MS;  // 10 000 ms
 
     // ── Derived protocol limits (integer, for SM comparisons) ────────────

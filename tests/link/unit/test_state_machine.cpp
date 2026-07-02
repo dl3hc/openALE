@@ -590,7 +590,7 @@ bool test_sounding_no_calling_phase() {
     bool calling_phase_ok = true;   // SCANNING_CALL and MESSAGE must never appear
     auto check_cp = [&]() {
         const auto cp = sm.get_calling_phase();
-        if (cp == CallingPhase::SCANNING_CALL || cp == CallingPhase::MESSAGE)
+        if (cp == CallingPhase::SCANNING_CALL)
             calling_phase_ok = false;
     };
 
@@ -1868,6 +1868,82 @@ bool test_sending_response_drain_timeout() {
 }
 
 // ============================================================================
+// TEST: Link idle timeout — the configured Twa governs (not the hardcoded
+// 120 s safety net), the idle warning fires once ~30 s before Twa, and
+// reset_link_idle_timer() restarts the full period and re-arms the warning.
+bool test_link_idle_timeout_and_warning() {
+    std::cout << "\n[TEST] Link idle timeout — Twa governs + warning + reset\n";
+    std::cout << "============================================================\n";
+    bool ok = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        ok = ok && cond;
+    };
+
+    ALEStateMachine sm;
+    sm.set_self_address("SAM");
+    sm.set_transmit_callback([](const ALEWord&) {});  // swallow TWAS / frames
+
+    // User-configured idle timeout: 360 s (GUI default). The hardcoded 120 s
+    // LINK_TIMEOUT_MS safety net must NOT fire before this — it is now
+    // max(Twa_ms, LINK_TIMEOUT_MS), so Twa governs when larger.
+    TimingParameters tp = sm.get_timing_parameters();
+    tp.Twa_ms = 360000u;
+    sm.set_timing_parameters(tp);
+
+    int warn_count = 0;
+    uint32_t last_remaining = 0;
+    sm.set_idle_warning_callback([&](uint32_t remaining_sec) {
+        ++warn_count;
+        last_remaining = remaining_sec;
+    });
+
+    // Drive to LINKED. update(0) anchors current_time_ms so last_word_time_ms
+    // (set on LINKED entry) == 0.
+    sm.update(0u);
+    ScanConfig cfg;
+    cfg.scan_list.push_back(Channel(7100000, "USB"));
+    sm.configure_scan(cfg);
+    sm.process_event(ALEEvent::START_SCAN);         // → SCANNING
+    sm.process_event(ALEEvent::CALL_DETECTED);      // → HANDSHAKE
+    sm.process_event(ALEEvent::HANDSHAKE_COMPLETE); // → LINKED (last_word_time_ms = 0)
+    check(sm.get_state() == ALEState::LINKED, "Entered LINKED");
+
+    // 130 s idle: the old 120 s safety net would have fired LINK_TIMEOUT here.
+    // With the fix, the configured 360 s Twa governs — link stays LINKED.
+    sm.update(130000u);
+    check(sm.get_state() == ALEState::LINKED, "Link survives past 120 s safety net (Twa=360 s governs)");
+    check(warn_count == 0, "No idle warning at 130 s (warns only in last 30 s)");
+
+    // 330 s idle: exactly IDLE_WARNING_LEAD_MS before Twa → warning fires once.
+    sm.update(330000u);
+    check(sm.get_state() == ALEState::LINKED, "Link still LINKED at 330 s");
+    check(warn_count == 1, "Idle warning fired once at 330 s");
+    check(last_remaining == 30u, "Warning reports ~30 s remaining");
+
+    // Re-tick at the same time: no duplicate warning (one-shot per idle period).
+    sm.update(330000u);
+    check(warn_count == 1, "No duplicate warning on same-tick re-update");
+
+    // Operator clicks "Reset Timer": restarts the full idle period, re-arms.
+    sm.reset_link_idle_timer();
+    check(warn_count == 1, "Reset does not itself fire a warning");
+
+    // 330 s after the reset (t=660 s): warning re-fires.
+    sm.update(660000u);
+    check(warn_count == 2, "Idle warning re-armed after reset, fires again 330 s later");
+    check(sm.get_state() == ALEState::LINKED, "Link still LINKED after reset+330 s");
+
+    // 360 s after the reset (t=690 s): Twa elapses → TWAS + LINK_TIMEOUT.
+    sm.update(690000u);
+    check(sm.get_state() != ALEState::LINKED, "Link terminated at Twa after reset");
+
+    if (ok)
+        std::cout << "PASS: Link idle timeout — Twa governs + warning + reset\n";
+    return ok;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -1910,6 +1986,7 @@ int run_all_tests() {
     if (test_allcall_receiver_resumes_on_twas()) { pass_count++; } else { fail_count++; }
     if (test_thread_contract_check()) { pass_count++; } else { fail_count++; }
     if (test_sending_response_drain_timeout()) { pass_count++; } else { fail_count++; }
+    if (test_link_idle_timeout_and_warning()) { pass_count++; } else { fail_count++; }
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

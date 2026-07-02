@@ -37,6 +37,16 @@
       --r-sm: 3px;
       --r-md: 6px;
       --r-lg: 10px;
+
+      --sp-1: 4px;  --sp-2: 6px;  --sp-3: 8px;
+      --sp-4: 12px; --sp-5: 16px; --sp-6: 24px;
+
+      --shadow-sm: 0 2px 8px rgba(0,0,0,0.35);
+      --shadow-md: 0 8px 28px rgba(0,0,0,0.45);
+      --shadow-lg: 0 16px 42px rgba(0,0,0,0.55);
+      --shadow-xl: 0 32px 80px rgba(0,0,0,0.70);
+
+      --t: 0.13s ease;
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -126,6 +136,9 @@
       font-size: 12px;
       cursor: pointer;
       transition: all 0.12s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
     .hdr-btn:hover {
       background: var(--bg3);
@@ -379,8 +392,21 @@
       cursor: pointer;
       letter-spacing: 0.04em;
       transition: all 0.12s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
     .btn-send:hover { background: var(--accent-dim); }
+    .msg-count {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--tx-dim);
+      align-self: center;
+      white-space: nowrap;
+      min-width: 34px;
+      text-align: right;
+    }
+    .msg-count.msg-count-full { color: #ff8a65; }
 
     /* ── Contacts ── */
     .panel-contacts { flex: 1; min-height: 0; }
@@ -459,14 +485,14 @@
     .call-mode-panel {
       position: absolute; bottom: calc(100% + 6px); left: 10px; right: 10px; z-index: 50;
       background: var(--bg2); border: 1px solid var(--border-md);
-      border-radius: var(--r-lg); box-shadow: 0 -8px 28px rgba(0,0,0,0.45);
+      border-radius: var(--r-lg); box-shadow: var(--shadow-md);
       display: flex; flex-direction: column; gap: 4px; padding: 6px;
     }
     .call-mode-panel.hidden { display: none; }
     .call-mode-btn {
       width: 100%; padding: 10px 12px; text-align: left;
       background: var(--bg3); border: 1px solid var(--border);
-      border-radius: var(--r); cursor: pointer; color: var(--tx);
+      border-radius: var(--r-md); cursor: pointer; color: var(--tx);
       display: flex; flex-direction: column; gap: 2px;
     }
     .call-mode-btn:hover { background: var(--accent-dim); border-color: var(--accent); }
@@ -541,7 +567,10 @@
     .qlabel { font-family: var(--mono); font-size: 11px; color: var(--s-linked); }
 
     .btn-end {
-      display: block;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
       width: calc(100% - 20px);
       margin: 0 10px 12px;
       padding: 10px;
@@ -707,6 +736,11 @@
                     border-bottom: 1px solid var(--border); }
     .heard-row:last-child { border-bottom: none; }
     .heard-cs     { color: var(--tx); font-weight: 600; min-width: 56px; }
+    .heard-avail  { font-size: 8px; font-weight: 700; min-width: 34px; text-align: center;
+                    padding: 1px 3px; border-radius: 2px; letter-spacing: .5px; }
+    .heard-avail.ha-yes { color: var(--s-linked); border: 1px solid var(--s-linked); }
+    .heard-avail.ha-no  { color: var(--s-error);  border: 1px solid var(--s-error); }
+    .heard-avail.ha-unk { color: var(--tx-dim);   border: 1px solid var(--border); }
     .heard-freq   { color: var(--tx-muted); font-size: 9px; min-width: 52px; }
     .heard-lbl    { color: var(--tx-dim);   font-size: 9px; min-width: 24px; }
     .heard-score  { min-width: 36px; }
@@ -802,7 +836,7 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      box-shadow: 0 32px 80px rgba(0,0,0,0.7);
+      box-shadow: var(--shadow-xl);
     }
 
     .modal-hdr {
@@ -883,6 +917,7 @@
       background: var(--accent-glow);
       border-color: rgba(0,220,140,0.20);
       color: var(--accent);
+      box-shadow: inset 3px 0 0 var(--accent);
     }
     .snav-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
     .snav-label { font-family: var(--sans); font-size: 13px; font-weight: 500; }
@@ -1161,6 +1196,9 @@
       font-size: 12px;
       cursor: pointer;
       transition: all 0.12s;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
     }
     .btn-sm:hover { background: var(--bg-hover); color: var(--tx); border-color: var(--border-hi); }
     .btn-sm.accent {
@@ -1204,6 +1242,23 @@
     }
     .conn-status.ok   { border-color: rgba(0,230,118,0.25); background: rgba(0,230,118,0.06); color: var(--s-linked); }
     .conn-status.err  { border-color: rgba(255,82,82,0.25); background: rgba(255,82,82,0.06); color: var(--s-error); }
+
+    /* Read-only status display — used in Location tab for GPS / SFI status */
+    .loc-status {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--tx-muted);
+      padding: 8px 12px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+    }
+    .loc-status.ok  { color: var(--s-linked);  border-color: rgba(0,230,118,0.25); background: rgba(0,230,118,0.06); }
+    .loc-status.err { color: var(--s-error);   border-color: rgba(255,82,82,0.25);  background: rgba(255,82,82,0.06); }
+    .loc-status.warn{ color: var(--s-calling); border-color: rgba(255,202,40,0.25); background: rgba(255,202,40,0.05); }
 
     /* Modal footer */
     .modal-footer {
@@ -1272,17 +1327,26 @@
       padding: 3px 10px; text-align: center;
     }
     .hdr-stat + .hdr-stat { border-left: 1px solid var(--border); }
-    .hdr-stat.freq { width: 96px; }
-    .hdr-stat.snr  { width: 62px; }
+    .hdr-stat.freq { width: 130px; }
     .hdr-stat-val {
       font-family: var(--mono); font-size: 14px; font-weight: 600;
       color: var(--accent); line-height: 1.2; letter-spacing: 0.03em; white-space: nowrap;
     }
-    .hdr-stat-suf { font-size: 9px; margin-left: 3px; }   /* "MHz" / "dB" — green, smaller */
+    .hdr-stat-suf { font-size: 9px; margin-left: 3px; }   /* "MHz" — green, smaller */
     .hdr-stat-sub {
       font-family: var(--mono); font-size: 8px; color: var(--tx-bright);
       text-transform: uppercase; letter-spacing: 0.13em; line-height: 1.2; white-space: nowrap;
     }
+
+    /* ── Header Network pill (active-net selector; replaces the old SINAD pill).
+       Sits in .hdr-right as its own bordered control, kept visually separate from
+       .hdr-stats by the flex gap (10px) — no shared border, no overlap. The panel
+       drops below the button via .radio-panel, so it never intersects the freq pill. */
+    .net-btn { min-width: 96px; justify-content: space-between; gap: 6px; }
+    .net-btn #netBtnLbl { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+    .net-btn .caret { font-size: 9px; color: var(--tx-muted); margin-left: 2px; }
+    #netWrap .radio-panel { width: 220px; }
+    #netPillList { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
 
     /* ── Header radio cluster: channel steppers + PTT + VFO dropdown ── */
     .hdr-group { display: flex; align-items: center; gap: 4px; }
@@ -1312,7 +1376,7 @@
       position: absolute; top: calc(100% + 9px); right: 0; z-index: 60;
       width: 320px; padding: 12px;
       background: var(--bg2); border: 1px solid var(--border-md);
-      border-radius: var(--r-lg); box-shadow: 0 16px 42px rgba(0,0,0,0.55);
+      border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
       display: none;
     }
     .radio-panel.open { display: block; }
@@ -1388,8 +1452,8 @@
     .sound-opt.active { background: var(--accent-glow-hi); border-color: var(--accent); color: var(--accent); }
     .sound-opt.sound-off { color: var(--tx-muted); }
     .sound-sel {
-      font-family: var(--mono); font-size: 11px; background: var(--bg-panel);
-      color: var(--tx-main); border: 1px solid var(--border-lo); border-radius: 3px;
+      font-family: var(--mono); font-size: 11px; background: var(--bg3);
+      color: var(--tx); border: 1px solid var(--border); border-radius: 3px;
       padding: 3px 5px; width: 100%; cursor: pointer;
     }
     .sound-sel:hover { border-color: var(--border-md); }
@@ -1528,6 +1592,56 @@
       text-transform: uppercase;
       animation: pulse-fade 2s ease-in-out infinite;
     }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       ICON  — inline SVG sizing + vertical alignment
+    ══════════════════════════════════════════════════════════════════════ */
+    .icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      vertical-align: middle;
+      pointer-events: none;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       MISSING RULES  — caught during audit
+    ══════════════════════════════════════════════════════════════════════ */
+    .ssec-subtitle {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--tx-muted);
+      margin: 16px 0 10px;
+    }
+
+    /* plabel em = secondary subtitle inside a panel label */
+    .plabel em {
+      font-style: normal;
+      font-weight: 400;
+      opacity: 0.55;
+      font-size: 8px;
+      letter-spacing: 0.12em;
+    }
+
+    /* Active-link panel label colour variant */
+    .plabel-linked { color: var(--s-linked); }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       UTILITY CLASSES  — covers repeated inline-style patterns
+    ══════════════════════════════════════════════════════════════════════ */
+    .u-flex-row   { display: flex; gap: 8px; align-items: center; }
+    .u-flex-col   { display: flex; flex-direction: column; gap: 6px; }
+    .u-flex-end   { justify-content: flex-end; }
+    .u-flex-1     { flex: 1; }
+    .u-mt-sm      { margin-top: var(--sp-1); }
+    .u-mt-md      { margin-top: var(--sp-3); }
+    .u-mt-lg      { margin-top: var(--sp-4); }
+    .u-mb-md      { margin-bottom: var(--sp-3); }
+    .u-w-auto     { width: auto; }
 
     /* ── Utilities ── */
     .hidden { display: none !important; }

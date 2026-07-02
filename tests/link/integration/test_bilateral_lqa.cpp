@@ -312,7 +312,7 @@ static void test_full_handshake_with_bilateral_lqa()
     // ── Step 6: Feed SAM's ACK to JOE ───────────────────────────────────────
     // Additional SAM TX words (ACK) were appended to sam_log after response received.
     // Drive JOE time forward to cover the ACK window.
-    const uint32_t t_sam_ack_start = t_joe_first + joe_log.words.size() * Trw;
+    const uint32_t t_sam_ack_start = t_joe_first + static_cast<uint32_t>(joe_log.words.size()) * Trw;
     size_t joe_rx_idx = sam_log.words.size();  // JOE already got sam_log[0..n-1]
     uint32_t t = t_sam_ack_start;
     for (; joe_rx_idx < sam_log.words.size(); ++joe_rx_idx, t += Trw) {

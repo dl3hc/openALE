@@ -93,8 +93,7 @@ static_assert([]() constexpr {
 // this constant; never pass a raw 0.7 or 1.0 literal into generate_symbols().
 constexpr float TX_AMPLITUDE = 0.25f;
 
-// FFT parameters
-constexpr uint32_t FFT_SIZE        = 64;
+// Spectrum analysis FFT parameters (SPEC_FFT_N window; not the Goertzel symbol window)
 constexpr uint32_t FFT_BIN_OFFSET  = 6;
 constexpr uint32_t FFT_BIN_STEP    = 2;
 constexpr uint32_t FFT_BIN_SPAN    = 15;
