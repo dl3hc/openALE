@@ -12,6 +12,8 @@
 
 #include "LQA/lqa_database.h"
 #include "LQA/lqa_metrics.h"
+#include "LQA/solar_position.h"
+#include "Protocol/Control/ale_channel_types.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -57,6 +59,10 @@ struct AnalyzerConfig {
     // A.5.4.5.1: recently-failed-handshake penalty
     uint32_t handshake_fail_penalty_window_ms = 300000; ///< Penalty window (5 min)
     float    handshake_fail_score_factor      = 0.5f;   ///< Score multiplier while penalised
+
+    // Propagation-aware scoring weights (0 = disabled)
+    float tod_weight = 0.15f;  ///< Solar-elevation similarity bonus weight
+    float sfi_weight = 0.10f;  ///< SFI similarity bonus weight
 };
 
 /**
@@ -114,15 +120,19 @@ public:
     void set_database(LQADatabase* database);
     
     /**
-     * @brief Process received sounding (TIS word)
-     * 
-     * Updates LQA database with sounding result.
-     * 
+     * @brief Process received sounding (TIS/TWAS word)
+     *
+     * Updates LQA database with sounding result and records the station's
+     * availability for active link establishment: a TIS conclusion marks the
+     * station available, a TWAS conclusion marks it not available.
+     *
      * @param station Station that sent sounding
      * @param frequency_hz Channel frequency
      * @param snr_db Measured SNR
      * @param ber Estimated BER (A.5.4.1.1 non-unanimous vote count, 0–48)
      * @param sinad_db Measured SINAD (dB, A.5.4.1.2); 0.0 = not measured
+     * @param twas_conclusion true = sounding ended with TWAS (not available);
+     *                        false = TIS (available, default)
      * @param timestamp_ms Sounding timestamp (0 = current time)
      */
     void process_sounding(const std::string& station,
@@ -130,6 +140,7 @@ public:
                          float snr_db,
                          float ber,
                          float sinad_db = 0.0f,
+                         bool twas_conclusion = false,
                          uint32_t timestamp_ms = 0);
     
     /**
@@ -185,7 +196,7 @@ public:
     
 /**
      * @brief Rank channels for specific station
-     * 
+     *
      * @param station Target station address
      * @param mode Selection mode (default: LINK_ESTABLISHMENT)
      * @return Vector of ranked channels for this station
@@ -193,7 +204,25 @@ public:
     std::vector<ChannelRank> rank_channels_for_station(
         const std::string& station,
         SelectionMode mode = SelectionMode::LINK_ESTABLISHMENT) const;
-    
+
+    /**
+     * @brief Sort a channel list for a call to @p station (A.5.4.5).
+     *
+     * Three-tier ordering:
+     *   1. Channels with station-specific bilateral data — sorted by score desc.
+     *   2. Channels with only aggregate sounding data — sorted by aggregate score.
+     *   3. Channels with no LQA at all — original order preserved.
+     *
+     * @param station  Target station address
+     * @param channels Candidate channels in user-configured order
+     * @param mode     Selection mode (pass BROADCAST for one-way per A.5.4.5.2)
+     * @return Channels reordered by descending quality
+     */
+    std::vector<Channel> rank_channels_for_call(
+        const std::string& station,
+        const std::vector<Channel>& channels,
+        SelectionMode mode = SelectionMode::LINK_ESTABLISHMENT) const;
+
     /**
      * @brief Check if sounding is due for a channel
      * 
@@ -212,10 +241,21 @@ public:
     std::vector<uint32_t> get_channels_needing_sounding() const;
     
     /**
+     * @brief Update the propagation context used by rank_channels_for_station().
+     *
+     * Called by ALEController::update_propagation_context() whenever the operator's
+     * position, GPS fix, or SFI changes. When ctx.position_valid is false, all
+     * propagation-based score adjustments are bypassed (graceful degradation).
+     *
+     * @param ctx  Current observer position + ionospheric state snapshot
+     */
+    void set_propagation_context(const PropagationContext& ctx);
+
+    /**
      * @brief Register callback for sounding requests
-     * 
+     *
      * Called when automatic sounding is enabled and sounding is due.
-     * 
+     *
      * @param callback Function to call with frequency when sounding needed
      */
     void set_sounding_callback(std::function<void(uint32_t)> callback);
@@ -259,13 +299,13 @@ private:
 /**
       * @brief Bilateral channel score for a single entry (MIL-STD-188-141B A.5.4.5.1)
       *
-      * When bilateral SINAD is available (bilateral_sinad <= 30):
-      *   - FROM quality = min(30, entry.sinad_db)  (local SINAD in dB; entry.score fallback)
-      *   - TO quality   = min(bilateral_sinad, 30 - bilateral_ber)  (peer-reported)
-      *   - Returns (from_quality + to_quality) / 2  — average of both directions
+      * Both directions use the BER-led blend (kBerLeadWeight × BER_q + (1−k) × SINAD_q)
+      * so a perfect decode is not penalised by the ~6 dB Goertzel SINAD floor:
+      *   - FROM quality = from_direction_quality(entry)  (BER-led; entry.score fallback)
+      *   - TO quality   = to_direction_quality(entry)    (BER-led; bilateral CMD-LQA codes)
+      *   - Returns (from_quality + to_quality) / 2  — average of both directions (A.5.4.5.1)
       *
-      * When bilateral SINAD is not available:
-      *   - Falls back to entry.score (composite LQA score)
+      * Falls back to entry.score when neither bilateral_ber nor bilateral_sinad is present.
       *
       * @param entry  LQA database entry for one (station, channel) pair
       * @return Score in [0, 30] (higher = better quality)
@@ -286,9 +326,20 @@ private:
      */
     std::string score_to_quality_level(float score) const;
     
-    LQADatabase* database_;                      ///< LQA database
-    AnalyzerConfig config_;                      ///< Configuration
-    std::function<void(uint32_t)> sounding_cb_;  ///< Sounding callback
+    /**
+     * @brief Propagation similarity factor for a single LQA entry.
+     *
+     * Returns a multiplier in [0.5, 1.0] based on how closely the current
+     * solar elevation and SFI match those recorded at measurement time.
+     * Returns 1.0 (no adjustment) when position is unknown or entry has no
+     * propagation data (graceful degradation).
+     */
+    float compute_propagation_factor(const LQAEntry& entry) const;
+
+    LQADatabase*                  database_;     ///< LQA database
+    AnalyzerConfig                config_;       ///< Configuration
+    PropagationContext            prop_ctx_;     ///< Current propagation context
+    std::function<void(uint32_t)> sounding_cb_; ///< Sounding callback
 };
 
 } // namespace ale

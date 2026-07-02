@@ -257,6 +257,29 @@ void LQADatabase::record_handshake_fail(uint32_t frequency_hz,
     it->second.last_failed_handshake_ms = now;
 }
 
+void LQADatabase::set_sounding_availability(uint32_t frequency_hz,
+                                            const std::string& remote_station,
+                                            bool twas,
+                                            uint32_t timestamp_ms) {
+    EntryKey key{frequency_hz, remote_station};
+    uint32_t now = (timestamp_ms == 0) ? get_current_time_ms() : timestamp_ms;
+    auto it = entries_.find(key);
+    if (it == entries_.end()) {
+        LQAEntry entry;
+        entry.frequency_hz   = frequency_hz;
+        entry.remote_station = remote_station;
+        // A sounding is not a contact; only stamp the sounding timestamp so
+        // last_activity_ms() / pruning reflect that we heard this station.
+        entry.last_sounding_ms = now;
+        evict_oldest_if_full();
+        entries_[key] = entry;
+        it = entries_.find(key);
+    }
+    it->second.sounding_twas      = twas;
+    it->second.last_sounding_ms   = now;
+    it->second.score              = compute_score(it->second);
+}
+
 std::shared_ptr<LQAEntry> LQADatabase::get_entry(uint32_t frequency_hz,
                                                  const std::string& remote_station) const {
     EntryKey key{frequency_hz, remote_station};
@@ -349,35 +372,75 @@ void LQADatabase::clear() {
     entries_.clear();
 }
 
+float from_direction_quality(const LQAEntry& entry) {
+    // See lqa_database.h for the full rationale (A.5.4.1.1 BER primary, A.5.4.1.2
+    // SINAD secondary). Returns [0,30] higher=better, or -1 when no FROM data.
+    const bool has_ber   = entry.total_words > 0;
+    const bool has_sinad = entry.sinad_db > 0.0f;
+
+    // BER quality: non-unanimous 2/3-vote count (0–48, lower=better) → [0,30].
+    // 0 votes (all words unanimous) = 30 (best); ≥48 = 0 (worst).
+    const float ber_q = has_ber
+        ? (1.0f - std::min(1.0f, entry.ber / 48.0f)) * LQA_QUALITY_MAX
+        : -1.0f;
+    // SINAD quality: dB directly, clamped to the [0,30] scale (A.5.4.1.2).
+    const float sinad_q = has_sinad
+        ? std::min(LQA_QUALITY_MAX, entry.sinad_db)
+        : -1.0f;
+
+    if (has_ber && has_sinad)
+        return kBerLeadWeight * ber_q + (1.0f - kBerLeadWeight) * sinad_q;
+    if (has_ber)   return ber_q;    // error-free decode scores high even if SINAD unknown
+    if (has_sinad) return sinad_q;  // SINAD-only (e.g. sounding without a decoded frame)
+    return -1.0f;                   // no FROM measurement at all
+}
+
+float to_direction_quality(const LQAEntry& entry) {
+    // Mirror of from_direction_quality() for the peer-reported (TO) direction.
+    // Uses bilateral CMD-LQA codes: bilateral_ber (0–30, lower=better; 31=no value)
+    // and bilateral_sinad (0–30 dB, higher=better; 31=no measurement).
+    // BER-led weighting matches the FROM direction so mixing FROM+TO averages
+    // apples-to-apples and a perfect decode (BER=0) is not penalised by the
+    // ~6 dB Goertzel SINAD floor on the remote station.
+    const bool has_ber   = (entry.bilateral_ber   <= 30u);
+    const bool has_sinad = (entry.bilateral_sinad <= 30u);
+
+    // BER quality: bilateral vote count (0–30, lower=better) → [0,30] higher=better.
+    const float ber_q = has_ber
+        ? (LQA_QUALITY_MAX - static_cast<float>(entry.bilateral_ber))
+        : -1.0f;
+    // SINAD quality: bilateral dB code, clamped to [0,30].
+    const float sinad_q = has_sinad
+        ? std::min(LQA_QUALITY_MAX, static_cast<float>(entry.bilateral_sinad))
+        : -1.0f;
+
+    if (has_ber && has_sinad)
+        return kBerLeadWeight * ber_q + (1.0f - kBerLeadWeight) * sinad_q;
+    if (has_ber)   return ber_q;
+    if (has_sinad) return sinad_q;
+    return -1.0f;  // no bilateral measurement at all
+}
+
 float LQADatabase::compute_score(const LQAEntry& entry) const {
     float score = 0.0f;
 
     // Quality scale is 0 (worst) .. 30 (best); 31 is the reserved "unknown"
     // sentinel and must never be produced here (AC-GEN-001-002, A.4.1.5).
 
-    // FROM-direction (locally measured) quality: snr + success rate. When no
-    // local measurement exists (e.g. a bilateral-only stub created by
-    // update_bilateral/mark_bilateral_attempted after a call), fall back to the
-    // bilateral (TO-direction) quality a peer reported about our signal so the
-    // score — and the GUI LQA table — reflects a real measurement instead of 0.
-    const bool has_from = (entry.total_words > 0) || (entry.snr_db > 0.0f)
-                          || (entry.sinad_db > 0.0f);
-    if (has_from) {
-        // SNR component (0-30 scale): map SNR dB to 0-30 (0 dB = 0, 30 dB+ = 30)
-        float snr_component = std::min(LQA_QUALITY_MAX, std::max(0.0f, entry.snr_db));
-        score += snr_component * config_.snr_weight;
-
-        // Success rate component (0-30 scale): 0 BER = 30, high BER = 0.
-        // ber is the averaged non-unanimous vote count (0.0–48.0, A.5.4.1.1).
-        float success_rate = 0.0f;
-        if (entry.total_words > 0) {
-            success_rate = (1.0f - std::min(1.0f, entry.ber / 48.0f)) * LQA_QUALITY_MAX;
-        }
-        score += success_rate * config_.success_weight;
+    // FROM-direction (locally measured) quality: BER-led per A.5.4.1.1 (the
+    // mandatory primary metric), refined by SINAD (A.5.4.1.2) as a secondary
+    // term — see from_direction_quality(). When no local measurement exists
+    // (e.g. a bilateral-only stub created by update_bilateral/
+    // mark_bilateral_attempted after a call), fall back to the bilateral
+    // (TO-direction) quality a peer reported about our signal so the score —
+    // and the GUI LQA table — reflects a real measurement instead of 0.
+    const float from_q = from_direction_quality(entry);
+    if (from_q >= 0.0f) {
+        // Combined snr+success weight so the total weights still sum to 1.0.
+        score += from_q * (config_.snr_weight + config_.success_weight);
     } else {
         // Bilateral TO-direction quality (SINAD dB higher=better, BER lower=better,
-        // per A.5.4.1/A.5.4.2 — no SINAD inversion). Weighted by the combined
-        // snr+success weight so the total weights still sum to 1.0.
+        // per A.5.4.1/A.5.4.2 — no SINAD inversion).
         score += bilateral_quality_score(entry)
                  * (config_.snr_weight + config_.success_weight);
     }
@@ -399,25 +462,10 @@ float LQADatabase::compute_score(const LQAEntry& entry) const {
 }
 
 float LQADatabase::bilateral_quality_score(const LQAEntry& entry) const {
-    // Per A.5.4.2: bilateral_sinad is the SINAD code [0-30] in dB, higher = better
-    // (31 = no measurement); bilateral_ber is the BER code [0-30] as a 2/3-vote
-    // count, lower = better (31 = no value). SINAD is the primary LQA metric
-    // (A.5.4.1.2, measured on all ALE signals); BER is secondary. Use SINAD when
-    // available, else derive from BER; 0 when neither was measured.
-    if (entry.bilateral_sinad <= 30u) {
-        float q = static_cast<float>(entry.bilateral_sinad);  // dB, higher = better
-        if (entry.bilateral_ber <= 30u) {
-            // Discount by BER (lower BER = better): minimise the two directions
-            // of the same report so a poor BER caps an optimistic SINAD.
-            const float ber_q = LQA_QUALITY_MAX - static_cast<float>(entry.bilateral_ber);
-            q = std::min(q, ber_q);
-        }
-        return std::min(LQA_QUALITY_MAX, std::max(LQA_QUALITY_MIN, q));
-    }
-    if (entry.bilateral_ber <= 30u) {
-        return LQA_QUALITY_MAX - static_cast<float>(entry.bilateral_ber);
-    }
-    return 0.0f;
+    // Delegate to the free-function so the formula is identical across all callers.
+    const float q = to_direction_quality(entry);
+    if (q < 0.0f) return 0.0f;  // no bilateral measurement
+    return std::min(LQA_QUALITY_MAX, std::max(LQA_QUALITY_MIN, q));
 }
 
 bool LQADatabase::save_to_file(const std::string& filepath) const {
@@ -430,7 +478,7 @@ bool LQADatabase::save_to_file(const std::string& filepath) const {
     const char magic[] = "PCALE_LQA";
     file.write(magic, sizeof(magic));
 
-    uint32_t version = 2;   // v2 adds bilateral_sinad/ber/mp/handshake_tried
+    uint32_t version = 3;   // v3 adds solar_elevation_deg_at_measurement + sfi_at_measurement
     file.write(reinterpret_cast<const char*>(&version), sizeof(version));
     
     // Write config
@@ -480,6 +528,10 @@ bool LQADatabase::save_to_file(const std::string& filepath) const {
                   sizeof(entry.bilateral_mp));
         uint8_t tried = entry.bilateral_handshake_tried ? 1u : 0u;
         file.write(reinterpret_cast<const char*>(&tried), sizeof(tried));
+
+        // v3: propagation context at measurement time
+        file.write(reinterpret_cast<const char*>(&entry.solar_elevation_deg_at_measurement), 4);
+        file.write(reinterpret_cast<const char*>(&entry.sfi_at_measurement), 4);
     }
 
     file.close();
@@ -501,12 +553,17 @@ bool LQADatabase::load_from_file(const std::string& filepath) {
     
     uint32_t version;
     file.read(reinterpret_cast<char*>(&version), sizeof(version));
-    if (version != 2) {
-        return false;  // v1 files lack bilateral fields; require v2
+    if (version < 2 || version > 3) {
+        return false;  // v1 files lack bilateral fields; only v2 and v3 supported
     }
-    
-    // Read config
+
+    // Read config (sizeof(LQAConfig) unchanged between v2 and v3)
     file.read(reinterpret_cast<char*>(&config_), sizeof(config_));
+
+    // v2 files were saved with max_age_ms = 3600000; upgrade to the new 25 h default
+    // so old sessions benefit from the extended retention without a manual settings change.
+    if (version < 3 && config_.max_age_ms < 90000000u)
+        config_.max_age_ms = 90000000u;
     
     // Read entry count
     uint32_t count;
@@ -557,12 +614,37 @@ bool LQADatabase::load_from_file(const std::string& filepath) {
         file.read(reinterpret_cast<char*>(&tried), sizeof(tried));
         entry.bilateral_handshake_tried = (tried != 0u);
 
+        // v3: propagation context (v2 files leave fields at constructor defaults: 0.0f)
+        if (version >= 3) {
+            file.read(reinterpret_cast<char*>(&entry.solar_elevation_deg_at_measurement), 4);
+            file.read(reinterpret_cast<char*>(&entry.sfi_at_measurement), 4);
+        }
+
         EntryKey key{entry.frequency_hz, entry.remote_station};
         entries_[key] = entry;
     }
     
     file.close();
     return true;
+}
+
+void LQADatabase::set_propagation_at_measurement(uint32_t frequency_hz,
+                                                   const std::string& station,
+                                                   float solar_elev,
+                                                   float sfi)
+{
+    EntryKey key{frequency_hz, station};
+    auto it = entries_.find(key);
+    if (it == entries_.end()) {
+        evict_oldest_if_full();
+        LQAEntry stub;
+        stub.frequency_hz   = frequency_hz;
+        stub.remote_station = station;
+        entries_[key] = stub;
+        it = entries_.find(key);
+    }
+    it->second.solar_elevation_deg_at_measurement = solar_elev;
+    it->second.sfi_at_measurement                 = sfi;
 }
 
 bool LQADatabase::export_to_csv(const std::string& filepath) const {

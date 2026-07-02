@@ -18,7 +18,32 @@ float channel_from_score(const LQAEntry& entry);
 float channel_to_score(const LQAEntry& entry);
 
 LQAAnalyzer::LQAAnalyzer(LQADatabase* database)
-    : database_(database), sounding_cb_(nullptr) {
+    : database_(database), prop_ctx_(), sounding_cb_(nullptr) {
+}
+
+void LQAAnalyzer::set_propagation_context(const PropagationContext& ctx) {
+    prop_ctx_ = ctx;
+}
+
+float LQAAnalyzer::compute_propagation_factor(const LQAEntry& entry) const {
+    if (!prop_ctx_.position_valid) return 1.0f;
+    if (entry.sample_count == 0 || entry.solar_elevation_deg_at_measurement == 0.0f) return 1.0f;
+
+    const float elev_now  = compute_solar_elevation(
+        prop_ctx_.lat_deg, prop_ctx_.lon_deg,
+        ms_to_unix_sec(prop_ctx_.now_ms));
+    const float elev_diff = std::abs(elev_now - entry.solar_elevation_deg_at_measurement);
+    // 45° difference → zero solar similarity; clamp to [0, 1]
+    const float solar_sim = std::max(0.0f, 1.0f - elev_diff / 45.0f);
+
+    float sfi_sim = 1.0f;
+    if (prop_ctx_.sfi_current > 0.0f && entry.sfi_at_measurement > 0.0f) {
+        const float sfi_diff = std::abs(prop_ctx_.sfi_current - entry.sfi_at_measurement);
+        sfi_sim = std::max(0.0f, 1.0f - sfi_diff / 100.0f);
+    }
+
+    // Floor at 0.5 — a channel with real LQA data is never zeroed by propagation mismatch
+    return 0.5f + 0.5f * (solar_sim * sfi_sim);
 }
 
 void LQAAnalyzer::set_config(const AnalyzerConfig& config) {
@@ -44,6 +69,7 @@ void LQAAnalyzer::process_sounding(const std::string& station,
                                   float snr_db,
                                   float ber,
                                   float sinad_db,
+                                  bool twas_conclusion,
                                   uint32_t timestamp_ms) {
     if (!database_) return;
 
@@ -59,6 +85,21 @@ void LQAAnalyzer::process_sounding(const std::string& station,
                                      0.0f, -120.0f, 0, 1, now);
     database_->update_entry_extended(frequency_hz, station, snr_db, ber, sinad_db,
                                      0.0f, -120.0f, 0, 1, now);
+
+    // Record the station's availability for active link establishment based on
+    // the sounding's conclusion word: TIS = available, TWAS = not available.
+    // Only the per-station entry carries the flag (the "" channel aggregate has
+    // no station to be "available"), and it is what the GUI displays.
+    database_->set_sounding_availability(frequency_hz, station, twas_conclusion, now);
+
+    // Record propagation context at measurement time for future similarity scoring.
+    if (prop_ctx_.position_valid) {
+        const float elev = compute_solar_elevation(
+            prop_ctx_.lat_deg, prop_ctx_.lon_deg,
+            ms_to_unix_sec(prop_ctx_.now_ms > 0 ? prop_ctx_.now_ms : now));
+        database_->set_propagation_at_measurement(frequency_hz, "",      elev, prop_ctx_.sfi_current);
+        database_->set_propagation_at_measurement(frequency_hz, station, elev, prop_ctx_.sfi_current);
+    }
 }
 
 void LQAAnalyzer::process_sounding_extended(const std::string& station,
@@ -268,6 +309,11 @@ std::vector<ChannelRank> LQAAnalyzer::rank_channels_for_station(
                 break;
         }
 
+        // Propagation-aware time-of-day / SFI similarity adjustment.
+        // Applied before the handshake penalty so the penalty still computes
+        // from the already-adjusted score.
+        score *= compute_propagation_factor(entry);
+
         // A.5.4.5.1: recently-failed handshake → deprioritise this channel.
         if (entry.last_failed_handshake_ms > 0) {
             const uint32_t now_ms = get_current_time_ms();
@@ -298,41 +344,64 @@ std::vector<ChannelRank> LQAAnalyzer::rank_channels_for_station(
     return ranks;
 }
 
+
+std::vector<Channel> LQAAnalyzer::rank_channels_for_call(
+    const std::string& station,
+    const std::vector<Channel>& channels,
+    SelectionMode mode) const {
+    if (channels.empty()) return channels;
+
+    auto ranked = rank_channels_for_station(station, mode);
+
+    auto score_for = [&ranked](uint32_t freq) -> float {
+        for (const auto& r : ranked)
+            if (r.frequency_hz == freq) return r.score;
+        return -1.0f;  // unlisted: falls to tier 2 or 3
+    };
+
+    std::vector<Channel> ordered = channels;
+    std::stable_sort(ordered.begin(), ordered.end(),
+        [&](const Channel& a, const Channel& b) {
+            const float sa = score_for(a.rx_frequency_hz);
+            const float sb = score_for(b.rx_frequency_hz);
+            // Tier 1: both have station-specific bilateral data
+            if (sa >= 0.0f && sb >= 0.0f) return sa > sb;
+            // Tier 2: only one has station-specific data — that one goes first
+            if (sa >= 0.0f) return true;
+            if (sb >= 0.0f) return false;
+            // Tier 3: neither has station data — fall back to aggregate sounding scores
+            const float agg_a = compute_channel_aggregate_score(a.rx_frequency_hz);
+            const float agg_b = compute_channel_aggregate_score(b.rx_frequency_hz);
+            if (agg_a > 0.0f || agg_b > 0.0f) return agg_a > agg_b;
+            return false;  // no LQA at all: preserve original order (A.5.4 fallback)
+        });
+    return ordered;
+}
+
+
 float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry,
                                             float& from_q_out,
                                             float& to_q_out) const {
-    if (entry.bilateral_sinad > 30u) {
+    // TO direction: BER-led blend (same weighting as FROM) via to_direction_quality().
+    // Returns -1 when neither bilateral_ber nor bilateral_sinad carries a measurement.
+    const float to_quality = to_direction_quality(entry);
+    if (to_quality < 0.0f) {
         from_q_out = -1.0f;
         to_q_out = -1.0f;
-        return entry.score;  // No bilateral SINAD data — fall back to composite score
-    }
-    // TO direction: bilateral SINAD code is dB directly, higher = better
-    // (A.5.4.2.2: 0 = ≤0 dB, 30 = 30 dB, 31 = no measurement). No inversion.
-    float to_quality = static_cast<float>(entry.bilateral_sinad);
-    if (entry.bilateral_ber <= 30u) {
-        // BER code is the 2/3-vote count, lower = better (A.5.4.2.1 / Table A-XIII).
-        const float ber_q = 30.0f - static_cast<float>(entry.bilateral_ber);
-        to_quality = std::min(to_quality, ber_q);
+        return entry.score;  // no bilateral data at all — fall back to composite score
     }
 
-    // FROM direction: sinad_db is SINAD in dB, higher = better (see lqa_database.h
-    // — populated via update_entry_extended / process_sounding_extended). Fall
-    // back to the composite score when no local SINAD measurement exists.
-    float from_quality;
-    if (entry.sinad_db > 0.0f) {
-        from_quality = std::min(30.0f, entry.sinad_db);
-    } else {
-        from_quality = entry.score;
-    }
+    // FROM direction: BER-led combined quality (A.5.4.1.1 primary + A.5.4.1.2
+    // SINAD secondary) via from_direction_quality(). Fall back to composite when
+    // no local measurement exists.
+    float from_quality = from_direction_quality(entry);
+    if (from_quality < 0.0f) from_quality = entry.score;
 
-    // Store outputs for use in ranking
     from_q_out = from_quality;
     to_q_out = to_quality;
-    
+
     // Bilateral averaging per A.5.4.5.1: (FROM + TO) / 2
-    // When both directions are known, return the average of both qualities.
-    // Otherwise, fall back to the original composite score.
-    return (from_quality >= 0 && to_quality >= 0) ? (from_quality + to_quality) / 2.0f : entry.score;
+    return (from_quality + to_quality) / 2.0f;
 }
 
 // Wrapper for backward compatibility
@@ -343,25 +412,14 @@ float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry) const {
 
 // New helper functions for rank_channels_for_station
 float channel_from_score(const LQAEntry& entry) {
-    if (entry.sinad_db > 0.0f) {
-        return std::min(30.0f, entry.sinad_db);
-    } else {
-        return entry.score;
-    }
+    // BER-led FROM quality (A.5.4.1.1 primary + A.5.4.1.2 SINAD secondary);
+    // fall back to the composite score when no local measurement exists.
+    const float q = from_direction_quality(entry);
+    return (q >= 0.0f) ? q : entry.score;
 }
 
 float channel_to_score(const LQAEntry& entry) {
-    if (entry.bilateral_sinad > 30u) {
-        return -1.0f;  // No bilateral data
-    }
-    // TO direction: bilateral SINAD code is dB directly, higher = better
-    float to_quality = static_cast<float>(entry.bilateral_sinad);
-    if (entry.bilateral_ber <= 30u) {
-        // BER code is the 2/3-vote count, lower = better (A.5.4.2.1 / Table A-XIII).
-        const float ber_q = 30.0f - static_cast<float>(entry.bilateral_ber);
-        to_quality = std::min(to_quality, ber_q);
-    }
-    return to_quality;
+    return to_direction_quality(entry);  // -1.0f when no bilateral data
 }
 
 float LQAAnalyzer::compute_channel_aggregate_score(uint32_t frequency_hz) const {

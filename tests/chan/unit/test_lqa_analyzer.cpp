@@ -257,15 +257,18 @@ void test_min_acceptable_score() {
     config.min_acceptable_score = 20.0f;  // High threshold
     analyzer.set_config(config);
     
-    // Add low quality channel
-    analyzer.process_sounding("REMOTE", 7073000, 10.0f, 0.1f);  // Poor quality
-    
+    // Add low quality channel. Quality is BER-led (A.5.4.1.1): ber is the
+    // non-unanimous 2/3-vote count (0–48), so a genuinely poor channel needs a
+    // HIGH count (near 48), not a small "rate". ber=40 → ber_q=(1-40/48)*30=5;
+    // with sinad=8 → from_q=0.7*5+0.3*8=5.9 → score ≈ 11 (< 20 threshold).
+    analyzer.process_sounding("REMOTE", 7073000, 10.0f, 40.0f, 8.0f);  // Poor quality
+
     // Should return nullptr (below threshold)
     auto best = analyzer.get_best_channel_for_station("REMOTE");
     assert(best == nullptr);
-    
-    // Add high quality channel
-    analyzer.process_sounding("REMOTE", 10142000, 28.0f, 0.001f);  // Excellent
+
+    // Add high quality channel: near-zero BER count + high SINAD → score ≈ 30.
+    analyzer.process_sounding("REMOTE", 10142000, 28.0f, 0.5f, 28.0f);  // Excellent
     
     // Should return the good channel
     best = analyzer.get_best_channel_for_station("REMOTE");
@@ -337,51 +340,55 @@ void test_bilateral_ranking_fallback_no_bilateral_data() {
     LQADatabase db;
     LQAAnalyzer analyzer(&db);
 
-    // process_sounding uses update_entry (no SINAD data), so bilateral_sinad stays at 31
-    analyzer.process_sounding("REMOTE", 7073000,  22.0f, 0.001f);
-    analyzer.process_sounding("REMOTE", 10142000, 28.0f, 0.0005f);
+    // No SINAD here (sinad_db defaults to 0), so quality is driven by the BER
+    // (2/3-vote count, A.5.4.1.1) — snr_db does not feed the score. Give the two
+    // channels clearly different BER counts so the ranking is unambiguous.
+    analyzer.process_sounding("REMOTE", 7073000,  22.0f, 10.0f);  // higher BER count
+    analyzer.process_sounding("REMOTE", 10142000, 28.0f,  2.0f);  // lower BER count → better
 
     auto ranked = analyzer.rank_channels_for_station("REMOTE");
     assert(ranked.size() == 2);
-    // Higher SNR → higher composite score → ranks first (same as before bilateral)
+    // Lower BER count → higher composite score → ranks first (A.5.4.1.1)
     assert(ranked[0].frequency_hz == 10142000);
 
     std::cout << "  PASS" << std::endl;
 }
 
 // Bilateral average (A.5.4.5.1): bilateral_channel_score = (FROM + TO) / 2.
-// Per A.5.4.2 the bilateral SINAD code is dB (higher = better) and the BER code
-// is a 2/3-vote count (lower = better) — bilateral_channel_score uses SINAD
-// positively and BER negatively (no SINAD inversion).
+// Both FROM and TO use BER-led blend: q = 0.7·ber_q + 0.3·sinad_q (A.5.4.1.1
+// primary, A.5.4.1.2 secondary) so a perfect decode is not penalised by a low
+// SINAD proxy floor.
 void test_bilateral_average_formula() {
     std::cout << "Test: bilateral_channel_score() = (FROM + TO) / 2 (A.5.4.5.1)..." << std::endl;
 
     LQADatabase db;
     LQAAnalyzer analyzer(&db);
 
-    // C1: FROM SINAD=20 dB → from_quality=20
-    //     bilateral SINAD=10, BER=5 → to_quality=min(10, 30-5=25)=10
-    //     bilateral_score = (20 + 10) / 2 = 15
+    // FROM quality is BER-led: from_q = 0.7·ber_q + 0.3·sinad_q.
+    // With ber≈0 (clean) ber_q≈30, so from_q ≈ 0.7·30 + 0.3·20 = 27 for SINAD=20.
+    // TO quality uses same blend on bilateral codes: to_q = 0.7·(30−ber) + 0.3·sinad.
+    //
+    // C1: FROM→27; bilateral SINAD=10,BER=5 → to=0.7·25+0.3·10=20.5
+    //     bilateral_score = (27 + 20.5) / 2 = 23.75
     db.update_entry_extended(7073000, "REMOTE", 20.0f, 0.001f,
                              20.0f, 0.0f, -100.0f, 0, 10);
     db.update_bilateral(7073000, "REMOTE", 10u, 5u, 0u);
 
-    // C2: FROM SINAD=20 dB → from_quality=20
-    //     bilateral SINAD=20, BER=0 → to_quality=min(20, 30-0=30)=20
-    //     bilateral_score = (20 + 20) / 2 = 20
+    // C2: FROM→27; bilateral SINAD=20,BER=0 → to=0.7·30+0.3·20=27
+    //     bilateral_score = (27 + 27) / 2 = 27.0
     db.update_entry_extended(10142000, "REMOTE", 20.0f, 0.001f,
                              20.0f, 0.0f, -100.0f, 0, 10);
     db.update_bilateral(10142000, "REMOTE", 20u, 0u, 0u);
 
     auto ranked = analyzer.rank_channels_for_station("REMOTE");
     assert(ranked.size() == 2);
-    // C2 (avg=20) must rank above C1 (avg=15)
+    // C2 (avg=27.0) must rank above C1 (avg=23.75)
     assert(ranked[0].frequency_hz == 10142000);
     assert(ranked[1].frequency_hz == 7073000);
     assert(ranked[0].score > ranked[1].score);
     // Verify the average formula explicitly
-    assert(std::abs(ranked[0].score - 20.0f) < 0.1f);
-    assert(std::abs(ranked[1].score - 15.0f) < 0.1f);
+    assert(std::abs(ranked[0].score - 27.0f) < 0.1f);
+    assert(std::abs(ranked[1].score - 23.75f) < 0.1f);
 
     std::cout << "  ranked[0]=" << ranked[0].frequency_hz
               << " score=" << ranked[0].score
@@ -399,19 +406,25 @@ void test_bilateral_balance_tiebreaker() {
     LQADatabase db;
     LQAAnalyzer analyzer(&db);
 
-    // C1: balanced — FROM=15, TO=15 → avg=15, imbalance=0
-    db.update_entry_extended(7073000, "REMOTE", 15.0f, 0.01f,
-                             15.0f, 0.0f, -100.0f, 0, 10);
-    db.update_bilateral(7073000, "REMOTE", 15u, 0u, 0u);  // to=min(15,30)=15
+    // FROM is BER-led: with ber≈0, from_q ≈ 0.7·30 + 0.3·sinad = 21 + 0.3·sinad.
+    // TO is also BER-led: to_q = 0.7·(30−bilateral_ber) + 0.3·bilateral_sinad.
+    // Choose inputs so both channels produce the same bilateral average (=27):
+    //
+    // C1: balanced — local SINAD=20 → FROM≈27, bilateral_sinad=20,BER=0 → TO=27
+    //     avg=(27+27)/2=27, imbalance=|27−27|=0
+    db.update_entry_extended(7073000, "REMOTE", 20.0f, 0.001f,
+                             20.0f, 0.0f, -100.0f, 0, 10);
+    db.update_bilateral(7073000, "REMOTE", 20u, 0u, 0u);  // to=0.7·30+0.3·20=27
 
-    // C2: lopsided — FROM=25, TO=5 → avg=15, imbalance=20
-    db.update_entry_extended(10142000, "REMOTE", 25.0f, 0.001f,
-                             25.0f, 0.0f, -100.0f, 0, 10);
-    db.update_bilateral(10142000, "REMOTE", 5u, 0u, 0u);  // to=min(5,30)=5
+    // C2: lopsided — local SINAD=30 → FROM≈30, bilateral_sinad=10,BER=0 → TO=24
+    //     avg=(30+24)/2=27, imbalance=|30−24|=6
+    db.update_entry_extended(10142000, "REMOTE", 30.0f, 0.001f,
+                             30.0f, 0.0f, -100.0f, 0, 10);
+    db.update_bilateral(10142000, "REMOTE", 10u, 0u, 0u);  // to=0.7·30+0.3·10=24
 
     auto ranked = analyzer.rank_channels_for_station("REMOTE");
     assert(ranked.size() == 2);
-    // Both have the same average score (15)
+    // Both have the same average score (≈27)
     assert(std::abs(ranked[0].score - ranked[1].score) < 0.01f);
     // C1 (balanced, imbalance=0) must rank above C2 (lopsided, imbalance=20)
     assert(ranked[0].frequency_hz == 7073000);
@@ -500,13 +513,14 @@ void test_rank_all_channels_min_path_score() {
     // C2: poor quality (score will be low)
     db.update_entry_extended(10142000, "REMOTE", 4.0f, 0.3f,
                              4.0f, 0.0f, -100.0f, 0, 10);
-    db.update_bilateral(10142000, "REMOTE", 4u, 20u, 7u);
+    db.update_bilateral(10142000, "REMOTE", 4u, 25u, 7u);  // bilateral_ber=25 → very poor peer BER
 
     // Without filter: both channels returned
     auto all = analyzer.rank_all_channels();
     assert(all.size() == 2);
 
-    // With min_path_score=15: only C1 qualifies (C2 bilateral ~(4+min(4,10))/2=4 < 15)
+    // With min_path_score=15: only C1 qualifies
+    // C2 bilateral: from_q≈22, to_q=0.7·(30−25)+0.3·4=4.7 → avg≈13.4 < 15
     auto filtered = analyzer.rank_all_channels(
         SelectionMode::LINK_ESTABLISHMENT, {}, 15.0f);
     assert(filtered.size() == 1);

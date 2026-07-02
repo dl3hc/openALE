@@ -78,6 +78,16 @@ struct LQAEntry {
     // Not persisted (volatile within session; 0 = no known failure).
     uint32_t last_failed_handshake_ms = 0;
 
+    // Sounding conclusion type received from this station.
+    // true  = last sounding used TWAS (station not available for active link establishment).
+    // false = last sounding used TIS  (station available) — also the default when no sounding heard.
+    // Only meaningful when last_sounding_ms > 0.
+    bool sounding_twas = false;
+
+    // ── Propagation context at measurement time (v3) ─────────────────────────
+    float solar_elevation_deg_at_measurement = 0.0f; ///< –90..+90 deg; 0 = not recorded
+    float sfi_at_measurement                 = 0.0f; ///< Solar Flux Index (sfu); 0 = not recorded
+
     /**
      * @brief Default constructor — bilateral fields initialised to "no data" sentinels.
      */
@@ -89,7 +99,9 @@ struct LQAEntry {
           sample_count(0),
           bilateral_sinad(31u), bilateral_ber(31u), bilateral_mp(7u),
           bilateral_handshake_tried(false),
-          last_failed_handshake_ms(0) {}
+          last_failed_handshake_ms(0),
+          solar_elevation_deg_at_measurement(0.0f),
+          sfi_at_measurement(0.0f) {}
 
     /**
      * @brief Timestamp of the most recent activity on this channel/station.
@@ -108,6 +120,54 @@ struct LQAEntry {
     }
 };
 
+/// Weight of the mandatory BER metric in from_direction_quality(); the remainder
+/// (1 - kBerLeadWeight) is the secondary SINAD contribution. BER must dominate so
+/// that an error-free decode is never rated "Poor" regardless of the leakage-SINAD
+/// proxy, while SINAD still discriminates between two otherwise error-free channels.
+static constexpr float kBerLeadWeight = 0.7f;
+
+/**
+ * @brief FROM-direction (locally measured) channel quality, [0, 30], higher = better.
+ *
+ * This is the single combined per-direction "LQA score" of MIL-STD-188-141B
+ * figure A-27 (FROM cell), on the operator convention (higher = better; A.5.4.1
+ * and A.5.4.5.1 Note 1). It is used only for internal channel ranking and the
+ * operator quality rating — NOT for the on-air CMD-LQA SINAD field (A.5.4.2.2),
+ * which is encoded separately from the raw sinad_db.
+ *
+ * Per A.5.4.1.1 the mandatory *primary* channel-quality metric is the 2/3-majority-
+ * vote BER count (0–48, lower = better): an error-free reception (all words
+ * unanimous) is the standard's strongest positive evidence that a channel is
+ * usable. SINAD (A.5.4.1.2) is a *secondary refinement*, never a veto — the
+ * per-symbol in-band SINAD proxy can read only ~6–7 dB even on a flawless digital
+ * decode, so letting SINAD dominate mis-rates good channels as "Poor". This
+ * function therefore leads with BER (kBerLeadWeight) and lets SINAD adjust it.
+ *
+ * @return BER-led quality in [0, 30], or -1.0f when no FROM measurement exists
+ *         (caller should fall back to the bilateral / composite score).
+ */
+float from_direction_quality(const LQAEntry& entry);
+
+/**
+ * @brief TO-direction (peer-reported via CMD LQA) channel quality, [0, 30], higher = better.
+ *
+ * Mirrors from_direction_quality() but operates on the bilateral CMD LQA codes
+ * sent by the remote station (A.5.4.2): bilateral_ber is the 2/3-vote count
+ * (0–30, lower = better; 31 = no value) and bilateral_sinad is the SINAD code
+ * (0–30 dB, higher = better; 31 = no measurement).
+ *
+ * Uses the same BER-led weighting as from_direction_quality() so both directions
+ * are scored consistently: a remote station that decoded us perfectly (bilateral
+ * BER = 0) is not penalised when its SINAD proxy reads only ~6 dB due to the
+ * same Goertzel leakage artifact. Mixing a BER-led FROM with a SINAD-dominated
+ * TO (e.g. via min(sinad, ber_q)) would unfairly halve the bilateral score on
+ * otherwise clean links.
+ *
+ * @return BER-led TO quality in [0, 30], or -1.0f when neither bilateral_ber
+ *         nor bilateral_sinad carries a measurement (caller falls back to composite score).
+ */
+float to_direction_quality(const LQAEntry& entry);
+
 /**
  * @brief Configuration parameters for LQA scoring algorithm
  * 
@@ -118,7 +178,7 @@ struct LQAConfig {
     float snr_weight = 0.5f;         ///< Weight for SNR in composite score
     float success_weight = 0.3f;     ///< Weight for successful reception rate
     float recency_weight = 0.2f;     ///< Weight for recent contact
-    uint32_t max_age_ms = 3600000;   ///< Max age before entry expires (1 hour)
+    uint32_t max_age_ms = 90000000;  ///< Max age before entry expires (25 h — covers full diurnal cycle)
     uint32_t history_depth = 100;    ///< Max entries per channel/station
     float time_decay_factor = 0.9f;  ///< Decay factor for time-weighted averaging
     
@@ -127,6 +187,21 @@ struct LQAConfig {
     float poor_snr_db = 6.0f;        ///< SNR threshold for "poor" quality
     float good_ber = 0.001f;         ///< BER threshold for "good" quality
     float poor_ber = 0.1f;           ///< BER threshold for "poor" quality
+};
+
+/**
+ * @brief Propagation context snapshot used to weight LQA channel scores.
+ *
+ * Passed to LQAAnalyzer::set_propagation_context() from ALEController each time
+ * the operator's position or ionospheric state changes. When position_valid is
+ * false, all propagation-based score adjustments are bypassed.
+ */
+struct PropagationContext {
+    bool     position_valid = false;
+    double   lat_deg        = 0.0;
+    double   lon_deg        = 0.0;
+    float    sfi_current    = 0.0f;  ///< Solar Flux Index (sfu); 0 = unknown
+    uint32_t now_ms         = 0;
 };
 
 /**
@@ -277,6 +352,26 @@ public:
                                uint32_t timestamp_ms = 0);
 
     /**
+     * @brief Record the sounding conclusion type (TIS vs TWAS) heard from
+     *        @p remote_station on @p frequency_hz.
+     *
+     * TIS = the station invites return calls (available for active link
+     * establishment); TWAS = announce-only (not available). Stored on the
+     * station's LQA entry so the GUI "Heard Stations / LQA" list can flag
+     * availability. Creates a stub entry when none exists. Does not alter
+     * last_contact_ms (a sounding is not a contact).
+     *
+     * @param frequency_hz   Channel frequency in Hz
+     * @param remote_station Station that sent the sounding
+     * @param twas           true = TWAS conclusion (not available); false = TIS (available)
+     * @param timestamp_ms   Sounding timestamp (0 = current time)
+     */
+    void set_sounding_availability(uint32_t frequency_hz,
+                                   const std::string& remote_station,
+                                   bool twas,
+                                   uint32_t timestamp_ms = 0);
+
+    /**
      * @brief Get LQA entry for specific channel/station
      *
      * @param frequency_hz Channel frequency in Hz
@@ -324,8 +419,26 @@ public:
                             uint32_t timestamp_ms = 0);
     
     /**
+     * @brief Record the propagation context (solar elevation, SFI) at the time
+     *        a sounding or contact was measured on this channel/station.
+     *
+     * Sets solar_elevation_deg_at_measurement and sfi_at_measurement on the
+     * matching entry. Creates a stub entry if none exists yet.
+     * Called from LQAAnalyzer::process_sounding() when position is known.
+     *
+     * @param frequency_hz  Channel frequency in Hz
+     * @param station       Remote station address (or "" for sounding)
+     * @param solar_elev    Solar elevation in degrees at measurement time (–90..+90)
+     * @param sfi           Solar Flux Index at measurement time (0 = unknown)
+     */
+    void set_propagation_at_measurement(uint32_t frequency_hz,
+                                        const std::string& station,
+                                        float solar_elev,
+                                        float sfi);
+
+    /**
      * @brief Get all LQA entries in database
-     * 
+     *
      * @return Vector of all entries
      */
     std::vector<LQAEntry> get_all_entries() const;
