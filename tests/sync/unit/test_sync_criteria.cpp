@@ -64,7 +64,12 @@ static void corrupt_bit(SymbolFrame& frame, int bit)
     }
 }
 
-// Build PCM for one ALE word (16-sample leading silence).
+// Build PCM for one ALE word (16-sample leading silence + 2-symbol tail).
+// The tail matters: the demodulator's word-boundary refinement needs up to one
+// symbol of lookahead past the last word before committing it via word_cb_.  A
+// real capture stream always keeps delivering samples (silence/noise) after a
+// transmission ends; a buffer that stops dead at the last tone sample is a
+// test artifact no physical audio path produces.
 static std::vector<int16_t> make_pcm(const ALEWord& word)
 {
     const SymbolFrame frame = ALEEncoder::encode(word);
@@ -74,6 +79,7 @@ static std::vector<int16_t> make_pcm(const ALEWord& word)
     pcm.resize(SILENCE + SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
     gen.generate_symbols(frame.data(), SYMBOLS_PER_WORD,
                          pcm.data() + SILENCE, TX_AMPLITUDE);
+    pcm.insert(pcm.end(), 2 * SAMPLES_PER_SYMBOL, 0);
     return pcm;
 }
 

@@ -163,6 +163,7 @@ void Demodulator::reset()
     grid_anchor_   = 0;
     uncorr_anchor_ = 0;
     silence_count_ = 0;
+    refining_      = false;
     restore_base_operating_point_();   // fresh acquisition uses the base point
 }
 
@@ -190,9 +191,12 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
         // transmission can re-anchor at its own sub-symbol phase offset.
         if (s > -SILENCE_THRESHOLD && s < SILENCE_THRESHOLD) {
             if (++silence_count_ >= SILENCE_RESET_SAMPLES) {
-                // Transmission ended: release the grid and return to the base
-                // (acquisition) operating point so the next transmission — which
-                // may be weaker — re-acquires with full tolerance.
+                // Transmission ended: flush any pending boundary refinement (the
+                // best candidate is a fully gated word — do not lose it), then
+                // release the grid and return to the base (acquisition) operating
+                // point so the next transmission — which may be weaker —
+                // re-acquires with full tolerance.
+                if (refining_) commit_refined_word_();
                 if (grid_locked_) restore_base_operating_point_();
                 grid_locked_   = false;
                 silence_count_ = SILENCE_RESET_SAMPLES;
@@ -201,24 +205,42 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
             silence_count_ = 0;
         }
 
-        if (++step_accum_ >= (grid_locked_ ? DECODE_STEP_FINE : DECODE_STEP_COARSE)) {
+        if (++step_accum_ >= ((grid_locked_ || refining_) ? DECODE_STEP_FINE
+                                                          : DECODE_STEP_COARSE)) {
             step_accum_ = 0;
             if (write_pos_ < WORD_SAMPLES) continue;
+
+            // Boundary refinement: one full symbol past the first passing
+            // candidate the energy peak has necessarily been bracketed —
+            // commit the best candidate (anchors grid + fires word_cb_).
+            if (refining_ && (write_pos_ - ref_first_pos_) >= SAMPLES_PER_SYMBOL)
+                commit_refined_word_();
 
             ALEWord word;
             Golay::DecodeResult fec;
             uint8_t unanimous_votes = 0;
-            const bool decoded_ok = try_decode(word, fec, unanimous_votes);
-            if (decoded_ok && accept_word_(fec, word, unanimous_votes)) {
-                // A.5.2.6.3 "DO": once tracking, fold the accepted word's quality
-                // into the adaptive estimate and update the operating point.
-                if (adaptive_) {
-                    adaptive_fec_.observe(unanimous_votes);
-                    golay_mode_          = adaptive_fec_.mode();
-                    min_unanimous_votes_ = adaptive_fec_.threshold();
+            float   word_energy     = 0.0f;
+            const bool decoded_ok = try_decode(word, fec, unanimous_votes, word_energy);
+            if (decoded_ok && gate_word_(fec, word, unanimous_votes)) {
+                // Do NOT accept the first passing offset: the decode pipeline is
+                // shift-tolerant up to ~half a symbol, so the earliest passing
+                // offset lies well before the true word boundary and would poison
+                // the SINAD measurement (see file header, "Word-boundary
+                // refinement"). Track the candidate whose summed winning-tone
+                // energy — a matched-filter statistic peaking exactly at the
+                // boundary — is maximal; commit_refined_word_() emits it.
+                if (!refining_) {
+                    refining_        = true;
+                    ref_first_pos_   = write_pos_;
+                    ref_best_energy_ = -1.0f;
                 }
-                if (word_cb_) word_cb_(word);
-            } else if (!decoded_ok && word.golay_uncorrectable
+                if (word_energy > ref_best_energy_) {
+                    ref_best_energy_ = word_energy;
+                    ref_best_pos_    = write_pos_;
+                    ref_best_votes_  = unanimous_votes;
+                    ref_best_word_   = word;
+                }
+            } else if (!decoded_ok && !refining_ && word.golay_uncorrectable
                        && grid_locked_
                        && unanimous_votes >= min_unanimous_votes_) {
                 // Grid-locked, quality-thresholded uncorrectable word:
@@ -299,7 +321,8 @@ float Demodulator::goertzel_power(const int16_t* block, float freq_hz, uint32_t 
     return q1 * q1 + q2 * q2 - coeff * q1 * q2;
 }
 
-uint8_t Demodulator::symbol_from_block(const int16_t* block, float& sinad_db_out)
+uint8_t Demodulator::symbol_from_block(const int16_t* block, float& sinad_db_out,
+                                       float& win_power_out)
 {
     // Symbol decision (A.5.2.6.3): the winning tone is the one with the largest
     // Goertzel power over the full 64-sample symbol block. This is unchanged.
@@ -309,6 +332,10 @@ uint8_t Demodulator::symbol_from_block(const int16_t* block, float& sinad_db_out
         const float p = goertzel_power(block, static_cast<float>(TONE_FREQS_HZ[r]));
         if (p > best) { best = p; rank = r; }
     }
+    // Full-block winning-tone power: coherent only when the block is aligned to
+    // the transmitted symbol, so its per-word sum peaks at the true boundary —
+    // the alignment metric for the word-boundary refinement.
+    win_power_out = best;
 
     // ── A.5.4.1.2 true-SINAD on a centered guard-limited sub-window ───────────
     // The previous SINAD used the sum of the 7 non-winning tone bins as
@@ -370,8 +397,8 @@ static bool is_acquisition_anchor(PreambleType t)
     return t == PreambleType::TO || t == PreambleType::TWAS || t == PreambleType::TIS;
 }
 
-bool Demodulator::accept_word_(const Golay::DecodeResult& fec, const ALEWord& word,
-                               uint8_t unanimous_votes)
+bool Demodulator::gate_word_(const Golay::DecodeResult& fec, const ALEWord& word,
+                             uint8_t unanimous_votes) const
 {
     // ── A.5.2.6.3 criterion 1: unanimous-vote (signal-quality) threshold ────
     // Applied to EVERY word, initial and continuing.  This is the standard's
@@ -395,61 +422,73 @@ bool Demodulator::accept_word_(const Golay::DecodeResult& fec, const ALEWord& wo
     // residual symbol errors at every alignment and so decodes as
     // DECODE_CORRECTED.  Criterion 4 (acceptable leading preamble) plus the
     // unanimous-vote gate above guard against false locks.
-    if (!grid_locked_) {
-        if (!is_acquisition_anchor(word.type))
-            return false;
-        grid_locked_ = true;
-        grid_anchor_ = write_pos_;
-        return true;
-    }
+    if (!grid_locked_)
+        return is_acquisition_anchor(word.type);
 
     // ── Continuing sync (grid locked) ───────────────────────────────────────
-    // grid_anchor_ holds the sample position of the last accepted word boundary;
+    // grid_anchor_ holds the sample position of the last committed word boundary;
     // words are one WORD_SAMPLES apart on the grid.
     const uint32_t samples_since_last_word = write_pos_ - grid_anchor_;
 
     // The Goertzel window slides every DECODE_STEP_COARSE/FINE samples, so the
     // same word would otherwise be decoded many times in a row.  Ignore any
-    // candidate closer than (almost) one full word to the previous accepted word.
+    // candidate closer than (almost) one full word to the previous committed word.
     const uint32_t min_spacing = WORD_SAMPLES - SAMPLES_PER_SYMBOL;  // one word, minus one symbol of slack
     if (samples_since_last_word < min_spacing)
         return false;
 
-    // A clean decode is always trusted and re-anchors the grid.
-    if (clean_decode) {
-        grid_anchor_ = write_pos_;
+    // A clean decode is always trusted as a candidate.
+    if (clean_decode)
         return true;
-    }
 
     // A FEC-corrected decode is trusted only when it lands on the word grid,
     // i.e. within one symbol (SAMPLES_PER_SYMBOL samples) of an expected word boundary
     // (A.5.2.6.3 criterion 9: correct triple-redundant word phase).
     const uint32_t phase_in_word    = samples_since_last_word % WORD_SAMPLES;
-    const bool     on_word_boundary = (phase_in_word <= SAMPLES_PER_SYMBOL) ||
-                                      (phase_in_word >= WORD_SAMPLES - SAMPLES_PER_SYMBOL);
-    if (on_word_boundary) {
-        grid_anchor_ = write_pos_;
-        return true;
-    }
-    return false;
+    return (phase_in_word <= SAMPLES_PER_SYMBOL) ||
+           (phase_in_word >= WORD_SAMPLES - SAMPLES_PER_SYMBOL);
 }
 
-bool Demodulator::try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes) const
+void Demodulator::commit_refined_word_()
+{
+    // Anchor the grid at the best-aligned candidate — not the first passing one —
+    // so the next word's decode window and the per-symbol SINAD line up with the
+    // true symbol boundaries (see "Word-boundary refinement" in the file header).
+    grid_locked_ = true;
+    grid_anchor_ = ref_best_pos_;
+    refining_    = false;
+
+    // A.5.2.6.3 "DO": fold the committed word's quality into the adaptive
+    // estimate and update the operating point.
+    if (adaptive_) {
+        adaptive_fec_.observe(ref_best_votes_);
+        golay_mode_          = adaptive_fec_.mode();
+        min_unanimous_votes_ = adaptive_fec_.threshold();
+    }
+    if (word_cb_) word_cb_(ref_best_word_);
+}
+
+bool Demodulator::try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes,
+                             float& word_energy) const
 {
     const uint32_t base = write_pos_ - WORD_SAMPLES;
     int16_t blk[SAMPLES_PER_SYMBOL];
     uint8_t sym[SYMBOLS_PER_WORD];
-    float sinad_sum = 0.0f;
+    float sinad_sum  = 0.0f;
+    float energy_sum = 0.0f;
     for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
         const uint32_t bk = base + k * SAMPLES_PER_SYMBOL;
         for (uint32_t j = 0; j < SAMPLES_PER_SYMBOL; ++j)
             blk[j] = ring_at(bk + j);
-        float sym_sinad;
-        sym[k] = symbol_from_block(blk, sym_sinad);
-        sinad_sum += sym_sinad;
+        float sym_sinad, sym_power;
+        sym[k] = symbol_from_block(blk, sym_sinad, sym_power);
+        sinad_sum  += sym_sinad;
+        energy_sum += sym_power;
     }
     // A.5.4.1.2: SINAD = time-averaged value over the signal duration (49 symbols).
     out.sinad_db = sinad_sum / static_cast<float>(SYMBOLS_PER_WORD);
+    // Alignment metric for the boundary refinement (peaks at the true boundary).
+    word_energy = energy_sum;
     return ALEDecoder::decode(sym, out, fec, &unanimous_votes, golay_mode_);
 }
 

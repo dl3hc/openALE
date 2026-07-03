@@ -9,12 +9,23 @@
  *   3. BER unchanged         — decode still succeeds (the symbol decision window
  *                              was not touched), unanimous votes stay high.
  *
+ * And the word-boundary refinement (early-anchor regression):
+ *   4. Contiguous words      — EVERY word of a contiguous multi-word transmission
+ *                              reads a high SINAD, not just the first.  Before the
+ *                              refinement, words 2..N were accepted ~28–32 samples
+ *                              early (the Golay/vote pipeline is shift-tolerant),
+ *                              which poisoned the SINAD sub-window to ~3–6 dB even
+ *                              on a bit-perfect signal.
+ *   5. Resampler path        — same assertion through the 8k→48k→8k round trip
+ *                              (the live ale_bridge / virtual-cable path).
+ *
  * Drives the real ALE2GModem::Demodulator via push_samples and reads sinad_db
  * back from the decoded ALEWord (try_decode averages per-symbol SINAD over the
  * 49-symbol word). Modeled on tests/sync/integration/test_word_sync.cpp.
  */
 
 #include "Modem/ale2g_modem.h"
+#include "App/resampler.h"
 #include "Codec/ale_encoder.h"
 #include "FSK/tone_generator.h"
 #include "FSK/ale_waveform.h"
@@ -185,6 +196,85 @@ void test_awgn_tracking()
     std::printf("  => %s\n\n", (g_failures == 0) ? "PASS" : "FAIL");
 }
 
+// Feed PCM and capture EVERY decoded word's SINAD (not just the first).
+struct MultiOutcome { int decoded = 0; int valid = 0; std::vector<float> sinads; };
+
+static MultiOutcome run_demod_all(const std::vector<int16_t>& pcm)
+{
+    ALE2GModem::Demodulator demod;
+    MultiOutcome out;
+    demod.set_word_callback([&](const ALEWord& w) {
+        ++out.decoded;
+        if (w.valid) ++out.valid;
+        out.sinads.push_back(w.sinad_db);
+    });
+    constexpr uint32_t STEP = 16;
+    const auto total = static_cast<uint32_t>(pcm.size());
+    for (uint32_t i = 0; i < total; i += STEP) {
+        const uint32_t n = (i + STEP <= total) ? STEP : (total - i);
+        demod.push_samples(pcm.data() + i, n);
+    }
+    return out;
+}
+
+// ── Test 3: contiguous words — every word reads a high SINAD ────────────────
+// Regression for the early-anchor bug: without boundary refinement the decode
+// grid re-anchors ~28–32 samples before the true boundary of every word after
+// the first, and their SINAD collapses to ~3–6 dB despite BER = 0.
+void test_contiguous_words_all_high_sinad()
+{
+    std::printf("[SINAD-3] Contiguous words — EVERY word SINAD >= 20 dB\n");
+    constexpr int N_WORDS = 5;
+    double sig_sq = 0.0;
+    auto pcm = build_clean_pcm(N_WORDS, sig_sq);
+    // Trailing quiet tail: the boundary refinement needs up to one symbol of
+    // lookahead past the last word before committing it (real audio streams
+    // never stop dead at the last sample either).
+    pcm.insert(pcm.end(), 2 * SAMPLES_PER_SYMBOL, 0);
+
+    const auto r = run_demod_all(pcm);
+    std::printf("  decoded %d/%d words (valid %d)\n", r.decoded, N_WORDS, r.valid);
+    check(r.decoded == N_WORDS, "all contiguous words must decode");
+    check(r.valid   == N_WORDS, "all contiguous words must be valid (BER unchanged)");
+
+    bool all_high = true;
+    for (size_t i = 0; i < r.sinads.size(); ++i) {
+        std::printf("  word %zu: SINAD = %.1f dB\n", i + 1, r.sinads[i]);
+        if (r.sinads[i] < 20.0f) all_high = false;
+    }
+    check(all_high, "every contiguous word SINAD >= 20 dB (words 2..N were ~3 dB "
+                    "before boundary refinement)");
+    std::printf("  => %s\n\n", (r.decoded == N_WORDS && all_high) ? "PASS" : "FAIL");
+}
+
+// ── Test 4: resampler round trip — the live ale_bridge / virtual-cable path ─
+void test_resampler_path_all_high_sinad()
+{
+    std::printf("[SINAD-4] 8k->48k->8k resampler path — EVERY word SINAD >= 20 dB\n");
+    constexpr int N_WORDS = 5;
+    double sig_sq = 0.0;
+    auto pcm8 = build_clean_pcm(N_WORDS, sig_sq);
+    pcm8.insert(pcm8.end(), 2 * SAMPLES_PER_SYMBOL, 0);
+
+    Resampler up(8000, 48000), down(48000, 8000);
+    std::vector<int16_t> dev48, rx8;
+    up.process(pcm8.data(), pcm8.size(), dev48);
+    down.process(dev48.data(), dev48.size(), rx8);
+
+    const auto r = run_demod_all(rx8);
+    std::printf("  decoded %d/%d words (valid %d)\n", r.decoded, N_WORDS, r.valid);
+    check(r.decoded == N_WORDS, "all words must decode through the resampler path");
+    check(r.valid   == N_WORDS, "all resampled words must be valid");
+
+    bool all_high = true;
+    for (size_t i = 0; i < r.sinads.size(); ++i) {
+        std::printf("  word %zu: SINAD = %.1f dB\n", i + 1, r.sinads[i]);
+        if (r.sinads[i] < 20.0f) all_high = false;
+    }
+    check(all_high, "every resampled word SINAD >= 20 dB (live VAC path regression)");
+    std::printf("  => %s\n\n", (r.decoded == N_WORDS && all_high) ? "PASS" : "FAIL");
+}
+
 } // namespace
 
 int main()
@@ -196,6 +286,8 @@ int main()
 
     test_clean_loopback_high_sinad();
     test_awgn_tracking();
+    test_contiguous_words_all_high_sinad();
+    test_resampler_path_all_high_sinad();
 
     if (g_failures == 0) {
         std::printf("PASS  true-SINAD: clean loopback reads high dB, AWGN tracks SNR, BER stable\n");

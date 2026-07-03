@@ -44,6 +44,22 @@
  *     - correct triple-redundant word phase (on-grid once locked)
  *   Silence-gap reset: 100 ms below threshold releases the grid lock so the
  *   next transmission re-acquires at its own sub-symbol phase.
+ *
+ * Word-boundary refinement:
+ *   Golay + triple-redundant voting are shift-tolerant — a decode window up to
+ *   ~half a symbol off the true word boundary still ranks every symbol's
+ *   majority tone correctly and decodes cleanly.  Accepting the FIRST passing
+ *   offset therefore anchors the grid ~28-32 samples early and poisons the
+ *   per-symbol SINAD (A.5.4.1.2) whose guard sub-window then straddles the
+ *   previous tone.  Instead, a passing decode only opens a refinement window:
+ *   candidates are evaluated every DECODE_STEP_FINE samples and the offset with
+ *   the maximum summed winning-tone Goertzel energy wins (the energy is a
+ *   matched-filter statistic that peaks exactly at the boundary — the same
+ *   principle as LinuxALE's per-phase magnitude-accumulator sync and ALELite's
+ *   agreeing-sub-block symbol hunt).  After one full symbol has been scanned
+ *   past the first candidate, the best candidate is committed: grid anchored
+ *   there, word_cb_ fired with the SINAD measured at the refined alignment.
+ *   Emission latency is ≤ SAMPLES_PER_SYMBOL (8 ms) — negligible vs Trw.
  */
 
 #pragma once
@@ -231,6 +247,17 @@ private:
     uint32_t             uncorr_anchor_ = 0;  ///< last write_pos_ at which an uncorrectable word was reported
     uint32_t             silence_count_ = 0;
 
+    // ── Word-boundary refinement state (see file header) ────────────────────
+    // A passing decode opens a refinement window instead of being accepted
+    // immediately; the candidate with the maximum winning-tone energy within
+    // one symbol of scanning is committed by commit_refined_word_().
+    bool     refining_        = false;
+    uint32_t ref_first_pos_   = 0;     ///< write_pos_ of the first passing candidate
+    uint32_t ref_best_pos_    = 0;     ///< write_pos_ of the best candidate so far
+    float    ref_best_energy_ = 0.0f;  ///< summed winning-tone Goertzel power of best
+    uint8_t  ref_best_votes_  = 0;     ///< unanimous votes of best (for adaptive FEC)
+    ALEWord  ref_best_word_{};         ///< decoded word of best (SINAD already correct)
+
     // FEC / sync operating point (A.5.2.6.3).  base_* = configured acquisition
     // point; the active golay_mode_ / min_unanimous_votes_ equal base_* except
     // while adaptive tracking is in effect.
@@ -312,13 +339,20 @@ private:
     // Goertzel single-bin power |X(k)|^2 over M samples (default: one full
     // 64-sample symbol). The symbol decision always uses the full window; SINAD
     // is measured on a shorter centered sub-window — see symbol_from_block().
+    // win_power_out = full-block power of the winning tone; summed over a word
+    // it is the alignment metric used by the boundary refinement.
     static float   goertzel_power(const int16_t* block, float freq_hz,
                                   uint32_t M = SAMPLES_PER_SYMBOL);
-    static uint8_t symbol_from_block(const int16_t* block, float& sinad_db_out);
+    static uint8_t symbol_from_block(const int16_t* block, float& sinad_db_out,
+                                     float& win_power_out);
     int16_t        ring_at(uint32_t abs_pos) const { return ring_[abs_pos % BUF_CAP]; }
-    bool           try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes) const;
-    bool           accept_word_(const Golay::DecodeResult& fec, const ALEWord& word,
-                                uint8_t unanimous_votes);
+    bool           try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes,
+                              float& word_energy) const;
+    // Acceptance gate (A.5.2.6.3 criteria) — const: passing a candidate no longer
+    // anchors the grid; commit_refined_word_() does that for the best candidate.
+    bool           gate_word_(const Golay::DecodeResult& fec, const ALEWord& word,
+                              uint8_t unanimous_votes) const;
+    void           commit_refined_word_();
 };
 
 } // namespace ALE2GModem
