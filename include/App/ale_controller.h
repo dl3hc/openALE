@@ -35,6 +35,7 @@
 #pragma once
 #include "Protocol/Control/ale_state_machine.h"
 #include "Modem/ale2g_modem.h"
+#include "Modem/channel_occupancy.h"
 #include "App/audio_device.h"
 #include "App/ale_station_config.h"
 #include "PAL/events.h"
@@ -119,6 +120,12 @@ public:
     /** Remove the channel with the given RX frequency.  Returns false if not found. */
     bool del_channel(uint32_t rx_hz);
 
+    /** Rename a channel's id (old_id → new_id) and propagate to every net's
+     *  membership list. Rejects empty/whitespace new_id, collisions with an
+     *  existing channel id, and unknown old_id. No-op (true) if new == old.
+     *  Reconfigures the SM and auto-saves station_file_ if set. */
+    bool rename_channel(const std::string& old_id, const std::string& new_id);
+
     /** Read-only access to the current channel list. */
     const std::vector<Channel>& channels() const { return calling_channels_; }
 
@@ -201,13 +208,15 @@ public:
     /**
      * Enable periodic multi-channel sounding on a named net's channels. When on,
      * the main loop starts a sounding sweep (ALEStateMachine::send_sounding_sweep)
-     * over the net's scan/sounding-enabled channels every @p interval_sec, whenever
-     * the SM is IDLE or SCANNING. Pass @p on=false (or an empty @p net_name) to
-     * stop. This is the GUI's "multi-channel sounding" dropdown mode, driven by
-     * the Sounding Interval setting (Settings ▸ Timing).
+     * over the net's scan/sounding-enabled channels every interval, whenever the
+     * SM is IDLE or SCANNING. The interval is taken from the net's own
+     * sounding_interval_sec policy (Nets panel "Auto-Sound every Xs"); it falls
+     * back to the global config_.sounding_interval_sec when the net is missing or
+     * its value is 0. Pass @p on=false (or an empty @p net_name) to stop. The
+     * GUI's Sound-panel toggle drives this; the net's own interval drives the
+     * cadence (live-updated via refresh_auto_sounding_interval on NET_UPDATE).
      */
-    void set_automatic_sounding(bool on, uint32_t interval_sec,
-                                const std::string& net_name);
+    void set_automatic_sounding(bool on, const std::string& net_name);
     // Auto-sounding state getters — used by the bridge SOUND_AUTO_GET so the
     // GUI can reflect core state after a settings import (no clobbering push).
     bool        is_automatic_sounding() const        { return auto_sounding_on_; }
@@ -406,6 +415,21 @@ public:
      * Re-arms on any link activity or reset_link_idle_timer().
      */
     std::function<void(uint32_t remaining_sec)> on_idle_warning;
+
+    /**
+     * Pre-sounding countdown warning (per-net automatic sounding). Fires with
+     * phase="warn" once when the active net's sounding timer enters the
+     * configured sounding_warning_lead_sec window while the SM is IDLE (idle→
+     * sounding transition only; during SCANNING the sweep fires silently).
+     * \p remaining_sec is whole seconds left before the sweep starts. The GUI
+     * shows a countdown popup with an Interrupt button. phase="fire" is sent
+     * when the sweep actually starts (GUI dismisses the popup); phase="cancel"
+     * is sent on interrupt, on toggle-off, or when a call pre-empts the pending
+     * idle sounding (GUI dismisses the popup). On interrupt, the controller
+     * re-arms that net's timer to its full original interval.
+     */
+    std::function<void(const std::string& net, uint32_t remaining_sec,
+                       const std::string& phase)> on_sounding_warning;
 
     /**
      * AMD orderwire message received (AC-LINK-009-3).
@@ -701,6 +725,15 @@ public:
     /// True if the configured channel at rx_hz has inhibit_calling set.
     bool calling_inhibited(uint32_t rx_hz) const;
 
+    /// True if the configured channel at rx_hz is rx_only (Direction=RX):
+    /// all transmit is suppressed (sounding, calling, handshake response,
+    /// manual PTT). False if not found or the flag is clear.
+    bool tx_inhibited(uint32_t rx_hz) const;
+
+    /// True if the configured channel at rx_hz is tx_only (Direction=TX):
+    /// receive is suppressed (excluded from scan, RX kept disabled).
+    bool rx_inhibited(uint32_t rx_hz) const;
+
     /**
      * Set frequency directly (VFO mode), simplex (RX=TX).
      * @param hz Frequency in Hz
@@ -756,6 +789,15 @@ public:
      */
     std::vector<std::string> get_all_lqa_entries() const;
 
+    /**
+     * @brief Read-only access to the LQA database (test/diagnostic introspection).
+     *
+     * Exposed so tests can assert the LQA-purity invariant (A.5.4.1.1/A.5.4.1.2): that
+     * TX-side events (transmitting a sounding, initiating a call) create no LQA entries,
+     * while received measurements do. Not used by the GUI bridge.
+     */
+    const LQADatabase& lqa_database() const { return lqa_database_; }
+
     // ── Timing parameters ─────────────────────────────────────────────────
     // Only the values ale_timing.h itself marks as "Level 5 — Programmable
     // defaults" (network-manager-overridable) are exposed here. Call timeout,
@@ -771,6 +813,19 @@ public:
 
     /** Select sounding conclusion type: false = TIS (invites return calls), true = TWAS (announce-only). */
     void set_sounding_use_twas(bool use_twas);
+
+    /** Set the pre-sounding countdown lead time in seconds (config_.sounding_warning_lead_sec). */
+    void set_sounding_warning_lead_sec(uint32_t sec);
+    uint32_t get_sounding_warning_lead_sec() const { return config_.sounding_warning_lead_sec; }
+
+    /**
+     * Interrupt the pending idle-sounding countdown on @p net. Re-arms that
+     * net's timer to its full original interval (per spec: "set back to its
+     * original value") and emits a "cancel" phase so the GUI hides the popup.
+     * No-op if @p net is not the active sounding net. If the SM is already in
+     * SOUNDING (sweep in flight) it is too late to interrupt — reports that.
+     */
+    void interrupt_sounding(const std::string& net);
 
     /**
      * Set link-idle timeout in seconds — Twa, ALEStateMachine::set_link_idle_timeout_ms().
@@ -884,6 +939,22 @@ public:
     /// see what the receiver actually decodes (e.g. during the LISTENING window).
     void set_debug_rx(bool on)                   { config_.debug_rx = on; debug_rx_ = on; }
     bool debug_rx() const                        { return debug_rx_; }
+
+    // ── LBT occupancy detection (A.5.4.7 listen-before-transmit) ─────────────
+    // Broadband busy detector (ChannelOccupancyDetector) consulted by the SM in
+    // all three LBT windows, in addition to the ALE-word busy path.  The busy
+    // margin is operator-settable so high local noise never permanently blocks
+    // TX (the EWMA floor self-adapts to steady noise; the margin covers
+    // impulsive QRM; the A.5.4.7.3 override is the hard bypass).
+    void  set_lbt_margin_db(float db);            ///< dB over tracked noise floor (default 6)
+    float lbt_margin_db() const;
+    void  set_lbt_occupancy_enabled(bool on)     { lbt_occupancy_enabled_ = on; }
+    bool  lbt_occupancy_enabled() const          { return lbt_occupancy_enabled_; }
+    void  set_lbt_override(bool on);              ///< A.5.4.7.3 operator override (emergency)
+    bool  lbt_override() const;
+    bool  lbt_busy() const;                       ///< current occupancy-busy state (diagnostics)
+    float lbt_level_db() const;                   ///< last 100 ms block level (diagnostics)
+    float lbt_floor_db() const;                   ///< tracked noise floor (diagnostics)
 
     // ── Auto-Relink (A.5.4.5 bilateral channel renegotiation) ────────────────
     /// Enable/disable post-link automatic channel renegotiation via TWAS + re-call.
@@ -1020,6 +1091,15 @@ private:
     int                      dbg_peak_   = 0;   // running peak |sample| since last report
     uint32_t                 dbg_count_  = 0;   // samples accumulated since last report
 
+    // LBT occupancy detection (A.5.4.7.2) — fed from feed_audio() while RX is
+    // enabled; queried by the SM via set_channel_busy_query.
+    ChannelOccupancyDetector occupancy_;
+    bool                     lbt_occupancy_enabled_ = true;
+    bool                     lbt_busy_reported_     = false;  // edge-detect for status emission
+
+    /// A.5.4.7.1: set SM shared/ALE-only LBT duration from the channels involved.
+    void apply_lbt_policy_(const std::vector<Channel>& channels);
+
     // Audio input level (get_audio_input_level) — independent of debug_rx_,
     // updated unconditionally on every feed_audio() call.
     float                    audio_input_level_ = 0.0f;
@@ -1035,6 +1115,10 @@ private:
     std::string              auto_sounding_net_;
     std::string              active_scan_net_;        ///< Active net for start_scanning() scoping
     uint32_t                 auto_sounding_last_ms_  = 0;
+    // Pre-sounding countdown state (idle→sounding warning popup).
+    uint32_t                 sounding_warning_lead_ms_  = 10000; ///< matches config_.sounding_warning_lead_sec * 1000
+    bool                     sounding_warning_sent_     = false; ///< one-shot per cycle (prevents re-fire)
+    bool                     sounding_warning_active_   = false; ///< popup is open; call pre-empt closes it
 
     // ── GPS / SFI state (propagation-aware LQA scoring) ──────────────────────
     double   gps_lat_       = 0.0;
@@ -1051,6 +1135,7 @@ private:
     uint32_t                 ptt_tail_deadline_ms_ = 0;   // release PTT when now_ms_ >= this; 0 = inactive
     bool                     sm_rx_enabled_        = true; // mirrors SM's last rx_enabled_callback value
     bool                     manual_ptt_           = false;
+    bool                     abort_tx_pending_     = false; // rx_only: abort SM TX on next update() tick (avoids re-entering SM inside set_rx_enabled_callback)
     std::vector<std::pair<ALEWord, bool>> pending_tx_words_; // word + had_audio_device flag, buffered during PTT lead
 
     // Last received word stats (get_current_signal_quality)
@@ -1135,6 +1220,11 @@ private:
     /// calling_channels_) for a multi-channel sounding sweep. Empty if the net
     /// doesn't exist or has no enabled member channels.
     std::vector<Channel> resolve_net_sounding_channels(const std::string& net_name) const;
+
+    /// Re-read the active sounding net's own sounding_interval_sec into
+    /// auto_sounding_interval_ms_. Called when the active net's policy is
+    /// updated live so the running timer reflects the new value immediately.
+    void refresh_auto_sounding_interval();
     void on_received_word(const ALEWord& word);
 
     // ── update() concern handlers ─────────────────────────────────────────────

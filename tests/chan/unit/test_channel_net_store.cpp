@@ -125,7 +125,8 @@ bool test_contact_store_add_update_remove()
 {
     std::cout << "\n[ContactStore] add/update/remove/find\n";
 
-    ContactStore store;
+    AddressBook ab;
+    ContactStore store(ab);
     Contact c;
     c.callsign = "BOB"; c.name = "Bob"; c.enabled = true;
     c.net_members = {"XYZ"};
@@ -366,12 +367,12 @@ bool test_ale_legacy_file_without_ids_still_loads()
 }
 
 // ============================================================================
-// .ale persistence — per-channel inhibit flags + rx_only round-trip
+// .ale persistence — per-channel inhibit flags + rx_only/tx_only round-trip
 // ============================================================================
 
 bool test_ale_roundtrip_inhibit_flags()
 {
-    std::cout << "\n[.ale persistence] per-channel inhibit flags + rx_only round-trip\n";
+    std::cout << "\n[.ale persistence] per-channel inhibit flags + rx_only/tx_only round-trip\n";
 
     const std::string path = "test_channel_flags_roundtrip.ale";
 
@@ -389,31 +390,39 @@ bool test_ale_roundtrip_inhibit_flags()
         c.id = "C-3"; c.enabled = false;  // master off via the OFF code
         ctrl.add_channel(c);
 
+        Channel d(18160000, 0, "USB", "USB");
+        d.id = "C-4"; d.tx_only = true;   // Direction=TX (no RX)
+        ctrl.add_channel(d);
+
         ctrl.save_channels(path);
     }
 
     ALEController reloaded;
     bool loaded = reloaded.load_channels(path);
     const auto& ch = reloaded.channels();
-    bool count_ok = (ch.size() == 3);
+    bool count_ok = (ch.size() == 4);
     bool c1 = (ch[0].id == "C-1" && ch[0].inhibit_calling
                && !ch[0].inhibit_sounding && !ch[0].inhibit_reporting
-               && !ch[0].rx_only && ch[0].enabled && ch[0].label == "40m-Calling");
+               && !ch[0].rx_only && !ch[0].tx_only && ch[0].enabled && ch[0].label == "40m-Calling");
     bool c2 = (ch[1].id == "C-2" && ch[1].inhibit_sounding && ch[1].inhibit_reporting
-               && ch[1].rx_only && !ch[1].inhibit_calling && ch[1].enabled
+               && ch[1].rx_only && !ch[1].tx_only && !ch[1].inhibit_calling && ch[1].enabled
                && ch[1].label.empty());
     bool c3 = (ch[2].id == "C-3" && !ch[2].enabled
                && !ch[2].inhibit_calling && !ch[2].inhibit_sounding
-               && !ch[2].inhibit_reporting && !ch[2].rx_only);
+               && !ch[2].inhibit_reporting && !ch[2].rx_only && !ch[2].tx_only);
+    bool c4 = (ch[3].id == "C-4" && ch[3].tx_only && !ch[3].rx_only
+               && !ch[3].inhibit_calling && !ch[3].inhibit_sounding
+               && !ch[3].inhibit_reporting && ch[3].enabled);
 
     std::cout << "  file loads: " << (loaded ? "PASS" : "FAIL") << "\n";
-    std::cout << "  3 channels: " << (count_ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "  4 channels: " << (count_ok ? "PASS" : "FAIL") << "\n";
     std::cout << "  C-1 inhibit_calling only: " << (c1 ? "PASS" : "FAIL") << "\n";
     std::cout << "  C-2 inhibit_sounding+reporting+rx_only: " << (c2 ? "PASS" : "FAIL") << "\n";
     std::cout << "  C-3 enabled=false (OFF): " << (c3 ? "PASS" : "FAIL") << "\n";
+    std::cout << "  C-4 tx_only (Direction=TX): " << (c4 ? "PASS" : "FAIL") << "\n";
 
     std::remove(path.c_str());
-    return loaded && count_ok && c1 && c2 && c3;
+    return loaded && count_ok && c1 && c2 && c3 && c4;
 }
 
 // A bracketed label that is NOT all-recognized flag codes must be preserved as
@@ -499,6 +508,46 @@ bool test_initiate_call_without_contact_leaves_target_scan_channels_untouched()
               << " (got " << ctrl.get_target_scan_channels() << ")\n";
 
     return started && unchanged;
+}
+
+// Direction=RX (rx_only): a receive-only channel is a hard TX prohibition — it
+// is filtered out of the outbound call set, so initiate_call() must refuse when
+// every configured channel is rx_only (no callable channels). A tx_only channel
+// (Direction=TX) is the mirror: TX is permitted, so it stays callable. The
+// tx_inhibited / rx_inhibited helpers must resolve per-frequency from flags.
+bool test_initiate_call_rx_only_channel_rejected()
+{
+    std::cout << "\n[Direction] rx_only refuses calling, tx_only stays callable\n";
+
+    // All RX-only -> initiate_call refuses (no callable channels).
+    ALEController rx_ctrl;
+    rx_ctrl.set_self_address("SAM");
+    Channel a(14250000); a.id = "C-1"; a.rx_only = true;
+    Channel b(7100000);  b.id = "C-2"; b.rx_only = true;
+    rx_ctrl.add_channel(a);
+    rx_ctrl.add_channel(b);
+    bool rx_refused = !rx_ctrl.initiate_call("BOB");
+    bool tx_helper  = rx_ctrl.tx_inhibited(14250000) && rx_ctrl.tx_inhibited(7100000)
+                      && !rx_ctrl.rx_inhibited(14250000);
+
+    // TX-only -> callable (TX permitted), so initiate_call proceeds past the
+    // callable filter (sm_.initiate_call returns true in the bare controller).
+    ALEController tx_ctrl;
+    tx_ctrl.set_self_address("SAM");
+    Channel c(3500000); c.id = "C-3"; c.tx_only = true;
+    tx_ctrl.add_channel(c);
+    bool tx_callable = tx_ctrl.initiate_call("BOB");
+    bool rx_helper   = tx_ctrl.rx_inhibited(3500000) && !tx_ctrl.tx_inhibited(3500000);
+
+    bool unknown = !rx_ctrl.tx_inhibited(99999999) && !tx_ctrl.rx_inhibited(99999999);
+
+    std::cout << "  RX-only call refused: " << (rx_refused ? "PASS" : "FAIL") << "\n";
+    std::cout << "  TX-only stays callable: " << (tx_callable ? "PASS" : "FAIL") << "\n";
+    std::cout << "  tx_inhibited()/rx_inhibited() per-freq: "
+              << ((tx_helper && rx_helper) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  unconfigured freq -> false: " << (unknown ? "PASS" : "FAIL") << "\n";
+
+    return rx_refused && tx_callable && tx_helper && rx_helper && unknown;
 }
 
 // Active-net scoping: with set_active_scan_net() set, initiate_call() must
@@ -648,6 +697,72 @@ bool test_step_channel_scoped_to_active_scan_net()
     std::cout << "  no net → all 6 channels visited: " << (visitsAll6 ? "PASS" : "FAIL") << "\n";
 
     return scoped && covers && scopedRev && visitsAll6;
+}
+
+// rename_channel() renames a channel id and propagates to net membership. It
+// rejects empty/whitespace ids, collisions with an existing channel id, and
+// unknown old_id. No-op when new == old. The GUI ID input rides this.
+bool test_rename_channel_propagates_to_nets()
+{
+    std::cout << "\n[rename_channel] renames id + propagates to net membership\n";
+
+    ALEController ctrl;
+    ctrl.set_self_address("SAM");
+    for (int i = 0; i < 3; ++i) {
+        Channel ch(14000000 + i * 1000);
+        ch.enabled = true;
+        ctrl.add_channel(ch);
+    }
+    std::vector<std::string> ids;
+    for (const auto& c : ctrl.channels()) ids.push_back(c.id);   // C-1, C-2, C-3
+    ctrl.add_net("N1");
+    ctrl.assign_channel_to_net("N1", ids[0]);
+    ctrl.assign_channel_to_net("N1", ids[1]);
+
+    auto netIds = [&](const std::string& name) {
+        const Net* n = nullptr;
+        for (const auto& nn : ctrl.nets()) if (nn.name == name) { n = &nn; break; }
+        std::vector<std::string> v = n ? n->channel_ids : std::vector<std::string>{};
+        std::sort(v.begin(), v.end());
+        return v;
+    };
+    auto chanId = [&](int i){ return ctrl.channels()[i].id; };
+
+    // 1) Rename C-2 → C-9: channel id changes, net N1 follows.
+    bool ok1 = ctrl.rename_channel(ids[1], "C-9");
+    bool idChanged = (chanId(1) == "C-9");
+    std::vector<std::string> after = { "C-1", "C-9" };
+    std::sort(after.begin(), after.end());
+    bool netFollows = (netIds("N1") == after);
+    std::cout << "  rename C-2→C-9: " << (ok1 && idChanged ? "PASS" : "FAIL") << "\n";
+    std::cout << "  net N1 follows ({C-1,C-9}): " << (netFollows ? "PASS" : "FAIL") << "\n";
+
+    // 2) Reject empty new_id.
+    bool ok2 = ctrl.rename_channel("C-9", "");
+    bool rejectEmpty = !ok2 && chanId(1) == "C-9";
+    std::cout << "  reject empty new_id: " << (rejectEmpty ? "PASS" : "FAIL") << "\n";
+
+    // 3) Reject whitespace new_id.
+    bool ok3 = ctrl.rename_channel("C-9", "C 9");
+    bool rejectWs = !ok3 && chanId(1) == "C-9";
+    std::cout << "  reject whitespace new_id: " << (rejectWs ? "PASS" : "FAIL") << "\n";
+
+    // 4) Reject collision with an existing channel id (C-1).
+    bool ok4 = ctrl.rename_channel("C-9", "C-1");
+    bool rejectDup = !ok4 && chanId(1) == "C-9";
+    std::cout << "  reject collision with C-1: " << (rejectDup ? "PASS" : "FAIL") << "\n";
+
+    // 5) Reject unknown old_id.
+    bool ok5 = ctrl.rename_channel("NOPE", "C-7");
+    bool rejectUnknown = !ok5;
+    std::cout << "  reject unknown old_id: " << (rejectUnknown ? "PASS" : "FAIL") << "\n";
+
+    // 6) No-op rename (new == old) returns true, id unchanged.
+    bool ok6 = ctrl.rename_channel("C-9", "C-9");
+    bool noop = ok6 && chanId(1) == "C-9";
+    std::cout << "  no-op (new==old) true: " << (noop ? "PASS" : "FAIL") << "\n";
+
+    return ok1 && idChanged && netFollows && rejectEmpty && rejectWs && rejectDup && rejectUnknown && noop;
 }
 
 bool test_channel_store_min_capacity_100()
@@ -1204,7 +1319,7 @@ int run_all_tests()
 
     run(".ale round-trip: IDs and nets survive",    test_ale_roundtrip_ids_and_nets());
     run(".ale legacy file still loads",             test_ale_legacy_file_without_ids_still_loads());
-    run(".ale round-trip: inhibit flags + rx_only", test_ale_roundtrip_inhibit_flags());
+    run(".ale round-trip: inhibit flags + rx_only/tx_only", test_ale_roundtrip_inhibit_flags());
     run(".ale bracketed non-flag label kept",       test_ale_bracketed_label_not_swallowed());
 
     run("initiate_call uses net's calling_length_c (global assumed is fallback)",
@@ -1213,8 +1328,12 @@ int run_all_tests()
         test_initiate_call_without_contact_leaves_target_scan_channels_untouched());
     run("initiate_call scopes outbound channels to the active scan net",
         test_initiate_call_scoped_to_active_scan_net());
+    run("Direction=RX: initiate_call rejected when all channels are RX-only",
+        test_initiate_call_rx_only_channel_rejected());
     run("step_channel iterates only the active net's channels",
         test_step_channel_scoped_to_active_scan_net());
+    run("rename_channel renames id + propagates to net membership",
+        test_rename_channel_propagates_to_nets());
 
     std::cout << "\n";
     std::cout << "================================================================\n";

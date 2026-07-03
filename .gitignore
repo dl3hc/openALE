@@ -9,6 +9,7 @@ diag_wav/
 # Root-level test-capture binary artifacts
 /*.raw
 /*.wav
+/*.pdb
 
 # Hamlib Build-Artefakte (via scripts/build_hamlib.sh erstellt)
 libs/hamlib-src/
@@ -29,6 +30,7 @@ prompts/
 python/
 graphify-out/
 ALELite/
+LinuxALE/
 docs/standards
 progress.md
 issues_preview/

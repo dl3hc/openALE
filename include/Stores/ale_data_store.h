@@ -1,4 +1,4 @@
-﻿/**
+/**
  * \file ale_data_store.h
  * \brief ALE data stores: channels, self-addresses, known stations, LQA, messages,
  *        and operating parameters
@@ -11,10 +11,12 @@
 #include "Protocol/Control/ale_channel_types.h"
 #include "Protocol/Message/ale_message.h"
 #include "LQA/lqa_database.h"
+#include "Stores/address_book.h"
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <memory>
+#include <utility>
 
 namespace ale {
 
@@ -135,6 +137,12 @@ public:
     /** Remove channel_id from every net's member list (e.g. after deleting a channel). */
     void unassign_channel_everywhere(const std::string& channel_id);
 
+    /** Rename a channel id across every net's member list: each occurrence of
+     *  old_id is replaced by new_id. If a net already lists new_id, the renamed
+     *  entry is dropped (no duplicate) so membership stays a set. Used when the
+     *  operator edits a Channel::id in the GUI. */
+    void rename_channel(const std::string& old_id, const std::string& new_id);
+
     const Net* find(const std::string& name) const;
     const std::vector<Net>& all() const { return nets_; }
     size_t size()  const { return nets_.size(); }
@@ -172,25 +180,39 @@ struct Contact {
 /**
  * \class ContactStore
  * Address book of known remote stations (GUI-facing; backs
- * ALEController::add_contact() and friends).
- *
- * Keyed by callsign; add_or_update() overwrites an existing entry in place.
+ * ALEController::add_contact() and friends). Backed by an AddressBook (the
+ * station list) plus a side table of per-contact metadata (net membership,
+ * channel reachability). Keyed by callsign; add_or_update() overwrites an
+ * existing entry in place.
  */
 class ContactStore {
 public:
-    ContactStore() = default;
+    explicit ContactStore(AddressBook& ab) : ab_(&ab) {}
+
+    /** Rebuild a Contact from the AddressBook entry + the metadata side table. */
+    Contact build(const std::string& addr, const std::string& name) const;
 
     bool add_or_update(const Contact& c);
     bool remove(const std::string& callsign);
     const Contact* find(const std::string& callsign) const;
 
-    const std::vector<Contact>& all() const { return contacts_; }
-    size_t size()  const { return contacts_.size(); }
-    bool   empty() const { return contacts_.empty(); }
+    const std::vector<Contact>& all() const;
+    size_t size()  const { return ab_->all_stations().size(); }
+    bool   empty() const { return ab_->all_stations().empty(); }
     void   clear();
 
 private:
-    std::vector<Contact> contacts_;
+    struct ContactMeta {
+        bool                     enabled       = true;
+        std::vector<std::string> net_members;
+        std::vector<std::string> valid_channels;
+        bool                     all_channels  = true;
+    };
+
+    AddressBook* ab_;
+    std::vector<std::pair<std::string, ContactMeta>> meta_;
+    mutable Contact             scratch_;
+    mutable std::vector<Contact> all_scratch_;
 };
 
 // ── SelfAddressStore ──────────────────────────────────────────────────────────

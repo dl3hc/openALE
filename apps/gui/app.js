@@ -10,6 +10,7 @@ const ICONS = {
   power:     '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
   settings:  '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
   user:      '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  userPlus:  '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>',
   headphones:'<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
   layers:    '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
   share2:    '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
@@ -131,6 +132,7 @@ function syncAllFromBridge(pullOnly = false) {
   syncVfoFromBridge();
   syncFecFromBridge();              // pull FEC (Golay/votes/adaptive) state from core
   syncRelinkFromBridge();           // pull Auto-Relink state from core
+  syncLbtFromBridge();              // pull LBT occupancy state from core (A.5.4.7)
   syncEnhFreqSelectFromBridge();    // pull Enhanced Freq-Select state from core
   syncLocationFromBridge();         // pull Station Location & Propagation from core
   pollRigStatus();   // establish initial radio-control lock state
@@ -169,7 +171,10 @@ function blendQuality(berQ, sinadQ) {
   return -1;
 }
 function qualityLabel(q) {
-  return q >= 24 ? 'Excellent' : q >= 17 ? 'Good' : q >= 10 ? 'Fair' : 'Poor';
+  // Buckets match LQAAnalyzer::score_to_quality_level (lqa_analyzer.cpp:517-522)
+  // so the GUI and the ALE log label the same score identically (A.5.4.1: higher=better).
+  return q >= 25 ? 'Excellent' : q >= 20 ? 'Good' : q >= 15 ? 'Fair'
+       : q >= 10 ? 'Poor' : 'Very Poor';
 }
 
 // Poll SIGNAL_QUALITY for the active-link quality panel (bars + label).
@@ -232,10 +237,10 @@ function applyStatusReply(r) {
 function applyBridgeState(state) {
   if (state === 'IDLE') goIdle();
   else if (state === 'SCANNING') goScanning();
-  else if (state === 'CALLING') setStatus('Calling…', 'calling');
+  else if (state === 'CALLING') { setStatus('Calling…', 'calling'); hideSoundingWarn(); }
   else if (state === 'INCOMING') setStatus('Incoming', 'incoming');
-  else if (state === 'HANDSHAKE') setStatus('Handshake…', 'handshake');
-  else if (state === 'LINKED') setStatus('Linked', 'linked');
+  else if (state === 'HANDSHAKE') { setStatus('Handshake…', 'handshake'); hideSoundingWarn(); }
+  else if (state === 'LINKED') { setStatus('Linked', 'linked'); hideSoundingWarn(); }
 }
 
 function onBridgeEvent(e) {
@@ -318,6 +323,10 @@ function onBridgeEvent(e) {
       // SM fires this once, ~30s before the configured Twa elapses. Show a modal
       // with a live countdown; Reset Timer restarts the full idle period.
       showIdleWarn(e.remaining_sec);
+      break;
+    case 'sounding_warning':
+      if (e.phase === 'warn') showSoundingWarn(e.net, e.remaining_sec);
+      else hideSoundingWarn();
       break;
     case 'word_decoded':  onAleLogWord(e, 'rx'); break;
     case 'word_tx':       onAleLogWord(e, 'tx'); break;
@@ -592,28 +601,48 @@ function chLabelForFreq(freqHz) {
   const ch = chFromFreq(freqHz);
   return ch ? ch.id.replace('C-', 'C') : '';
 }
+// Exact configured channel frequency in MHz (Hz-precise, 6 decimals — no rounding).
+// Looks the channel up by the LQA entry's freq_hz and formats its configured RX Hz,
+// so the display matches the channel's "RX Hz" field exactly instead of the old
+// kHz-rounded (freq_hz/1e6).toFixed(3) that turned 10.1455 MHz into "10.146".
+function fmtChFreqExact(freqHz) {
+  const ch = chFromFreq(freqHz);
+  const hz = ch ? parseInt(ch.rx, 10) : freqHz;
+  return hz ? (hz / 1e6).toFixed(6) : '?';
+}
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    HEARD STATIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-let heardStations = [];  // { addr, freq_hz, ts, score, sinad_db }
+let heardStations = [];  // { addr, freq_hz, ts, score, available, sinad_from, sinad_to,
+                         //   ber_from, ber_to_code, ber_to, mp_to, ageMin } — full FROM/TO
+                         //   breakdown, same columns as the Settings/LQA table.
 // Keys ('addr|freq_hz') the user removed from the heard list. Kept for the
 // session so syncLqaFromBridge's mirror step doesn't re-add them on the next
 // LQA_LIST sync. Reset only by clearLqa() (full DB clear).
 let heardDeleted = new Set();
 
-function upsertHeard(addr, freqHz, score, sinadDb, available, sinadDir) {
-  const idx = heardStations.findIndex(h => h.addr === addr && h.freq_hz === freqHz);
-  const av  = (typeof available === 'number') ? available : -1;
-  const dir = sinadDir || null;
+function upsertHeard(e) {
+  const idx = heardStations.findIndex(h => h.addr === e.addr && h.freq_hz === e.freq_hz);
+  // Full FROM/TO breakdown mirroring the lqaEntry, so the heard panel can render the
+  // same 10-column table as Settings/LQA (sinad_from/to, ber_from/to, mp_to, …).
+  const metrics = {
+    score:       e.score,
+    available:   (typeof e.available === 'number') ? e.available : -1,
+    sinad_from:  e.sinad_from,
+    sinad_to:    e.sinad_to,
+    ber_from:    e.ber_from,
+    ber_to_code: e.ber_to_code,
+    ber_to:      e.ber_to,
+    mp_to:       e.mp_to,
+    ageMin:      e.ageMin,
+  };
   if (idx >= 0) {
-    // Refresh score/sinad/available but keep the original "first heard" timestamp.
-    heardStations[idx] = { ...heardStations[idx], score, sinad_db: sinadDb,
-                           available: av, sinad_dir: dir };
+    // Refresh metrics but keep the original "first heard" timestamp.
+    heardStations[idx] = { ...heardStations[idx], ...metrics };
   } else {
     const ts = new Date().toTimeString().slice(0, 8);
-    heardStations.unshift({ addr, freq_hz: freqHz, ts, score, sinad_db: sinadDb,
-                            available: av, sinad_dir: dir });
+    heardStations.unshift({ addr: e.addr, freq_hz: e.freq_hz, ts, ...metrics });
   }
   renderHeard();
 }
@@ -630,6 +659,32 @@ function clearHeard() {
   renderHeard();
 }
 
+// One-click "add heard station to address book" from a heard-row button. Adds
+// the callsign as a minimal contact (operator can flesh out name/net/channels
+// later via the contact editor) and pushes it to Core via the same CONTACT_ADD
+// path saveContact() uses. No-op if the callsign is already a contact or if the
+// row has no real callsign (the '(sounding)' placeholder).
+function addHeardToContacts(addr) {
+  if (!addr || addr === '(sounding)') return;
+  const cs = addr.toUpperCase();
+  if (contacts.some(c => c.cs.toUpperCase() === cs)) {
+    aleLogInfo(`${cs} is already in the address book`);
+    return;
+  }
+  const c = { cs, name: '', fav: false, status: 'enabled', net: '', chans: 'ALL' };
+  contacts.push(c);
+  selectedContact = c;
+  renderContacts();
+  renderHeard();   // flip the row's button to the ✓/already-added state
+  if (bridgeConnected) {
+    bridgeSend('CONTACT_ADD', {
+      callsign: c.cs, name: c.name, status: c.status,
+      net_members: c.net, valid_channels: c.chans,
+    }, () => syncContactsFromBridge());
+  }
+  aleLogInfo(`Added ${cs} to the address book`);
+}
+
 function renderHeard() {
   const el = document.getElementById('heardList');
   if (!el) return;
@@ -637,39 +692,51 @@ function renderHeard() {
     el.innerHTML = '<div class="heard-empty">No stations heard yet</div>';
     return;
   }
-  el.innerHTML = heardStations.map(h => {
-    const freqMhz  = h.freq_hz ? (h.freq_hz / 1e6).toFixed(3) : '?';
-    const lbl      = chLabelForFreq(h.freq_hz);
-    // Continuous gradient (better = green → worse = red) via qColor, replacing
-    // the old 3-bucket hs-good/hs-ok/hs-bad classes.
-    const scoreSt   = (h.score != null)
-      ? `style="color:${qColor(Math.min(1, Math.max(0, h.score / 30)))};font-weight:600"`
-      : '';
-    const sinadGood = (h.sinad_db > 0) ? Math.min(1, h.sinad_db / 30) : null;
-    const sinadSt   = (sinadGood != null)
-      ? `style="color:${qColor(sinadGood)};font-weight:600"` : 'style="color:var(--tx-dim)"';
-    const sinadTxt  = (h.sinad_db > 0) ? `+${Math.round(h.sinad_db)}` : '—';
-    // Direction marker for the collapsed SINAD: ▲ FROM (measured) / ▼ TO (reported).
-    const dirMark   = h.sinad_dir === 'FROM' ? '▲'
-                    : h.sinad_dir === 'TO'   ? '▼' : '';
-    const dirTip    = h.sinad_dir === 'FROM' ? 'locally measured (FROM)'
-                    : h.sinad_dir === 'TO'   ? 'peer-reported (TO)' : '';
-    // Sounding-conclusion availability: 1 = TIS (available), 0 = TWAS (not
-    // available), -1 = no sounding heard from this station (unknown).
-    const av = h.available;
-    const avCls = av === 1 ? 'ha-yes' : av === 0 ? 'ha-no' : 'ha-unk';
-    const avTxt = av === 1 ? 'AVAIL' : av === 0 ? 'N/A' : '—';
-    return `<div class="heard-row">` +
-      `<span class="heard-cs">${escapeHtml(h.addr)}</span>` +
-      `<span class="heard-avail ${avCls}" title="Sounding conclusion: ${av === 1 ? 'TIS — available for link' : av === 0 ? 'TWAS — not available' : 'no sounding heard'}">${avTxt}</span>` +
-      `<span class="heard-freq">${escapeHtml(freqMhz)}</span>` +
-      `<span class="heard-lbl">${lbl ? '['+escapeHtml(lbl)+']' : ''}</span>` +
-      `<span class="heard-score" ${scoreSt}>${h.score != null ? h.score : '—'}</span>` +
-      `<span class="heard-sinad" ${sinadSt} title="${dirTip}">${sinadTxt}${dirMark ? ` <span style="opacity:.6">${dirMark}</span>` : ''}</span>` +
-      `<span class="heard-ts">${h.ts}</span>` +
-      `<button class="heard-del" onclick="deleteHeard(${JSON.stringify(h.addr)},${h.freq_hz})" title="Remove">×</button>` +
-      `</div>`;
+  // Same column layout and gradient math as renderLqa() (Settings/LQA), so the
+  // main-window heard panel reads identically to the Settings table. qCell/
+  // availBadge are hoisted declarations below; cfgLqaAge lives in the settings
+  // DOM (always present, just hidden) and drives the age gradient.
+  const ageLimit = Math.max(1, Number(document.getElementById('cfgLqaAge')?.value) || 60);
+  const body = heardStations.map(h => {
+    const sinadFromG = (h.sinad_from != null) ? h.sinad_from / 30 : null;
+    const sinadToG   = (h.sinad_to   != null) ? h.sinad_to   / 30 : null;
+    const berFromG   = (h.ber_from   != null) ? 1 - Math.min(1, h.ber_from / 48) : null;
+    const berToCode  = (h.ber_to_code != null && h.ber_to_code <= 30) ? h.ber_to_code : null;
+    const berToG     = (berToCode != null) ? 1 - berToCode / 30 : null;
+    const mpG        = (h.mp_to != null) ? 1 - Math.min(1, h.mp_to / 6) : null;
+    const scoreG     = Math.min(1, Math.max(0, h.score / 30));
+    const ageG       = 1 - Math.min(1, h.ageMin / ageLimit);
+    // Add-to-address-book button: only for rows that carry a real callsign.
+    // Shows ✓/disabled once the callsign is already a contact.
+    const canAdd = h.addr && h.addr !== '(sounding)';
+    const inBook = canAdd && contacts.some(c => c.cs.toUpperCase() === h.addr.toUpperCase());
+    const addBtn = !canAdd ? '' : inBook
+      ? `<span class="heard-add heard-added" title="Already in address book">${icon('user',11)}</span>`
+      : `<button class="heard-add" onclick="addHeardToContacts(${JSON.stringify(h.addr)})" title="Add to address book">${icon('userPlus',11)}</button>`;
+    return `<tr>` +
+      `<td class="lqa-cell" style="text-align:left">${escapeHtml(h.addr)}</td>` +
+      `<td class="lqa-cell">${fmtChFreqExact(h.freq_hz)}</td>` +
+      availBadge(h.available) +
+      qCell(h.score, scoreG) +
+      qCell(h.sinad_from != null ? `+${Math.round(h.sinad_from)}` : null, sinadFromG) +
+      qCell(h.sinad_to   != null ? `+${Math.round(h.sinad_to)}`   : null, sinadToG) +
+      qCell(h.ber_from   != null ? h.ber_from.toFixed(1)          : null, berFromG) +
+      qCell(berToCode    != null ? h.ber_to                       : null, berToG) +
+      qCell(h.mp_to      != null ? h.mp_to.toFixed(0) + 'ms'      : null, mpG) +
+      qCell(h.ageMin + 'm', ageG) +
+      `<td class="lqa-cell heard-actions">${addBtn}<button class="heard-del" onclick="deleteHeard(${JSON.stringify(h.addr)},${h.freq_hz})" title="Remove">×</button></td>` +
+      `</tr>`;
   }).join('');
+  el.innerHTML =
+    `<table class="ch-table heard-table">` +
+      `<thead><tr>` +
+        `<th>Callsign</th><th>Ch</th><th>Avail</th><th>Score</th>` +
+        `<th>SINAD<br>FROM</th><th>SINAD<br>TO</th>` +
+        `<th>BER<br>FROM</th><th>BER<br>TO</th><th>MP</th><th>Age</th>` +
+        `<th></th>` +
+      `</tr></thead>` +
+      `<tbody>${body}</tbody>` +
+    `</table>`;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -746,20 +813,23 @@ function onAleLogFrame(e) {
   aleLogAppend(`<div class="ale-frame-sep"></div>`);
 }
 
-function onAleLogLqa(addr, freqHz, score, sinadDb, available, sinadDir) {
-  upsertHeard(addr, freqHz, score, sinadDb, available, sinadDir);
+function onAleLogLqa(e) {
+  upsertHeard(e);
   const ts      = new Date().toTimeString().slice(0, 8);
-  const freqStr = freqHz ? ` ${(freqHz / 1e6).toFixed(3)} MHz` : '';
-  const lbl     = freqHz ? chLabelForFreq(freqHz) : '';
+  const freqStr = e.freq_hz ? ` ${fmtChFreqExact(e.freq_hz)} MHz` : '';
+  const lbl     = e.freq_hz ? chLabelForFreq(e.freq_hz) : '';
   const lblStr  = lbl ? ` [${lbl}]` : '';
-  const scoreStr = score != null ? ` score=${score}` : '';
-  const sinadStr = sinadDb > 0   ? ` SINAD=+${Math.round(sinadDb)}dB` : '';
+  const scoreStr = e.score != null ? ` score=${e.score}` : '';
+  // Collapsed SINAD for the one-line log (FROM preferred, TO fallback).
+  const sinadDb = e.sinad_from != null ? e.sinad_from
+                : e.sinad_to   != null ? e.sinad_to : 0;
+  const sinadStr = sinadDb > 0 ? ` SINAD=+${Math.round(sinadDb)}dB` : '';
   aleLogAppend(
     `<div class="ale-entry ale-info">` +
     `<span class="ale-entry-ts">${ts}</span>` +
     `<span class="ale-entry-ch"></span>` +
     `<span class="ale-entry-mode">[INFO]</span>` +
-    `<span class="ale-entry-addr">LQA record: ${escapeHtml(addr)}` +
+    `<span class="ale-entry-addr">LQA record: ${escapeHtml(e.addr)}` +
     `${escapeHtml(freqStr + lblStr + scoreStr + sinadStr)}</span>` +
     `</div>`);
 }
@@ -788,6 +858,7 @@ function clearAleLog() {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 let callStart = null, timerId = null;
 let idleWarnIntervalId = null, idleWarnRemaining = 0;
+let soundingWarnIntervalId = null, soundingWarnRemaining = 0, soundingWarnNet = '';
 function tickTimer() {
   if (!callStart) return;
   const s = Math.floor((Date.now() - callStart) / 1000);
@@ -860,6 +931,37 @@ function hideIdleWarn() {
 function resetIdleTimer() {
   if (bridgeConnected) bridgeSend('RESET_IDLE_TIMER', {});
   hideIdleWarn();
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   PRE-SOUNDING COUNTDOWN POPUP
+   The core fires `sounding_warning` (phase="warn") once the auto-sounding
+   timer enters the configured lead window while the SM is IDLE. The popup
+   shows a live countdown and offers Interrupt (resets timer to full interval)
+   or Dismiss (popup closes, sounding still fires). Phase "fire" or "cancel"
+   auto-dismiss the popup.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+function showSoundingWarn(net, remainingSec) {
+  soundingWarnNet       = net || '';
+  soundingWarnRemaining = Math.max(0, Math.floor(Number(remainingSec) || 0));
+  document.getElementById('soundingWarnNet').textContent       = soundingWarnNet || '—';
+  document.getElementById('soundingWarnRemaining').textContent = soundingWarnRemaining;
+  document.getElementById('soundingWarnModal').classList.remove('hidden');
+  if (soundingWarnIntervalId) clearInterval(soundingWarnIntervalId);
+  soundingWarnIntervalId = setInterval(() => {
+    if (soundingWarnRemaining > 0) soundingWarnRemaining -= 1;
+    document.getElementById('soundingWarnRemaining').textContent = soundingWarnRemaining;
+  }, 1000);
+}
+
+function hideSoundingWarn() {
+  if (soundingWarnIntervalId) { clearInterval(soundingWarnIntervalId); soundingWarnIntervalId = null; }
+  document.getElementById('soundingWarnModal').classList.add('hidden');
+}
+
+function interruptSounding() {
+  if (bridgeConnected) bridgeSend('SOUND_INTERRUPT', { net: soundingWarnNet });
+  hideSoundingWarn();
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1420,9 +1522,9 @@ function pollRigStatus() {
 //   self : '' = use primary self address; otherwise one of the SelfAddrTable entries
 //   inhCall / inhSnd : exclude this channel from outbound calling / sounding
 let channels = [
-  { id:'C-1', rx:'14109000', tx:'14109000', mode:'USB', usage:'BOTH',  dir:'RX/TX', self:'', label:'Primary',    inhCall:false, inhSnd:false, inhRep:false },
-  { id:'C-2', rx:'7102000',  tx:'7102000',  mode:'USB', usage:'BOTH',  dir:'RX/TX', self:'', label:'40m Backup', inhCall:false, inhSnd:false, inhRep:false },
-  { id:'C-3', rx:'3596000',  tx:'3596000',  mode:'USB', usage:'VOICE', dir:'RX/TX', self:'', label:'80m Night',  inhCall:false, inhSnd:false, inhRep:false },
+  { id:'C-1', rx:'14109000', tx:'14109000', mode:'USB', usage:'BOTH',  dir:'RX/TX', self:'', label:'Primary',    inhCall:false, inhSnd:false, inhRep:false, txOnly:false },
+  { id:'C-2', rx:'7102000',  tx:'7102000',  mode:'USB', usage:'BOTH',  dir:'RX/TX', self:'', label:'40m Backup', inhCall:false, inhSnd:false, inhRep:false, txOnly:false },
+  { id:'C-3', rx:'3596000',  tx:'3596000',  mode:'USB', usage:'VOICE', dir:'RX/TX', self:'', label:'80m Night',  inhCall:false, inhSnd:false, inhRep:false, txOnly:false },
 ];
 
 // Smallest unused "C-<n>" id (n >= 1) — mirrors next_free_channel_id() in
@@ -1457,7 +1559,9 @@ function renderChannels() {
       <div class="ch-card-top">
         <div class="ch-field ch-id-field">
           <label>ID</label>
-          <div class="ch-id-ro" title="Auto-assigned, matches Core's channel id">${escapeHtml(c.id)}</div>
+          <input class="ch-inp ch-id-inp" data-f="id" value="${escapeHtml(c.id)}"
+                 title="Channel id. New channels auto-get C-n; loaded .ale files keep their id (e.g. 03D). Editable — renames the channel and updates net membership."
+                 onblur="chCommitId(${i})">
         </div>
         <div class="ch-field">
           <label>RX Hz</label>
@@ -1501,6 +1605,9 @@ function renderChannels() {
         <label class="ch-check">
           <input type="checkbox" ${c.inhRep ? 'checked' : ''} onchange="chSet(${i},'inhRep',this.checked);chCommit(${i})" title="Exclude this channel from the bilateral LQA CMD 'a' exchange (A.5.4.2). Local LQA measurements are still recorded."> Inhibit Reporting
         </label>
+        <label class="ch-check">
+          <input type="checkbox" ${c.aleOnly ? 'checked' : ''} onchange="chSet(${i},'aleOnly',this.checked);chCommit(${i})" title="Channel carries ALE traffic exclusively (A.5.4.7.1): permits the short 784 ms listen-before-transmit pause. Unchecked = shared channel, LBT waits >= 2 s."> ALE-only (short LBT)
+        </label>
       </div>
     </div>`).join('');
 }
@@ -1535,10 +1642,13 @@ function chSet(i, field, val) {
 // channel creates a new entry rather than renaming the old one — same
 // behaviour as editing a .ale file by hand; not something the GUI papers
 // over here. Core's Channel has no per-channel self-address (GUI-only), but
-// the three inhibit flags + rx_only DO round-trip independently now —
+// the three inhibit flags + rx_only/tx_only DO round-trip independently now —
 // `enabled` is derived as !(inhCall && inhSnd) so a fully-inhibited channel
 // drops out of scan (unchanged scan behaviour), while each inhibit flag
 // gates its own protocol path (calling / sounding / bilateral LQA CMD 'a').
+// Direction RX/TX|RX|TX maps to rx_only|tx_only: RX blocks all TX, TX blocks
+// all RX (excluded from scan). The reply acks to the GUI log so the operator
+// sees exactly what was applied.
 function chCommit(i) {
   if (!bridgeConnected) return;
   const c = channels[i];
@@ -1552,12 +1662,69 @@ function chCommit(i) {
     label: c.label,
     enabled: !(c.inhCall && c.inhSnd),
     rx_only: c.dir === 'RX',
+    tx_only: c.dir === 'TX',
     voice_use: c.usage !== 'DATA',
     data_use: c.usage !== 'VOICE',
     inhibit_calling: c.inhCall,
     inhibit_sounding: c.inhSnd,
     inhibit_reporting: c.inhRep,
+    ale_only: c.aleOnly,
+  }, (r) => {
+    if (r && r.ok) {
+      aleLogInfo('✓ ' + c.id + ' saved — Dir: ' + c.dir
+                 + ', InhCall: ' + (c.inhCall ? 'on' : 'off')
+                 + ', InhSnd: ' + (c.inhSnd ? 'on' : 'off')
+                 + ', InhRep: ' + (c.inhRep ? 'on' : 'off'));
+    } else {
+      aleLogInfo('✗ ' + c.id + ' save rejected by core');
+    }
   });
+}
+
+// Commit an ID edit: rename the channel (old id → new id) in core + locally.
+// The ID input is read on blur, so the live c.id — which net membership
+// references — only changes on a confirmed rename (typing does NOT mutate it).
+// Validates non-empty + unique; a rejection restores the input to the old id.
+function chCommitId(i) {
+  const c = channels[i];
+  if (!c) return;
+  const card = document.querySelectorAll('#chBody .ch-card')[i];
+  const inp = card && card.querySelector('[data-f="id"]');
+  if (!inp) return;
+  const newId = (inp.value || '').trim().toUpperCase();
+  const oldId = c.id;
+  if (!newId || newId === oldId) { inp.value = oldId; return; }
+  if (channels.some((o, j) => j !== i && o.id === newId)) {
+    aleLogInfo('Channel ID "' + newId + '" already in use — keeping ' + oldId);
+    inp.value = oldId;
+    return;
+  }
+  if (bridgeConnected) {
+    bridgeSend('CHANNEL_RENAME', { old_id: oldId, new_id: newId }, (r) => {
+      if (!r || !r.ok) {
+        inp.value = oldId;
+        aleLogInfo('Channel rename to "' + newId + '" rejected — keeping ' + oldId);
+        return;
+      }
+      applyChannelRename(i, oldId, newId);
+    });
+  } else {
+    applyChannelRename(i, oldId, newId);
+  }
+}
+
+// Apply a confirmed rename locally: set the channel id, replace the old id in
+// every net's channelIds, and re-render channel cards + net membership so the
+// new id shows everywhere. Re-render is safe (fired on blur, focus leaving).
+function applyChannelRename(i, oldId, newId) {
+  channels[i].id = newId;
+  for (const n of nets) {
+    const k = n.channelIds.indexOf(oldId);
+    if (k !== -1) n.channelIds[k] = newId;
+  }
+  renderChannels();
+  renderNets();
+  renderNetPill();
 }
 
 function syncChannelsFromBridge() {
@@ -1572,11 +1739,12 @@ function syncChannelsFromBridge() {
       tx: (c.tx_hz && c.tx_hz !== c.rx_hz) ? String(c.tx_hz) : '',
       mode: c.mode, label: c.label,
       usage: c.voice_use && c.data_use ? 'BOTH' : c.data_use ? 'DATA' : 'VOICE',
-      dir: c.rx_only ? 'RX' : 'RX/TX',
+      dir: c.rx_only ? 'RX' : c.tx_only ? 'TX' : 'RX/TX',
       self: prevById.get(c.id)?.self ?? '',       // preserved: core has no per-channel self-addr
       inhCall: c.inhibit_calling,                 // independent per-channel flags now
       inhSnd:  c.inhibit_sounding,
       inhRep:  c.inhibit_reporting,
+      aleOnly: c.ale_only,                        // A.5.4.7.1: short-LBT permission
     }));
     renderChannels();
     renderNets();
@@ -1586,7 +1754,7 @@ function syncChannelsFromBridge() {
 }
 
 function addCh() {
-  channels.push({ id:nextFreeChannelId(channels), rx:'', tx:'', mode:'USB', usage:'BOTH', dir:'RX/TX', self:'', label:'', inhCall:false, inhSnd:false, inhRep:false });
+  channels.push({ id:nextFreeChannelId(channels), rx:'', tx:'', mode:'USB', usage:'BOTH', dir:'RX/TX', self:'', label:'', inhCall:false, inhSnd:false, inhRep:false, aleOnly:false, txOnly:false });
   renderChannels();
   renderNets();   // new channel id becomes selectable in net membership
   updateScanBtn();
@@ -1782,6 +1950,7 @@ function saveSettings() {
   applyFecToBridge();           // FEC (Golay/votes/adaptive) + Debug RX → core
   applyLqaToBridge();           // Record-LQA toggle → core (A.5.4.1.1)
   applyRelinkToBridge();        // Auto-Relink toggle + threshold → core (A.5.4.5)
+  applyLbtToBridge();           // LBT occupancy margin/enable/override → core (A.5.4.7)
   applyEnhFreqSelectToBridge(); // Enhanced Freq-Select → core (A.5.6.3.2)
   applySoundAuto();             // interval may have changed → re-assert periodic mode
   updateSelfHeader();
@@ -1948,15 +2117,23 @@ function selectNet(name) {
   activeNet = name || null;
   if (bridgeConnected) bridgeSend('SCAN_NET_SET', { net: name || '' });
   if (activeNet) {
-    // Tune to the net's first (lowest-numbered) channel. VFO_SET_FREQ drives the
-    // controller (which emits channel_changed → readout updates via push when a
-    // radio is live). We also mirror locally so the readout shows the selected
-    // net's first channel immediately, even before a CAT link is established; the
-    // push corrects it once the radio actually tunes.
+    // Tune to the net's first (lowest-numbered) channel — frequency AND mode.
+    // set_frequency() alone keeps the radio's existing mode, so its
+    // channel_changed push would report the OLD mode and clobber the readout
+    // (the operator would have to step once to get the right mode). We send
+    // VFO_SET_FREQ then VFO_SET_MODE: per the HamlibRadio TCP-mode invariant,
+    // after set_frequency updates current_channel_ to the intended (new) freq,
+    // set_mode sees an unchanged frequency → rig_set_freq is a no-op (RIG_OK
+    // fast, no TCP timeout) → rig_set_mode applies cleanly. The mode push then
+    // reports the channel's real mode. We mirror locally too so the readout
+    // shows the net's first channel immediately, even before a CAT link is up.
     const first = firstChannelOfNet(nets.find(n => n.name === activeNet));
     const hz = first ? parseInt(first.rx, 10) : 0;
     if (hz) {
-      if (bridgeConnected) bridgeSend('VFO_SET_FREQ', { hz });
+      if (bridgeConnected) {
+        bridgeSend('VFO_SET_FREQ', { hz });
+        if (first.mode) bridgeSend('VFO_SET_MODE', { mode: first.mode });
+      }
       radioFreqHz = hz;
       radioMode   = first.mode || radioMode;
       radioChannel = -1;
@@ -1971,14 +2148,15 @@ function selectNet(name) {
 }
 
 // Push the periodic-sounding mode to the core. ON when a net is selected and the
-// Automatic Sounding toggle is checked; OFF otherwise. The interval comes from
-// the Sounding Interval setting (Timing), wired via applyTimingToBridge().
+// Automatic Sounding toggle is checked; OFF otherwise. The interval is owned by
+// the net's own sounding_interval_sec policy (Nets panel "Auto-Sound every Xs"),
+// already in core via NET_UPDATE — not sent here.
 // The scan-net scope is owned by selectNet() (SCAN_NET_SET); applySoundAuto only
-// pushes the SOUND_AUTO state.
+// pushes the SOUND_AUTO on/off + net target.
 function applySoundAuto() {
   if (!bridgeConnected) { updateSoundBtn(); return; }
   const on = !!activeNet && !!(document.getElementById('cfgAutoSound')?.checked);
-  bridgeSend('SOUND_AUTO', { on, interval_sec: soundingIntervalSec(), net: on ? activeNet : '' });
+  bridgeSend('SOUND_AUTO', { on, net: on ? activeNet : '' });
   updateSoundBtn();
 }
 
@@ -2064,6 +2242,7 @@ function applyTimingToBridge() {
   const numZ = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v >= 0 ? v : null; };
   const pl = numZ('cfgPttLead');    if (pl !== null) args.ptt_lead_ms = pl;
   const pt = numZ('cfgPttTail');    if (pt !== null) args.ptt_tail_ms = pt;
+  const sl = numZ('cfgSoundingLead'); if (sl !== null) args.sounding_warning_lead_sec = sl;
   const concSel = document.getElementById('cfgSoundingConclusion');
   if (concSel) args.sounding_use_twas = concSel.value === 'twas';
   bridgeSend('TIMING_SET', args);
@@ -2094,6 +2273,33 @@ function syncRelinkFromBridge() {
     const elThr = document.getElementById('cfgRelinkThreshold');
     if (elOn  && typeof r.relink_enabled   === 'boolean') elOn.checked  = r.relink_enabled;
     if (elThr && typeof r.relink_threshold === 'number')  elThr.value   = r.relink_threshold;
+  });
+}
+
+// Push LBT occupancy settings to the core (A.5.4.7): busy margin (dB over the
+// tracked noise floor — operator-settable for local noise conditions), master
+// enable, and the A.5.4.7.3 emergency override. Fired on change and from
+// saveSettings().
+function applyLbtToBridge() {
+  if (!bridgeConnected) return;
+  const margin = parseFloat(document.getElementById('cfgLbtMargin')?.value ?? '6');
+  bridgeSend('LBT_SET', {
+    margin_db:         Number.isFinite(margin) ? margin : 6,
+    occupancy_enabled: document.getElementById('cfgLbtOccupancy')?.checked ?? true,
+    override:          document.getElementById('cfgLbtOverride')?.checked ?? false,
+  });
+}
+
+// Sync LBT occupancy state from core into the GUI controls.
+function syncLbtFromBridge() {
+  bridgeSend('LBT_GET', {}, (r) => {
+    if (!r.ok) return;
+    const elM = document.getElementById('cfgLbtMargin');
+    const elE = document.getElementById('cfgLbtOccupancy');
+    const elO = document.getElementById('cfgLbtOverride');
+    if (elM && typeof r.margin_db         === 'number')  elM.value   = r.margin_db;
+    if (elE && typeof r.occupancy_enabled === 'boolean') elE.checked = r.occupancy_enabled;
+    if (elO && typeof r.override          === 'boolean') elO.checked = r.override;
   });
 }
 
@@ -2297,12 +2503,13 @@ function syncTimingFromBridge() {
   bridgeSend('TIMING_GET', {}, (r) => {
     if (!r.ok) return;
     const setNum = (id, v) => { const el = document.getElementById(id); if (el && typeof v === 'number') el.value = v; };
-    setNum('cfgDwell',      r.scan_dwell_ms);
-    setNum('cfgSounding',    r.sounding_interval_sec);
-    setNum('cfgLinkIdle',    r.link_idle_timeout_sec);
-    setNum('cfgMaxTune',     r.max_tune_time_ms);
-    setNum('cfgPttLead',     r.ptt_lead_ms);
-    setNum('cfgPttTail',     r.ptt_tail_ms);
+    setNum('cfgDwell',          r.scan_dwell_ms);
+    setNum('cfgSounding',       r.sounding_interval_sec);
+    setNum('cfgSoundingLead',   r.sounding_warning_lead_sec);
+    setNum('cfgLinkIdle',       r.link_idle_timeout_sec);
+    setNum('cfgMaxTune',        r.max_tune_time_ms);
+    setNum('cfgPttLead',        r.ptt_lead_ms);
+    setNum('cfgPttTail',        r.ptt_tail_ms);
     const conc = document.getElementById('cfgSoundingConclusion');
     if (conc && typeof r.sounding_use_twas === 'boolean')
       conc.value = r.sounding_use_twas ? 'twas' : 'tis';
@@ -2712,13 +2919,16 @@ function syncLqaFromBridge() {
       const mpToVal = (typeof e.bilateral_mp === 'number' && e.bilateral_mp >= 0
                         && e.bilateral_mp <= 6) ? e.bilateral_mp : null; // 7 = none
 
-      // Collapsed best-available for the compact heard list (FROM preferred).
+      // Collapsed best-available (FROM preferred, TO fallback). Used by the
+      // active-link quality panel (updateLinkQualityFromLqa) and the one-line
+      // ALE-log "LQA record:" entry; the heard panel now renders the full
+      // FROM/TO table directly from sinad_from/sinad_to above.
       const fromSinadStr = sinadFromVal != null ? String(Math.round(sinadFromVal)) : null;
       const bilatSinadStr = sinadToVal != null ? String(Math.round(sinadToVal)) : null;
 
       return {
         addr:    e.station || '(sounding)',
-        ch:      (e.freq_hz / 1e6).toFixed(3),
+        ch:      fmtChFreqExact(e.freq_hz),
         freq_hz: e.freq_hz,
         score:   Math.round(e.display_score != null ? e.display_score : e.score),
         // separate FROM/TO for the matrix table:
@@ -2728,7 +2938,8 @@ function syncLqaFromBridge() {
         ber_to_code: berToCode,                    // 0–30 code or null (31 = none)
         ber_to:     berToCode != null ? fmtBerCode(berToCode) : null,  // Table-A-XIII decoded
         mp_to:     mpToVal,                        // 0–6 ms number or null
-        // collapsed (compact heard list): FROM preferred, TO fallback.
+        // collapsed: FROM preferred, TO fallback. Feeds the active-link quality
+        // panel (updateLinkQualityFromLqa) and the ALE-log "LQA record:" line.
         // snr_db (votes-based proxy) is NOT used as a SINAD fallback — it is a
         // different metric (votes/48×31) and would violate A.5.4.1.2 (SINAD in dB).
         sinad:   fromSinadStr || bilatSinadStr || '—',
@@ -2755,8 +2966,8 @@ function syncLqaFromBridge() {
       if (heardDeleted.has(key)) return;
       const wasInDb = prevKeys.has(e.addr + '|' + e.ch);
       const inList  = heardStations.some(h => h.addr === e.addr && h.freq_hz === e.freq_hz);
-      if (!wasInDb && !inList) onAleLogLqa(e.addr, e.freq_hz, e.score, e.sinad_db, e.available, e.sinad_dir);
-      else                     upsertHeard(e.addr, e.freq_hz, e.score, e.sinad_db, e.available, e.sinad_dir);
+      if (!wasInDb && !inList) onAleLogLqa(e);
+      else                     upsertHeard(e);
     });
     // Drop heard rows no longer in the DB (after LQA_CLEAR or the 1h prune).
     if (heardStations.some(h => !dbKeys.has(h.addr + '|' + h.freq_hz))) {

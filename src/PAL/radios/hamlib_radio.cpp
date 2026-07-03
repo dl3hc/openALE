@@ -101,15 +101,23 @@ bool HamlibRadio::set_channel(const Channel& channel) {
     const bool mode_changed = channel.tx_mode      != current_channel_.tx_mode;
     const bool tcp          = !is_serial_port();
 
+    // A prior TCP command may have left the socket dirty (freq timeout →
+    // reconnect in flight). Reconnect now so freq/mode go out on a clean socket.
+    if (tcp && tcp_socket_dirty_)
+        reconnect_tcp();
+
     int freq_ret = RIG_OK;
     int mode_ret = RIG_OK;
 
     if (freq_changed) {
         freq_ret = rig_set_freq(rig_, RIG_VFO_CURR,
                                 static_cast<freq_t>(channel.tx_frequency));
+        if (tcp)
+            std::fprintf(stderr, "[HamlibRadio] TCP rig_set_freq(%u) -> %d (%s)\n",
+                         channel.tx_frequency, freq_ret,
+                         freq_ret == RIG_OK ? "OK" : rigerror(freq_ret));
         if (freq_ret != RIG_OK)
-            std::fprintf(stderr, "[HamlibRadio] rig_set_freq(%u) failed: %s\n",
-                         channel.tx_frequency, rigerror(freq_ret));
+            tcp_socket_dirty_ = true;   // socket likely corrupted — reconnect before mode
     }
 
     // Send mode whenever freq changes, even if tx_mode appears unchanged. Over
@@ -118,22 +126,36 @@ bool HamlibRadio::set_channel(const Channel& channel) {
     // channel hop. This also resets any manual mode the operator set: the next
     // channel hop (scan or step arrow) always applies the channel's own mode.
     if (mode_changed || freq_changed) {
-        // Over TCP/netrigctl a preceding rig_set_freq timeout can leave the
-        // socket in an inconsistent state (stale RPRT response in buffer, or
-        // connection reset). Allow the connection to settle, then send mode.
-        if (tcp && freq_changed && freq_ret != RIG_OK)
-            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        // Over TCP the mode command only reliably reaches rigctld on a freshly
+        // (re)connected socket: a long-open netrigctl socket is frequently
+        // desynchronised by a prior rig_set_freq whose RPRT read timed out (the
+        // reply is left buffered, so the next read consumes a stale response).
+        // That corrupts mode-only sets too — the radio ends up keeping its old
+        // mode. Force a clean rig_close+rig_open before EVERY mode command over
+        // TCP so mode is set independently of whether a frequency change ran.
+        // rig_open() does not touch the radio VFO, so a just-applied frequency
+        // is retained. (On scanning hops a freq timeout already forced this
+        // reconnect, so there is no extra reconnect in the hot path.)
+        if (tcp)
+            reconnect_tcp();
 
         const rmode_t mode = to_hamlib_mode(channel.tx_mode);
+        const char* mode_name = rig_strrmode(mode);  // e.g. "PKTUSB", "PKTLSB", "USB"
         mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, mode, RIG_PASSBAND_NORMAL);
         if (mode_ret != RIG_OK && tcp) {
-            // Single retry — connection may have auto-recovered after the sleep.
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            // First attempt failed — reconnect and retry once on a clean socket.
+            reconnect_tcp();
             mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, mode, RIG_PASSBAND_NORMAL);
         }
+        if (tcp)
+            std::fprintf(stderr,
+                         "[HamlibRadio] TCP rig_set_mode(%s [%d]) -> %d (%s)\n",
+                         mode_name ? mode_name : "?", static_cast<int>(mode),
+                         mode_ret, mode_ret == RIG_OK ? "OK" : rigerror(mode_ret));
         if (mode_ret != RIG_OK)
-            std::fprintf(stderr, "[HamlibRadio] rig_set_mode failed: %s\n",
-                         rigerror(mode_ret));
+            tcp_socket_dirty_ = true;
+        else
+            tcp_socket_dirty_ = false;
     }
 
     // Always track the intended state regardless of return codes. Over TCP,
@@ -177,6 +199,26 @@ void HamlibRadio::process_response(const uint8_t*, size_t) {}
 bool HamlibRadio::is_serial_port() const {
     // TCP/network Specs beginnen mit "tcp://" oder "rigctld://"
     return port_.rfind("tcp://", 0) != 0 && port_.rfind("rigctld://", 0) != 0;
+}
+
+// Over TCP/netrigctl a rig_set_freq timeout leaves the socket in a dirty state
+// (stale RPRT in the read buffer, or connection reset). hamlib auto-reconnects
+// internally, but the timing is not guaranteed — a mode command sent during the
+// reconnect window is lost, which is how the radio ends up on the new frequency
+// but the OLD mode. Force a clean rig_close+rig_open so the next command goes
+// out on a known-good connection. rig_open() does NOT reset the radio's VFO
+// (it only re-establishes the rigctld session + capability handshake), so the
+// radio retains the frequency rigctld already applied.
+void HamlibRadio::reconnect_tcp() {
+    if (!rig_) return;
+    tcp_socket_dirty_ = false;
+    rig_close(rig_);
+    const int ret = rig_open(rig_);
+    if (ret != RIG_OK)
+        std::fprintf(stderr, "[HamlibRadio] TCP reconnect (rig_open) failed: %s\n",
+                     rigerror(ret));
+    else
+        std::fprintf(stderr, "[HamlibRadio] TCP reconnect OK\n");
 }
 
 rmode_t HamlibRadio::to_hamlib_mode(RadioMode mode) const {

@@ -35,11 +35,27 @@ public:
     std::string get_self_address() const { return self_address; }
 
     /**
-     * Add a known station address.
+     * Add a known station address. No-op if address already present.
      * \param address Station address (Basic 38, 3-15 chars)
      * \param name    Optional friendly name
      */
     void add_station(const std::string& address, const std::string& name = "");
+
+    /**
+     * Add or update (in-place) a known station address.
+     * If address already exists its name is updated; otherwise the entry is appended.
+     */
+    void update_station(const std::string& address, const std::string& name = "");
+
+    /** Remove a known station by address. No-op if not present. */
+    void remove_station(const std::string& address);
+
+    /** Clear all known stations. */
+    void clear_stations();
+
+    /** Read-only view of the known-station list (address, name pairs). */
+    const std::vector<std::pair<std::string, std::string>>& all_stations() const
+        { return stations; }
 
     /**
      * Add a net (group) address.

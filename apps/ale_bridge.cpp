@@ -190,11 +190,13 @@ static mj::Value channel_to_json(const Channel& c) {
     v.set("label", mj::Value::string(c.label));
     v.set("enabled", mj::Value::boolean(c.enabled));
     v.set("rx_only", mj::Value::boolean(c.rx_only));
+    v.set("tx_only", mj::Value::boolean(c.tx_only));
     v.set("voice_use", mj::Value::boolean(c.voice_use));
     v.set("data_use", mj::Value::boolean(c.data_use));
     v.set("inhibit_calling",   mj::Value::boolean(c.inhibit_calling));
     v.set("inhibit_sounding",  mj::Value::boolean(c.inhibit_sounding));
     v.set("inhibit_reporting", mj::Value::boolean(c.inhibit_reporting));
+    v.set("ale_only",          mj::Value::boolean(c.ale_only));
     return v;
 }
 
@@ -386,7 +388,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
                 if (n.name == net) {
                     for (const auto& id : n.channel_ids)
                         for (const auto& c : ctrl.channels())
-                            if (c.id == id && c.enabled && !c.inhibit_sounding) { sweep.push_back(c); break; }
+                            if (c.id == id && c.enabled && !c.inhibit_sounding && !c.rx_only) { sweep.push_back(c); break; }
                     break;
                 }
             ok = !sweep.empty() && ctrl.send_sounding_sweep(sweep);
@@ -394,9 +396,9 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "SOUND_AUTO") {  // periodic multi-channel sounding on a net
-        ctrl.set_automatic_sounding(msg.get_bool("on"),
-            static_cast<uint32_t>(msg.get_number("interval_sec", 300)),
-            msg.get_string("net"));
+        // interval_sec is now owned by the net's own sounding_interval_sec policy;
+        // the GUI still sends it via NET_UPDATE, not SOUND_AUTO.
+        ctrl.set_automatic_sounding(msg.get_bool("on"), msg.get_string("net"));
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "SOUND_AUTO_GET") {
@@ -405,6 +407,10 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("interval_sec", mj::Value::number(ctrl.get_auto_sounding_interval_sec()));
         r.set("net",          mj::Value::string(ctrl.get_auto_sounding_net()));
         return mj::dump(r);
+    }
+    if (cmd == "SOUND_INTERRUPT") {  // cancel a pending idle-sounding countdown and reset timer
+        ctrl.interrupt_sounding(msg.get_string("net"));
+        return mj::dump(make_reply(msg, true));
     }
 
     if (cmd == "CALL") {
@@ -517,16 +523,23 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         ch.label = msg.get_string("label");
         if (msg.has("enabled"))           ch.enabled           = msg.get_bool("enabled", true);
         if (msg.has("rx_only"))           ch.rx_only           = msg.get_bool("rx_only", false);
+        if (msg.has("tx_only"))           ch.tx_only           = msg.get_bool("tx_only", false);
         if (msg.has("voice_use"))         ch.voice_use         = msg.get_bool("voice_use", true);
         if (msg.has("data_use"))          ch.data_use          = msg.get_bool("data_use", true);
         if (msg.has("inhibit_calling"))   ch.inhibit_calling   = msg.get_bool("inhibit_calling", false);
         if (msg.has("inhibit_sounding"))  ch.inhibit_sounding  = msg.get_bool("inhibit_sounding", false);
         if (msg.has("inhibit_reporting")) ch.inhibit_reporting = msg.get_bool("inhibit_reporting", false);
+        if (msg.has("ale_only"))          ch.ale_only          = msg.get_bool("ale_only", false);
         const bool ok = ctrl.add_channel(ch);
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "CHANNEL_DEL") {
         const bool ok = ctrl.del_channel(static_cast<uint32_t>(msg.get_number("rx_hz")));
+        return mj::dump(make_reply(msg, ok));
+    }
+    if (cmd == "CHANNEL_RENAME") {
+        const bool ok = ctrl.rename_channel(msg.get_string("old_id"),
+                                            msg.get_string("new_id"));
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "STATION_LOAD" || cmd == "CHANNELS_LOAD") {
@@ -633,6 +646,31 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("lqa_enabled", mj::Value::boolean(ctrl.lqa_enabled()));
         return mj::dump(r);
     }
+
+    // ── LBT occupancy detection (A.5.4.7) ────────────────────────────────
+    // margin_db: busy threshold in dB over the tracked noise floor (operator-
+    // settable for local noise conditions). occupancy_enabled: master switch
+    // for the broadband busy detector. override: A.5.4.7.3 emergency override
+    // (busy results ignored; the LBT pause itself still runs).
+    if (cmd == "LBT_SET") {
+        if (msg.has("margin_db"))
+            ctrl.set_lbt_margin_db(static_cast<float>(msg.get_number("margin_db")));
+        if (msg.has("occupancy_enabled"))
+            ctrl.set_lbt_occupancy_enabled(msg.get_bool("occupancy_enabled"));
+        if (msg.has("override"))
+            ctrl.set_lbt_override(msg.get_bool("override"));
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "LBT_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("margin_db",         mj::Value::number(ctrl.lbt_margin_db()));
+        r.set("occupancy_enabled", mj::Value::boolean(ctrl.lbt_occupancy_enabled()));
+        r.set("override",          mj::Value::boolean(ctrl.lbt_override()));
+        r.set("busy",              mj::Value::boolean(ctrl.lbt_busy()));
+        r.set("level_db",          mj::Value::number(ctrl.lbt_level_db()));
+        r.set("floor_db",          mj::Value::number(ctrl.lbt_floor_db()));
+        return mj::dump(r);
+    }
     if (cmd == "RELINK_SET") {
         // relink_enabled: auto-renegotiate channel via TWAS + re-call when a
         // better channel is known post-LINKED (A.5.4.5 bilateral selection).
@@ -694,19 +732,21 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("ptt_lead_ms"))            ctrl.set_ptt_lead_ms(static_cast<uint32_t>(msg.get_number("ptt_lead_ms")));
         if (msg.has("ptt_tail_ms"))            ctrl.set_ptt_tail_ms(static_cast<uint32_t>(msg.get_number("ptt_tail_ms")));
         if (msg.has("assumed_scan_channels"))  ctrl.set_assumed_scan_channels(static_cast<uint32_t>(msg.get_number("assumed_scan_channels")));
-        if (msg.has("sounding_use_twas"))      ctrl.set_sounding_use_twas(msg.get_bool("sounding_use_twas"));
+        if (msg.has("sounding_use_twas"))          ctrl.set_sounding_use_twas(msg.get_bool("sounding_use_twas"));
+        if (msg.has("sounding_warning_lead_sec"))  ctrl.set_sounding_warning_lead_sec(static_cast<uint32_t>(msg.get_number("sounding_warning_lead_sec")));
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "TIMING_GET") {
         mj::Value r = make_reply(msg, true);
-        r.set("scan_dwell_ms",         mj::Value::number(ctrl.get_scan_dwell_ms()));
-        r.set("sounding_interval_sec", mj::Value::number(ctrl.get_sounding_interval_sec()));
-        r.set("link_idle_timeout_sec", mj::Value::number(ctrl.get_link_idle_timeout_sec()));
-        r.set("max_tune_time_ms",      mj::Value::number(ctrl.get_max_tune_time_ms()));
-        r.set("ptt_lead_ms",           mj::Value::number(ctrl.get_ptt_lead_ms()));
-        r.set("ptt_tail_ms",           mj::Value::number(ctrl.get_ptt_tail_ms()));
-        r.set("assumed_scan_channels", mj::Value::number(ctrl.get_assumed_scan_channels()));
-        r.set("sounding_use_twas",     mj::Value::boolean(ctrl.get_sounding_use_twas()));
+        r.set("scan_dwell_ms",              mj::Value::number(ctrl.get_scan_dwell_ms()));
+        r.set("sounding_interval_sec",      mj::Value::number(ctrl.get_sounding_interval_sec()));
+        r.set("link_idle_timeout_sec",      mj::Value::number(ctrl.get_link_idle_timeout_sec()));
+        r.set("max_tune_time_ms",           mj::Value::number(ctrl.get_max_tune_time_ms()));
+        r.set("ptt_lead_ms",                mj::Value::number(ctrl.get_ptt_lead_ms()));
+        r.set("ptt_tail_ms",                mj::Value::number(ctrl.get_ptt_tail_ms()));
+        r.set("assumed_scan_channels",      mj::Value::number(ctrl.get_assumed_scan_channels()));
+        r.set("sounding_use_twas",          mj::Value::boolean(ctrl.get_sounding_use_twas()));
+        r.set("sounding_warning_lead_sec",  mj::Value::number(ctrl.get_sounding_warning_lead_sec()));
         return mj::dump(r);
     }
 
@@ -1035,6 +1075,14 @@ int main(int argc, char* argv[]) {
     ctrl.on_idle_warning = [&](uint32_t remaining_sec) {
         mj::Value e = make_event("idle_warning");
         e.set("remaining_sec", mj::Value::number(remaining_sec));
+        ws.send_text(mj::dump(e));
+    };
+    ctrl.on_sounding_warning = [&](const std::string& net, uint32_t remaining_sec,
+                                   const std::string& phase) {
+        mj::Value e = make_event("sounding_warning");
+        e.set("net",           mj::Value::string(net));
+        e.set("remaining_sec", mj::Value::number(remaining_sec));
+        e.set("phase",         mj::Value::string(phase));
         ws.send_text(mj::dump(e));
     };
     ctrl.on_amd_received = [&](const std::string& self_address,

@@ -439,10 +439,19 @@ void ALEStateMachine::handle_calling() {
     switch (calling_phase) {
 
         // ── LBT ──────────────────────────────────────────────────────────────────
-        // Listen Twt (784 ms ALE-only) before first TX — AC-LINK-017-1.
-        // RX is open; timer runs regardless of channel activity.
+        // Listen Twt before first TX — AC-LINK-017-1.  Duration per A.5.4.7.1:
+        // 784 ms only when every channel involved is ALE-only, else ≥2 s
+        // (effective_twt_ms_ / set_lbt_shared).  RX is open; the broadband
+        // occupancy query (A.5.4.7.2, set_channel_busy_query) is polled every
+        // tick — traffic detected → select another channel (A.5.4.7:
+        // "for a call another channel shall be selected").
         case CallingPhase::LBT: {
-            if ((current_time_ms - lbt_start_ms) >= ALETimingConstants::Twt_ms) {
+            if (lbt_channel_busy_()) {
+                SM_TRACE("[TRACE] handle_calling: channel occupied during LBT → next channel\n");
+                try_next_calling_channel();
+                break;
+            }
+            if ((current_time_ms - lbt_start_ms) >= effective_twt_ms_()) {
                 calling_phase = CallingPhase::TUNING;
                 tune_start_ms = current_time_ms;
                 if (rx_enabled_callback) rx_enabled_callback(false);  // blind tune
@@ -676,6 +685,14 @@ void ALEStateMachine::handle_handshake() {
         // Any word received here signals channel busy → abort (AC-LINK-019-3).
         // process_received_word() handles the busy-detection path.
         case HandshakePhase::CHANNEL_CHECK: {
+            // Broadband occupancy (A.5.4.7.2) — same abort as the valid-word
+            // busy path (AC-LINK-019-3); non-ALE traffic never reaches
+            // process_received_word(), so it must be caught here.
+            if (lbt_channel_busy_()) {
+                SM_TRACE("[TRACE] handle_handshake: channel occupied during LBT → LINK_TIMEOUT\n");
+                process_event(ALEEvent::LINK_TIMEOUT);
+                break;
+            }
             if ((current_time_ms - hs_lbt_start_ms) >= ALETimingConstants::Tdrw_ms) {
                 SM_TRACE("[TRACE] handle_handshake: LBT clear → SENDING_RESPONSE\n");
                 if (rx_enabled_callback) rx_enabled_callback(false);
@@ -909,9 +926,17 @@ void ALEStateMachine::reset_link_idle_timer() {
 }
 
 void ALEStateMachine::handle_sounding() {
-    // ── LBT: listen Twt_ms before any TX (AC-SOUND-001-001 / REQ-CHAN-031) ──
+    // ── LBT: listen Twt before any TX (AC-SOUND-001-001 / REQ-CHAN-031) ──
+    // Duration per A.5.4.7.1 (784 ms ALE-only / ≥2 s shared, see set_lbt_shared).
+    // Broadband occupancy busy (A.5.4.7.2) → abort, same as the invalid-word
+    // path: per A.5.4.7 an aborted sound is rescheduled, not moved.
     if (sounding_phase_ == SoundingPhase::LBT) {
-        if ((current_time_ms - sounding_lbt_start_ms_) >= ALETimingConstants::Twt_ms) {
+        if (lbt_channel_busy_()) {
+            SM_TRACE("[TRACE] handle_sounding: channel occupied during LBT → SOUNDING_COMPLETE\n");
+            process_event(ALEEvent::SOUNDING_COMPLETE);
+            return;
+        }
+        if ((current_time_ms - sounding_lbt_start_ms_) >= effective_twt_ms_()) {
             sounding_phase_ = SoundingPhase::TRANSMITTING;
             if (rx_enabled_callback) rx_enabled_callback(false);
             if (!address_book.get_self_address().empty()) {

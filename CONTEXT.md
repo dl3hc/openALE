@@ -11,9 +11,12 @@ ALE automates HF link establishment by continuously monitoring multiple radio ch
 
 The controller continuously operates as a state machine whose primary states are:
 
+* IDLE
 * Available (scanning)
-* Linking
+* Calling
+* Linking (handshake)
 * Linked
+* Sounding
 
 Only one of these states is active at any given time.
 
@@ -217,7 +220,7 @@ This table is used to determine which channel should be selected for future call
 The implementation should follow these fundamental rules:
 
 * Always listen when not linked.
-* Always scan while available.
+* Always scan while available. (unless prevented by the operator)
 * Never interfere with occupied channels.
 * Use LQA to select channels.
 * Update LQA only from actual received measurements.
@@ -249,7 +252,7 @@ Responsible only for:
 * aging measurements
 * ranking channels
 
-The LQA engine is **measurement-driven**, not **transmission-driven**.
+The LQA engine is **measurement-driven**.
 
 This distinction is critical and prevents many implementation bugs.
 

@@ -307,6 +307,9 @@ namespace ALETimingConstants {
     constexpr uint32_t Twr_ms  = ale::Twr_fast_int;   //  653 ms  (5×Tw, fast equipment)
     constexpr uint32_t Twrt_ms = ale::Twrt_fast_int;  //  784 ms  (6×Tw = Twr+Tt fast)
     constexpr uint32_t Twt_ms  = ale::Twt_ale_ms;     //  784 ms  (= Tdrw, ALE-only LBT)
+    // A.5.4.7.1: Twt = 2×Trw suffices only on channels known to carry ALE
+    // exclusively; on shared channels the LBT pause shall be at least 2 s.
+    constexpr uint32_t Twt_shared_ms = 2000;          // 2000 ms — shared-channel LBT
     constexpr uint32_t Tt_ms   = static_cast<uint32_t>(ale::TT_BLIND_MS + 0.5);  // 1045 ms
     constexpr uint32_t Tlww_ms = ale::Tlww_ms;        //  392 ms  (= Trw, T1ww)
     // Detect-following-(redundant)-word window (= Tdrw = 2×Trw).  Used as the

@@ -153,6 +153,13 @@ private:
 
     bool is_serial_port() const;
 
+    // Over TCP/netrigctl a rig_set_freq timeout (hamlib reports non-RIG_OK even
+    // when rigctld applied the command) leaves the socket in a dirty state — the
+    // next command sent on it is lost during hamlib's internal auto-reconnect.
+    // When set, the next set_channel() forces a rig_close+rig_open so freq/mode
+    // go out on a clean connection. Cleared after any command returns RIG_OK.
+    void reconnect_tcp();
+
     std::string      model_;
     std::string      port_;
     int              baud_;
@@ -163,6 +170,7 @@ private:
     Channel current_channel_;
     bool transmitting_ = false;
     bool ready_ = false;
+    bool tcp_socket_dirty_ = false;  // TCP: last command failed → reconnect before next
 
     SendCommandCallback send_callback_;
     AckCallback ack_callback_;

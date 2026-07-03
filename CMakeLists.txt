@@ -526,6 +526,16 @@ target_link_libraries(test_lqa_noise_cmd ale_lqa ale_protocol ale_fsk_core ale_f
 target_include_directories(test_lqa_noise_cmd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME LQANoiseCmd COMMAND test_lqa_noise_cmd)
 
+add_executable(test_lbt_occupancy tests/chan/unit/test_lbt_occupancy.cpp)
+target_link_libraries(test_lbt_occupancy ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_lbt_occupancy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME LbtOccupancy COMMAND test_lbt_occupancy)
+
+add_executable(test_lqa_purity tests/chan/unit/test_lqa_purity.cpp)
+target_link_libraries(test_lqa_purity ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_lqa_purity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME LQAPurity COMMAND test_lqa_purity)
+
 add_executable(test_lqa_bilateral_tx tests/chan/unit/test_lqa_bilateral_tx.cpp)
 target_link_libraries(test_lqa_bilateral_tx ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_bilateral_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -772,7 +772,12 @@
             <div>
               <label class="flabel">Sounding Interval (s)</label>
               <input class="finput" id="cfgSounding" type="number" value="300" min="60">
-              <div class="fhint">Auto-sounding period (LQA).</div>
+              <div class="fhint">Default auto-sounding period (per-net override in Nets panel).</div>
+            </div>
+            <div>
+              <label class="flabel">Sounding Warning Lead (s)</label>
+              <input class="finput" id="cfgSoundingLead" type="number" value="10" min="0">
+              <div class="fhint">Pre-sounding countdown popup lead time (0 = no popup).</div>
             </div>
             <div>
               <label class="flabel">Link Idle Timeout (s)</label>
@@ -909,6 +914,26 @@
               <div class="ftoggle-desc">Propose a better channel to the peer via standard CMD 'f' (A.5.6.3.2) before TWAS. The peer evaluates its LQA for the proposed channel and accepts or rejects. Standard ALE 2G stations ignore CMD 'f' while linked — no relink occurs then. Both stations should have this enabled.</div>
             </div>
             <label class="ftoggle"><input type="checkbox" id="cfgEnhFreqSelect" onchange="applyEnhFreqSelectToBridge()"><span class="ftrack"></span></label>
+          </div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">LBT Busy Detection</div>
+              <div class="ftoggle-desc">Listen-before-transmit occupancy check (A.5.4.7.2): blocks TX when broadband energy (voice, data, carrier — not just ALE) exceeds the tracked noise floor by the margin. Raise the margin at noisy locations so local QRM never blocks transmissions; the noise floor itself adapts to steady local noise automatically.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-left:12px">
+              <label class="ftoggle"><input type="checkbox" id="cfgLbtOccupancy" checked onchange="applyLbtToBridge()"><span class="ftrack"></span></label>
+              <input class="finput" id="cfgLbtMargin" type="number" value="6" min="0" max="40" step="1" style="width:64px" title="Busy threshold in dB above the tracked noise floor (default 6)" onchange="applyLbtToBridge()">
+              <span style="font-size:11px;opacity:0.6">dB</span>
+            </div>
+          </div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">LBT Override</div>
+              <div class="ftoggle-desc">Operator override (A.5.4.7.3, emergency use): ignore busy-channel results — transmit even when the channel appears occupied. The LBT pause itself still runs.</div>
+            </div>
+            <label class="ftoggle"><input type="checkbox" id="cfgLbtOverride" onchange="applyLbtToBridge()"><span class="ftrack"></span></label>
           </div>
 
           <div class="fg-row col3">
@@ -1119,6 +1144,30 @@
     </div>
   </div><!-- /modal -->
 </div><!-- /idle-warning modal -->
+
+<!-- Shown on the `sounding_warning` bridge event (phase="warn") when the
+     auto-sounding timer enters the lead window while the SM is IDLE.
+     Interrupt → SOUND_INTERRUPT resets the timer to its full value; Dismiss
+     closes the popup and lets the sounding fire normally. -->
+<div class="modal-overlay hidden" id="soundingWarnModal" onclick="if(event.target===this)hideSoundingWarn()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-hdr">
+      <span class="modal-title"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg> Sounding starting</span>
+      <button class="modal-close" onclick="hideSoundingWarn()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="line-height:1.5">
+        Sounding on net <strong id="soundingWarnNet">—</strong> starts in
+        <strong id="soundingWarnRemaining">—</strong>s.
+        Interrupt to skip this cycle and reset the timer, or dismiss to let it proceed.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="hideSoundingWarn()">Dismiss</button>
+      <button class="btn-save" onclick="interruptSounding()">Interrupt</button>
+    </div>
+  </div><!-- /modal -->
+</div><!-- /sounding-warning modal -->
 
 <!-- ══════ CONTACT EDITOR MODAL ══════ -->
 <div class="modal-overlay hidden" id="contactModal" onclick="if(event.target===this)closeContactEditor()">

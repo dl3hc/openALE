@@ -5,6 +5,7 @@
 
 #include "Stores/address_book.h"
 #include "Word/ale_word.h"
+#include <algorithm>
 
 namespace ale {
 
@@ -29,6 +30,26 @@ void AddressBook::add_station(const std::string& address, const std::string& nam
         if (s.first == address) return;
     }
     stations.push_back({address, name});
+}
+
+void AddressBook::update_station(const std::string& address, const std::string& name)
+{
+    for (auto& s : stations) {
+        if (s.first == address) { s.second = name; return; }
+    }
+    stations.push_back({address, name});
+}
+
+void AddressBook::remove_station(const std::string& address)
+{
+    stations.erase(std::remove_if(stations.begin(), stations.end(),
+                                  [&](const auto& p) { return p.first == address; }),
+                   stations.end());
+}
+
+void AddressBook::clear_stations()
+{
+    stations.clear();
 }
 
 void AddressBook::add_net(const std::string& net_address,

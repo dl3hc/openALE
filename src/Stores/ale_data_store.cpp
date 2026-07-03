@@ -170,6 +170,21 @@ void NetStore::unassign_channel_everywhere(const std::string& channel_id) {
             n.channel_ids.end());
 }
 
+void NetStore::rename_channel(const std::string& old_id, const std::string& new_id) {
+    if (old_id == new_id) return;
+    for (auto& n : nets_) {
+        // If new_id is already a member, drop the renamed slot so membership
+        // stays a set (no duplicate ids).
+        const bool has_new = std::find(n.channel_ids.begin(), n.channel_ids.end(),
+                                       new_id) != n.channel_ids.end();
+        for (auto& id : n.channel_ids)
+            if (id == old_id) id = has_new ? std::string{} : new_id;
+        n.channel_ids.erase(
+            std::remove(n.channel_ids.begin(), n.channel_ids.end(), std::string{}),
+            n.channel_ids.end());
+    }
+}
+
 const Net* NetStore::find(const std::string& name) const {
     for (const auto& n : nets_)
         if (n.name == name) return &n;
@@ -230,29 +245,75 @@ void GroupCallStore::clear() { rosters_.clear(); }
 
 // ── ContactStore ─────────────────────────────────────────────────────────────
 
-bool ContactStore::add_or_update(const Contact& c) {
-    if (c.callsign.empty()) return false;
-    for (auto& existing : contacts_) {
-        if (existing.callsign == c.callsign) { existing = c; return true; }
+Contact ContactStore::build(const std::string& addr, const std::string& name) const
+{
+    Contact c;
+    c.callsign = addr;
+    c.name     = name;
+    for (const auto& [cs, m] : meta_) {
+        if (cs == addr) {
+            c.enabled        = m.enabled;
+            c.net_members    = m.net_members;
+            c.valid_channels = m.valid_channels;
+            c.all_channels   = m.all_channels;
+            return c;
+        }
     }
-    contacts_.push_back(c);
+    return c;  // defaults: enabled=true, all_channels=true
+}
+
+bool ContactStore::add_or_update(const Contact& c)
+{
+    if (c.callsign.empty()) return false;
+    ab_->update_station(c.callsign, c.name);
+    for (auto& [cs, m] : meta_) {
+        if (cs == c.callsign) {
+            m = { c.enabled, c.net_members, c.valid_channels, c.all_channels };
+            return true;
+        }
+    }
+    meta_.push_back({ c.callsign,
+                      { c.enabled, c.net_members, c.valid_channels, c.all_channels } });
     return true;
 }
 
-bool ContactStore::remove(const std::string& callsign) {
-    const size_t before = contacts_.size();
-    contacts_.erase(std::remove_if(contacts_.begin(), contacts_.end(),
-        [&](const Contact& c) { return c.callsign == callsign; }), contacts_.end());
-    return contacts_.size() != before;
+bool ContactStore::remove(const std::string& callsign)
+{
+    bool found = false;
+    for (const auto& s : ab_->all_stations())
+        if (s.first == callsign) { found = true; break; }
+    if (!found) return false;
+    ab_->remove_station(callsign);
+    meta_.erase(std::remove_if(meta_.begin(), meta_.end(),
+                               [&](const auto& p) { return p.first == callsign; }),
+                meta_.end());
+    return true;
 }
 
-const Contact* ContactStore::find(const std::string& callsign) const {
-    for (const auto& c : contacts_)
-        if (c.callsign == callsign) return &c;
+const Contact* ContactStore::find(const std::string& callsign) const
+{
+    for (const auto& s : ab_->all_stations()) {
+        if (s.first == callsign) {
+            scratch_ = build(s.first, s.second);
+            return &scratch_;
+        }
+    }
     return nullptr;
 }
 
-void ContactStore::clear() { contacts_.clear(); }
+const std::vector<Contact>& ContactStore::all() const
+{
+    all_scratch_.clear();
+    for (const auto& s : ab_->all_stations())
+        all_scratch_.push_back(build(s.first, s.second));
+    return all_scratch_;
+}
+
+void ContactStore::clear()
+{
+    ab_->clear_stations();
+    meta_.clear();
+}
 
 // ── SelfAddressStore ──────────────────────────────────────────────────────────
 

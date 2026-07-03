@@ -109,7 +109,7 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
     ale::Channel ch(rx_hz, tx_hz, mode, mode);
     ch.id = id;
 
-    // optional bracketed flags token [OFF,RX,IC,IS,IR] (written by
+    // optional bracketed flags token [OFF,RX,IC,IS,IR,AO] (written by
     // format_channel_line). Treated as flags only when every comma-separated
     // code is a known code; otherwise the token is left as part of the label
     // (so a label that legitimately starts with "[...]" is not swallowed).
@@ -128,17 +128,19 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
             code = code.substr(a, b - a + 1);
             codes.push_back(code);
             any_code = true;
-            if (code != "OFF" && code != "RX" && code != "IC"
-                && code != "IS" && code != "IR")
+            if (code != "OFF" && code != "RX" && code != "TX" && code != "IC"
+                && code != "IS" && code != "IR" && code != "AO")
                 all_recognized = false;
         }
         if (any_code && all_recognized) {
             for (const auto& c : codes) {
                 if      (c == "OFF") ch.enabled          = false;
                 else if (c == "RX")  ch.rx_only          = true;
+                else if (c == "TX")  ch.tx_only          = true;
                 else if (c == "IC")  ch.inhibit_calling   = true;
                 else if (c == "IS")  ch.inhibit_sounding  = true;
                 else if (c == "IR")  ch.inhibit_reporting = true;
+                else if (c == "AO")  ch.ale_only          = true;  // A.5.4.7.1: short LBT ok
             }
             ++label_start;
         }
@@ -158,8 +160,8 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
 //   [ID:id] rx_hz tx_hz mode [flags] [label]
 // where [flags] is a bracketed, comma-separated code list emitted only when any
 // per-channel flag is non-default (backward-compatible: old files have no token).
-// Codes: OFF (enabled=false), RX (rx_only), IC (inhibit_calling),
-//         IS (inhibit_sounding), IR (inhibit_reporting).
+// Codes: OFF (enabled=false), RX (rx_only), TX (tx_only), IC (inhibit_calling),
+//         IS (inhibit_sounding), IR (inhibit_reporting), AO (ale_only — short LBT).
 static std::string format_channel_line(const ale::Channel& ch)
 {
     char buf[64];
@@ -174,9 +176,11 @@ static std::string format_channel_line(const ale::Channel& ch)
     std::string flags;
     if (!ch.enabled)            flags += "OFF,";
     if (ch.rx_only)             flags += "RX,";
+    if (ch.tx_only)             flags += "TX,";
     if (ch.inhibit_calling)     flags += "IC,";
     if (ch.inhibit_sounding)    flags += "IS,";
     if (ch.inhibit_reporting)   flags += "IR,";
+    if (ch.ale_only)            flags += "AO,";
     if (!flags.empty()) {
         flags.pop_back();  // drop trailing comma
         line += " [";
@@ -281,7 +285,8 @@ static std::string mode_to_string(pal::RadioMode m) {
 namespace ale {
 
 ALEController::ALEController()
-    : lqa_analyzer_(&lqa_database_)
+    : contact_store_(sm_.get_address_book())
+    , lqa_analyzer_(&lqa_database_)
     , lqa_exchange_(lqa_database_,
                     [this](const std::string& a){ return self_address_store_.matches_self(a); },
                     [this](uint32_t w){ sm_.set_pending_lqa_cmd(w); },
@@ -295,6 +300,24 @@ ALEController::ALEController()
 {
     wire_callbacks();
 
+    // LBT occupancy (A.5.4.7.2): the SM polls this in all three LBT windows.
+    // Busy transitions are surfaced to the operator via status (no silent
+    // blocking); the A.5.4.7.3 override is handled inside the SM.
+    sm_.set_channel_busy_query([this]() {
+        if (!lbt_occupancy_enabled_) return false;
+        const bool busy = occupancy_.is_busy();
+        if (busy && !lbt_busy_reported_) {
+            char buf[112];
+            std::snprintf(buf, sizeof(buf),
+                          "LBT: channel busy — level %.0f dB, floor %.0f dB (margin %.0f dB)",
+                          occupancy_.level_db(), occupancy_.floor_db(),
+                          occupancy_.margin_db());
+            emit_status(buf);
+        }
+        lbt_busy_reported_ = busy;
+        return busy;
+    });
+
     MetricsConfig mc;
     mc.averaging_window = 1;
     lqa_db_metrics_.set_config(mc);
@@ -305,10 +328,34 @@ ALEController::ALEController()
     // currently dwelling on a channel that has stale (or absent) LQA data.
     lqa_analyzer_.set_sounding_callback([this](uint32_t freq) {
         const Channel* ch = sm_.get_current_channel();
-        // Per-channel inhibit_sounding suppresses auto-sounding on this channel.
-        if (ch && ch->rx_frequency_hz == freq && !sounding_inhibited(freq))
+        // Per-channel inhibit_sounding / rx_only suppress auto-sounding on this channel.
+        if (ch && ch->rx_frequency_hz == freq
+            && !sounding_inhibited(freq) && !tx_inhibited(freq)) {
+            apply_lbt_policy_({ *ch });   // A.5.4.7.1 LBT duration for this channel
             sm_.send_sounding();
+        }
     });
+}
+
+// ── LBT occupancy (A.5.4.7) ──────────────────────────────────────────────────
+
+void  ALEController::set_lbt_margin_db(float db) { occupancy_.set_margin_db(db); }
+float ALEController::lbt_margin_db() const       { return occupancy_.margin_db(); }
+void  ALEController::set_lbt_override(bool on)   { sm_.set_lbt_override(on); }
+bool  ALEController::lbt_override() const        { return sm_.lbt_override(); }
+bool  ALEController::lbt_busy() const            { return occupancy_.is_busy(); }
+float ALEController::lbt_level_db() const        { return occupancy_.level_db(); }
+float ALEController::lbt_floor_db() const        { return occupancy_.floor_db(); }
+
+void ALEController::apply_lbt_policy_(const std::vector<Channel>& channels)
+{
+    // A.5.4.7.1: the short Twt (784 ms) is permitted only when every channel
+    // involved is known to carry ALE exclusively; otherwise the LBT pause must
+    // be >= 2 s.  Unknown/empty channel sets are treated as shared (spec-safe).
+    bool all_ale_only = !channels.empty();
+    for (const auto& ch : channels)
+        if (!ch.ale_only) { all_ale_only = false; break; }
+    sm_.set_lbt_shared(!all_ale_only);
 }
 
 void ALEController::wire_callbacks()
@@ -384,9 +431,29 @@ void ALEController::wire_callbacks()
                 // actual PTT release + demod enable happen in update()
             } else {
                 set_ptt_and_notify(false);
-                demodulator_.set_enabled(true);
+                // tx_only (Direction=TX): keep RX disabled — transmit-only channel.
+                if (!rx_inhibited(get_current_frequency()))
+                    demodulator_.set_enabled(true);
+                else
+                    emit_status("RX disabled — current channel is TX-only (Direction=TX)");
             }
         } else {
+            // RX→TX: the SM wants to transmit. rx_only (Direction=RX) is a hard
+            // TX prohibition — refuse to key PTT and keep RX enabled so the
+            // station keeps listening. The SM is mid-transition (this callback
+            // fires synchronously inside sm_.update()), so we cannot abort it
+            // here without re-entering the SM; set a flag and abort on the next
+            // tick (tick_sm → emergency_manual_control → IDLE, no TWAS in
+            // HANDSHAKE — the only autonomous-TX path reachable on a rx_only
+            // channel since initiate_call is already gated).
+            const Channel cur_tx_ch = get_current_channel();
+            if (cur_tx_ch.rx_frequency_hz > 0 && tx_inhibited(cur_tx_ch.rx_frequency_hz)) {
+                abort_tx_pending_ = true;
+                emit_status("Incoming call not answered — channel " + cur_tx_ch.id
+                            + " is RX-only (Direction=RX); TX suppressed");
+                emit_event(pal::EventType::PTT_OFF);
+                return;
+            }
             // RX→TX: cancel any pending tail, assert PTT, start lead
             ptt_tail_deadline_ms_ = 0;
             demodulator_.set_enabled(false);
@@ -474,6 +541,18 @@ bool ALEController::calling_inhibited(uint32_t rx_hz) const
 {
     const Channel* ch = find_channel_by_freq(rx_hz);
     return ch && ch->inhibit_calling;
+}
+
+bool ALEController::tx_inhibited(uint32_t rx_hz) const
+{
+    const Channel* ch = find_channel_by_freq(rx_hz);
+    return ch && ch->rx_only;
+}
+
+bool ALEController::rx_inhibited(uint32_t rx_hz) const
+{
+    const Channel* ch = find_channel_by_freq(rx_hz);
+    return ch && ch->tx_only;
 }
 
 bool ALEController::set_frequency(uint32_t hz)
@@ -603,6 +682,7 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     set_scan_dwell_ms(cfg.scan_dwell_ms);
     set_sounding_interval_sec(cfg.sounding_interval_sec);
     set_sounding_use_twas(cfg.sounding_use_twas);
+    set_sounding_warning_lead_sec(cfg.sounding_warning_lead_sec);
     set_link_idle_timeout_sec(cfg.link_idle_timeout_sec);
     set_max_tune_time_ms(cfg.max_tune_time_ms);
     set_ptt_lead_ms(cfg.ptt_lead_ms);
@@ -660,6 +740,7 @@ void ALEController::start_scanning()
         cfg.dwell_time_ms = scan_net->dwell_ms;
         for (const auto& ch : calling_channels_) {
             if (!ch.enabled) continue;
+            if (ch.tx_only) continue;   // tx_only (Direction=TX): can't receive — not scannable
             if (std::find(scan_net->channel_ids.begin(), scan_net->channel_ids.end(), ch.id)
                     == scan_net->channel_ids.end()) continue;
             cfg.scan_list.push_back(ch);
@@ -668,11 +749,11 @@ void ALEController::start_scanning()
             // Active net has no enabled channels — fall back to all enabled.
             cfg.dwell_time_ms = config_.scan_dwell_ms;
             for (const auto& ch : calling_channels_)
-                if (ch.enabled) cfg.scan_list.push_back(ch);
+                if (ch.enabled && !ch.tx_only) cfg.scan_list.push_back(ch);
         }
     } else {
         for (const auto& ch : calling_channels_)
-            if (ch.enabled) cfg.scan_list.push_back(ch);
+            if (ch.enabled && !ch.tx_only) cfg.scan_list.push_back(ch);
     }
 
     // A.5.4.5.3: sort scan channels by FROM-direction quality.
@@ -695,10 +776,18 @@ void ALEController::start_scanning()
 
 bool ALEController::send_sounding()
 {
+    if (tx_inhibited(get_current_frequency())) {
+        emit_status("Manual sounding rejected — current channel is RX-only (Direction=RX)");
+        return false;
+    }
     if (sounding_inhibited(get_current_frequency())) {
         emit_status("Manual sounding rejected — current channel is inhibit-sounding");
         return false;
     }
+    // A.5.4.7.1 LBT duration from the sounding channel's ale_only flag
+    // (unknown channel → shared → >= 2 s, spec-safe).
+    const Channel* cc = find_channel_by_freq(get_current_frequency());
+    apply_lbt_policy_(cc ? std::vector<Channel>{ *cc } : std::vector<Channel>{});
     if (!sm_.send_sounding()) {
         emit_status("Manual sounding rejected — only available while IDLE or scanning");
         return false;
@@ -709,6 +798,7 @@ bool ALEController::send_sounding()
 
 bool ALEController::send_sounding_sweep(const std::vector<Channel>& channels)
 {
+    apply_lbt_policy_(channels);   // A.5.4.7.1: short Twt only if ALL are ale_only
     if (!sm_.send_sounding_sweep(channels)) {
         emit_status("Sounding sweep rejected — only available while IDLE or scanning");
         return false;
@@ -731,16 +821,17 @@ bool ALEController::initiate_call(const std::string& target_addr)
 
     // Channel ordering: always use LQA data when available (A.5.4.5, mandatory).
     // Per-channel inhibit_calling excludes a channel from the outbound call
-    // set (it may still scan / sound). Build the callable subset first. If the
-    // channel list is non-empty but every channel is inhibit-calling, abort;
-    // an empty list (no channels configured) is left to proceed as before so
-    // downstream behaviour is unchanged.
+    // set (it may still scan / sound). rx_only (Direction=RX) excludes a channel
+    // from calling too — it is a hard TX prohibition. Build the callable subset
+    // first. If the channel list is non-empty but every channel is filtered out,
+    // abort; an empty list (no channels configured) is left to proceed as before
+    // so downstream behaviour is unchanged.
     std::vector<Channel> callable;
     callable.reserve(calling_channels_.size());
     for (const auto& ch : calling_channels_)
-        if (!ch.inhibit_calling) callable.push_back(ch);
+        if (!ch.inhibit_calling && !ch.rx_only) callable.push_back(ch);
     if (!calling_channels_.empty() && callable.empty()) {
-        emit_status("No callable channels — all channels inhibit-calling");
+        emit_status("No callable channels — all channels inhibit-calling or RX-only");
         return false;
     }
 
@@ -799,6 +890,12 @@ bool ALEController::initiate_call(const std::string& target_addr)
     // above is always active.
     if (config_.lqa_exchange_enabled && !reporting_inhibited(first_call_freq_hz))
         lqa_exchange_.encode_outgoing(first_call_freq_hz, target_addr, true);
+    else if (config_.lqa_exchange_enabled && reporting_inhibited(first_call_freq_hz))
+        emit_status("LQA CMD 'a' exchange suppressed on this call — channel is inhibit-reporting");
+
+    // A.5.4.7.1 LBT duration: short Twt only when every callable channel of
+    // this call is marked ALE-only; any shared channel → >= 2 s pause.
+    apply_lbt_policy_(callable);
 
     emit_status("Initiating call to " + target_addr);
     return sm_.initiate_call(target_addr);
@@ -812,7 +909,20 @@ bool ALEController::initiate_single_channel_call(const std::string& target_addr)
         return false;
     }
     Channel cur = get_current_channel();
+    // rx_only (Direction=RX) is a hard TX prohibition: the operator-override
+    // single-channel call bypasses inhibit_calling but NOT rx_only — a receive-
+    // only channel cannot place a call. get_current_channel() is radio-backed and
+    // does not carry the flags, so resolve the configured channel by frequency.
+    if (tx_inhibited(cur.rx_frequency_hz)) {
+        emit_status("Single-channel call rejected — channel " + cur.id
+                    + " is RX-only (Direction=RX)");
+        return false;
+    }
     sm_.set_calling_channels({ cur });
+    // cur is radio-backed and carries no flags; resolve the configured channel
+    // for the A.5.4.7.1 ale_only policy (unresolved → shared → >= 2 s LBT).
+    const Channel* cfg_ch = find_channel_by_freq(cur.rx_frequency_hz);
+    apply_lbt_policy_(cfg_ch ? std::vector<Channel>{ *cfg_ch } : std::vector<Channel>{});
     uint32_t C = config_.assumed_scan_channels;
     if (const Contact* ct = contact_store_.find(target_addr))
         for (const auto& nm : ct->net_members)
@@ -856,7 +966,7 @@ bool ALEController::initiate_group_call(const std::vector<std::string>& members)
         std::vector<Channel> callable;
         callable.reserve(calling_channels_.size());
         for (const auto& ch : calling_channels_)
-            if (!ch.inhibit_calling) callable.push_back(ch);
+            if (!ch.inhibit_calling && !ch.rx_only) callable.push_back(ch);
         if (!active_scan_net_.empty()) {
             if (const Net* net = net_store_.find(active_scan_net_)) {
                 std::vector<Channel> scoped;
@@ -984,6 +1094,12 @@ void ALEController::set_ptt_and_notify(bool on)
 void ALEController::set_manual_ptt(bool on)
 {
     manual_ptt_ = on;
+    if (on && tx_inhibited(get_current_frequency())) {
+        // rx_only (Direction=RX): manual PTT is a transmit — refuse and stay RX.
+        manual_ptt_ = false;
+        emit_status("Manual PTT rejected — current channel is RX-only (Direction=RX)");
+        return;
+    }
     if (on) {
         // Immediate TX override: cancel pending timing, disable demod, assert PTT.
         // Also abort any active protocol operation so the SM stops queuing new words.
@@ -1046,12 +1162,23 @@ void ALEController::tick_ptt_timing(uint32_t now_ms)
     if (ptt_tail_deadline_ms_ > 0 && !manual_ptt_ && now_ms >= ptt_tail_deadline_ms_) {
         ptt_tail_deadline_ms_ = 0;
         set_ptt_and_notify(false);
-        demodulator_.set_enabled(true);
+        // tx_only (Direction=TX): keep RX disabled — transmit-only channel.
+        if (!rx_inhibited(get_current_frequency()))
+            demodulator_.set_enabled(true);
     }
 }
 
 void ALEController::tick_sm(uint32_t now_ms)
 {
+    // rx_only: abort an SM-initiated TX (incoming-call handshake response) that
+    // was caught in set_rx_enabled_callback. Drained here to avoid re-entering
+    // the SM inside that callback. emergency_manual_control() → IDLE; in
+    // HANDSHAKE state this is silent (no TWAS), so the station hears the call
+    // but never transmits — exactly "reception only, transmission disabled".
+    if (abort_tx_pending_) {
+        abort_tx_pending_ = false;
+        sm_.emergency_manual_control();
+    }
     sm_.update(now_ms);
     maybe_emit_call_alert();
 }
@@ -1115,21 +1242,46 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
     // Periodic multi-channel sounding sweep (set_automatic_sounding). Start a
     // sweep over the configured net's channels every interval, gated on IDLE/
     // SCANNING. A running sweep holds the SM in SOUNDING, which blocks re-entry.
-    if (auto_sounding_on_ && !auto_sounding_net_.empty()
-        && auto_sounding_interval_ms_ > 0) {
-        const ALEState st = sm_.get_state();
-        if ((st == ALEState::IDLE || st == ALEState::SCANNING)
-            && (now_ms - auto_sounding_last_ms_) >= auto_sounding_interval_ms_) {
-            auto channels = resolve_net_sounding_channels(auto_sounding_net_);
-            if (!channels.empty()) {
-                sm_.send_sounding_sweep(channels);
-                emit_status("Auto-sounding sweep on net '" + auto_sounding_net_
-                            + "' (" + std::to_string(channels.size()) + " channels)");
-            }
-            // Re-arm whether or not channels resolved (avoid busy-looping).
-            auto_sounding_last_ms_ = now_ms_;
+    if (!auto_sounding_on_ || auto_sounding_net_.empty() || auto_sounding_interval_ms_ == 0)
+        return;
+
+    const ALEState st = sm_.get_state();
+    if (st == ALEState::SOUNDING) return; // sweep in flight
+
+    // Compute remaining ms. Use signed arithmetic to detect overdue (<=0).
+    const int32_t remaining_ms = static_cast<int32_t>(auto_sounding_interval_ms_)
+                                 - static_cast<int32_t>(now_ms - auto_sounding_last_ms_);
+
+    // Pre-sounding warning — IDLE only, within the configured lead window.
+    if (st == ALEState::IDLE && sounding_warning_lead_ms_ > 0
+        && remaining_ms > 0
+        && static_cast<uint32_t>(remaining_ms) <= sounding_warning_lead_ms_
+        && !sounding_warning_sent_) {
+        sounding_warning_sent_   = true;
+        sounding_warning_active_ = true;
+        const uint32_t remaining_sec = (static_cast<uint32_t>(remaining_ms) + 999u) / 1000u;
+        if (on_sounding_warning) on_sounding_warning(auto_sounding_net_, remaining_sec, "warn");
+    }
+
+    // Fire when due — from IDLE or SCANNING.
+    if (remaining_ms <= 0 && (st == ALEState::IDLE || st == ALEState::SCANNING)) {
+        auto channels = resolve_net_sounding_channels(auto_sounding_net_);
+        if (!channels.empty()) {
+            sm_.send_sounding_sweep(channels);
+            emit_status("Auto-sounding sweep on net '" + auto_sounding_net_
+                        + "' (" + std::to_string(channels.size()) + " channels)");
+        }
+        // Re-arm whether or not channels resolved (avoid busy-looping on empty net).
+        auto_sounding_last_ms_ = now_ms_;
+        sounding_warning_sent_ = false;
+        if (sounding_warning_active_) {
+            sounding_warning_active_ = false;
+            if (on_sounding_warning) on_sounding_warning(auto_sounding_net_, 0, "fire");
         }
     }
+    // When remaining_ms <= 0 but SM is CALLING/HANDSHAKE/LINKED, leave
+    // auto_sounding_last_ms_ unchanged so the sweep fires the moment the SM
+    // returns to IDLE/SCANNING.
 }
 
 void ALEController::tick_offline_completion()
@@ -1215,6 +1367,10 @@ void ALEController::maybe_emit_call_alert()
             && !reporting_inhibited(cur_blka4_ch.rx_frequency_hz))
             lqa_exchange_.encode_outgoing(cur_blka4_ch.rx_frequency_hz,
                                           sm_.get_caller_address(), false);
+        else if (cur_blka4_ch.rx_frequency_hz > 0
+                 && reporting_inhibited(cur_blka4_ch.rx_frequency_hz))
+            emit_status("LQA CMD 'a' exchange suppressed — channel "
+                        + cur_blka4_ch.id + " is inhibit-reporting");
     }
 
     // Block A5 — apply bilateral received from caller's CMD 'a'; Block C5 if KA1=true.
@@ -1366,6 +1522,11 @@ void ALEController::feed_audio(const int16_t* samples, uint32_t count)
             dbg_count_ = 0;
         }
     }
+    // LBT occupancy (A.5.4.7.2): only while RX actually listens on the channel —
+    // during TX the RX pipeline is disabled and own-signal leakage would poison
+    // the noise floor and busy state.
+    if (demodulator_.enabled())
+        occupancy_.push_samples(samples, count);
     demodulator_.push_samples(samples, count);
 }
 
@@ -1378,6 +1539,16 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
                   ALEStateMachine::state_name(from),
                   ALEStateMachine::state_name(to));
     emit_status(buf);
+
+    // Pre-empt: if a call begins while the idle-sounding countdown popup is open,
+    // cancel the popup. Keep sounding_warning_sent_=true so we don't re-warn for
+    // this same cycle; the overdue sweep will fire silently once the call ends.
+    if (sounding_warning_active_
+        && (to == ALEState::CALLING || to == ALEState::HANDSHAKE
+            || to == ALEState::LINKED)) {
+        sounding_warning_active_ = false;
+        if (on_sounding_warning) on_sounding_warning(auto_sounding_net_, 0, "cancel");
+    }
 
     // Reset caller tracking when leaving HANDSHAKE
     if (from == ALEState::HANDSHAKE) {
@@ -1401,17 +1572,16 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         hs_resp_freq_hz_ = 0;
     }
 
-    // LQA: when we enter SOUNDING, record the sounding timestamp so that
-    // is_sounding_due() won't immediately re-trigger after we return to SCANNING.
-    // We read back any existing metrics so the time-weighted average is a no-op.
+    // Entering SOUNDING = we are about to *transmit* our own sounding. Per
+    // A.5.4.1.1/A.5.4.1.2 a transmitted sounding produces no received words and
+    // MUST NOT create an LQA entry (only stations that *receive* a sounding
+    // perform channel measurements — see commit_sounding_sample()). The sounding
+    // scheduler is driven by auto_sounding_last_ms_, not the LQA DB, so there is
+    // nothing to write here. Block B3 (CMD NOISE attach) is TX command assembly,
+    // not an LQA DB write, and remains below.
     if (to == ALEState::SOUNDING) {
         const Channel* ch = sm_.get_current_channel();
         if (ch) {
-            auto existing = lqa_database_.get_entry(ch->rx_frequency_hz, "");
-            const float snr = existing ? existing->snr_db : 0.0f;
-            const float ber = existing ? existing->ber    : 0.0f;
-            lqa_database_.update_entry(ch->rx_frequency_hz, "", snr, ber, 0, 1);
-
             // Block B3 — attach CMD NOISE to this sounding cycle.
             if (config_.lqa_exchange_enabled) {
                 const auto stats = lqa_metrics_.get_noise_floor_stats(now_ms_);
@@ -2055,21 +2225,68 @@ void ALEController::enable_automatic_sounding(bool on)
     lqa_analyzer_.set_config(cfg);
 }
 
-void ALEController::set_automatic_sounding(bool on, uint32_t interval_sec,
-                                           const std::string& net_name)
+void ALEController::set_automatic_sounding(bool on, const std::string& net_name)
 {
-    auto_sounding_on_          = on && !net_name.empty();
-    auto_sounding_interval_ms_ = on ? interval_sec * 1000u : 0u;
-    auto_sounding_net_         = on ? net_name : std::string{};
-    // Arm the first sweep for `interval` from now (don't fire immediately on
-    // enable — the operator just turned it on and may still be configuring).
-    auto_sounding_last_ms_     = now_ms_;
+    // Cancel an active warning popup before changing state.
+    if (sounding_warning_active_ && on_sounding_warning)
+        on_sounding_warning(auto_sounding_net_, 0, "cancel");
+    sounding_warning_sent_   = false;
+    sounding_warning_active_ = false;
+
+    auto_sounding_on_  = on && !net_name.empty();
+    auto_sounding_net_ = on ? net_name : std::string{};
+
     if (auto_sounding_on_) {
+        // Resolve interval from the net's own policy; fall back to global default.
+        const Net* net = net_store_.find(net_name);
+        const uint32_t net_sec = (net && net->sounding_interval_sec > 0)
+                                 ? net->sounding_interval_sec
+                                 : config_.sounding_interval_sec;
+        auto_sounding_interval_ms_ = net_sec * 1000u;
+        // Arm from now — don't fire immediately (operator may still be configuring).
+        auto_sounding_last_ms_ = now_ms_;
         emit_status("Periodic sounding on net '" + net_name + "' every "
-                    + std::to_string(interval_sec) + " s");
+                    + std::to_string(net_sec) + " s");
     } else {
+        auto_sounding_interval_ms_ = 0u;
         emit_status("Periodic multi-channel sounding off");
     }
+}
+
+void ALEController::refresh_auto_sounding_interval()
+{
+    if (!auto_sounding_on_ || auto_sounding_net_.empty()) return;
+    const Net* net = net_store_.find(auto_sounding_net_);
+    const uint32_t net_sec = (net && net->sounding_interval_sec > 0)
+                             ? net->sounding_interval_sec
+                             : config_.sounding_interval_sec;
+    auto_sounding_interval_ms_ = net_sec * 1000u;
+}
+
+void ALEController::set_sounding_warning_lead_sec(uint32_t sec)
+{
+    config_.sounding_warning_lead_sec = sec;
+    sounding_warning_lead_ms_         = sec * 1000u;
+}
+
+void ALEController::interrupt_sounding(const std::string& net)
+{
+    if (net != auto_sounding_net_) {
+        emit_status("Sounding interrupt ignored — net '" + net + "' is not the active sounding net");
+        return;
+    }
+    if (sm_.get_state() == ALEState::SOUNDING) {
+        emit_status("Sounding already in progress — too late to interrupt");
+        return;
+    }
+    // Reset timer to full interval (per spec: "set back to its original value").
+    auto_sounding_last_ms_   = now_ms_;
+    sounding_warning_sent_   = false;
+    if (sounding_warning_active_) {
+        sounding_warning_active_ = false;
+        if (on_sounding_warning) on_sounding_warning(net, 0, "cancel");
+    }
+    emit_status("Sounding on net '" + net + "' interrupted — timer reset");
 }
 
 std::vector<Channel> ALEController::resolve_net_sounding_channels(
@@ -2080,7 +2297,7 @@ std::vector<Channel> ALEController::resolve_net_sounding_channels(
     if (!net) return out;
     for (const auto& ch_id : net->channel_ids) {
         for (const auto& ch : calling_channels_) {
-            if (ch.id == ch_id && ch.enabled && !ch.inhibit_sounding) {
+            if (ch.id == ch_id && ch.enabled && !ch.inhibit_sounding && !ch.rx_only) {
                 out.push_back(ch);
                 break;
             }
@@ -2319,6 +2536,7 @@ bool ALEController::export_settings(const std::string& path)
     f << "scan_dwell_ms=" << config_.scan_dwell_ms << "\n";
     f << "sounding_interval_sec=" << config_.sounding_interval_sec << "\n";
     f << "sounding_use_twas=" << (config_.sounding_use_twas ? "1" : "0") << "\n";
+    f << "sounding_warning_lead_sec=" << config_.sounding_warning_lead_sec << "\n";
     f << "link_idle_timeout_sec=" << config_.link_idle_timeout_sec << "\n";
     f << "max_tune_time_ms=" << config_.max_tune_time_ms << "\n";
     f << "ptt_lead_ms=" << config_.ptt_lead_ms << "\n";
@@ -2337,6 +2555,17 @@ bool ALEController::export_settings(const std::string& path)
     f << "nmea_port=" << config_.nmea_port << "\n";
     f << "nmea_baud=" << config_.nmea_baud << "\n";
     f << "sfi_enabled=" << (config_.sfi_enabled ? 1 : 0) << "\n";
+    if (!contact_store_.empty()) {
+        f << "\n# ALE address export\n";
+        f << "# contact=callsign|name|status|net_members|valid_channels\n";
+        for (const auto& c : contact_store_.all()) {
+            f << "contact=" << c.callsign << '|' << c.name
+              << '|' << (c.enabled ? "enabled" : "disabled")
+              << '|' << join_csv(c.net_members)
+              << '|' << (c.all_channels ? "ALL" : join_csv(c.valid_channels))
+              << '\n';
+        }
+    }
     return f.good();
 }
 
@@ -2350,6 +2579,9 @@ bool ALEController::import_settings(const std::string& path)
     bool lqa_enabled_val = lqa_enabled();
     std::string station_file_to_load;
     bool first_self_addr = true;
+    // Contacts from ale.conf (# ALE address export section). Applied after
+    // load_station_file so entries already in the station file are not duplicated.
+    std::vector<std::array<std::string, 5>> conf_contacts;
 
     std::string line;
     while (std::getline(f, line)) {
@@ -2387,6 +2619,8 @@ bool ALEController::import_settings(const std::string& path)
             cfg.sounding_interval_sec = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "sounding_use_twas") {
             cfg.sounding_use_twas = (val == "1" || val == "true");
+        } else if (key == "sounding_warning_lead_sec") {
+            cfg.sounding_warning_lead_sec = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "link_idle_timeout_sec") {
             cfg.link_idle_timeout_sec = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "max_tune_time_ms") {
@@ -2424,6 +2658,14 @@ bool ALEController::import_settings(const std::string& path)
             cfg.nmea_baud = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "sfi_enabled") {
             cfg.sfi_enabled = (val == "1");
+        } else if (key == "contact" && !val.empty()) {
+            // contact=callsign|name|status|net_members|valid_channels
+            const auto fields = split_pipe(val);
+            if (!fields.empty() && !fields[0].empty()) {
+                std::array<std::string, 5> row{};
+                for (size_t i = 0; i < fields.size() && i < 5; ++i) row[i] = fields[i];
+                conf_contacts.push_back(row);
+            }
         }
         // net= / net_channel=: legacy keys, silently ignored (nets now in station file)
         // audio_in / audio_out: bridge-level, silently ignored here
@@ -2432,6 +2674,14 @@ bool ALEController::import_settings(const std::string& path)
     if (has_lqa_enabled) set_lqa_enabled(lqa_enabled_val);
     if (!station_file_to_load.empty())
         load_station_file(station_file_to_load);  // sets station_file_ on success
+    // Populate address book from ale.conf contacts (skip callsigns already loaded
+    // from the station file to avoid duplicates).
+    for (const auto& row : conf_contacts) {
+        const std::string& cs = row[0];
+        if (!contact_store_.find(cs))
+            add_contact(cs, row[1], row[2].empty() ? "enabled" : row[2],
+                        row[3], row[4].empty() ? "ALL" : row[4]);
+    }
     update_propagation_context();
     return true;
 }
@@ -2468,6 +2718,29 @@ bool ALEController::del_channel(uint32_t rx_hz)
 
     if (!removed_id.empty()) net_store_.unassign_channel_everywhere(removed_id);
     sm_.set_calling_channels(calling_channels_);
+    if (!station_file_.empty()) save_channels(station_file_);
+    return true;
+}
+
+bool ALEController::rename_channel(const std::string& old_id, const std::string& new_id)
+{
+    if (old_id == new_id) return true;
+    if (new_id.empty()) return false;
+    // Reject whitespace in the id (would break the .ale token format).
+    if (new_id.find_first_of(" \t\r\n") != std::string::npos) return false;
+
+    auto it = std::find_if(calling_channels_.begin(), calling_channels_.end(),
+        [&](const Channel& c){ return c.id == old_id; });
+    if (it == calling_channels_.end()) return false;                 // unknown old_id
+
+    // Reject collision with another channel that already has new_id.
+    for (const auto& c : calling_channels_)
+        if (c.id == new_id) return false;
+
+    it->id = new_id;
+    net_store_.rename_channel(old_id, new_id);                       // propagate to nets
+    sm_.set_calling_channels(calling_channels_);
+    if (on_channel_changed) on_channel_changed(*it);                 // GUI readout follows rename
     if (!station_file_.empty()) save_channels(station_file_);
     return true;
 }
@@ -2639,7 +2912,11 @@ bool ALEController::unassign_channel_from_net(const std::string& net_name, const
 bool ALEController::update_net(const Net& updated)
 {
     const bool ok = net_store_.update_net(updated);
-    if (ok && !station_file_.empty()) save_channels(station_file_);
+    if (ok) {
+        if (!station_file_.empty()) save_channels(station_file_);
+        // Live-update the sounding timer if the active sounding net was changed.
+        if (updated.name == auto_sounding_net_) refresh_auto_sounding_interval();
+    }
     return ok;
 }
 

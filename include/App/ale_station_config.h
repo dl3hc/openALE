@@ -46,6 +46,13 @@ struct ALEStationConfig {
     uint32_t  sounding_interval_sec  = 300;
     /// Sounding conclusion type: false = TIS (invites return calls), true = TWAS (announce-only).
     bool      sounding_use_twas      = false;
+    /// Pre-sounding countdown lead time (Sekunden). Wenn die automatische
+    /// Sounding einer Net-Aktivierung von IDLE aus kurz bevorsteht (innerhalb
+    /// dieses Vorlaufs), feuert on_sounding_warning(phase="warn"), damit die GUI
+    /// einen Countdown-Popup mit Interrupt-Möglichkeit anzeigt. 0 = kein Popup.
+    /// Wirkt NUR beim Übergang IDLE→SOUNDING; während SCANNING feuert die Sounding
+    /// still (A.5.3.1 Sweep kehrt nach SCANNING zurück).
+    uint32_t  sounding_warning_lead_sec = 10;
     /// Link-Idle-Timeout: Verbindung wird nach dieser Zeit getrennt (Sekunden).
     /// Default 360 s — programmierbarer Twa-Override gem. MIL-STD-188-141B Level-5
     /// (entspricht PCALE TWA=360000 ms). Der SM-Spec-Default bleibt 30 s

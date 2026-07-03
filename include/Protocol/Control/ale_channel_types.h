@@ -32,13 +32,18 @@ namespace ale {
  *   label            — optional human-readable name
  *   enabled          — participates in scan/sounding (master on/off; GUI derives
  *                      this as !(inhibit_calling && inhibit_sounding))
- *   rx_only          — R-only channel (no TX)
+ *   rx_only          — R-only channel (no TX); blocks all transmit (sounding,
+ *                      calling, handshake response, manual PTT)
+ *   tx_only          — T-only channel (no RX); excluded from scan, RX disabled
+ *                      when dwelling; TX (sounding) still permitted
  *   voice_use        — voice traffic allowed on this channel
  *   data_use         — data traffic allowed on this channel
  *   inhibit_calling  — exclude from outbound calling (initiate_call ranking)
  *   inhibit_sounding — exclude from sounding (sweep + single + auto)
  *   inhibit_reporting — exclude from bilateral LQA CMD 'a' exchange (A.5.4.2);
  *                      local LQA-DB measurements are NOT suppressed
+ *   ale_only         — channel carries ALE exclusively (A.5.4.7.1): permits the
+ *                      short 784 ms LBT; unset (default) = shared channel → ≥2 s
  *   secure           — security setting (DO; clear=false/secure=true)
  *   power_pct        — TX power 0–100% (DO)
  *   antenna          — antenna port 1–4 (DO)
@@ -65,12 +70,16 @@ struct Channel {
     // ── Configuration ────────────────────────────────────────────────────
     std::string label;
     bool        enabled              = true;
-    bool        rx_only              = false;  ///< R-only (no TX)
+    bool        rx_only              = false;  ///< R-only (no TX); blocks all transmit
+    bool        tx_only              = false;  ///< T-only (no RX); excluded from scan, RX disabled
     bool        voice_use            = true;
     bool        data_use             = true;
     bool        inhibit_calling       = false;  ///< exclude from outbound calling (initiate_call ranking)
     bool        inhibit_sounding      = false;  ///< exclude from sounding (sweep + single + auto)
     bool        inhibit_reporting     = false;  ///< exclude from bilateral LQA CMD 'a' exchange (A.5.4.2); local LQA-DB writes unaffected
+    bool        ale_only              = false;  ///< channel known to carry ALE exclusively (A.5.4.7.1):
+                                                ///< LBT may use Twt = 2×Trw (784 ms) instead of ≥2 s.
+                                                ///< Default false = shared channel (spec-safe).
     bool        secure               = false;  ///< DO: security mode
     uint8_t     power_pct            = 100;    ///< DO: TX power 0–100%
     uint8_t     antenna              = 1;      ///< DO: antenna port 1–4

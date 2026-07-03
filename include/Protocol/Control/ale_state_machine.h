@@ -506,6 +506,38 @@ public:
     }
 
     /**
+     * Broadband channel-occupancy query for LBT (A.5.4.7.2 / A.4.2.2).
+     * Polled during the three LBT windows (calling LBT, sounding LBT, handshake
+     * CHANNEL_CHECK) on every update() tick, in addition to the ALE-word busy
+     * path.  Return true while the channel carries non-ALE traffic (energy over
+     * the tracked noise floor — see ChannelOccupancyDetector).  Busy behavior
+     * follows A.5.4.7: calling → next channel; sounding → abort (reschedule);
+     * handshake → abort.  Unset = no occupancy detection (legacy behavior).
+     */
+    void set_channel_busy_query(std::function<bool()> q) {
+        channel_busy_query_ = std::move(q);
+    }
+
+    /**
+     * A.5.4.7.3 operator override: when true, occupancy-busy results are
+     * ignored (the LBT pause itself still runs).  For emergency use.
+     */
+    void set_lbt_override(bool on) { lbt_override_ = on; }
+    bool lbt_override() const      { return lbt_override_; }
+
+    /**
+     * A.5.4.7.1 LBT duration policy: shared channels require an LBT pause of
+     * at least Twt_shared_ms (2 s); only channels known to carry ALE
+     * exclusively may use the short Twt (784 ms).  The controller sets this
+     * from the Channel::ale_only flags of the channels involved in the call /
+     * sounding.  Default false preserves the short Twt (existing tests and
+     * ALE-only deployments).  Applies to calling LBT and sounding LBT; the
+     * handshake CHANNEL_CHECK keeps its protocol-defined Tdrw window.
+     */
+    void set_lbt_shared(bool shared) { lbt_shared_ = shared; }
+    bool lbt_shared() const          { return lbt_shared_; }
+
+    /**
      * Attach an LQAMetrics instance for quality tracking.
      * When set, every call to update_link_quality() also feeds the metrics
      * subsystem.  Pass nullptr to detach.  Ownership stays with the caller.
@@ -530,6 +562,10 @@ public:
     void set_frame_assembled_callback(std::function<void(const ALEMessage&)> cb) {
         frame_assembled_cb_ = std::move(cb);
     }
+
+    /** Address book accessor — exposes the SM's AddressBook to the controller layer. */
+    AddressBook&       get_address_book()       { return address_book; }
+    const AddressBook& get_address_book() const { return address_book; }
 
 private:
     // ── State machine ─────────────────────────────────────────────────────
@@ -704,6 +740,9 @@ private:
     std::function<void(const ALEWord&)>      transmit_callback;
     std::function<void(bool)>                rx_enabled_callback;
     std::function<void(OperatorEvent)>       operator_callback;
+    std::function<bool()>                    channel_busy_query_;  ///< LBT occupancy (A.5.4.7.2)
+    bool                                     lbt_override_ = false; ///< A.5.4.7.3 operator override
+    bool                                     lbt_shared_   = false; ///< A.5.4.7.1: shared-channel LBT (≥2 s)
     std::function<void(const std::string&)>  trace_cb_;
     std::function<void(const ALEMessage&)>   frame_assembled_cb_;
     std::function<void(uint32_t)>           idle_warning_cb_;
@@ -758,6 +797,17 @@ private:
      * If no more channels remain, notifies operator and transitions to IDLE.
      */
     void try_next_calling_channel();
+
+    /// Occupancy-busy during an LBT window? (query set, not overridden, busy)
+    bool lbt_channel_busy_() const {
+        return channel_busy_query_ && !lbt_override_ && channel_busy_query_();
+    }
+    /// Effective LBT pause (A.5.4.7.1): short Twt only on ALE-only channels.
+    uint32_t effective_twt_ms_() const {
+        return (lbt_shared_ && ALETimingConstants::Twt_shared_ms > ALETimingConstants::Twt_ms)
+            ? ALETimingConstants::Twt_shared_ms
+            : ALETimingConstants::Twt_ms;
+    }
 
     /**
      * Compute the maximum allowed duration for the entire CALLING state.
