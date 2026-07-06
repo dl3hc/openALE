@@ -276,7 +276,7 @@ static void test_call_type_detector()
         };
         EXPECT_EQ(CallTypeDetector::detect(words), CallType::INDIVIDUAL, "TO+TIS → INDIVIDUAL");
     }
-    // TO + CMD (AMD message start) + TIS → AMD
+    // TO + CMD + TIS → AMD
     {
         std::vector<ALEWord> words = {
             make(PreambleType::TO,  "JOE", 0),
@@ -285,13 +285,22 @@ static void test_call_type_detector()
         };
         EXPECT_EQ(CallTypeDetector::detect(words), CallType::AMD, "TO+CMD+TIS → AMD");
     }
-    // TWAS + TIS → NET (or rejection with TIS — wire type is same)
+    // TWAS + TIS → UNKNOWN: is_net_call() cannot distinguish NET from individual
+    // without address-book context; the old TWAS heuristic was wrong.
     {
         std::vector<ALEWord> words = {
             make(PreambleType::TWAS, "NET", 0),
             make(PreambleType::TIS,  "SAM", 100)
         };
-        EXPECT_EQ(CallTypeDetector::detect(words), CallType::NET, "TWAS+TIS → NET");
+        EXPECT_EQ(CallTypeDetector::detect(words), CallType::UNKNOWN, "TWAS+TIS → UNKNOWN (is_net_call retired)");
+    }
+    // TO + TWAS (termination/net conclusion) → UNKNOWN (no TIS/FROM alongside)
+    {
+        std::vector<ALEWord> words = {
+            make(PreambleType::TO,   "SAM", 0),
+            make(PreambleType::TWAS, "JOE", 100)
+        };
+        EXPECT_EQ(CallTypeDetector::detect(words), CallType::UNKNOWN, "TO+TWAS → UNKNOWN");
     }
     // Empty → UNKNOWN
     {
@@ -320,6 +329,46 @@ static void test_multiword_address_limitation()
     EXPECT_EQ(msg.words.size(), (size_t)2, "Frame has 2 words (DATA suffix + TIS prefix)");
 }
 
+// ── test 11: TWAS-based frame completion (Fix 3 regression) ─────────────────
+
+static void test_twas_completion()
+{
+    std::cout << "\n[11] TWAS as frame terminator (Fix 3 regression)\n";
+
+    // TWAS-only frame (announce-only sounding / orphaned rejection word)
+    {
+        MessageAssembler asm_;
+        bool complete = asm_.add_word(make(PreambleType::TWAS, "SAM", 100));
+        EXPECT_TRUE(complete, "TWAS alone completes a frame");
+        ALEMessage msg;
+        EXPECT_TRUE(asm_.get_message(msg), "get_message returns true");
+        EXPECT_EQ(msg.call_type, CallType::UNKNOWN, "TWAS-only → UNKNOWN (no TIS/TO)");
+        EXPECT_TRUE(msg.complete, "msg.complete");
+    }
+
+    // TO × 2 + TWAS (rejection / link-termination frame)
+    {
+        MessageAssembler asm_;
+        EXPECT_FALSE(asm_.add_word(make(PreambleType::TO,   "SAM", 100)), "TO 1 not complete");
+        EXPECT_FALSE(asm_.add_word(make(PreambleType::TO,   "SAM", 200)), "TO 2 not complete");
+        bool complete = asm_.add_word(make(PreambleType::TWAS, "JOE", 300));
+        EXPECT_TRUE(complete, "TO+TO+TWAS completes frame");
+        ALEMessage msg;
+        asm_.get_message(msg);
+        EXPECT_EQ(msg.call_type, CallType::UNKNOWN, "TO+TWAS → UNKNOWN");
+        EXPECT_EQ(msg.words.size(), (size_t)3, "Frame contains 3 words");
+    }
+
+    // FROM-only must NOT complete (bogus branch removed in Fix 3)
+    {
+        MessageAssembler asm_;
+        bool complete = asm_.add_word(make(PreambleType::FROM, "SAM", 100));
+        EXPECT_FALSE(complete, "FROM alone does NOT complete a frame");
+        ALEMessage msg;
+        EXPECT_FALSE(asm_.get_message(msg), "No complete message available");
+    }
+}
+
 } // namespace ale
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -340,6 +389,7 @@ int main()
     ale::test_sequential_frames();
     ale::test_call_type_detector();
     ale::test_multiword_address_limitation();
+    ale::test_twas_completion();
 
     std::cout << "\n═══════════════════════════════════════\n";
     std::cout << "  PASS: " << ale::g_pass << "  FAIL: " << ale::g_fail << "\n";

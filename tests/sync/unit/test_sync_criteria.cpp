@@ -10,7 +10,7 @@
  *   1  unanimous-vote count >= threshold         Demodulator accept_word_() / set_min_unanimous_votes()
  *   2  successful Golay decode of "A" half       ALEFECCodec::deinterleave_word() Golay A
  *   3  successful Golay decode of "B" half       ALEFECCodec::deinterleave_word() Golay B
- *   4  acceptable leading preamble (initial only) Demodulator is_acquisition_anchor()
+ *   4  valid words anchor grid; no preamble-type filter (quality gates reject garbage)  Demodulator gate_word_()
  *   5  acceptable first character bits (Basic-38) WordParser::parse_from_bits() / decode_ascii()
  *   6  acceptable second character bits           same
  *   7  acceptable third character bits            same
@@ -231,83 +231,78 @@ void test_criteria_2_3_golay_decode_gate()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Criterion 4 — acceptable leading preamble (initial sync only)
+// Criterion 4 — initial acquisition: no preamble-type filter
 //
-// Gate: accept_word_() checks is_acquisition_anchor() before setting
-//       grid_locked_.  Acquisition anchors per A.5.2.6.3: TO, TWAS, TIS.
-//       FROM, CMD, THRU, DATA, REP are NOT acquisition anchors and cannot
-//       start a new link.
+// The modem is a general-purpose ALE decoder.  Address/orderwire word types
+// (TO, TWAS, TIS, FROM, THRU, DATA, REP) carry char-validated payloads (Basic-38
+// or Expanded-64), so a misaligned decode producing out-of-set garbage fails at
+// the char gate (valid=false) and does not anchor.  The modem applies NO
+// preamble-type filter for cold acquisition: only TO/TIS/TWAS/FROM cold-lock
+// the grid.  DATA/REP/CMD/THRU do not, even when they decode cleanly.
 //
-// Negative: FROM and CMD fed as the first word → no callback.
-// Positive: TO, TWAS, TIS fed as the first word → callback fires.
+// Rationale: DATA and REP are address extension words that follow TO/TIS/TWAS.
+// A DATA cold-lock offsets the grid by one Trw from the true frame boundary,
+// causing sounding words to appear in the wrong order and consuming 392 ms of
+// the WAIT_ACK Twr window for multi-word peer addresses.  CMD has no ALE
+// character-set gate (decode_ascii accepts CMD unconditionally), making it an
+// unreliable anchor under noise.  THRU only appears mid-rotation in group
+// scanning calls.  All four types decode correctly once the grid is locked.
+//
+// Tests:
+//   — TO, TWAS, TIS, FROM each trigger initial acquisition.
+//   — CMD, DATA, REP, THRU do NOT cold-lock the grid.
 // ═══════════════════════════════════════════════════════════════════════════
-void test_criterion_4_acceptable_preamble()
+void test_criterion_4_all_preambles_accepted()
 {
-    std::printf("[Criterion 4] acceptable leading preamble (initial sync)\n");
+    std::printf("[Criterion 4] address preambles anchor; DATA/CMD/REP/THRU do not\n");
 
-    // Negative: FROM is not an acquisition anchor
+    // Part A: address preamble types (TO/TIS/TWAS/FROM) must cold-lock the grid
     {
-        const ALEWord w = WordParser::make_word(PreambleType::FROM, "SAM");
-        check(w.valid, "make_word(FROM, SAM) must succeed");
-        ALE2GModem::Demodulator d;
-        bool fired = false;
-        d.set_word_callback([&](const ALEWord&) { fired = true; });
-        feed(d, make_pcm(w));
-        check(!fired,
-              "criterion 4 negative: FROM must not trigger initial acquisition");
-        std::printf("  FROM as 1st word: %s\n", !fired ? "PASS" : "FAIL");
+        const PreambleType types[] = {
+            PreambleType::TO, PreambleType::TWAS, PreambleType::TIS,
+            PreambleType::FROM
+        };
+        const char* names[] = { "TO", "TWAS", "TIS", "FROM" };
+
+        for (size_t i = 0; i < 4; ++i) {
+            const ALEWord w = WordParser::make_word(types[i], "SAM");
+            check(w.valid, "make_word must succeed");
+            ALE2GModem::Demodulator d;
+            bool fired = false;
+            d.set_word_callback([&](const ALEWord&) { fired = true; });
+            feed(d, make_pcm(w));
+            check(fired, "address preamble types must trigger initial acquisition");
+            std::printf("  %-4s as 1st word: %s\n", names[i], fired ? "PASS" : "FAIL");
+        }
     }
 
-    // Negative: CMD is not an acquisition anchor
+    // Part B: CMD, DATA, REP, THRU must NOT cold-lock the grid.
+    //
+    // DATA/REP are address extension words that appear AFTER TO/TIS/TWAS.  A
+    // DATA cold-lock offsets the grid by one Trw from the true frame boundary:
+    // sounding "TIS, DATA..." displays as "DATA, TIS...", and in WAIT_ACK the
+    // first ACK word is decoded one Trw late, consuming 392 ms of the 2091 ms
+    // window.  CMD is excluded because decode_ascii accepts CMD payloads
+    // unconditionally (no char-set gate), making a noise-CMD a false anchor.
+    // THRU only appears mid-rotation in group scanning calls.
+    // All four are decoded normally once the grid is already locked.
     {
-        const ALEWord w = WordParser::make_word(PreambleType::CMD, "SAM");
-        check(w.valid, "make_word(CMD, SAM) must succeed");
-        ALE2GModem::Demodulator d;
-        bool fired = false;
-        d.set_word_callback([&](const ALEWord&) { fired = true; });
-        feed(d, make_pcm(w));
-        check(!fired,
-              "criterion 4 negative: CMD must not trigger initial acquisition");
-        std::printf("  CMD as 1st word: %s\n", !fired ? "PASS" : "FAIL");
-    }
+        const PreambleType excluded[] = {
+            PreambleType::CMD, PreambleType::DATA,
+            PreambleType::REP, PreambleType::THRU
+        };
+        const char* excl_names[] = { "CMD", "DATA", "REP", "THRU" };
 
-    // Positive: TO triggers acquisition
-    {
-        const ALEWord w = WordParser::make_word(PreambleType::TO, "SAM");
-        check(w.valid, "make_word(TO, SAM) must succeed");
-        ALE2GModem::Demodulator d;
-        bool fired = false;
-        d.set_word_callback([&](const ALEWord&) { fired = true; });
-        feed(d, make_pcm(w));
-        check(fired,
-              "criterion 4 positive: TO must trigger initial acquisition");
-        std::printf("  TO  as 1st word: %s\n", fired ? "PASS" : "FAIL");
-    }
-
-    // Positive: TWAS triggers acquisition
-    {
-        const ALEWord w = WordParser::make_word(PreambleType::TWAS, "SAM");
-        check(w.valid, "make_word(TWAS, SAM) must succeed");
-        ALE2GModem::Demodulator d;
-        bool fired = false;
-        d.set_word_callback([&](const ALEWord&) { fired = true; });
-        feed(d, make_pcm(w));
-        check(fired,
-              "criterion 4 positive: TWAS must trigger initial acquisition");
-        std::printf("  TWAS as 1st word: %s\n", fired ? "PASS" : "FAIL");
-    }
-
-    // Positive: TIS triggers acquisition
-    {
-        const ALEWord w = WordParser::make_word(PreambleType::TIS, "SAM");
-        check(w.valid, "make_word(TIS, SAM) must succeed");
-        ALE2GModem::Demodulator d;
-        bool fired = false;
-        d.set_word_callback([&](const ALEWord&) { fired = true; });
-        feed(d, make_pcm(w));
-        check(fired,
-              "criterion 4 positive: TIS must trigger initial acquisition");
-        std::printf("  TIS  as 1st word: %s\n", fired ? "PASS" : "FAIL");
+        for (size_t i = 0; i < 4; ++i) {
+            const ALEWord w = WordParser::make_word(excluded[i], "SAM");
+            ALE2GModem::Demodulator d;
+            bool fired = false;
+            d.set_word_callback([&](const ALEWord&) { fired = true; });
+            feed(d, make_pcm(w));
+            check(!fired, "DATA/CMD/REP/THRU must NOT cold-lock the grid");
+            std::printf("  %-4s as 1st word (must NOT fire): %s\n",
+                        excl_names[i], !fired ? "PASS" : "FAIL");
+        }
     }
 }
 
@@ -455,6 +450,62 @@ void test_criteria_8_9_grid_state_and_phase()
 
 } // namespace
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Gap regression — Golay-OK / char-invalid word surfaced via word_cb
+//
+// A word whose Golay FEC succeeds but whose decoded characters fall outside the
+// word's char set (here: TO with a lowercase 'a' payload, which fails Basic-38)
+// decodes valid=false with golay_uncorrectable=false.  Before the branch-2 guard
+// was broadened, such a word was silently dropped (branch 1 needs decoded_ok;
+// branch 2 required golay_uncorrectable) — a real transmitted word never reached
+// downstream.  Now branch 2 surfaces it once the grid is locked and the word
+// lands on-grid, so the controller/SM see every word the decoder processed.
+// ═══════════════════════════════════════════════════════════════════════════
+void test_gap_char_invalid_word_surfaces()
+{
+    std::printf("[Gap] Golay-OK/char-invalid word surfaced on locked grid\n");
+
+    // Word 1: valid TO "SAM" — locks the grid.
+    const ALEWord good = WordParser::make_word(PreambleType::TO, "SAM");
+    check(good.valid, "gap: good word must be valid");
+
+    // Word 2: TO with a lowercase 'a' payload char — Golay-clean (encode() does
+    // not check valid) but fails Basic-38 → ALEDecoder returns valid=false,
+    // golay_uncorrectable=false.
+    ALEWord bad;
+    bad.type        = PreambleType::TO;
+    bad.raw_payload = (static_cast<uint32_t>('a') << 14)
+                   | (static_cast<uint32_t>('S') <<  7)
+                   |  static_cast<uint32_t>('S');
+    bad.valid       = false;
+
+    // PCM: 16-sample lead + word1 + word2 back-to-back (no inter-word silence so
+    // word2 lands exactly WORD_SAMPLES after word1's boundary → on-grid phase 0;
+    // silence < SILENCE_RESET_SAMPLES so the grid stays locked) + 2-symbol tail.
+    const SymbolFrame f1 = ALEEncoder::encode(good);
+    const SymbolFrame f2 = ALEEncoder::encode(bad);
+    ToneGenerator gen;
+    constexpr uint32_t SILENCE = 16;
+    std::vector<int16_t> pcm(SILENCE, 0);
+    pcm.resize(SILENCE + 2 * SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
+    gen.generate_symbols(f1.data(), SYMBOLS_PER_WORD, pcm.data() + SILENCE, TX_AMPLITUDE);
+    gen.generate_symbols(f2.data(), SYMBOLS_PER_WORD,
+                         pcm.data() + SILENCE + SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL,
+                         TX_AMPLITUDE);
+    pcm.insert(pcm.end(), 2 * SAMPLES_PER_SYMBOL, 0);
+
+    ALE2GModem::Demodulator d;
+    int bad_seen = 0;
+    d.set_word_callback([&](const ALEWord& w) {
+        if (!w.valid && !w.golay_uncorrectable && w.type == PreambleType::TO) ++bad_seen;
+    });
+    feed(d, pcm);
+    check(bad_seen == 1,
+          "gap: char-invalid word must surface exactly once (valid=false, golay_uncorrectable=false)");
+    std::printf("  char-invalid surfaced (valid=F, golay_unc=F): %s\n",
+                bad_seen == 1 ? "PASS" : "FAIL");
+}
+
 int main()
 {
     std::printf("\n");
@@ -466,9 +517,11 @@ int main()
     std::printf("\n");
     test_criteria_2_3_golay_decode_gate();
     std::printf("\n");
-    test_criterion_4_acceptable_preamble();
+    test_criterion_4_all_preambles_accepted();
     std::printf("\n");
     test_criteria_5_6_7_basic38_character_gate();
+    std::printf("\n");
+    test_gap_char_invalid_word_surfaces();
     std::printf("\n");
     test_criteria_8_9_grid_state_and_phase();
     std::printf("\n");

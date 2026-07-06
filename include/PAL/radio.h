@@ -86,7 +86,30 @@ public:
     // Channel control
     virtual bool set_channel(const Channel& channel) = 0;
     virtual Channel get_channel() const = 0;
-    
+
+    // Single-attribute control — set only frequency or only mode without
+    // disturbing the other. The default implementation does a read-modify-write
+    // through set_channel(); backends that can set one attribute independently
+    // (e.g. hamlib over TCP, where freq and mode are separate CAT commands)
+    // override these to send only what changed and avoid touching the other.
+    virtual bool set_frequency(uint32_t hz) {
+        Channel c = get_channel();
+        c.rx_frequency = hz;
+        c.tx_frequency = hz;  // simplex
+        return set_channel(c);
+    }
+    virtual bool set_mode(RadioMode mode) {
+        Channel c = get_channel();
+        c.rx_mode = c.tx_mode = mode;
+        return set_channel(c);
+    }
+
+    // Query the radio for its actual current frequency and mode and update the
+    // internal channel state.  Returns true if anything changed.  The default
+    // implementation is a no-op (returns false) for backends that have no
+    // independent radio state to read back (e.g. software modems, mocks).
+    virtual bool sync_from_radio() { return false; }
+
     // PTT control (part of radio, not separate)
     virtual void set_ptt(bool transmit) = 0;
     virtual bool is_transmitting() const = 0;

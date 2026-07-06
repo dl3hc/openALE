@@ -124,10 +124,12 @@
             <div class="radio-side">
               <div class="radio-sub">Mode</div>
               <div class="radio-modes">
-                <button class="rk rk-mode" data-mode="USB" onclick="radioSetMode('USB')">USB</button>
-                <button class="rk rk-mode" data-mode="LSB" onclick="radioSetMode('LSB')">LSB</button>
-                <button class="rk rk-mode" data-mode="FM"  onclick="radioSetMode('FM')">FM</button>
-                <button class="rk rk-mode" data-mode="AM"  onclick="radioSetMode('AM')">AM</button>
+                <button class="rk rk-mode" data-mode="USB"   onclick="radioSetMode('USB')">USB</button>
+                <button class="rk rk-mode" data-mode="LSB"   onclick="radioSetMode('LSB')">LSB</button>
+                <button class="rk rk-mode" data-mode="USB-D" onclick="radioSetMode('USB-D')">USB-D</button>
+                <button class="rk rk-mode" data-mode="LSB-D" onclick="radioSetMode('LSB-D')">LSB-D</button>
+                <button class="rk rk-mode" data-mode="FM"    onclick="radioSetMode('FM')">FM</button>
+                <button class="rk rk-mode" data-mode="AM"    onclick="radioSetMode('AM')">AM</button>
               </div>
               <div class="radio-sub">Tune</div>
               <div class="radio-tune">
@@ -155,6 +157,10 @@
       <div class="status-chip">
         <div class="dot scanning" id="statusDot"></div>
         <span class="status-text" id="statusText">Scanning</span>
+      </div>
+      <div class="hdr-clock" id="clock" onclick="toggleClockZone()" title="Click to switch UTC / Local time">
+        <span class="hdr-clock-time" id="clockTime">--:--:--</span>
+        <span class="hdr-clock-zone" id="clockZone">UTC</span>
       </div>
     </div>
   </header>
@@ -295,11 +301,11 @@
     <!-- SIGNAL STRIP -->
     <div class="strip">
 
-      <!-- Clock + sync lock, beside the waterfall -->
+      <!-- Channel busy indicator, beside the waterfall -->
       <div class="strip-stats">
-        <div class="hdr-clock" id="clock" onclick="toggleClockZone()" title="Click to switch UTC / Local time">
-          <span class="hdr-clock-time" id="clockTime">--:--:--</span>
-          <span class="hdr-clock-zone" id="clockZone">UTC</span>
+        <div id="busyChip" class="busy-chip" title="Channel clear (LBT A.5.4.7.2)">
+          <div class="dot busy-dot"></div>
+          <span>FREQ CLEAR</span>
         </div>
       </div>
 
@@ -381,7 +387,7 @@
           <div class="ssec-title">Identity</div>
 
           <div class="fg">
-            <label class="flabel">Self Address Table <span class="fbadge">SelfAddrTable</span></label>
+            <label class="flabel">Self Addresses</label>
             <table class="ch-table">
               <thead>
                 <tr><th>Address</th><th>Status</th><th>Valid Channels</th><th></th></tr>
@@ -389,7 +395,7 @@
               <tbody id="selfAddrBody"></tbody>
             </table>
             <div class="ch-add-row"><button class="btn-sm accent" onclick="addSelfAddr()">+ Add Self Address</button></div>
-            <div class="fhint" style="margin-top:8px">First <em style="font-style:normal;color:var(--accent)">enabled</em> entry is the primary callsign shown in the header. SelfAddr 1–15 uppercase chars; SelfAddrValidChannels = ALL or list (e.g. 1,2).</div>
+            <div class="fhint" style="margin-top:8px">The first <em style="font-style:normal;color:var(--accent)">enabled</em> entry is the primary callsign shown in the header. Addresses are 1–15 uppercase characters. Valid Channels restricts which channels this address is active on (ALL or comma-separated IDs).</div>
           </div>
 
           <div class="fg">
@@ -397,23 +403,6 @@
             <input class="finput" id="cfgName" type="text" placeholder="Optional description" value="">
           </div>
 
-          <div class="fg">
-            <label class="flabel">Default Channel File (.ale)</label>
-            <div style="display:flex;gap:8px">
-              <input class="finput" id="cfgChFile" type="text" placeholder="/path/to/channels.ale" style="flex:1">
-              <button class="btn-sm">Browse…</button>
-            </div>
-            <div class="fhint">Loaded at startup; add_channel / del_channel auto-save here.</div>
-          </div>
-
-          <div class="fg">
-            <label class="flabel">LQA Database File</label>
-            <div style="display:flex;gap:8px">
-              <input class="finput" id="cfgLqaFile" type="text" placeholder="/path/to/lqa.json" style="flex:1">
-              <button class="btn-sm">Browse…</button>
-            </div>
-            <div class="fhint">Channel quality history — restored on startup, saved on exit.</div>
-          </div>
         </div><!-- /identity -->
 
         <!-- ── Audio ── -->
@@ -443,16 +432,9 @@
           <div class="fg-row col2">
             <div>
               <label class="flabel">TX Volume</label>
-              <input class="finput" type="range" id="cfgTxVol" min="0" max="100" value="80"
+              <input class="finput" type="range" id="cfgTxVol" min="0" max="100" value="25"
                 style="padding:4px 0;cursor:pointer">
-              <div class="fhint" id="txVolLbl">80 %</div>
-            </div>
-            <div>
-              <label class="flabel">Sample Rate</label>
-              <select class="fselect" id="cfgSr">
-                <option value="8000" selected>8 000 Hz (required)</option>
-              </select>
-              <div class="fhint">ALE 2G is fixed at 8 kHz.</div>
+              <div class="fhint" id="txVolLbl">−12 dBFS</div>
             </div>
           </div>
 
@@ -516,7 +498,9 @@
               </div>
               <div>
                 <label class="flabel">Hamlib Model</label>
-                <input class="finput" id="rigModel" type="number" value="3021" placeholder="Model ID">
+                <select class="fselect" id="rigModel">
+                  <option value="">— connect bridge to load —</option>
+                </select>
               </div>
             </div>
             <div class="fg-row col3">
@@ -711,16 +695,13 @@
 
           <div id="chBody"></div>
 
-          <div class="ch-add-row" style="margin-bottom:4px">
-            <input class="finput" id="cfgStationFile" type="text" placeholder="station.ale" style="flex:1;font-size:.75rem;padding:3px 6px">
-          </div>
           <div class="ch-add-row">
             <button class="btn-sm accent" onclick="addCh()">+ Add Channel</button>
             <button class="btn-sm" onclick="loadAleFile()">↑ Load .ale</button>
             <button class="btn-sm" onclick="saveAleFile()">↓ Save .ale</button>
           </div>
           <div class="fhint" style="margin-top:10px">
-            Per channel: <code style="font-family:var(--mono);color:var(--accent)">id · rx_hz [tx_hz] · mode · usage · direction · self_addr · label</code>, plus inhibit-calling / inhibit-sounding / inhibit-reporting flags. CMD:ADD_CHANNEL / CMD:DEL_CHANNEL also update this list at runtime.
+            Per channel: ID · frequencies · mode · usage flags (voice/data) · direction (RX/TX/both) · inhibit flags (calling / sounding / reporting) · ALE-only (short LBT).
           </div>
         </div><!-- /channels -->
 
@@ -729,13 +710,11 @@
           <div class="ssec-title">Net Membership</div>
 
           <div class="fg">
-            <label class="flabel">Nets <span class="fbadge">Channel Group</span></label>
+            <label class="flabel">Nets</label>
             <div id="netList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
             <button class="btn-sm accent" onclick="addNet()">+ Add Net</button>
             <div class="fhint" style="margin-top:8px">
-              A net is a named group of scanning channels (NetStore: name + assigned channel IDs).
-              Calls to a contact whose Net Members include this net size the scanning-call
-              section from the net's channel count.
+              A net groups channels for scanning, sounding, and calling. Each net carries its own dwell time, sounding interval, and calling-length policy.
             </div>
           </div>
 
@@ -747,11 +726,6 @@
 
           <div class="fg-row col3">
             <div>
-              <label class="flabel">Scan Dwell (ms)</label>
-              <input class="finput" id="cfgDwell" type="number" value="200" min="100">
-              <div class="fhint">Time per channel while scanning.</div>
-            </div>
-            <div>
               <label class="flabel">Call Timeout (ms)</label>
               <input class="finput" id="cfgCallTo" type="number" value="15000" min="1000">
               <div class="fhint">Abort calling if no reply.</div>
@@ -760,6 +734,11 @@
               <label class="flabel">Handshake Timeout (ms)</label>
               <input class="finput" id="cfgHsTo" type="number" value="8000" min="1000">
               <div class="fhint">Max time for 3-way handshake.</div>
+            </div>
+            <div>
+              <label class="flabel">Link Idle Timeout (s)</label>
+              <input class="finput" id="cfgLinkIdle" type="number" value="360" min="10">
+              <div class="fhint">Terminate link after inactivity.</div>
             </div>
           </div>
 
@@ -779,43 +758,37 @@
               <input class="finput" id="cfgSoundingLead" type="number" value="10" min="0">
               <div class="fhint">Pre-sounding countdown popup lead time (0 = no popup).</div>
             </div>
-            <div>
-              <label class="flabel">Link Idle Timeout (s)</label>
-              <input class="finput" id="cfgLinkIdle" type="number" value="360" min="10">
-              <div class="fhint">Terminate link after inactivity.</div>
-            </div>
           </div>
 
           <div class="fg-row col3">
             <div>
               <label class="flabel">Turn-Around (ms)</label>
               <input class="finput" id="cfgTurnAround" type="number" value="200" min="0">
-              <div class="fhint">TurnAroundTime — radio TX↔RX switch (Tta).</div>
+              <div class="fhint">Radio TX↔RX switch time after each word.</div>
             </div>
             <div>
               <label class="flabel">Max Tune Time (ms)</label>
               <input class="finput" id="cfgMaxTune" type="number" value="1045" min="0">
-              <div class="fhint">MaxTuneTime — blind tune delay before first TX (Tt).</div>
+              <div class="fhint">Maximum time allowed for antenna tuner before first TX.</div>
             </div>
             <div>
               <label class="flabel">Listen Time (ms)</label>
               <input class="finput" id="cfgListen" type="number" value="784" min="0">
-              <div class="fhint">ListenTime — LBT / response listen window (Twt).</div>
+              <div class="fhint">Listen-before-transmit window. 784 ms for ALE-only channels, ≥ 2 s for shared channels (set per channel).</div>
             </div>
           </div>
 
-          <div class="fg-row col3">
+          <div class="fg-row col2">
             <div>
               <label class="flabel">PTT Lead (ms)</label>
               <input class="finput" id="cfgPttLead" type="number" value="100" min="0">
-              <div class="fhint">Delay after PTT assert before audio TX (CAT/CI-V latency).</div>
+              <div class="fhint">Delay after PTT key-up before audio transmits — covers CAT/CI-V latency.</div>
             </div>
             <div>
               <label class="flabel">PTT Tail (ms)</label>
               <input class="finput" id="cfgPttTail" type="number" value="350" min="0">
-              <div class="fhint">Delay after SM RX-enable before PTT release (buffer drain).</div>
+              <div class="fhint">Delay after RX re-enable before PTT releases — allows audio buffer to drain.</div>
             </div>
-            <div></div>
           </div>
 
           <div class="fhint" style="margin-top:6px">
@@ -843,28 +816,28 @@
             <div class="ftoggle-row">
               <div class="ftoggle-info">
                 <div class="ftoggle-name">Accept Any Call</div>
-                <div class="ftoggle-desc">AcceptAnyCall — respond to individual calls from stations not in the address book</div>
+                <div class="ftoggle-desc">Respond to individual calls from stations not in the address book.</div>
               </div>
               <label class="ftoggle"><input type="checkbox" id="cfgAcceptAny" checked><span class="ftrack"></span></label>
             </div>
             <div class="ftoggle-row">
               <div class="ftoggle-info">
                 <div class="ftoggle-name">Accept AllCall</div>
-                <div class="ftoggle-desc">AcceptAllcall — react to broadcast ALLCALL / ANYCALL frames</div>
+                <div class="ftoggle-desc">Respond to broadcast ALLCALL / ANYCALL frames.</div>
               </div>
               <label class="ftoggle"><input type="checkbox" id="cfgAcceptAll" checked onchange="applyAllCallAcceptToBridge()"><span class="ftrack"></span></label>
             </div>
             <div class="ftoggle-row">
               <div class="ftoggle-info">
                 <div class="ftoggle-name">Accept AMD</div>
-                <div class="ftoggle-desc">AcceptAMD — receive and display Automatic Message Display orderwire</div>
+                <div class="ftoggle-desc">Receive and display Automatic Message Display (AMD) orderwire messages.</div>
               </div>
               <label class="ftoggle"><input type="checkbox" id="cfgAcceptAmd" checked><span class="ftrack"></span></label>
             </div>
             <div class="ftoggle-row">
               <div class="ftoggle-info">
                 <div class="ftoggle-name">Accept DTM / DBM <span class="fbadge">data layer</span></div>
-                <div class="ftoggle-desc">AcceptDTM / AcceptDBM — requires the FS-1052 data layer (not yet wired)</div>
+                <div class="ftoggle-desc">Data layer (DTM/DBM) — not yet implemented.</div>
               </div>
               <label class="ftoggle"><input type="checkbox" id="cfgAcceptData" disabled><span class="ftrack"></span></label>
             </div>
@@ -878,20 +851,19 @@
           <div class="ssec-subtitle">Calling Policy</div>
           <div class="fg">
             <div class="fhint">
-              Scanning-Call Length (C) is now configured per net in the <strong>Nets</strong> section.
-              The fallback when no net policy is found is C=10 (MIL-STD max, PCALE default).
+              Scanning-Call Length (C) is configured per net in the <strong>Nets</strong> section.
             </div>
           </div>
         </div><!-- /policy -->
 
         <!-- ── LQA ── -->
         <div class="ssec" data-sec="lqa">
-          <div class="ssec-title">Link Quality Analysis · LqaMatrix</div>
+          <div class="ssec-title">Link Quality Analysis</div>
 
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">Record LQA</div>
-              <div class="ftoggle-desc">Measure &amp; store BER/SNR from every received transmission after word sync (A.5.4.1.1). Off = link normally but learn no new channel quality.</div>
+              <div class="ftoggle-desc">Measure and store signal quality (BER / SINAD) from every received transmission (A.5.4.1.1). Disable to link without updating channel quality history.</div>
             </div>
             <label class="ftoggle" style="margin-left:12px"><input type="checkbox" id="cfgRecLqa" checked onchange="applyLqaToBridge()"><span class="ftrack"></span></label>
           </div>
@@ -899,7 +871,7 @@
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">Auto-Relink</div>
-              <div class="ftoggle-desc">Terminate and re-call on a better channel when bilateral LQA shows a significant improvement (A.5.4.5). Threshold sets the minimum score gain needed to trigger a relink.</div>
+              <div class="ftoggle-desc">When bilateral LQA shows a significantly better channel, terminate and re-establish the link on it (A.5.4.5). The threshold controls the minimum score improvement required.</div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;margin-left:12px">
               <label class="ftoggle"><input type="checkbox" id="cfgAutoRelink" onchange="applyRelinkToBridge()"><span class="ftrack"></span></label>
@@ -911,7 +883,7 @@
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">Enhanced Freq-Select</div>
-              <div class="ftoggle-desc">Propose a better channel to the peer via standard CMD 'f' (A.5.6.3.2) before TWAS. The peer evaluates its LQA for the proposed channel and accepts or rejects. Standard ALE 2G stations ignore CMD 'f' while linked — no relink occurs then. Both stations should have this enabled.</div>
+              <div class="ftoggle-desc">Propose a better channel to the peer before ending a link (A.5.6.3.2). The peer evaluates its own LQA and accepts or rejects. Both stations should have this enabled for it to take effect.</div>
             </div>
             <label class="ftoggle"><input type="checkbox" id="cfgEnhFreqSelect" onchange="applyEnhFreqSelectToBridge()"><span class="ftrack"></span></label>
           </div>
@@ -941,7 +913,7 @@
               <div class="ftoggle-row" style="border:none;padding:0">
                 <div class="ftoggle-info">
                   <div class="ftoggle-name">Request LQA</div>
-                  <div class="ftoggle-desc">RequestLQA in handshake</div>
+                  <div class="ftoggle-desc">Exchange signal quality reports during link handshake.</div>
                 </div>
                 <label class="ftoggle" style="margin-left:12px"><input type="checkbox" id="cfgReqLqa" checked><span class="ftrack"></span></label>
               </div>
@@ -949,7 +921,7 @@
             <div>
               <label class="flabel">LQA Age Limit (min)</label>
               <input class="finput" id="cfgLqaAge" type="number" value="60" min="1">
-              <div class="fhint">LqaAge — discard entries older than this.</div>
+              <div class="fhint">Discard entries older than this.</div>
             </div>
             <div>
               <label class="flabel">Sort By</label>
@@ -964,7 +936,7 @@
           <table class="ch-table" style="margin-top:6px">
             <thead>
               <tr>
-                <th>LqaAddr</th><th>Ch</th><th>Avail</th><th>Score</th>
+                <th>Station</th><th>Ch</th><th>Avail</th><th>Score</th>
                 <th>SINAD<br>FROM</th><th>SINAD<br>TO</th>
                 <th>BER<br>FROM</th><th>BER<br>TO</th><th>MP</th><th>Age</th>
               </tr>
@@ -973,11 +945,10 @@
           </table>
 
           <div class="fhint" style="margin-top:8px">
-            LqaMatrix indexed by LqaAddr × LqaChannel, four-level per MIL-STD-188-141B App. A.
-            <strong>FROM</strong> = locally measured (SINAD dB, BER = raw 0–48 2/3-vote count A.5.4.1.1);
-            <strong>TO</strong> = peer-reported via CMD LQA (A.5.4.2: SINAD dB, BER decoded from 5-bit Table A-XIII code, MP ms).
-            <strong>Score</strong> 0–30, higher = better (operator display; internal ranking is inverted per Fig. A-27).
-            <strong>Avail</strong> = sounding conclusion (TIS = available, TWAS = not). Colours: green = better → red = worse.
+            <strong>FROM</strong> = locally measured quality (SINAD dB, BER = 2/3-vote count A.5.4.1.1).
+            <strong>TO</strong> = peer-reported via CMD LQA (A.5.4.2: SINAD dB, BER decoded from 5-bit code, MP ms).
+            <strong>Score</strong> 0–30, higher = better.
+            <strong>Avail</strong> = sounding conclusion: TIS = available, TWAS = not.
           </div>
           <button class="btn-sm" style="margin-top:10px" onclick="renderLqa()">↺ Refresh</button>
           <button class="btn-sm" style="margin-top:10px;margin-left:6px" onclick="clearLqa()">⌫ Clear LQA</button>
@@ -1078,7 +1049,7 @@
             <div class="ftoggle-row">
               <div class="ftoggle-info">
                 <div class="ftoggle-name">Auto-save LQA on Exit</div>
-                <div class="ftoggle-desc">Write LQA database to disk when ale_cli shuts down</div>
+                <div class="ftoggle-desc">Save LQA history to disk when the bridge shuts down.</div>
               </div>
               <label class="ftoggle">
                 <input type="checkbox" id="cfgAutoLqa" checked>
@@ -1088,7 +1059,7 @@
             <div class="ftoggle-row">
               <div class="ftoggle-info">
                 <div class="ftoggle-name">Automatic Sounding</div>
-                <div class="ftoggle-desc">Periodically sound channels in the LQA DB (interval above)</div>
+                <div class="ftoggle-desc">Enable periodic multi-channel sounding on the active net (interval configured per net in the Nets panel).</div>
               </div>
               <label class="ftoggle">
                 <input type="checkbox" id="cfgAutoSound" onchange="applySoundAuto()">
@@ -1106,7 +1077,26 @@
               <button class="btn-sm accent" onclick="exportConf()">↓ Export</button>
               <button class="btn-sm" onclick="importConf()">↑ Import</button>
             </div>
-            <div class="fhint">Exports all settings above as a flat key=value file readable by ale_cli --config.</div>
+            <div class="fhint">Exports all current settings as a portable configuration file.</div>
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Channel File (.ale)</label>
+            <div style="display:flex;gap:8px">
+              <input class="finput" id="cfgStationFile" type="text" placeholder="station.ale" style="flex:1">
+              <button class="btn-sm" onclick="loadAleFile()">↑ Load</button>
+              <button class="btn-sm" onclick="saveAleFile()">↓ Save</button>
+            </div>
+            <div class="fhint">Channel list loaded at startup and used by the Load / Save buttons in Channels.</div>
+          </div>
+
+          <div class="fg">
+            <label class="flabel">LQA Database File</label>
+            <div style="display:flex;gap:8px">
+              <input class="finput" id="cfgLqaFile" type="text" placeholder="lqa.bin" style="flex:1">
+              <button class="btn-sm">Browse…</button>
+            </div>
+            <div class="fhint">Channel quality history — restored on startup, saved on exit.</div>
           </div>
         </div><!-- /advanced -->
 
@@ -1171,44 +1161,21 @@
 
 <!-- ══════ CONTACT EDITOR MODAL ══════ -->
 <div class="modal-overlay hidden" id="contactModal" onclick="if(event.target===this)closeContactEditor()">
-  <div class="modal" style="max-width:480px">
+  <div class="modal" style="max-width:420px">
     <div class="modal-hdr">
       <span class="modal-title" id="ceTitle">Add Contact</span>
       <button class="modal-close" onclick="closeContactEditor()">✕</button>
     </div>
     <div class="scontent" style="padding:22px 24px">
-      <div class="fg-row col2">
-        <div>
-          <label class="flabel">Callsign / Address <span class="fbadge">OtherAddr</span></label>
-          <input class="finput" id="ceCs" maxlength="15" style="text-transform:uppercase" placeholder="W1ABC"
-            onkeydown="if(event.key==='Enter')saveContact()">
-        </div>
-        <div>
-          <label class="flabel">Status</label>
-          <select class="fselect" id="ceStatus">
-            <option value="enabled">enabled</option>
-            <option value="disabled">disabled</option>
-          </select>
-          <div class="fhint">OtherAddrStatus</div>
-        </div>
+      <div class="fg">
+        <label class="flabel">Callsign / Address</label>
+        <input class="finput" id="ceCs" maxlength="15" style="text-transform:uppercase" placeholder="W1ABC"
+          onkeydown="if(event.key==='Enter')saveContact()">
       </div>
 
       <div class="fg">
         <label class="flabel">Name / Description</label>
         <input class="finput" id="ceName" placeholder="Optional">
-      </div>
-
-      <div class="fg-row col2">
-        <div>
-          <label class="flabel">Net Members</label>
-          <input class="finput" id="ceNet" placeholder="e.g. NET1">
-          <div class="fhint">OtherAddrNetMembers — net this station belongs to.</div>
-        </div>
-        <div>
-          <label class="flabel">Valid Channels</label>
-          <input class="finput" id="ceChans" placeholder="ALL or C-1,C-2">
-          <div class="fhint">OtherAddrValidChannels — channels to call it on.</div>
-        </div>
       </div>
 
       <div class="ftoggle-row">

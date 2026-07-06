@@ -25,7 +25,6 @@
 #include "Word/address_encoder.h"
 #include "Stores/address_book.h"
 #include "Protocol/Control/ale_timing.h"
-#include "Word/ale_word_decoder.h"
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -33,6 +32,7 @@
 #include <thread>  // std::thread::id — debug-only single-thread contract check
 
 namespace ale { class LQAMetrics; }
+namespace ale { class ALECallProcessor; }   // owns received-word processing (friend)
 
 namespace ale {
 
@@ -109,10 +109,13 @@ enum class CallingPhase {
  * Sub-states within SCANNING per A.5.5.4.4/5 (T-10).
  *   HOPPING        — normales Channel-Hopping
  *   ALLCALL_PAUSE  — Channel-Hopping eingefroren; warte auf Message/Conclusion
+ *   TRAFFIC_PAUSE  — valid ALE word received; dwell frozen until Tdrw silence,
+ *                    then hop (allows full frame capture and TO_SELF detection)
  */
 enum class ScanningPhase {
     HOPPING,
     ALLCALL_PAUSE,
+    TRAFFIC_PAUSE,
 };
 
 /**
@@ -542,7 +545,7 @@ public:
      * When set, every call to update_link_quality() also feeds the metrics
      * subsystem.  Pass nullptr to detach.  Ownership stays with the caller.
      */
-    void set_lqa_metrics(LQAMetrics* m) { lqa_metrics_ = m; }
+    void set_lqa_metrics(LQAMetrics* m);
 
     /**
      * Optional trace sink for protocol-level debug events.
@@ -559,9 +562,7 @@ public:
      * complete — regardless of local protocol state or address match.
      * Pass nullptr to detach.
      */
-    void set_frame_assembled_callback(std::function<void(const ALEMessage&)> cb) {
-        frame_assembled_cb_ = std::move(cb);
-    }
+    void set_frame_assembled_callback(std::function<void(const ALEMessage&)> cb);
 
     /** Address book accessor — exposes the SM's AddressBook to the controller layer. */
     AddressBook&       get_address_book()       { return address_book; }
@@ -700,6 +701,7 @@ private:
     // ── Scanning sub-state (T-10) ────────────────────────────────────────
     ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING
     uint32_t      allcall_pause_start_ms_;   ///< Startzeit der AllCall-Pause (T-10)
+    uint32_t      traffic_settle_ms_ = 0;   ///< Last-word time during TRAFFIC_PAUSE (A.5.3.1)
 
     // ── Sounding sub-state (T-08) ─────────────────────────────────────────
     SoundingPhase sounding_phase_;        ///< Aktuelle Phase innerhalb SOUNDING
@@ -729,8 +731,14 @@ private:
     uint32_t state_entry_time_ms;
     uint32_t current_time_ms;
 
-    // ── Word decoder ──────────────────────────────────────────────────────
-    ALEWordDecoder decoder_;
+    // ── Call processor ─────────────────────────────────────────────────────
+    // ALECallProcessor owns ALL received-word processing LOGIC (classification,
+    // per-state reactions, LQA update, frame-assembly driving) as stateless friend
+    // functions, so the SM itself contains no word-processing logic — only states +
+    // transitions (+ time evolution / TX).  The stateful parts (MessageAssembler,
+    // lqa_metrics_, frame_assembled_cb_) stay SM members so the SM remains
+    // copyable; ALECallProcessor::process_received_word(*this, …) drives them.
+    friend class ALECallProcessor;            // accesses SM privates + drives process_event
 
     // ── LQA ───────────────────────────────────────────────────────────────
     LQAMetrics* lqa_metrics_ = nullptr;  ///< Optional; set via set_lqa_metrics()
@@ -776,12 +784,8 @@ private:
 #endif
 
     // ── Word-receive helpers ──────────────────────────────────────────────
-    void handle_invalid_word();
-    void detect_incoming_call(const WordEvent& ev); ///< shared: TO_SELF / ALLCALL detection
-    void react_idle(const WordEvent& ev);           ///< IDLE state: call detection only
-    void react_scanning(const WordEvent& ev);       ///< SCANNING state: call detection + AllCall-pause recovery
-    void react_calling(const WordEvent& ev);
-    void react_handshake(const WordEvent& ev, const ALEWord& word);
+    // (Received-word processing now lives in ALECallProcessor — see above.
+    //  handle_invalid_word / detect_incoming_call / react_* were moved there.)
 
     void handle_scanning();
     void handle_calling();

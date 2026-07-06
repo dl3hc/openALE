@@ -1,8 +1,6 @@
 /**
- * \file App/audio_device.cpp
- * \brief AudioDevice platform implementations.
- *
- * Windows: WASAPI shared-mode with event-driven callbacks.
+ * \file App/wasapi_audio.cpp
+ * \brief WASAPI shared-mode audio driver (Windows).
  *
  *   Architecture (pull model)
  *   ──────────────────────────
@@ -27,9 +25,6 @@
  *     played = total_written_ - padding against per-word write-end targets.
  *     Main thread tick() fires armed callbacks from frame_notify_queue_
  *     when frames_rendered_ reaches each callback's target.
- *
- * Other: NullDevice — compiles but does no I/O; simulates pull consumption
- *        from tick() for offline use.
  */
 
 #include "PAL/audio_driver.h"
@@ -41,10 +36,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <memory>
-
-// ─────────────────────────────────────────────────────────────────────────────
-#ifdef _WIN32
-// ─────────────────────────────────────────────────────────────────────────────
 
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -61,7 +52,6 @@
 #include <string>
 #include <thread>
 #include <atomic>
-#include <memory>
 #include <functional>
 
 #pragma comment(lib, "ole32.lib")
@@ -157,12 +147,17 @@ public:
 
     bool is_open() const override { return open_; }
 
+    void set_tx_volume(float level) override {
+        tx_volume_.store(std::clamp(level, 0.0f, 1.0f), std::memory_order_relaxed);
+    }
+
     std::vector<std::string> list_devices() const override;
 
 private:
     // ── Audio thread ──────────────────────────────────────────────────────
     std::thread          audio_thread_;
     std::atomic<bool>    audio_running_{false};
+    std::atomic<float>   tx_volume_{0.25f};     // 0.0–1.0; default = TX_AMPLITUDE
     HANDLE               render_event_  = nullptr;
     HANDLE               capture_event_ = nullptr;
     HANDLE               stop_event_    = nullptr;
@@ -469,7 +464,8 @@ void WasapiDevice::service_render()
             if (pulled) {
                 at_pcm_8k_.resize(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
                 at_tone_gen_.generate_symbols(syms, SYMBOLS_PER_WORD,
-                                              at_pcm_8k_.data(), TX_AMPLITUDE);
+                                              at_pcm_8k_.data(),
+                                              tx_volume_.load(std::memory_order_relaxed));
                 // SSB-audio band-pass (750–2500 Hz): strips the sub-300 Hz keying
                 // skirt and out-of-band content without touching the 8-FSK keying.
                 at_pcm_filt_.clear();
@@ -724,63 +720,3 @@ std::unique_ptr<IAudioDriver> create_audio_driver()
     return std::make_unique<ale::WasapiDevice>();
 }
 } // namespace pal
-
-// ─────────────────────────────────────────────────────────────────────────────
-#else  // non-Windows: NullAudioDriver
-// ─────────────────────────────────────────────────────────────────────────────
-
-#include <cstdio>
-#include <queue>
-
-namespace ale {
-
-class NullDevice : public pal::IAudioDriver {
-    bool open_ = false;
-    std::function<bool(uint8_t*)>      sym_pull_;
-    std::queue<std::function<void()>>  pending_completions_;
-
-public:
-    bool open(const std::string& = "", const std::string& = "") override {
-        std::fprintf(stderr, "[audio] NullDevice — no real-time audio on this platform.\n");
-        open_ = true;
-        return true;
-    }
-    void close() override {
-        open_ = false;
-        sym_pull_ = nullptr;
-        while (!pending_completions_.empty()) pending_completions_.pop();
-    }
-
-    void set_symbol_source(std::function<bool(uint8_t*)> fn) override {
-        sym_pull_ = std::move(fn);
-    }
-
-    void arm_frame_complete(std::function<void()> cb) override {
-        if (cb) pending_completions_.push(std::move(cb));
-    }
-
-    void tick(std::vector<int16_t>& /*rx_out*/) override {
-        if (!sym_pull_) return;
-        uint8_t syms[SYMBOLS_PER_WORD];
-        while (sym_pull_(syms)) {
-            if (!pending_completions_.empty()) {
-                pending_completions_.front()();
-                pending_completions_.pop();
-            }
-        }
-    }
-
-    bool is_open() const override { return open_; }
-    std::vector<std::string> list_devices() const override { return {}; }
-};
-
-} // namespace ale
-
-namespace pal {
-std::unique_ptr<IAudioDriver> create_audio_driver()
-{
-    return std::make_unique<ale::NullDevice>();
-}
-} // namespace pal
-
-#endif

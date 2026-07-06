@@ -8,21 +8,40 @@
  *
  * Verwendung:
  *   radio_mock.exe --port 8766
+ *   radio_mock.exe --port 8766 --verbose    # zeigt jeden Rohbefehl
  *
  * ale_bridge verbinden (GUI: Radio → CAT → hamlib:2:tcp://127.0.0.1:8766):
  *   ale_bridge --radio hamlib:2:tcp://127.0.0.1:8766 ...
  *
- * Implementiertes rigctld-Protokoll (Hamlib 4.x, Subset):
- *   \chk_vfo            → RPRT -1     (einfacher Modus, kein VFO-Präfix)
- *   \dump_state         → Capabilities-Dump (minimal, aber parsebar)
- *   \get_info           → Versionsstring
- *   F <hz>  / \set_freq → setzt Frequenz, gibt LOG-Zeile aus
- *   f       / \get_freq → liefert aktuelle Frequenz
- *   M <mode> <bw>       → setzt Modus
- *   m       / \get_mode → liefert aktuellen Modus
- *   T <0|1> / \set_ptt  → schaltet PTT, gibt LOG-Zeile aus
- *   t       / \get_ptt  → liefert PTT-Status
+ * Implementiertes rigctld-Protokoll (Hamlib 4.x, rigs/dummy/netrigctl.c):
+ *
+ *   \chk_vfo            → "0\n"         (kein VFO-Präfix, simple mode)
+ *   \dump_state         → Capabilities-Dump
+ *   \get_info           → Versionsstring + RPRT 0
+ *   F <hz>              → setzt Frequenz   (kein VFO-Präfix, rigctld_vfo_mode=0)
+ *   F <vfo> <hz>        → setzt Frequenz   (mit VFO-Präfix, rigctld_vfo_mode=1)
+ *   f / \get_freq       → liefert Frequenz + RPRT 0
+ *   M <mode> <bw>       → setzt Modus      (kein VFO-Präfix)
+ *   M <vfo> <mode> <bw> → setzt Modus      (mit VFO-Präfix)
+ *   m / \get_mode       → liefert Modus + Bandbreite + RPRT 0
+ *   v / \get_vfo        → liefert VFO-Name ("currVFO") + RPRT 0
+ *   V <name>            → setzt VFO (keine Aktion, RPRT 0)
+ *   s / \get_split_vfo  → liefert Split-Status (0 + VFOA) + RPRT 0
+ *   T <0|1> / \set_ptt  → schaltet PTT
+ *   t / \get_ptt        → liefert PTT-Status
+ *   Q / q               → Verbindung beenden
  *   alles andere        → RPRT 0  (ignoriert, kein Fehler)
+ *
+ * PROTOKOLL-DETAILS (aus Hamlib rigs/dummy/netrigctl.c):
+ *
+ *   \chk_vfo muss "0\n" (oder "1\n") zurückgeben — KEINE RPRT-Zeile.
+ *   hamlib liest genau eine Zeile und wertet sie mit atoi() aus.
+ *   → 0 = simple mode (kein VFO-Präfix in nachfolgenden Befehlen)
+ *   → 1 = VFO mode   (hamlib schickt "F currVFO 14000000\n" etc.)
+ *
+ *   Wenn der Mock "RPRT -1\n" zurückgibt, liest hamlib "RPRT -1" und
+ *   wertet atoi("RPRT -1") = 0 aus — zufällig korrekt, aber falsch.
+ *   Deshalb korrekt: "0\n" zurückgeben.
  */
 
 #ifdef _WIN32
@@ -51,6 +70,11 @@
 #include <string>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
+
+// ── Global options ────────────────────────────────────────────────────────────
+
+static bool g_verbose = false;   // --verbose: prints every raw command
 
 // ── Radio state ───────────────────────────────────────────────────────────────
 
@@ -76,34 +100,49 @@ static std::string trim(const std::string& s)
     return s.substr(first, s.find_last_not_of(" \t\r\n") - first + 1);
 }
 
+// Returns true if 'tok' looks like a hamlib VFO name (currVFO, VFOA, Main…)
+// rather than a mode name (USB, LSB, AM…).  Used to skip optional VFO prefix.
+static bool is_vfo_token(const std::string& tok)
+{
+    // Mode names start with a letter and are short alphabetic strings,
+    // but VFO names are a closed set.  We check the known VFO identifiers
+    // that hamlib emits when rigctld_vfo_mode=1 (rig_strvfo output).
+    static const char* const vfos[] = {
+        "currVFO", "VFOA", "VFOB", "VFO", "Main", "Sub",
+        "TX",      "RX",   "MEM",  "VFO_A", "VFO_B", nullptr
+    };
+    for (int i = 0; vfos[i]; ++i)
+        if (tok == vfos[i]) return true;
+    return false;
+}
+
 // Minimal rigctld dump_state response.
-// Format documented in Hamlib src/iofunc.c and rigs/netrigctl.c.
-// Protocol version 0 (Hamlib ≤4.5).  All modes = 0x1ff.
+// Format: rigs/dummy/netrigctl.c, protocol version 0 (Hamlib ≤4.5).
 static std::string make_dump_state()
 {
     return
-        "0\n"                                          // protocol version
-        "1\n"                                          // rig model
-        "1\n"                                          // ITU region
-        // RX freq ranges: 100 kHz – 30 MHz, all modes
+        "0\n"                                            // protocol version
+        "1\n"                                            // rig model
+        "1\n"                                            // ITU region
+        // RX freq ranges: 100 kHz – 30 MHz, all modes (0x1ff)
         "100000 30000000 0x1ff -1 -1 0x10000003 0x1\n"
         "0 0 0 0 0 0 0\n"
         // TX freq ranges
         "100000 30000000 0x1ff -1 -1 0x10000003 0x1\n"
         "0 0 0 0 0 0 0\n"
-        // Tuning steps (mode step) — one catch-all entry
+        // Tuning steps
         "0x1ff 1\n"
         "0 0\n"
-        // Filters — 2400 Hz for all modes
+        // Filters
         "2400 0x1ff\n"
-        "500 0x04\n"       // 500 Hz for CW
+        "500 0x04\n"
         "0 0\n"
         "0\n"              // max_rit
         "0\n"              // max_xit
         "0\n"              // max_ifshift
         "0\n"              // announces
-        "0\n"              // preamp (0 = end of list)
-        "0\n"              // attenuator (0 = end)
+        "0\n"              // preamp list end
+        "0\n"              // attenuator list end
         "0x00000003\n"     // has_get_func
         "0x00000003\n"     // has_set_func
         "0x00000001\n"     // has_get_level (STRENGTH)
@@ -115,32 +154,70 @@ static std::string make_dump_state()
 }
 
 // ── Command handler ───────────────────────────────────────────────────────────
+//
+// Returns "" to signal "close connection" (quit command).
+// Returns the response string otherwise.
 
 static std::string handle_line(const std::string& raw)
 {
     std::string line = trim(raw);
-    if (line.empty()) return {};
+    if (line.empty()) return "RPRT 0\n";
 
-    // Strip leading backslash (long-form \set_freq etc.)
+    if (g_verbose) {
+        std::printf("[RAW] %s\n", line.c_str());
+        std::fflush(stdout);
+    }
+
+    // Strip optional leading '+' (extended response protocol) — we don't
+    // implement extended mode, just parse the command name that follows.
+    bool extended = (!line.empty() && (line[0] == '+' || line[0] == ';' || line[0] == '|'));
+    if (extended) line = trim(line.substr(1));
+
+    // Long-form commands start with backslash: "\set_freq 14000000"
     std::string cmd = line;
     if (!cmd.empty() && cmd[0] == '\\') cmd = cmd.substr(1);
 
+    // ── Quit ─────────────────────────────────────────────────────────────
+    if (cmd == "q" || cmd == "Q") return "";  // signal close
+
     // ── Protocol handshake ────────────────────────────────────────────────
+
+    // chk_vfo: return integer 0 (simple mode, no VFO prefix needed).
+    // hamlib reads exactly one line and calls atoi() on it.
+    // "0\n" → rigctld_vfo_mode=0  → hamlib sends "F <hz>" / "M <mode> <bw>"
+    // "1\n" → rigctld_vfo_mode=1  → hamlib sends "F <vfo> <hz>" / "M <vfo> <mode> <bw>"
+    // Do NOT return "RPRT -1\n" here: atoi("RPRT -1") happens to give 0 too,
+    // but some hamlib versions treat a RPRT response as a failure and may leave
+    // rigctld_vfo_mode at its initialised value (which could be 1).
     if (cmd == "chk_vfo")
-        return "RPRT -1\n";   // simple mode: no per-VFO prefix in commands
+        return "0\n";
 
     if (cmd == "dump_state" || cmd == "dump_caps")
         return make_dump_state();
 
-    if (cmd == "get_info" || cmd == "\\get_info")
+    if (cmd == "get_info")
         return "Mock Radio v1.0\nRPRT 0\n";
 
     // ── Frequency ─────────────────────────────────────────────────────────
-    // Short: "F 14150000"   Long: "set_freq 14150000"
-    if (cmd.rfind("set_freq ", 0) == 0 || (cmd.size() >= 2 && cmd[0] == 'F' && cmd[1] == ' ')) {
-        const std::string arg = trim(cmd.substr(cmd.find(' ') + 1));
-        s_freq_hz = std::stod(arg);
-        char buf[64];
+    // Simple:   "F <hz>"        (rigctld_vfo_mode=0)
+    // VFO mode: "F <vfo> <hz>"  (rigctld_vfo_mode=1)
+    if (cmd.rfind("set_freq", 0) == 0 ||
+        (cmd.size() >= 2 && cmd[0] == 'F' && cmd[1] == ' '))
+    {
+        const std::string args = trim(cmd.substr(cmd.find(' ') + 1));
+        std::istringstream ss(args);
+        std::string tok1, tok2;
+        ss >> tok1;
+        if (is_vfo_token(tok1)) {
+            // VFO-prefixed: skip VFO name, read actual frequency
+            ss >> tok2;
+            std::printf("[WARN] hamlib sent VFO-prefixed freq command (rigctld_vfo_mode=1!): %s\n",
+                        line.c_str());
+        } else {
+            tok2 = tok1;  // tok1 is the frequency
+        }
+        s_freq_hz = std::stod(tok2);
+        char buf[80];
         std::snprintf(buf, sizeof(buf), "[TRX] Freq  %.3f kHz", s_freq_hz / 1000.0);
         log_event(buf);
         return "RPRT 0\n";
@@ -152,12 +229,32 @@ static std::string handle_line(const std::string& raw)
     }
 
     // ── Mode ──────────────────────────────────────────────────────────────
-    // Short: "M USB 2400"   Long: "set_mode USB 2400"
-    if (cmd.rfind("set_mode ", 0) == 0 || (cmd.size() >= 2 && cmd[0] == 'M' && cmd[1] == ' ')) {
-        std::istringstream ss(cmd.substr(cmd.find(' ') + 1));
-        ss >> s_mode >> s_bw;
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "[TRX] Mode  %s  BW=%d Hz", s_mode.c_str(), s_bw);
+    // Simple:   "M <mode> <bw>"        (rigctld_vfo_mode=0)
+    // VFO mode: "M <vfo> <mode> <bw>"  (rigctld_vfo_mode=1)
+    if (cmd.rfind("set_mode", 0) == 0 ||
+        (cmd.size() >= 2 && cmd[0] == 'M' && cmd[1] == ' '))
+    {
+        const std::string args = trim(cmd.substr(cmd.find(' ') + 1));
+        std::istringstream ss(args);
+        std::string tok1, tok2, tok3;
+        ss >> tok1 >> tok2 >> tok3;
+
+        if (is_vfo_token(tok1)) {
+            // "M <vfo> <mode> <bw>"
+            std::printf("[WARN] hamlib sent VFO-prefixed mode command (rigctld_vfo_mode=1!): %s\n",
+                        line.c_str());
+            s_mode = tok2;
+            s_bw   = tok3.empty() ? 0 : std::atoi(tok3.c_str());
+        } else {
+            // "M <mode> <bw>"
+            s_mode = tok1;
+            s_bw   = tok2.empty() ? 0 : std::atoi(tok2.c_str());
+        }
+
+        char buf[96];
+        std::snprintf(buf, sizeof(buf),
+                      "[TRX] Mode  %-8s BW=%-5d  [raw: %s]",
+                      s_mode.c_str(), s_bw, line.c_str());
         log_event(buf);
         return "RPRT 0\n";
     }
@@ -167,10 +264,38 @@ static std::string handle_line(const std::string& raw)
         return buf;
     }
 
+    // ── VFO ───────────────────────────────────────────────────────────────
+    // hamlib NET_RIGCTL sends "v" (get_vfo) during rig_open() cache-init.
+    // Returning just "RPRT 0\n" (no VFO name) causes rig_parse_vfo("") to
+    // return RIG_VFO_NONE; strict hamlib builds treat that as an error and
+    // rig_open() fails → start() returns false → GUI stays radio-ctrl-locked
+    // → every VFO_SET_MODE is silently dropped before reaching the bridge.
+    if (cmd == "get_vfo" || cmd == "v") {
+        return "currVFO\nRPRT 0\n";
+    }
+    // "V <name>" (set_vfo) — explicit handler so --verbose can log it.
+    if (cmd.size() >= 2 && cmd[0] == 'V' && cmd[1] == ' ') {
+        if (g_verbose) {
+            std::printf("[VFO] set → %s\n", trim(cmd.substr(2)).c_str());
+            std::fflush(stdout);
+        }
+        return "RPRT 0\n";
+    }
+
+    // ── Split ─────────────────────────────────────────────────────────────
+    // hamlib NET_RIGCTL sends "s" (get_split_vfo) during rig_open() cache-init.
+    // Response format: <split_int>\n<split_vfo_name>\nRPRT 0\n
+    if (cmd == "get_split_vfo" || cmd == "s") {
+        return "0\nVFOA\nRPRT 0\n";
+    }
+
     // ── PTT ───────────────────────────────────────────────────────────────
     // Short: "T 1"   Long: "set_ptt 1"
-    if (cmd.rfind("set_ptt ", 0) == 0 || (cmd.size() >= 2 && cmd[0] == 'T' && cmd[1] == ' ')) {
-        s_ptt = std::stoi(trim(cmd.substr(cmd.find(' ') + 1)));
+    if (cmd.rfind("set_ptt", 0) == 0 ||
+        (cmd.size() >= 2 && cmd[0] == 'T' && cmd[1] == ' '))
+    {
+        const std::string arg = trim(cmd.substr(cmd.find(' ') + 1));
+        s_ptt = std::atoi(arg.c_str());
         log_event(s_ptt ? "[TRX] PTT ON  ←── TX" : "[TRX] PTT OFF ──► RX");
         return "RPRT 0\n";
     }
@@ -181,6 +306,10 @@ static std::string handle_line(const std::string& raw)
     }
 
     // ── Catch-all ─────────────────────────────────────────────────────────
+    if (g_verbose) {
+        std::printf("[IGN] %s\n", line.c_str());
+        std::fflush(stdout);
+    }
     return "RPRT 0\n";
 }
 
@@ -211,16 +340,18 @@ static void serve(sock_t client)
             pending = pending.substr(pos + 1);
 
             const std::string resp = handle_line(line);
-            if (!resp.empty()) {
-#ifdef _WIN32
-                send(client, resp.c_str(), static_cast<int>(resp.size()), 0);
-#else
-                send(client, resp.c_str(), resp.size(), 0);
-#endif
+            if (resp.empty()) {
+                // Quit command — close connection
+                goto done;
             }
+#ifdef _WIN32
+            send(client, resp.c_str(), static_cast<int>(resp.size()), 0);
+#else
+            send(client, resp.c_str(), resp.size(), 0);
+#endif
         }
     }
-
+done:
     log_event("[MOCK] Client getrennt\n");
 }
 
@@ -232,10 +363,16 @@ static void print_usage(const char* prog)
         "Mock Radio — rigctld-kompatibler Test-TRX\n"
         "\n"
         "Usage:\n"
-        "  %s --port N\n"
+        "  %s --port N [--verbose]\n"
         "\n"
         "Options:\n"
-        "  --port N   TCP-Port des rigctld-Listeners (Pflichtfeld)\n",
+        "  --port N    TCP-Port des rigctld-Listeners (Pflichtfeld)\n"
+        "  --verbose   Zeigt jeden Rohbefehl von hamlib\n"
+        "\n"
+        "Protokoll-Hinweise:\n"
+        "  [WARN] VFO-prefixed … → hamlib sendet rigctld_vfo_mode=1-Befehle\n"
+        "         (chk_vfo-Handshake fehlgeschlagen oder hamlib-Bug)\n"
+        "  [TRX] Mode raw: …      → exakter Befehlstring zur Diagnose\n",
         prog);
 }
 
@@ -245,6 +382,8 @@ int main(int argc, char* argv[])
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc)
             port = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--verbose") == 0 || std::strcmp(argv[i], "-v") == 0)
+            g_verbose = true;
         else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]); return 0;
         }
@@ -269,7 +408,6 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // Allow port reuse after restart
     const int yes = 1;
     setsockopt(server, SOL_SOCKET, SO_REUSEADDR,
                reinterpret_cast<const char*>(&yes), sizeof(yes));
@@ -293,14 +431,19 @@ int main(int argc, char* argv[])
     std::printf("║  Port    : %-44d ║\n", port);
     std::printf("║  Freq    : %-44.3f ║\n", s_freq_hz / 1000.0);
     std::printf("║  Mode    : %-44s ║\n", s_mode.c_str());
+    std::printf("║  chk_vfo : 0  (simple mode — kein VFO-Präfix)        ║\n");
     std::printf("╠═══════════════════════════════════════════════════════╣\n");
     std::printf("║  ale_bridge / GUI verbinden:                          ║\n");
     std::printf("║    hamlib:2:tcp://127.0.0.1:%-26d ║\n", port);
+    std::printf("╠═══════════════════════════════════════════════════════╣\n");
+    std::printf("║  Diagnose: [WARN] zeigt falls hamlib VFO-Präfix sendet║\n");
+    std::printf("║            [TRX] Mode zeigt exakten Rohbefehl         ║\n");
     std::printf("╚═══════════════════════════════════════════════════════╝\n");
+    if (g_verbose)
+        std::printf("  --verbose: alle Rohbefehle werden angezeigt\n");
     std::printf("\nWarte auf Verbindung...\n\n");
     std::fflush(stdout);
 
-    // Accept loop — one client at a time (ALE is single-station)
     while (true) {
         sockaddr_in client_addr{};
 #ifdef _WIN32

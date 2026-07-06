@@ -56,6 +56,7 @@ add_library(ale_protocol
     src/Word/ale_sequence.cpp
     src/Word/address_encoder.cpp
     src/Protocol/Message/ale_message.cpp
+    src/Protocol/Message/frame_validator.cpp
     src/Protocol/Message/ale_orderwire_protocols.cpp
     src/LQA/lqa_report.cpp
 )
@@ -102,7 +103,9 @@ target_link_libraries(ale_codec ale_fec ale_protocol ale_fsk_core)
 
 # ALE 2G Modem — word-level TX with 3× redundancy (A.5.2.2.4)
 add_library(ale_modem
-    src/Modem/ale2g_modem.cpp   # Modulator + Demodulator
+    src/Modem/ale2g_modem.cpp        # Modulator + Demodulator (signal extraction)
+    src/Modem/word_grid_tracker.cpp  # A.5.2.6.3 grid-lock state machine
+    src/Modem/spectrum_analyser.cpp  # Waterfall / spectrum analyser (display)
 )
 
 target_include_directories(ale_modem PUBLIC
@@ -114,9 +117,9 @@ target_link_libraries(ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
 # ALE state machine (link layer)
 add_library(ale_link
     src/Protocol/Control/ale_state_machine.cpp
+    src/Protocol/Control/ale_call_processor.cpp
     src/Protocol/Control/ale_channel_manager.cpp
     src/Protocol/Control/ale_freq_select.cpp
-    src/Word/ale_word_decoder.cpp
 )
 
 target_include_directories(ale_link PUBLIC
@@ -339,9 +342,15 @@ endif()
 
 # ── Audio I/O device (platform-specific) ──────────────────────────────────────
 
-add_library(ale_audio_device
-    src/App/audio_device.cpp
-)
+if(WIN32)
+    set(AUDIO_DEVICE_SRC src/App/wasapi_audio.cpp)
+elseif(UNIX AND NOT APPLE)
+    set(AUDIO_DEVICE_SRC src/App/alsa_audio.cpp)
+else()
+    set(AUDIO_DEVICE_SRC src/App/null_audio.cpp)
+endif()
+
+add_library(ale_audio_device ${AUDIO_DEVICE_SRC})
 
 target_include_directories(ale_audio_device PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -351,6 +360,8 @@ if(WIN32)
     # WASAPI (mmdeviceapi/audioclient) + COM device enumeration.
     # ole32: COM; uuid: PKEY_Device_FriendlyName property key.
     target_link_libraries(ale_audio_device ole32 uuid)
+elseif(UNIX AND NOT APPLE)
+    target_link_libraries(ale_audio_device asound)
 endif()
 
 # ── Mock Radio Server (rigctld-kompatibel, kein Hamlib nötig) ─────────────────
@@ -363,6 +374,28 @@ target_include_directories(radio_mock PRIVATE
 
 if(WIN32)
     target_link_libraries(radio_mock ws2_32)
+endif()
+
+# ── Hamlib protocol smoke-test (connects to radio_mock, verifies command format) ──
+if(HAMLIB_FOUND)
+    add_executable(test_hamlib_mock apps/test_hamlib_mock.cpp)
+    if(MSVC)
+        # pthread compat stub must precede hamlib includes (same as ale_pal)
+        target_include_directories(test_hamlib_mock PRIVATE
+            "${_pthread_compat_dir}"
+            "${_hamlib_inc}"
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+    else()
+        target_include_directories(test_hamlib_mock PRIVATE
+            "${_hamlib_inc}"
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+    endif()
+    target_link_libraries(test_hamlib_mock "${_hamlib_lib}")
+    if(WIN32)
+        target_link_libraries(test_hamlib_mock ws2_32)
+    endif()
 endif()
 
 # ── WebSocket bridge (GUI↔Core) ────────────────────────────────────────────────
@@ -624,6 +657,11 @@ add_executable(test_sync_criteria tests/sync/unit/test_sync_criteria.cpp)
 target_link_libraries(test_sync_criteria ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_sync_criteria PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME SyncCriteria COMMAND test_sync_criteria)
+
+add_executable(test_word_grid_tracker tests/sync/unit/test_word_grid_tracker.cpp)
+target_link_libraries(test_word_grid_tracker ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_word_grid_tracker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME WordGridTracker COMMAND test_word_grid_tracker)
 
 add_executable(test_word_sync tests/sync/integration/test_word_sync.cpp)
 target_link_libraries(test_word_sync ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)

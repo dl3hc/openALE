@@ -89,6 +89,11 @@ A transmitted sounding is **not** intended to update the sender's own LQA databa
 
 Only stations that **receive** a sounding perform channel measurements.
 
+While sounding, the controller listens for:
+
+* channel activity
+* when channel is occupied, sounding will be postponed to a later point in time
+
 ---
 
 # Link Quality Analysis (LQA)

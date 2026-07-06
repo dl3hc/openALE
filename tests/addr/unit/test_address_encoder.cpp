@@ -24,6 +24,7 @@
 
 #include "Word/ale_word.h"
 #include "Word/address_encoder.h"
+#include "Protocol/Message/frame_validator.h"
 #include <iostream>
 #include <iomanip>
 #include <string>

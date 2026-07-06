@@ -12,6 +12,7 @@
  */
 
 #include "Protocol/Control/ale_state_machine.h"
+#include "Protocol/Control/ale_call_processor.h"   // ALECallProcessor::classify + WordRole (AllCall unit test)
 #include <iostream>
 #include <iomanip>
 #include <vector>
@@ -1601,7 +1602,7 @@ bool test_respond_to_call_does_not_bypass_handshake() {
 //         a normal TO to self stays TO_SELF.
 // ============================================================================
 bool test_allcall_decoder_detection() {
-    std::cout << "\n[TEST 19] AllCall address detection (decoder)\n";
+    std::cout << "\n[TEST 19] AllCall address detection (call processor)\n";
     std::cout << "===================================================================\n";
 
     bool all_pass = true;
@@ -1610,12 +1611,14 @@ bool test_allcall_decoder_detection() {
         all_pass = all_pass && cond;
     };
 
-    ALEWordDecoder dec;
-    auto decode = [&](PreambleType ty, const char a3[3], const std::string& self) {
-        ALEWord w = WordParser::make_word(ty, a3);
-        WordDecodeContext ctx;
-        ctx.self_address = self;
-        return dec.decode(w, ctx);
+    // Drive ALECallProcessor::classify with a fresh IDLE SM whose address book
+    // carries the test's self address.  (Replaces the old ALEWordDecoder unit
+    // test — classification now lives in ALECallProcessor, not a "decoder".)
+    auto classify_to = [&](const char a3[3], const std::string& self) {
+        ALEStateMachine sm;
+        sm.get_address_book().set_self_address(self);
+        ALEWord w = WordParser::make_word(PreambleType::TO, a3);
+        return ALECallProcessor::classify(sm, w);
     };
 
     const char allcall_g[3] = {'@','?','@'};   // global AllCall
@@ -1623,20 +1626,20 @@ bool test_allcall_decoder_detection() {
     const char anycall[3] = {'@','@','?'};    // global AnyCall (A.5.5.4.5)
     const char sam3[3] = {'S','A','M'};
 
-    auto e1 = decode(PreambleType::TO, allcall_g, "JOE");
-    check(e1.type == WordEvent::Type::ALLCALL, "global @?@ → ALLCALL (any self)");
+    auto e1 = classify_to(allcall_g, "JOE");
+    check(e1.type == ALECallProcessor::WordRole::ALLCALL, "global @?@ → ALLCALL (any self)");
     check(e1.address == "@?", "address trimmed to @?");
 
-    auto e2 = decode(PreambleType::TO, allcall_sA, "SAMA");
-    check(e2.type == WordEvent::Type::ALLCALL, "selective @A@ pertinent (self ends A) → ALLCALL");
-    auto e3 = decode(PreambleType::TO, allcall_sA, "SAM");
-    check(e3.type == WordEvent::Type::NONE, "selective @A@ not pertinent (self ends M) → NONE");
+    auto e2 = classify_to(allcall_sA, "SAMA");
+    check(e2.type == ALECallProcessor::WordRole::ALLCALL, "selective @A@ pertinent (self ends A) → ALLCALL");
+    auto e3 = classify_to(allcall_sA, "SAM");
+    check(e3.type == ALECallProcessor::WordRole::NONE, "selective @A@ not pertinent (self ends M) → NONE");
 
-    auto e4 = decode(PreambleType::TO, anycall, "JOE");
-    check(e4.type == WordEvent::Type::NONE, "AnyCall @@? → NONE (not AllCall)");
+    auto e4 = classify_to(anycall, "JOE");
+    check(e4.type == ALECallProcessor::WordRole::NONE, "AnyCall @@? → NONE (not AllCall)");
 
-    auto e5 = decode(PreambleType::TO, sam3, "SAM");
-    check(e5.type == WordEvent::Type::TO_SELF, "normal TO to self → TO_SELF (not ALLCALL)");
+    auto e5 = classify_to(sam3, "SAM");
+    check(e5.type == ALECallProcessor::WordRole::TO_SELF, "normal TO to self → TO_SELF (not ALLCALL)");
 
     if (all_pass)
         std::cout << "PASS: AllCall address detection\n";
@@ -1944,6 +1947,81 @@ bool test_link_idle_timeout_and_warning() {
 }
 
 // ============================================================================
+// TEST: Scan traffic-pause — foreign ALE traffic freezes dwell (A.5.3.1)
+//
+// Verifies that when a valid ALE word addressed to another station arrives
+// while scanning, the dwell timer is frozen (TRAFFIC_PAUSE) until Tdrw of
+// silence elapses, then the scanner hops. Covers three word types:
+//   A. Foreign TO word        → WordEvent::NONE
+//   B. Foreign TIS conclusion → WordEvent::TIS_CALLER  (individual sounding)
+//   C. Foreign TWAS word      → WordEvent::TWAS_REJECTION (net sounding /
+//                                station present but NOT available for calls)
+// ============================================================================
+bool test_scan_traffic_pause() {
+    std::cout << "\n[TEST] Scan traffic-pause — foreign ALE traffic freezes dwell (A.5.3.1)\n";
+    std::cout << "=========================================================================\n";
+
+    constexpr uint32_t DWELL_MS = 200u;
+    constexpr uint32_t TDRW     = ALETimingConstants::Tdrw_ms;  // 784 ms
+
+    auto make_word = [](PreambleType type, const char* addr3) -> ALEWord {
+        ALEWord w{};
+        w.type  = type;
+        w.valid = true;
+        strncpy(w.address, addr3, 3);
+        return w;
+    };
+
+    auto run_sub = [&](const char* label, PreambleType wtype, const char* addr) -> bool {
+        ALEStateMachine sm;
+        sm.set_self_address("SAM");
+        ChannelTracker tracker;
+        sm.set_channel_callback([&tracker](const Channel& ch) { tracker.record(ch); });
+
+        ScanConfig cfg;
+        cfg.scan_list.push_back(Channel(7100000,  "USB"));
+        cfg.scan_list.push_back(Channel(14100000, "USB"));
+        cfg.dwell_time_ms = DWELL_MS;
+        sm.configure_scan(cfg);
+        sm.process_event(ALEEvent::START_SCAN);
+        tracker.clear();
+
+        // t=100: inject foreign word mid-dwell
+        sm.update(100);
+        sm.process_received_word(make_word(wtype, addr));
+
+        // dwell would normally expire at t=200 — must NOT hop (TRAFFIC_PAUSE active)
+        sm.update(DWELL_MS);
+        const bool no_hop_at_dwell = (tracker.count() == 0);
+        std::cout << "  " << label << ": no hop at dwell expiry: "
+                  << (no_hop_at_dwell ? "PASS" : "FAIL") << "\n";
+
+        // Tdrw-1 ms after last word — still no hop
+        sm.update(100 + TDRW - 1);
+        const bool no_hop_before_tdrw = (tracker.count() == 0);
+        std::cout << "  " << label << ": no hop at Tdrw-1: "
+                  << (no_hop_before_tdrw ? "PASS" : "FAIL") << "\n";
+
+        // Tdrw ms after last word — hop fires, SM stays SCANNING
+        sm.update(100 + TDRW);
+        const bool hopped        = (tracker.count() == 1);
+        const bool still_scanning = (sm.get_state() == ALEState::SCANNING);
+        std::cout << "  " << label << ": hop after Tdrw silence: "
+                  << (hopped ? "PASS" : "FAIL") << "\n";
+        std::cout << "  " << label << ": SM stays SCANNING: "
+                  << (still_scanning ? "PASS" : "FAIL") << "\n";
+
+        return no_hop_at_dwell && no_hop_before_tdrw && hopped && still_scanning;
+    };
+
+    const bool pass_A = run_sub("A(TO-other)",    PreambleType::TO,   "OTH");
+    const bool pass_B = run_sub("B(TIS-sounding)", PreambleType::TIS, "SND");
+    const bool pass_C = run_sub("C(TWAS-not-avail)", PreambleType::TWAS, "SND");
+
+    return pass_A && pass_B && pass_C;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -1987,6 +2065,7 @@ int run_all_tests() {
     if (test_thread_contract_check()) { pass_count++; } else { fail_count++; }
     if (test_sending_response_drain_timeout()) { pass_count++; } else { fail_count++; }
     if (test_link_idle_timeout_and_warning()) { pass_count++; } else { fail_count++; }
+    if (test_scan_traffic_pause())            { pass_count++; } else { fail_count++; }
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

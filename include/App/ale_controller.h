@@ -498,31 +498,70 @@ public:
      * Process a text command from operator (CLI, GUI, or remote control).
      *
      * Supported commands:
-     *   CMD:CALL <ADDR>   — initiate individual call to ADDR
-     *   CMD:AMD <text>    — queue AMD orderwire for the next CMD:CALL (max 90 chars, Expanded-64)
-     *   CMD:TERMINATE        — terminate current link
-     *   CMD:ACCEPT           — accept incoming call (manual-accept mode only)
-     *   CMD:REJECT           — reject incoming call with TWAS
-     *   CMD:START_SCANNING   — start channel scanning (alias: CMD:SCAN)
-     *   CMD:STOP_SCANNING    — stop scanning, return to IDLE (available)
-     *   CMD:STATUS        — return current SM state name
-     *   CMD:HELP          — list available commands
-     *   CMD:ADD_CHANNEL   — add/update channel
-     *   CMD:DEL_CHANNEL   — remove channel
-     *   CMD:LIST_CHANNELS — list all channels
-     *   CMD:CLEAR_CHANNELS — remove all channels
-     *   CMD:SAVE_CHANNELS — save channels to file
-     *   CMD:LOAD_CHANNELS — load channels from file
-     *   CMD:ADD_NET       — add a net
-     *   CMD:DEL_NET       — remove a net
-     *   CMD:ASSIGN_CHANNEL   — assign a channel ID to a net
-     *   CMD:UNASSIGN_CHANNEL — remove a channel ID from a net
-     *   CMD:LIST_NETS     — list all nets and their channel assignments
      *
-     * Returns a human-readable result string suitable for display:
-     *   "OK: ..."   on success
-     *   "ERROR: …"  on invalid command or wrong state
-     *   "STATUS: …" for CMD:STATUS
+     *   -- Call/link control --
+     *   CMD:CALL <ADDR>              initiate individual call to ADDR
+     *   CMD:SINGLE_CALL <ADDR>       force single-channel call (no scanning)
+     *   CMD:GROUP_CALL <ROSTER>      call all members of named roster
+     *   CMD:AMD <ADDR> <text>        send AMD orderwire; when LINKED, <ADDR> is
+     *                                ignored and text goes to active peer
+     *   CMD:TERMINATE                terminate current link
+     *   CMD:ACCEPT                   accept incoming call (manual-accept mode)
+     *   CMD:REJECT                   reject incoming call with TWAS
+     *   CMD:RESET_IDLE_TIMER         reset the link idle watchdog
+     *   CMD:EMERGENCY_STOP           abort TX and reset immediately
+     *   CMD:SET_PTT on|off           manual PTT override
+     *
+     *   -- Scanning --
+     *   CMD:START_SCANNING           start channel scanning (alias: CMD:SCAN)
+     *   CMD:STOP_SCANNING            stop scanning, return to IDLE
+     *                                (alias: CMD:AVAILABLE)
+     *   CMD:SET_SCAN_NET <name>      set active scan net (empty = all channels)
+     *   CMD:STATUS                   return current SM state name
+     *
+     *   -- Sounding --
+     *   CMD:SOUND                    send a sounding on current channel
+     *   CMD:SOUND_SWEEP <net>        sounding sweep over a net's channels
+     *   CMD:SOUND_AUTO on|off [net]  enable/disable automatic sounding
+     *   CMD:SOUND_INTERRUPT <net>    cancel an in-progress sounding sweep
+     *
+     *   -- Channels --
+     *   CMD:ADD_CHANNEL rx_hz[:tx_hz] [mode] [label]
+     *   CMD:DEL_CHANNEL rx_hz
+     *   CMD:LIST_CHANNELS
+     *   CMD:CLEAR_CHANNELS
+     *   CMD:RENAME_CHANNEL <old_id> <new_id>
+     *   CMD:SAVE_CHANNELS [path]
+     *   CMD:LOAD_CHANNELS <path>
+     *
+     *   -- Nets --
+     *   CMD:ADD_NET <name>
+     *   CMD:DEL_NET <name>
+     *   CMD:ASSIGN_CHANNEL <net> <id>
+     *   CMD:UNASSIGN_CHANNEL <net> <id>
+     *   CMD:LIST_NETS
+     *
+     *   -- Contacts --
+     *   CMD:LIST_CONTACTS
+     *   CMD:ADD_CONTACT <callsign> [name]
+     *   CMD:DEL_CONTACT <callsign>
+     *   CMD:SELECT_CONTACT <callsign>
+     *
+     *   -- Self addresses --
+     *   CMD:LIST_SELF_ADDRS
+     *   CMD:ADD_SELF_ADDR <addr>
+     *   CMD:DEL_SELF_ADDR <addr>
+     *   CMD:SET_PRIMARY_ADDR <addr>
+     *
+     *   -- LQA --
+     *   CMD:CLEAR_LQA
+     *
+     *   CMD:HELP                     print full command list
+     *
+     * Returns a human-readable result string:
+     *   "OK: ..."    on success
+     *   "ERROR: ..."  on invalid command or wrong state
+     *   "STATUS: ..." for CMD:STATUS
      */
     std::string process_command(const std::string& cmd);
 
@@ -559,6 +598,13 @@ public:
      *         contact (channels field is "ALL" when all_channels is set).
      */
     std::vector<std::string> get_all_contacts() const;
+
+    /**
+     * Direct access to the SM's AddressBook (callsign + name pairs only).
+     * Prefer this over get_all_contacts() for bridge/GUI use.
+     */
+    AddressBook&       get_address_book()       { return sm_.get_address_book(); }
+    const AddressBook& get_address_book() const { return sm_.get_address_book(); }
 
     /**
      * Set the currently selected contact (for outgoing calls).
@@ -749,6 +795,20 @@ public:
     bool set_mode(const std::string& mode);
 
     /**
+     * Atomically tune the attached radio to an explicit frequency AND mode in a
+     * SINGLE set_channel() call — the exact path scanning (sm_.set_channel_callback)
+     * and step_channel() use. Manual channel selection must go through here, NOT
+     * set_frequency()+set_mode() as two separate commands: over TCP an SDR
+     * front-end (Quisk) restores a per-band saved mode on the frequency change, so
+     * only one atomic freq-first/mode-last set reliably makes PC-ALE authoritative.
+     * Simplex (RX=TX). Empty mode keeps the radio's current mode.
+     * @param hz   Frequency in Hz
+     * @param mode Mode string (USB, LSB, USB-D/PKTUSB, LSB-D/PKTLSB, FM, …)
+     * @return false if no radio is attached or hz == 0
+     */
+    bool set_vfo_channel(uint32_t hz, const std::string& mode);
+
+    /**
      * Step through the configured calling-channel list (forward = +1,
      * backward = -1) and tune the attached radio to it.
      * @param direction +1 for next, -1 for previous
@@ -878,6 +938,10 @@ public:
 
     /** Test rig connection — radio_->is_ready() if a radio is attached, else false. */
     bool test_rig_connection() const;
+
+    /** Query the radio for its live frequency/mode and update internal channel state.
+     *  Returns true if anything changed.  No-op when no radio is attached. */
+    bool sync_radio_state();
 
     /** Get rig connection status as a human-readable string. */
     std::string get_rig_connection_status() const;
@@ -1133,6 +1197,14 @@ private:
     // PTT timing (set_manual_ptt, wire_callbacks, update)
     uint32_t                 ptt_lead_deadline_ms_ = 0;   // flush pending_tx_words_ when now_ms_ >= this; 0 = inactive
     uint32_t                 ptt_tail_deadline_ms_ = 0;   // release PTT when now_ms_ >= this; 0 = inactive
+
+    // Deferred radio mode verify (schedule_mode_verify, tick_mode_verify).
+    // An SDR front-end can revert a just-commanded mode asynchronously after
+    // set_channel() returns; these checks call radio_->sync_from_radio() a few
+    // hundred ms later so the intended mode is re-asserted promptly (the radio
+    // backend guards the actual re-send: freq-still-matches + recency window).
+    uint32_t                 mode_verify_deadline_ms_ = 0; // next check when now_ms_ >= this; 0 = inactive
+    int                      mode_verify_checks_left_ = 0; // remaining checks for the current activation
     bool                     sm_rx_enabled_        = true; // mirrors SM's last rx_enabled_callback value
     bool                     manual_ptt_           = false;
     bool                     abort_tx_pending_     = false; // rx_only: abort SM TX on next update() tick (avoids re-entering SM inside set_rx_enabled_callback)
@@ -1235,6 +1307,13 @@ private:
     void tick_sounding_sweep(uint32_t now_ms);  ///< periodic multi-channel sounding sweep
     void tick_offline_completion();             ///< pull symbol frames in offline (no-audio) mode
     void tick_lqa_update(uint32_t now_ms);      ///< throttled LQA DB prune + auto-sounding check
+    void tick_mode_verify(uint32_t now_ms);     ///< deferred radio-mode verify after channel activation
+
+    /// Arm the deferred mode-verify checks after any radio channel/mode command.
+    /// Re-arming on every command means checks only fire once activity pauses —
+    /// a fast scan (dwell < first check delay) keeps superseding them, which is
+    /// correct: each hop re-sends the mode anyway.
+    void schedule_mode_verify();
 
     // ── on_received_word() concern handlers ──────────────────────────────────
     void rx_log_word(const ALEWord& word);                   ///< debug_rx_ trace line

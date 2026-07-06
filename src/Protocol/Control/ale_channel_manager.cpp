@@ -10,6 +10,7 @@ namespace ale {
 
 void ALEChannelManager::configure(const ScanConfig& config) {
     scan_ = config;
+    scan_started_ = false;  // next start() goes to ch0
 }
 
 void ALEChannelManager::add_channel(const Channel& ch) {
@@ -41,11 +42,21 @@ const Channel* ALEChannelManager::select_best() const {
 }
 
 void ALEChannelManager::start(uint32_t current_time_ms) {
-    last_hop_ms_ = current_time_ms;
-    if (!scan_.scan_list.empty())
-        apply(0, current_time_ms);
-    else
+    if (scan_.scan_list.empty()) {
         scan_.channel_index = 0;
+        last_hop_ms_ = current_time_ms;
+        return;
+    }
+    if (!scan_started_) {
+        // Fresh scan list (after configure()): always start at ch0.
+        scan_started_ = true;
+        last_hop_ms_ = current_time_ms;
+        apply(0, current_time_ms);
+    } else {
+        // Re-entry (returning from SOUNDING, failed CALLING, HANDSHAKE, etc.):
+        // resume from the next channel so ch0 doesn't accumulate extra dwells.
+        hop_next(current_time_ms);
+    }
 }
 
 bool ALEChannelManager::hop_next(uint32_t current_time_ms) {

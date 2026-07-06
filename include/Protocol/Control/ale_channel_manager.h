@@ -78,6 +78,7 @@ public:
 private:
     ScanConfig scan_;
     uint32_t   last_hop_ms_ = 0;
+    bool       scan_started_ = false;  // false = fresh list, first start goes to ch0
     std::function<void(const Channel&)> on_change_;
 
     // Sounding-sweep override (see set_override()). When active, current()

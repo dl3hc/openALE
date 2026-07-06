@@ -2,6 +2,7 @@
     "configurations": [
         {
             "name": "Win32",
+            "configurationProvider": "ms-vscode.cmake-tools",
             "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/libs/hamlib-built/include",

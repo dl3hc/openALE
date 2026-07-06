@@ -2,10 +2,12 @@
  * \file Modem/ale2g_modem.h
  * \brief ALE 2G Modem — Modulator and Demodulator.
  *
- * namespace ale::ALE2GModem contains two classes:
+ * namespace ale::ALE2GModem contains:
  *
- *   Modulator   — TX side: word-queue + 49-symbol pull API (no PCM, no timing)
- *   Demodulator — RX side: streaming PCM → ALEWord via Goertzel + Grid-Lock
+ *   Modulator        — TX side: word-queue + 49-symbol pull API (no PCM, no timing)
+ *   Demodulator      — RX side: streaming PCM → ALEWord via Goertzel + Grid-Lock
+ *   SpectrumAnalyser — RX-side waterfall / spectrum analyser (display concern,
+ *                      not decode).  See Modem/spectrum_analyser.h.
  *
  * ── Modulator ────────────────────────────────────────────────────────────────
  *
@@ -60,6 +62,14 @@
  *   past the first candidate, the best candidate is committed: grid anchored
  *   there, word_cb_ fired with the SINAD measured at the refined alignment.
  *   Emission latency is ≤ SAMPLES_PER_SYMBOL (8 ms) — negligible vs Trw.
+ *
+ * Architecture:
+ *   Demodulator = signal extraction (PCM → DecodedCandidate via Goertzel + FEC)
+ *   WordGridTracker = grid-lock state machine (A.5.2.6.3 gate + refinement)
+ *
+ *   The grid-lock layer (WordGridTracker) is independently testable without PCM:
+ *   construct DecodedCandidate values and call process_candidate() directly.
+ *   See Modem/word_grid_tracker.h and tests/sync/unit/test_word_grid_tracker.cpp.
  */
 
 #pragma once
@@ -68,6 +78,8 @@
 #include "Codec/ale_encoder.h"
 #include "FSK/ale_waveform.h"
 #include "FEC/golay.h"
+#include "Modem/spectrum_analyser.h"
+#include "Modem/word_grid_tracker.h"
 #include "Protocol/Control/ale_timing.h"
 #include "Word/ale_word.h"
 #include "Word/ale_sequence.h"
@@ -123,47 +135,6 @@ private:
     void advance_queue_();
 };
 
-// ── Adaptive FEC policy (MIL-STD-188-141B A.5.2.6.3 "DO") ───────────────────────
-//
-// Tracks an EWMA of per-word unanimous-vote counts and maps the running
-// signal-quality estimate to a Golay correction power and acceptance threshold:
-// clean channel → less correction, higher threshold; marginal → full correction,
-// lower threshold.  Threshold is bounded so re-acquisition is never blocked.
-class AdaptiveFec {
-public:
-    void reset() { quality_ = INIT_QUALITY; }
-
-    /// Fold one accepted word's unanimous-vote count into the running estimate.
-    void observe(uint8_t unanimous_votes) {
-        quality_ += ALPHA * (static_cast<float>(unanimous_votes) - quality_);
-    }
-
-    float quality() const { return quality_; }
-
-    GolayMode mode() const {
-        if (quality_ >= CLEAN_HI) return GolayMode::Mode1_6;  // very clean link
-        if (quality_ >= CLEAN_LO) return GolayMode::Mode2_5;  // clean link
-        return GolayMode::Mode3_4;                            // marginal / unknown
-    }
-
-    uint8_t threshold() const {
-        float t = quality_ - MARGIN;
-        if (t < MIN_THRESHOLD) t = MIN_THRESHOLD;
-        if (t > MAX_THRESHOLD) t = MAX_THRESHOLD;
-        return static_cast<uint8_t>(t + 0.5f);
-    }
-
-private:
-    static constexpr float   ALPHA         = 0.125f;
-    static constexpr float   MARGIN        = 8.0f;
-    static constexpr float   CLEAN_LO      = 45.0f;
-    static constexpr float   CLEAN_HI      = 48.0f;
-    static constexpr float   INIT_QUALITY  = 40.0f;  // neutral start: Mode3_4, threshold 32
-    static constexpr uint8_t MIN_THRESHOLD = 30;
-    static constexpr uint8_t MAX_THRESHOLD = 42;
-    float quality_ = INIT_QUALITY;
-};
-
 // ── Demodulator ───────────────────────────────────────────────────────────────
 
 class Demodulator {
@@ -177,15 +148,14 @@ public:
      * Typical range: noise floor ≈ −90 dBFS, strong tone ≈ −20 dBFS.
      * Called from the audio capture thread — keep it short or hand off to a queue.
      */
-    using SpectrumCallback =
-        std::function<void(const float* bins, size_t count, float hz_per_bin)>;
+    using SpectrumCallback = SpectrumAnalyser::SpectrumCallback;
 
     Demodulator();
 
-    void set_word_callback(WordCallback cb) { word_cb_ = std::move(cb); }
+    void set_word_callback(WordCallback cb) { tracker_.set_word_callback(std::move(cb)); }
 
     /** Register a callback for spectrum/waterfall data.  Pass nullptr to disable. */
-    void set_spectrum_callback(SpectrumCallback cb) { spectrum_cb_ = std::move(cb); }
+    void set_spectrum_callback(SpectrumCallback cb) { spectrum_.set_callback(std::move(cb)); }
 
     /**
      * Enable / disable decoding.  Disabling resets the ring buffer and
@@ -208,151 +178,60 @@ public:
     // spec-compliant signal can be acquired.
 
     /// Select the Golay correction power applied during decode (A.5.2.6.3).
-    void      set_golay_mode(GolayMode m) { base_golay_mode_ = m; golay_mode_ = m; }
-    GolayMode golay_mode() const          { return golay_mode_; }
+    void      set_golay_mode(GolayMode m) { tracker_.set_golay_mode(m); }
+    GolayMode golay_mode() const          { return tracker_.golay_mode(); }
 
     /// Set the minimum unanimous 2/3-vote count required to accept a word (0..49).
-    void    set_min_unanimous_votes(uint8_t v) { base_min_unanimous_ = v; min_unanimous_votes_ = v; }
-    uint8_t min_unanimous_votes() const        { return min_unanimous_votes_; }
+    void    set_min_unanimous_votes(uint8_t v) { tracker_.set_min_unanimous_votes(v); }
+    uint8_t min_unanimous_votes() const        { return tracker_.min_unanimous_votes(); }
 
     /// A.5.2.6.3 "DO": enable automatic adjustment of Golay mode + unanimous-vote
     /// threshold from observed signal quality.  Off by default → fixed operating
     /// point.  Adaptation runs only while the word grid is locked (tracking);
     /// acquisition always uses the configured base point so a degraded signal can
     /// still be acquired.
-    void set_adaptive_fec(bool on) { adaptive_ = on; if (!on) restore_base_operating_point_(); }
-    bool adaptive_fec() const      { return adaptive_; }
+    void set_adaptive_fec(bool on) { tracker_.set_adaptive_fec(on); }
+    bool adaptive_fec() const      { return tracker_.adaptive_fec(); }
 
 private:
     static constexpr uint32_t WORD_SAMPLES          = SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL; // 3136
-    static constexpr uint32_t DECODE_STEP_COARSE   = SAMPLES_PER_SYMBOL / 4;   // 16 — acquisition
-    static constexpr uint32_t DECODE_STEP_FINE     = SAMPLES_PER_SYMBOL / 16;  //  4 — grid-locked
+    static constexpr uint32_t DECODE_STEP_COARSE    = SAMPLES_PER_SYMBOL / 4;   // 16 — acquisition
+    static constexpr uint32_t DECODE_STEP_FINE      = SAMPLES_PER_SYMBOL / 16;  //  4 — grid-locked
     static constexpr uint32_t SILENCE_RESET_SAMPLES = 800;  // 100 ms at 8 kHz
-    static constexpr int16_t  SILENCE_THRESHOLD    = 200;
+    static constexpr int16_t  SILENCE_THRESHOLD     = 200;
 
-    // A.5.2.6.3 criterion 1: minimum unanimous 2/3-votes (out of 49) required to
-    // accept a word.  This is the standard's primary, manufacturer-tunable BER /
-    // signal-quality discriminator; it also enforces "correct triple-redundant
-    // word phase" — a misaligned window makes the three copies disagree, dropping
-    // the unanimous count far below threshold.  A clean (bit-exact) peer scores 49.
-    static constexpr uint8_t  MIN_UNANIMOUS_VOTES  = 33;   // ~67 % of 49
+    // Ring buffer holds exactly the decode window (one word + one symbol of slack
+    // for boundary refinement).
+    static constexpr uint32_t BUF_CAP = WORD_SAMPLES + SAMPLES_PER_SYMBOL;  // 3200
 
-    WordCallback         word_cb_;
+    // ── Signal-extraction working set ──────────────────────────────────────
     bool                 enabled_       = true;
     std::vector<int16_t> ring_;
     uint32_t             write_pos_     = 0;
     uint32_t             step_accum_    = 0;
-    bool                 grid_locked_   = false;
-    uint32_t             grid_anchor_   = 0;
-    uint32_t             uncorr_anchor_ = 0;  ///< last write_pos_ at which an uncorrectable word was reported
     uint32_t             silence_count_ = 0;
 
-    // ── Word-boundary refinement state (see file header) ────────────────────
-    // A passing decode opens a refinement window instead of being accepted
-    // immediately; the candidate with the maximum winning-tone energy within
-    // one symbol of scanning is committed by commit_refined_word_().
-    bool     refining_        = false;
-    uint32_t ref_first_pos_   = 0;     ///< write_pos_ of the first passing candidate
-    uint32_t ref_best_pos_    = 0;     ///< write_pos_ of the best candidate so far
-    float    ref_best_energy_ = 0.0f;  ///< summed winning-tone Goertzel power of best
-    uint8_t  ref_best_votes_  = 0;     ///< unanimous votes of best (for adaptive FEC)
-    ALEWord  ref_best_word_{};         ///< decoded word of best (SINAD already correct)
+    // ── Grid-lock state machine ─────────────────────────────────────────────
+    // All gate / refinement / adaptive-FEC logic lives in WordGridTracker.
+    WordGridTracker tracker_;
 
-    // FEC / sync operating point (A.5.2.6.3).  base_* = configured acquisition
-    // point; the active golay_mode_ / min_unanimous_votes_ equal base_* except
-    // while adaptive tracking is in effect.
-    GolayMode   base_golay_mode_     = GolayMode::Mode3_4;
-    uint8_t     base_min_unanimous_  = MIN_UNANIMOUS_VOTES;
-    GolayMode   golay_mode_          = GolayMode::Mode3_4;
-    uint8_t     min_unanimous_votes_ = MIN_UNANIMOUS_VOTES;
-    bool        adaptive_            = false;
-    AdaptiveFec adaptive_fec_;
+    // ── Spectrum analyser (waterfall data source) ────────────────────────────
+    SpectrumAnalyser spectrum_;
 
-    void restore_base_operating_point_() {
-        golay_mode_          = base_golay_mode_;
-        min_unanimous_votes_ = base_min_unanimous_;
-        adaptive_fec_.reset();
-    }
-
-    // ── Spectrum analyser (waterfall data source) ─────────────────────────
-    //
-    // Tunable parameters — both must be consistent with apps/gui/app.js:
-    //
-    //   SPEC_FFT_N   — FFT size (must be a power of 2).
-    //                  Determines frequency resolution: Hz/bin = 8000 / SPEC_FFT_N.
-    //                  ALE tone spacing is 250 Hz; any size that places each tone on
-    //                  a distinct set of bins is adequate.
-    //
-    //                  Typical values and their trade-offs:
-    //                    1024 →  7.8 Hz/bin,  32 bins/tone-gap — minimum useful
-    //                    2048 →  3.9 Hz/bin,  64 bins/tone-gap — current default
-    //                    4096 →  2.0 Hz/bin, 128 bins/tone-gap — higher resolution
-    //                    8192 →  1.0 Hz/bin, 256 bins/tone-gap — maximum, 3× memory
-    //                  Increasing SPEC_FFT_N above WORD_SAMPLES+SAMPLES_PER_SYMBOL (3200)
-    //                  automatically increases BUF_CAP (see below).
-    //
-    //   SPEC_INTERVAL — Samples consumed between consecutive FFT triggers.
-    //                   Update rate (Hz) = SAMPLE_RATE_HZ / SPEC_INTERVAL.
-    //                   Must match the JS row-interval constant (default 100 ms):
-    //                     SPEC_INTERVAL = SAMPLE_RATE_HZ × JS_ROW_MS / 1000
-    //                   e.g. 8000 × 0.100 = 800 (current default, 10 Hz).
-    //                   Lower values increase CPU load and WebSocket bandwidth
-    //                   (~4 KB × rate); the JS canvas redraws at ~60 fps anyway, so
-    //                   there is no visual gain beyond the display refresh rate.
-    //
-    //   BUF_CAP       — Derived; no manual tuning.  Automatically set to the larger
-    //                   of the decode window (WORD_SAMPLES+SAMPLES_PER_SYMBOL = 3200) and
-    //                   SPEC_FFT_N so that compute_spectrum_() can always read a
-    //                   full SPEC_FFT_N-sample history from the ring buffer.
-    //
-    // The Blackman-Harris window (−92 dB sidelobes) in compute_spectrum_() is
-    // hardcoded; it is substantially better than Hann (−31 dB) for ALE signals
-    // whose tones are 40–60 dB above the HF noise floor.
-    //
-    // ── JS counterparts (apps/gui/app.js) ────────────────────────────────────
-    // nextRowAt + 100   row interval in ms  (= 1000 * SPEC_INTERVAL / 8000)
-    // BW_LO / BW_HI     displayed Hz window  (0 / 4000 — must equal 0 / Nyquist)
-    // emaFloor α        0.03 slow / 0.97 fast  — noise-floor tracker time constant
-    // emaPeak attack    0.20  — how fast the peak level rises on a new signal
-    // emaPeak decay     0.002 — how slowly the peak level falls after the signal ends
-    // range minimum     20 dB — floor for the adaptive display range
-    // energy2rgb stops  0.20 / 0.40 / 0.60 / 0.80 — SDR rainbow gradient thresholds
-
-    static constexpr size_t   SPEC_FFT_N    = 2048;  // bins: 0–4000 Hz, ≈3.9 Hz/bin
-    static constexpr uint32_t SPEC_INTERVAL = 800;   // samples between updates (~10 Hz)
-    // BUF_CAP must cover both the decode window (WORD_SAMPLES + SAMPLES_PER_SYMBOL = 3200)
-    // and the spectrum window (SPEC_FFT_N = 2048); take the larger.
-    static constexpr uint32_t BUF_CAP =
-        (WORD_SAMPLES + SAMPLES_PER_SYMBOL >= static_cast<uint32_t>(SPEC_FFT_N))
-        ? WORD_SAMPLES + SAMPLES_PER_SYMBOL
-        : static_cast<uint32_t>(SPEC_FFT_N);  // 3200
-
-    SpectrumCallback              spectrum_cb_;
-    uint32_t                      spec_accum_  = 0;
-    std::array<float, SPEC_FFT_N>           spec_window_;  // pre-computed Blackman-Harris window
-    std::array<float, SPEC_FFT_N>           spec_re_;      // FFT working buffer (real)
-    std::array<float, SPEC_FFT_N>           spec_im_;      // FFT working buffer (imag)
-    std::array<float, SPEC_FFT_N / 2 + 1>  spec_bins_;    // output magnitude/dBFS bins
-
-    void compute_spectrum_();
-
+    // ── Signal-extraction helpers ────────────────────────────────────────────
     // Goertzel single-bin power |X(k)|^2 over M samples (default: one full
-    // 64-sample symbol). The symbol decision always uses the full window; SINAD
-    // is measured on a shorter centered sub-window — see symbol_from_block().
-    // win_power_out = full-block power of the winning tone; summed over a word
-    // it is the alignment metric used by the boundary refinement.
+    // 64-sample symbol).
     static float   goertzel_power(const int16_t* block, float freq_hz,
                                   uint32_t M = SAMPLES_PER_SYMBOL);
     static uint8_t symbol_from_block(const int16_t* block, float& sinad_db_out,
                                      float& win_power_out);
     int16_t        ring_at(uint32_t abs_pos) const { return ring_[abs_pos % BUF_CAP]; }
-    bool           try_decode(ALEWord& out, Golay::DecodeResult& fec, uint8_t& unanimous_votes,
-                              float& word_energy) const;
-    // Acceptance gate (A.5.2.6.3 criteria) — const: passing a candidate no longer
-    // anchors the grid; commit_refined_word_() does that for the best candidate.
-    bool           gate_word_(const Golay::DecodeResult& fec, const ALEWord& word,
-                              uint8_t unanimous_votes) const;
-    void           commit_refined_word_();
+
+    // Produce a DecodedCandidate from the current ring buffer position.
+    // Uses tracker_.golay_mode() for the FEC operating point.
+    DecodedCandidate try_decode_() const;
+
+    void check_silence_reset_(int16_t s);
 };
 
 } // namespace ALE2GModem

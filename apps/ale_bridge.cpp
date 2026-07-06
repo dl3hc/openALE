@@ -26,6 +26,7 @@
 #include "App/gps_service.h"
 #include "App/sfi_service.h"
 #include "PAL/radio.h"
+#include "PAL/radios/hamlib_radio.h"
 #include "PAL/timer.h"
 #include "bridge/ws_server.h"
 #include "bridge/minijson.h"
@@ -119,22 +120,6 @@ static mj::Value string_array(const std::vector<std::string>& items) {
     return v;
 }
 
-// "CALLSIGN|name|enabled|net1,net2|chan1,chan2" -> {callsign,name,status,net_members:[],valid_channels:[]/"ALL"}
-static mj::Value contact_line_to_json(const std::string& line) {
-    std::vector<std::string> f;
-    std::stringstream ss(line);
-    std::string tok;
-    while (std::getline(ss, tok, '|')) f.push_back(tok);
-    f.resize(5);
-    mj::Value v = mj::obj();
-    v.set("callsign", mj::Value::string(f[0]));
-    v.set("name", mj::Value::string(f[1]));
-    v.set("status", mj::Value::string(f[2]));
-    v.set("net_members", string_array(split_csv(f[3])));
-    if (f[4] == "ALL") v.set("valid_channels", mj::Value::string("ALL"));
-    else                v.set("valid_channels", string_array(split_csv(f[4])));
-    return v;
-}
 
 // "ADDR|enabled|chan1,chan2" -> {addr,status,valid_channels:[]/"ALL"}
 static mj::Value self_addr_line_to_json(const std::string& line) {
@@ -273,6 +258,7 @@ struct BridgeCtx {
     std::string                    lqa_path;   ///< empty = persistence disabled
     std::string                    audio_in;   ///< last successfully opened RX device
     std::string                    audio_out;  ///< last successfully opened TX device
+    float                          tx_volume = 0.25f; ///< persists across AUDIO_OPEN/CLOSE
     // GPS / SFI services and shared pending-update mailbox
     GpsService*       gps_svc  = nullptr;
     SfiService*       sfi_svc  = nullptr;
@@ -344,10 +330,19 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
     }
 }
 
+// Helper: call process_command() and map its text result to a JSON bool reply.
+// All operator CMDs go through this — single code path, no duplicated dispatch.
+static std::string pc(const mj::Value& msg, ALEController& ctrl, const std::string& cmd) {
+    const std::string r = ctrl.process_command(cmd);
+    return mj::dump(make_reply(msg, r.rfind("OK:", 0) == 0));
+}
+
 // Every command's reply is {"id":<echo>,"ok":bool,...}. "id" is whatever the
 // GUI sent (number or absent — JS request counters are the expected case).
-// AMD dispatches to the typed ALEController::send_amd() (linked orderwire when
-// LINKED, else queue + call); CMD:AMD still exists for CLI/legacy queue-only use.
+// Operator CMDs route through ctrl.process_command() via the pc() helper above.
+// Commands that return structured data or own bridge-level state (AUDIO_OPEN,
+// RIG_CONNECT, TIMING_SET, channel/contact/net construction, etc.) call the
+// controller directly here.
 //
 // Runs on the main-loop thread (commands drained in the loop), so AUDIO_OPEN's
 // close+reopen is sequential with audio->tick() — no race.
@@ -375,31 +370,15 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         ctrl.start_scanning();
         return mj::dump(make_reply(msg, true));
     }
-    if (cmd == "AVAILABLE") { ctrl.start_available();  return mj::dump(make_reply(msg, true)); }
-    if (cmd == "SOUND")     { return mj::dump(make_reply(msg, ctrl.send_sounding())); }
-    if (cmd == "SOUND_SWEEP") {  // one-shot multi-channel sounding on a net's channels
-        const std::string net = msg.get_string("net");
-        bool ok = false;
-        if (!net.empty()) {
-            // Resolve the net's channels here via the controller's helper-less path:
-            // ALEController exposes the channel list + nets; build the sweep list.
-            std::vector<Channel> sweep;
-            for (const auto& n : ctrl.nets())
-                if (n.name == net) {
-                    for (const auto& id : n.channel_ids)
-                        for (const auto& c : ctrl.channels())
-                            if (c.id == id && c.enabled && !c.inhibit_sounding && !c.rx_only) { sweep.push_back(c); break; }
-                    break;
-                }
-            ok = !sweep.empty() && ctrl.send_sounding_sweep(sweep);
-        }
-        return mj::dump(make_reply(msg, ok));
+    if (cmd == "AVAILABLE")       { return pc(msg, ctrl, "CMD:AVAILABLE"); }
+    if (cmd == "SOUND")           { return pc(msg, ctrl, "CMD:SOUND"); }
+    if (cmd == "SOUND_SWEEP") {
+        return pc(msg, ctrl, "CMD:SOUND_SWEEP " + msg.get_string("net"));
     }
-    if (cmd == "SOUND_AUTO") {  // periodic multi-channel sounding on a net
-        // interval_sec is now owned by the net's own sounding_interval_sec policy;
-        // the GUI still sends it via NET_UPDATE, not SOUND_AUTO.
-        ctrl.set_automatic_sounding(msg.get_bool("on"), msg.get_string("net"));
-        return mj::dump(make_reply(msg, true));
+    if (cmd == "SOUND_AUTO") {
+        return pc(msg, ctrl, std::string("CMD:SOUND_AUTO ")
+            + (msg.get_bool("on") ? "on" : "off")
+            + (msg.get_string("net").empty() ? "" : " " + msg.get_string("net")));
     }
     if (cmd == "SOUND_AUTO_GET") {
         mj::Value r = make_reply(msg, true);
@@ -408,23 +387,15 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("net",          mj::Value::string(ctrl.get_auto_sounding_net()));
         return mj::dump(r);
     }
-    if (cmd == "SOUND_INTERRUPT") {  // cancel a pending idle-sounding countdown and reset timer
-        ctrl.interrupt_sounding(msg.get_string("net"));
-        return mj::dump(make_reply(msg, true));
-    }
+    if (cmd == "SOUND_INTERRUPT") { return pc(msg, ctrl, "CMD:SOUND_INTERRUPT " + msg.get_string("net")); }
 
     if (cmd == "CALL") {
         const bool single = msg.get_bool("single_channel", false);
-        const bool ok = single
-            ? ctrl.initiate_single_channel_call(msg.get_string("addr"))
-            : ctrl.initiate_call(msg.get_string("addr"));
-        return mj::dump(make_reply(msg, ok));
+        return pc(msg, ctrl, (single ? "CMD:SINGLE_CALL " : "CMD:CALL ") + msg.get_string("addr"));
     }
     if (cmd == "GROUP_CALL") {
-        if (msg.find("roster")) {
-            const bool ok = ctrl.initiate_group_call(msg.get_string("roster"));
-            return mj::dump(make_reply(msg, ok));
-        }
+        if (msg.find("roster"))
+            return pc(msg, ctrl, "CMD:GROUP_CALL " + msg.get_string("roster"));
         const mj::Value* members = msg.find("members");
         const bool ok = members && ctrl.initiate_group_call(members->as_string_array());
         return mj::dump(make_reply(msg, ok));
@@ -474,15 +445,12 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         }
         return mj::dump(make_reply(msg, true));
     }
-    if (cmd == "ACCEPT")          { ctrl.accept_call();     return mj::dump(make_reply(msg, true)); }
-    if (cmd == "REJECT")          { ctrl.reject_call();     return mj::dump(make_reply(msg, true)); }
-    if (cmd == "TERMINATE")       { ctrl.terminate_link();  return mj::dump(make_reply(msg, true)); }
-    if (cmd == "RESET_IDLE_TIMER"){ ctrl.reset_link_idle_timer(); return mj::dump(make_reply(msg, true)); }
-    if (cmd == "EMERGENCY_STOP")  { ctrl.emergency_stop();  return mj::dump(make_reply(msg, true)); }
-    if (cmd == "SET_PTT") {
-        ctrl.set_manual_ptt(msg.get_bool("on", false));
-        return mj::dump(make_reply(msg, true));
-    }
+    if (cmd == "ACCEPT")           { return pc(msg, ctrl, "CMD:ACCEPT"); }
+    if (cmd == "REJECT")           { return pc(msg, ctrl, "CMD:REJECT"); }
+    if (cmd == "TERMINATE")        { return pc(msg, ctrl, "CMD:TERMINATE"); }
+    if (cmd == "RESET_IDLE_TIMER") { return pc(msg, ctrl, "CMD:RESET_IDLE_TIMER"); }
+    if (cmd == "EMERGENCY_STOP")   { return pc(msg, ctrl, "CMD:EMERGENCY_STOP"); }
+    if (cmd == "SET_PTT")          { return pc(msg, ctrl, msg.get_bool("on", false) ? "CMD:SET_PTT on" : "CMD:SET_PTT off"); }
 
     if (cmd == "AMD") {
         // Typed dispatch: if LINKED, send AMD over the established link; otherwise
@@ -534,13 +502,12 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "CHANNEL_DEL") {
-        const bool ok = ctrl.del_channel(static_cast<uint32_t>(msg.get_number("rx_hz")));
-        return mj::dump(make_reply(msg, ok));
+        return pc(msg, ctrl, "CMD:DEL_CHANNEL "
+            + std::to_string(static_cast<uint32_t>(msg.get_number("rx_hz"))));
     }
     if (cmd == "CHANNEL_RENAME") {
-        const bool ok = ctrl.rename_channel(msg.get_string("old_id"),
-                                            msg.get_string("new_id"));
-        return mj::dump(make_reply(msg, ok));
+        return pc(msg, ctrl, "CMD:RENAME_CHANNEL "
+            + msg.get_string("old_id") + " " + msg.get_string("new_id"));
     }
     if (cmd == "STATION_LOAD" || cmd == "CHANNELS_LOAD") {
         const bool ok = ctrl.load_station_file(msg.get_string("path"));
@@ -559,15 +526,13 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("data", list);
         return mj::dump(r);
     }
-    if (cmd == "NET_ADD") { return mj::dump(make_reply(msg, ctrl.add_net(msg.get_string("name")))); }
-    if (cmd == "NET_DEL") { return mj::dump(make_reply(msg, ctrl.del_net(msg.get_string("name")))); }
+    if (cmd == "NET_ADD")      { return pc(msg, ctrl, "CMD:ADD_NET " + msg.get_string("name")); }
+    if (cmd == "NET_DEL")      { return pc(msg, ctrl, "CMD:DEL_NET " + msg.get_string("name")); }
     if (cmd == "NET_ASSIGN") {
-        const bool ok = ctrl.assign_channel_to_net(msg.get_string("net"), msg.get_string("channel_id"));
-        return mj::dump(make_reply(msg, ok));
+        return pc(msg, ctrl, "CMD:ASSIGN_CHANNEL " + msg.get_string("net") + " " + msg.get_string("channel_id"));
     }
     if (cmd == "NET_UNASSIGN") {
-        const bool ok = ctrl.unassign_channel_from_net(msg.get_string("net"), msg.get_string("channel_id"));
-        return mj::dump(make_reply(msg, ok));
+        return pc(msg, ctrl, "CMD:UNASSIGN_CHANNEL " + msg.get_string("net") + " " + msg.get_string("channel_id"));
     }
     if (cmd == "NET_UPDATE") {
         Net updated;
@@ -579,10 +544,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         updated.calling_length_c     = static_cast<uint32_t>(msg.get_number("calling_length_c", 10));
         return mj::dump(make_reply(msg, ctrl.update_net(updated)));
     }
-    if (cmd == "SCAN_NET_SET") {
-        ctrl.set_active_scan_net(msg.get_string("net"));
-        return mj::dump(make_reply(msg, true));
-    }
+    if (cmd == "SCAN_NET_SET")     { return pc(msg, ctrl, "CMD:SET_SCAN_NET " + msg.get_string("net")); }
     if (cmd == "SCAN_NET_GET") {
         mj::Value r = make_reply(msg, true);
         r.set("net", mj::Value::string(ctrl.get_active_scan_net()));
@@ -593,18 +555,23 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "CONTACTS_LIST") {
         mj::Value r = make_reply(msg, true);
         mj::Value list = mj::arr();
-        for (const auto& line : ctrl.get_all_contacts()) list.push_back(contact_line_to_json(line));
+        for (const auto& [addr, name] : ctrl.get_address_book().all_stations()) {
+            mj::Value v = mj::obj();
+            v.set("callsign", mj::Value::string(addr));
+            v.set("name",     mj::Value::string(name));
+            list.push_back(std::move(v));
+        }
         r.set("data", list);
         return mj::dump(r);
     }
     if (cmd == "CONTACT_ADD") {
-        const bool ok = ctrl.add_contact(msg.get_string("callsign"), msg.get_string("name"),
-            msg.get_string("status", "enabled"), msg.get_string("net_members"),
-            msg.get_string("valid_channels", "ALL"));
-        return mj::dump(make_reply(msg, ok));
+        const auto cs   = msg.get_string("callsign");
+        const auto name = msg.get_string("name");
+        if (cs.empty()) return mj::dump(make_reply(msg, false));
+        return mj::dump(make_reply(msg, ctrl.add_contact(cs, name)));
     }
-    if (cmd == "CONTACT_DEL")    { return mj::dump(make_reply(msg, ctrl.remove_contact(msg.get_string("callsign")))); }
-    if (cmd == "CONTACT_SELECT") { return mj::dump(make_reply(msg, ctrl.select_contact(msg.get_string("callsign")))); }
+    if (cmd == "CONTACT_DEL")    { return pc(msg, ctrl, "CMD:DEL_CONTACT "    + msg.get_string("callsign")); }
+    if (cmd == "CONTACT_SELECT") { return pc(msg, ctrl, "CMD:SELECT_CONTACT " + msg.get_string("callsign")); }
 
     // ── Self addresses ───────────────────────────────────────────────────
     if (cmd == "SELF_ADDR_LIST") {
@@ -619,8 +586,8 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             msg.get_string("status", "enabled"), msg.get_string("valid_channels", "ALL"));
         return mj::dump(make_reply(msg, ok));
     }
-    if (cmd == "SELF_ADDR_DEL")         { return mj::dump(make_reply(msg, ctrl.remove_self_address(msg.get_string("addr")))); }
-    if (cmd == "SELF_ADDR_SET_PRIMARY") { return mj::dump(make_reply(msg, ctrl.set_primary_self_address(msg.get_string("addr")))); }
+    if (cmd == "SELF_ADDR_DEL")         { return pc(msg, ctrl, "CMD:DEL_SELF_ADDR "     + msg.get_string("addr")); }
+    if (cmd == "SELF_ADDR_SET_PRIMARY") { return pc(msg, ctrl, "CMD:SET_PRIMARY_ADDR " + msg.get_string("addr")); }
 
     // ── LQA / signal quality ─────────────────────────────────────────────
     if (cmd == "LQA_LIST") {
@@ -631,7 +598,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(r);
     }
     if (cmd == "LQA_CLEAR") {
-        ctrl.clear_lqa();
+        ctrl.process_command("CMD:CLEAR_LQA");
         if (!ctx.lqa_path.empty()) ctrl.save_lqa(ctx.lqa_path);
         return mj::dump(make_reply(msg, true));
     }
@@ -686,6 +653,12 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("relink_threshold", mj::Value::number(ctrl.relink_threshold()));
         return mj::dump(r);
     }
+    if (cmd == "LOG_LEVEL_SET") {
+        // level: 0=Off, 1=Error, 2=Info, 3=Debug, 4=Trace  (matches GUI cfgLogLevel)
+        const int level = static_cast<int>(msg.get_number("level"));
+        pal::hamlib_set_log_level(level);
+        return mj::dump(make_reply(msg, true));
+    }
     if (cmd == "FREQ_SELECT_SET") {
         if (msg.has("enhanced_freq_select"))
             ctrl.set_enhanced_freq_select(msg.get_bool("enhanced_freq_select"));
@@ -710,6 +683,10 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
 
     // ── VFO / radio ──────────────────────────────────────────────────────
     if (cmd == "VFO_GET") {
+        // Sync from radio before reading so the reply reflects actual radio
+        // state (freq/mode the operator may have changed in Quisk or on
+        // hardware), not just the last value PC-ALE commanded.
+        ctrl.sync_radio_state();
         mj::Value r = make_reply(msg, true);
         r.set("freq_hz", mj::Value::number(ctrl.get_current_frequency()));
         r.set("mode", mj::Value::string(ctrl.get_current_mode()));
@@ -719,6 +696,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     }
     if (cmd == "VFO_SET_FREQ")      { return mj::dump(make_reply(msg, ctrl.set_frequency(static_cast<uint32_t>(msg.get_number("hz"))))); }
     if (cmd == "VFO_SET_MODE")      { return mj::dump(make_reply(msg, ctrl.set_mode(msg.get_string("mode")))); }
+    if (cmd == "VFO_SET_CHANNEL")   { return mj::dump(make_reply(msg, ctrl.set_vfo_channel(static_cast<uint32_t>(msg.get_number("hz")), msg.get_string("mode")))); }
     if (cmd == "VFO_STEP")          { return mj::dump(make_reply(msg, ctrl.step_channel(static_cast<int>(msg.get_number("direction"))))); }
     if (cmd == "VFO_NUDGE")         { ctrl.nudge_frequency(static_cast<int>(msg.get_number("direction"))); return mj::dump(make_reply(msg, true)); }
     if (cmd == "VFO_SET_TUNE_STEP") { ctrl.set_tune_step(static_cast<uint32_t>(msg.get_number("hz"))); return mj::dump(make_reply(msg, true)); }
@@ -839,7 +817,11 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         const std::string in_dev  = msg.get_string("in");
         const std::string out_dev = msg.get_string("out");
         const bool ok = (*ctx.audio)->open(in_dev, out_dev);
-        if (ok) { ctrl.set_audio_device(ctx.audio->get()); ctx.audio_in = in_dev; ctx.audio_out = out_dev; }
+        if (ok) {
+            ctrl.set_audio_device(ctx.audio->get());
+            (*ctx.audio)->set_tx_volume(ctx.tx_volume);
+            ctx.audio_in = in_dev; ctx.audio_out = out_dev;
+        }
         else    { ctx.audio->reset(); ctx.audio_in.clear(); ctx.audio_out.clear(); }
         mj::Value r = make_reply(msg, ok);
         if (!ok) r.set("error", mj::Value::string("could not open audio device(s)"));
@@ -847,6 +829,14 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     }
     if (cmd == "AUDIO_CLOSE") {
         if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); ctx.audio->reset(); }
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "AUDIO_SET_VOL") {
+        float vol = static_cast<float>(msg.get_number("vol", 0.25));
+        if (vol < 0.0f) vol = 0.0f;
+        if (vol > 1.0f) vol = 1.0f;
+        ctx.tx_volume = vol;
+        if (*ctx.audio) (*ctx.audio)->set_tx_volume(vol);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "AUDIO_LEVEL") {
@@ -913,6 +903,19 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         mj::Value r = make_reply(msg, true);
         r.set("connected", mj::Value::boolean(ctrl.test_rig_connection()));
         r.set("status", mj::Value::string(ctrl.get_rig_connection_status()));
+        return mj::dump(r);
+    }
+    if (cmd == "RIG_LIST") {
+        mj::Value r = make_reply(msg, true);
+        mj::Value arr = mj::arr();
+        for (const auto& e : pal::list_rigs()) {
+            mj::Value v = mj::obj();
+            v.set("id",    mj::Value::number(e.model));
+            v.set("mfg",   mj::Value::string(e.mfg));
+            v.set("macro", mj::Value::string(e.macro));
+            arr.push_back(std::move(v));
+        }
+        r.set("rigs", std::move(arr));
         return mj::dump(r);
     }
 
@@ -1049,6 +1052,7 @@ int main(int argc, char* argv[]) {
 
     BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path,
                    /*audio_in*/"", /*audio_out*/"",
+                   /*tx_volume*/0.25f,
                    &gps_svc, &sfi_svc, &pending, &ws };
 
     // ── Event push ───────────────────────────────────────────────────────
@@ -1184,7 +1188,8 @@ int main(int argc, char* argv[]) {
 
     // ── Main loop — mirrors ale_cli.cpp exactly, plus WS command drain ─────
     std::vector<int16_t> rx_buf;
-    std::string last_state = ctrl.display_state();
+    std::string last_state    = ctrl.display_state();
+    bool        last_lbt_busy = false;
     while (g_running) {
         const uint32_t t = static_cast<uint32_t>(timer->get_time_ms());
 
@@ -1226,6 +1231,19 @@ int main(int argc, char* argv[]) {
             e.set("value", mj::Value::string(s));
             ws.send_text(mj::dump(e));
             last_state = std::move(s);
+        }
+
+        // Channel-occupancy indicator: push on every busy→idle / idle→busy edge
+        // so the GUI always reflects the detector's current state, not just
+        // the transitions that happen to fall inside an LBT window.
+        const bool cur_lbt_busy = ctrl.lbt_busy();
+        if (cur_lbt_busy != last_lbt_busy) {
+            mj::Value e = make_event("channel_busy");
+            e.set("busy",     mj::Value::boolean(cur_lbt_busy));
+            e.set("level_db", mj::Value::number(ctrl.lbt_level_db()));
+            e.set("floor_db", mj::Value::number(ctrl.lbt_floor_db()));
+            ws.send_text(mj::dump(e));
+            last_lbt_busy = cur_lbt_busy;
         }
 
         timer->sleep_ms(1);

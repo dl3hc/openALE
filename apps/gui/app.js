@@ -136,6 +136,7 @@ function syncAllFromBridge(pullOnly = false) {
   syncEnhFreqSelectFromBridge();    // pull Enhanced Freq-Select state from core
   syncLocationFromBridge();         // pull Station Location & Propagation from core
   pollRigStatus();   // establish initial radio-control lock state
+  populateRigDropdown();
   if (pullOnly) {
     // After a settings import: PULL the just-loaded core state into the GUI.
     // The default push path would read stale DOM values and clobber the import.
@@ -155,7 +156,16 @@ function syncAllFromBridge(pullOnly = false) {
 // external signal PC-ALE can't be notified about — needs a heartbeat) and the
 // signal-quality panel. syncVfoFromBridge() is still called on connect
 // (syncAllFromBridge) and as a per-command ACK from manual VFO actions.
-setInterval(() => { if (bridgeConnected) { pollRigStatus(); pollSignalQuality(); } }, 2000);
+setInterval(() => {
+  if (bridgeConnected) {
+    pollRigStatus();
+    pollSignalQuality();
+    // Pull live freq/mode from the radio on every heartbeat tick so manual
+    // operator tuning (Quisk VFO, hardware dial) is reflected in the GUI
+    // within ~2 s.  Only relevant when a rig is actually connected.
+    if (rigConnected) syncVfoFromBridge();
+  }
+}, 2000);
 
 // BER-led quality blend, mirroring C++ from_direction_quality()
 // (MIL-STD-188-141B A.5.4.1.1 BER primary + A.5.4.1.2 SINAD secondary). berQ and
@@ -345,6 +355,17 @@ function onBridgeEvent(e) {
       pttOn = !!e.ptt;
       { const b = document.getElementById('pttBtn');
         if (b) { b.classList.toggle('ptt-on', pttOn); b.innerHTML = pttOn ? `${icon('zap',14)} TX` : `${icon('mic',14)} PTT`; } }
+      break;
+    case 'channel_busy':
+      { const chip = document.getElementById('busyChip');
+        if (chip) {
+          chip.classList.toggle('busy', !!e.busy);
+          chip.querySelector('span').textContent = e.busy ? 'FREQ BUSY' : 'FREQ CLEAR';
+          chip.title = e.busy
+            ? `Channel occupied — level ${Math.round(e.level_db)} dB, floor ${Math.round(e.floor_db)} dB (A.5.4.7.2)`
+            : 'Channel clear (A.5.4.7.2)';
+        }
+      }
       break;
     case 'gps_fix':
       locGpsFix = !!e.acquired;
@@ -659,11 +680,8 @@ function clearHeard() {
   renderHeard();
 }
 
-// One-click "add heard station to address book" from a heard-row button. Adds
-// the callsign as a minimal contact (operator can flesh out name/net/channels
-// later via the contact editor) and pushes it to Core via the same CONTACT_ADD
-// path saveContact() uses. No-op if the callsign is already a contact or if the
-// row has no real callsign (the '(sounding)' placeholder).
+// One-click "add heard station to address book" from a heard-row button.
+// No-op if the callsign is already a contact or if the row has no real callsign.
 function addHeardToContacts(addr) {
   if (!addr || addr === '(sounding)') return;
   const cs = addr.toUpperCase();
@@ -671,16 +689,13 @@ function addHeardToContacts(addr) {
     aleLogInfo(`${cs} is already in the address book`);
     return;
   }
-  const c = { cs, name: '', fav: false, status: 'enabled', net: '', chans: 'ALL' };
+  const c = { cs, name: '', fav: false };
   contacts.push(c);
   selectedContact = c;
   renderContacts();
   renderHeard();   // flip the row's button to the ✓/already-added state
   if (bridgeConnected) {
-    bridgeSend('CONTACT_ADD', {
-      callsign: c.cs, name: c.name, status: c.status,
-      net_members: c.net, valid_channels: c.chans,
-    }, () => syncContactsFromBridge());
+    bridgeSend('CONTACT_ADD', { callsign: c.cs, name: c.name }, () => syncContactsFromBridge());
   }
   aleLogInfo(`Added ${cs} to the address book`);
 }
@@ -1009,11 +1024,10 @@ function renderContacts() {
   el.innerHTML = list.length ? list.map(c => {
     const idx = contacts.indexOf(c);
     const sel = c === selectedContact ? ' sel' : '';
-    const off = c.status === 'disabled';
-    return `<div class="contact-item${sel}" style="${off?'opacity:.5':''}" onclick="pickContact(${idx})">
+    return `<div class="contact-item${sel}" onclick="pickContact(${idx})">
       <div class="contact-avatar">${icon('user',16)}</div>
       <div class="contact-info">
-        <div class="contact-cs">${c.cs}${off?' <span style="font-size:9px;color:var(--tx-dim)">OFF</span>':''}</div>
+        <div class="contact-cs">${c.cs}</div>
         <div class="contact-name">${escapeHtml(c.name||'')}</div>
       </div>
       <div class="contact-actions">
@@ -1034,12 +1048,8 @@ function syncContactsFromBridge() {
   bridgeSend('CONTACTS_LIST', {}, (r) => {
     if (!r.ok) return;
     const prevSel = selectedContact?.cs;
-    const favs = new Set(contacts.filter(c => c.fav).map(c => c.cs));  // "favorite" is GUI-only, not in Core
-    contacts = r.data.map(c => ({
-      cs: c.callsign, name: c.name, fav: favs.has(c.callsign), status: c.status,
-      net: (c.net_members || [])[0] || '',
-      chans: c.valid_channels === 'ALL' ? 'ALL' : (c.valid_channels || []).join(','),
-    }));
+    const favs = new Set(contacts.filter(c => c.fav).map(c => c.cs));
+    contacts = r.data.map(c => ({ cs: c.callsign, name: c.name, fav: favs.has(c.callsign) }));
     selectedContact = contacts.find(c => c.cs === prevSel) || contacts[0] || null;
     renderContacts();
   });
@@ -1048,13 +1058,10 @@ function syncContactsFromBridge() {
 function openContactEditor(idx) {
   editingContactIdx = (typeof idx === 'number') ? idx : -1;
   const c = editingContactIdx >= 0 ? contacts[editingContactIdx]
-                                   : { cs:'', name:'', fav:false, status:'enabled', net:'', chans:'ALL' };
-  document.getElementById('ceCs').value     = c.cs;
-  document.getElementById('ceName').value   = c.name || '';
-  document.getElementById('ceFav').checked  = !!c.fav;
-  document.getElementById('ceStatus').value = c.status || 'enabled';
-  document.getElementById('ceNet').value    = c.net || '';
-  document.getElementById('ceChans').value  = c.chans || 'ALL';
+                                   : { cs:'', name:'', fav:false };
+  document.getElementById('ceCs').value    = c.cs;
+  document.getElementById('ceName').value  = c.name || '';
+  document.getElementById('ceFav').checked = !!c.fav;
   document.getElementById('ceDelete').style.display = editingContactIdx >= 0 ? '' : 'none';
   document.getElementById('ceTitle').textContent    = editingContactIdx >= 0 ? 'Edit Contact' : 'Add Contact';
   document.getElementById('contactModal').classList.remove('hidden');
@@ -1068,11 +1075,8 @@ function saveContact() {
   if (!cs) { document.getElementById('ceCs').focus(); return; }
   const c = {
     cs,
-    name:   document.getElementById('ceName').value.trim(),
-    fav:    document.getElementById('ceFav').checked,
-    status: document.getElementById('ceStatus').value,
-    net:    document.getElementById('ceNet').value.trim(),
-    chans:  document.getElementById('ceChans').value.trim() || 'ALL',
+    name: document.getElementById('ceName').value.trim(),
+    fav:  document.getElementById('ceFav').checked,
   };
   const prevCs = editingContactIdx >= 0 ? contacts[editingContactIdx].cs : null;
   if (editingContactIdx >= 0) contacts[editingContactIdx] = c;
@@ -1080,12 +1084,8 @@ function saveContact() {
   closeContactEditor();
   renderContacts();
   if (bridgeConnected) {
-    // callsign is ContactStore's key — a rename needs the old entry removed too.
     if (prevCs && prevCs !== cs) bridgeSend('CONTACT_DEL', { callsign: prevCs });
-    bridgeSend('CONTACT_ADD', {
-      callsign: c.cs, name: c.name, status: c.status,
-      net_members: c.net, valid_channels: c.chans,
-    }, () => syncContactsFromBridge());
+    bridgeSend('CONTACT_ADD', { callsign: c.cs, name: c.name }, () => syncContactsFromBridge());
   }
 }
 
@@ -1307,6 +1307,33 @@ function updateRigFields() {
   document.getElementById('rigFieldsSerial').style.display = val === 'serial'    ? '' : 'none';
 }
 
+// Populate the Hamlib model dropdown from the bridge's RIG_LIST reply.
+// Groups entries by manufacturer using <optgroup>. Restores any previously
+// selected model number after rebuilding the list.
+function populateRigDropdown() {
+  const sel = document.getElementById('rigModel');
+  if (!sel || !bridgeConnected) return;
+  const prev = sel.value;
+  bridgeSend('RIG_LIST', {}, (r) => {
+    if (!r.ok || !Array.isArray(r.rigs)) return;
+    sel.innerHTML = '';
+    let grp = null, lastMfg = null;
+    for (const e of r.rigs) {
+      if (e.mfg !== lastMfg) {
+        grp = document.createElement('optgroup');
+        grp.label = e.mfg;
+        sel.appendChild(grp);
+        lastMfg = e.mfg;
+      }
+      const opt = document.createElement('option');
+      opt.value = String(e.id);
+      opt.textContent = e.macro;
+      grp.appendChild(opt);
+    }
+    if (prev) sel.value = prev;
+  });
+}
+
 // Populate the RX/TX device dropdowns with real WASAPI devices from the bridge's
 // AUDIO_DEVICES reply (option value is the bare name AudioDevice::open() matches —
 // "IN: "/"OUT: " prefix stripped). Remembers the operator's device choice so
@@ -1374,7 +1401,11 @@ function openAudioDevice() {
   if (btn) btn.textContent = '⟳ Opening…';
   bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (r) => {
     audioOpen = !!r.ok;
-    if (r.ok) { audioInSelected = inName; audioOutSelected = outName; }  // remember the working choice
+    if (r.ok) {
+      audioInSelected = inName; audioOutSelected = outName;
+      const vol = document.getElementById('cfgTxVol');
+      if (vol) bridgeSend('AUDIO_SET_VOL', { vol: vol.value / 100 });
+    }
     if (btn) {
       btn.innerHTML = r.ok ? `${icon('square',12)} Close Audio` : `${icon('power',12)} Connect Audio`;
       btn.classList.toggle('scan-on', !!r.ok);
@@ -1395,9 +1426,15 @@ function testAudio() {
   }, 120);
 }
 
-// TX volume label sync
+// TX volume — label + live send to bridge when audio is open
+function txVolTodBFS(v) {
+  if (v <= 0) return '−∞ dBFS';
+  const db = Math.round(20 * Math.log10(v / 100));
+  return (db >= 0 ? '+' : '') + db + ' dBFS';
+}
 document.getElementById('cfgTxVol')?.addEventListener('input', function() {
-  document.getElementById('txVolLbl').textContent = this.value + ' %';
+  document.getElementById('txVolLbl').textContent = txVolTodBFS(+this.value);
+  if (audioOpen) bridgeSend('AUDIO_SET_VOL', { vol: this.value / 100 });
 });
 
 // Live CAT-link state (bridge attached a real pal::IRadio). Drives the Connect
@@ -1781,43 +1818,107 @@ function delCh(i) {
 let nets = [
   { name:'NET1', channelIds:['C-1'], dwellMs:200, scanEnabled:true, soundEnabled:false, soundIntervalSec:300, callingC:10 },
 ];
+const netChExpanded = new Set();
+
+function netFmtFreq(hzStr) {
+  const hz = Number(hzStr);
+  if (!hz) return '—';
+  const mhz    = Math.trunc(hz / 1_000_000);
+  const kpart  = Math.trunc((hz % 1_000_000) / 1_000);
+  const hzpart = hz % 1_000;
+  return `${mhz}.${String(kpart).padStart(3, '0')}.${String(hzpart).padStart(3, '0')}`;
+}
+
+function toggleNetChannelSection(name) {
+  if (netChExpanded.has(name)) netChExpanded.delete(name);
+  else netChExpanded.add(name);
+  renderNets();
+}
 
 function renderNets() {
   const el = document.getElementById('netList');
   if (!el) return;
-  el.innerHTML = nets.length ? nets.map((n, i) => `
-    <div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:8px">
-      <div style="display:flex;gap:8px;align-items:flex-start">
-        <input class="finput" value="${escapeHtml(n.name)}" style="width:140px" oninput="netSet(${i},'name',this.value)">
-        <div class="fhint" style="margin:4px 0 0;flex:1;display:flex;gap:12px;flex-wrap:wrap">
-          ${channels.map(c => `
-            <label style="display:flex;align-items:center;gap:4px;color:var(--tx)">
-              <input type="checkbox" ${n.channelIds.includes(c.id) ? 'checked' : ''}
-                onchange="toggleNetChannel(${i},'${c.id}',this.checked)"> ${escapeHtml(c.id)}${c.label ? ' · ' + escapeHtml(c.label) : ''} <span style="opacity:.55">${escapeHtml(c.mode)}</span>
-            </label>`).join('') || '<span class="fhint" style="margin:0">No channels configured</span>'}
-        </div>
-        <button class="ch-del" onclick="delNet(${i})" title="Delete net">✕</button>
-      </div>
-      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;align-items:center">
-        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--tx-dim)">
-          Dwell&nbsp;<input class="finput" type="number" value="${n.dwellMs}" min="200" style="width:70px"
-            onchange="netPolicySet(${i},'dwellMs',+this.value)">ms
-        </label>
-        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--tx-dim)">
-          <input type="checkbox" ${n.scanEnabled ? 'checked' : ''} onchange="netPolicySet(${i},'scanEnabled',this.checked)"> Scanning
-        </label>
-        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--tx-dim)">
-          <input type="checkbox" ${n.soundEnabled ? 'checked' : ''} onchange="netPolicySet(${i},'soundEnabled',this.checked)"> Auto-Sound every
-          <input class="finput" type="number" value="${n.soundIntervalSec}" min="60" style="width:65px"
-            onchange="netPolicySet(${i},'soundIntervalSec',+this.value)">s
-        </label>
-        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--tx-dim)">
-          C&nbsp;<input class="finput" type="number" value="${n.callingC}" min="1" max="10" style="width:50px"
-            onchange="netPolicySet(${i},'callingC',+this.value)">
-          <span title="Assumed scan channels of the called station (Tsc = C × 784 ms)">?</span>
-        </label>
-      </div>
-    </div>`).join('') : '<div class="msg-empty">No nets configured</div>';
+  if (!nets.length) {
+    el.innerHTML = '<div class="msg-empty">No nets configured</div>';
+    return;
+  }
+  el.innerHTML = nets.map((n, i) => {
+    const isActive  = n.name === activeNet;
+    const memberCnt = n.channelIds.length;
+    const expanded  = netChExpanded.has(n.name);
+    const safeName  = escapeHtml(n.name);
+
+    const chips = channels.length
+      ? channels.map(c => {
+          const on   = n.channelIds.includes(c.id);
+          const freq = netFmtFreq(c.rx);
+          const tip  = c.label ? escapeHtml(c.label) : '';
+          return `<label class="net-ch-chip${on ? ' on' : ''}" title="${tip}">
+            <input type="checkbox" ${on ? 'checked' : ''}
+              onchange="toggleNetChannel(${i},'${c.id}',this.checked);renderNets()">
+            <span class="ch-chip-id">${escapeHtml(c.id)}</span>
+            <span class="ch-chip-freq">${freq}</span>
+            <span class="ch-chip-mode">${escapeHtml(c.mode)}</span>
+          </label>`;
+        }).join('')
+      : '<span class="fhint" style="padding:4px 0;grid-column:1/-1">No channels configured yet</span>';
+
+    return `
+<div class="net-card${isActive ? ' active' : ''}">
+  <div class="net-card-hdr">
+    <input class="net-name-inp" value="${safeName}"
+      oninput="netSet(${i},'name',this.value)" title="Net name — click to rename">
+    ${isActive ? '<span class="net-active-badge">ACTIVE</span>' : ''}
+    <span class="net-count-badge">${memberCnt} ch</span>
+    <button class="net-del-btn" onclick="delNet(${i})" title="Delete net">
+      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+        <path d="M10 11v6"/><path d="M14 11v6"/>
+        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+      </svg>
+    </button>
+  </div>
+  <div class="net-card-policy">
+    <label class="net-policy-grp">
+      <input type="checkbox" ${n.scanEnabled ? 'checked' : ''}
+        onchange="netPolicySet(${i},'scanEnabled',this.checked);renderNets()">
+      Scan
+    </label>
+    <label class="net-policy-grp">
+      Dwell&nbsp;<input type="number" value="${n.dwellMs}" min="200"
+        ${n.scanEnabled ? '' : 'disabled'}
+        oninput="netPolicySet(${i},'dwellMs',+this.value)">&nbsp;ms
+    </label>
+    <div class="net-policy-sep"></div>
+    <label class="net-policy-grp">
+      <input type="checkbox" ${n.soundEnabled ? 'checked' : ''}
+        onchange="netPolicySet(${i},'soundEnabled',this.checked);renderNets()">
+      Auto-Sound
+    </label>
+    <label class="net-policy-grp">
+      every&nbsp;<input type="number" value="${n.soundIntervalSec}" min="60"
+        ${n.soundEnabled ? '' : 'disabled'}
+        oninput="netPolicySet(${i},'soundIntervalSec',+this.value)">&nbsp;s
+    </label>
+    <div class="net-policy-sep"></div>
+    <label class="net-policy-grp"
+      title="Assumed scan channels of the called station — determines total call duration (Tsc = C × 784 ms)">
+      Call width&nbsp;<input type="number" value="${n.callingC}" min="1" max="10"
+        oninput="netPolicySet(${i},'callingC',+this.value)">
+    </label>
+  </div>
+  <div class="net-ch-summary${expanded ? ' open' : ''}"
+    onclick="toggleNetChannelSection('${safeName}')">
+    <span class="net-ch-caret">▶</span>
+    <span>Channels</span>
+    <span class="net-count-badge">${memberCnt} / ${channels.length}</span>
+    ${memberCnt === 0 ? '<span style="color:var(--s-error);font-size:10px;margin-left:2px">— none assigned</span>' : ''}
+  </div>
+  <div class="net-ch-grid${expanded ? ' open' : ''}">${chips}</div>
+</div>`;
+  }).join('');
 }
 
 // Net rename has no direct Core primitive (NetStore is add_net(name)/
@@ -1829,6 +1930,10 @@ function netSet(i, field, val) { nets[i][field] = val; }
 function netPolicySet(i, field, val) {
   nets[i][field] = val;
   if (!bridgeConnected) return;
+  // oninput fires on every keystroke; skip bridge sends for partial/invalid numerics
+  // (nets[i] is already updated above so renderNets() won't overwrite the in-progress value)
+  if ((field === 'dwellMs' || field === 'soundIntervalSec' || field === 'callingC')
+      && (!Number.isFinite(val) || val <= 0)) return;
   const n = nets[i];
   bridgeSend('NET_UPDATE', {
     name:                 n.name,
@@ -1838,6 +1943,13 @@ function netPolicySet(i, field, val) {
     sounding_interval_sec:n.soundIntervalSec,
     calling_length_c:     n.callingC,
   });
+  // If the active net's sounding policy just changed, keep the runtime toggle
+  // and the sounding timer in sync immediately.
+  if (n.name === activeNet) {
+    const cb = document.getElementById('cfgAutoSound');
+    if (cb) cb.checked = !!n.soundEnabled;
+    applySoundAuto();
+  }
 }
 
 function toggleNetChannel(i, chId, on) {
@@ -1944,6 +2056,12 @@ function updateAutoAcceptUi() {
   if (inp) inp.disabled = auto;
 }
 
+function applyLogLevelToBridge() {
+  if (!bridgeConnected) return;
+  const level = parseInt(document.getElementById('cfgLogLevel')?.value ?? '2', 10);
+  bridgeSend('LOG_LEVEL_SET', { level });
+}
+
 function saveSettings() {
   applyManualAcceptToBridge();
   applyTimingToBridge();        // Timing + Calling Policy → core
@@ -1952,6 +2070,7 @@ function saveSettings() {
   applyRelinkToBridge();        // Auto-Relink toggle + threshold → core (A.5.4.5)
   applyLbtToBridge();           // LBT occupancy margin/enable/override → core (A.5.4.7)
   applyEnhFreqSelectToBridge(); // Enhanced Freq-Select → core (A.5.6.3.2)
+  applyLogLevelToBridge();      // HamlibRadio debug logging → core
   applySoundAuto();             // interval may have changed → re-assert periodic mode
   updateSelfHeader();
   closeSettings();
@@ -2116,28 +2235,30 @@ function firstChannelOfNet(net) {
 function selectNet(name) {
   activeNet = name || null;
   if (bridgeConnected) bridgeSend('SCAN_NET_SET', { net: name || '' });
+  // Mirror the net's sounding_enabled policy into the Auto-Sound toggle so that
+  // selecting a net that has sounding configured automatically activates it.
+  const selNet = activeNet ? nets.find(n => n.name === activeNet) : null;
+  const cb = document.getElementById('cfgAutoSound');
+  if (cb) cb.checked = selNet ? !!selNet.soundEnabled : false;
   if (activeNet) {
-    // Tune to the net's first (lowest-numbered) channel — frequency AND mode.
-    // set_frequency() alone keeps the radio's existing mode, so its
-    // channel_changed push would report the OLD mode and clobber the readout
-    // (the operator would have to step once to get the right mode). We send
-    // VFO_SET_FREQ then VFO_SET_MODE: per the HamlibRadio TCP-mode invariant,
-    // after set_frequency updates current_channel_ to the intended (new) freq,
-    // set_mode sees an unchanged frequency → rig_set_freq is a no-op (RIG_OK
-    // fast, no TCP timeout) → rig_set_mode applies cleanly. The mode push then
-    // reports the channel's real mode. We mirror locally too so the readout
-    // shows the net's first channel immediately, even before a CAT link is up.
+    // Tune to the net's first (lowest-numbered) channel — frequency AND mode in
+    // ONE atomic VFO_SET_CHANNEL. This drives the controller's set_vfo_channel()
+    // → set_channel(), the SAME path scanning and the channel-step arrows use.
+    // The former VFO_SET_FREQ + VFO_SET_MODE pair sent two separate CAT exchanges
+    // and lost the SDR band-restore race (the mode was reverted to the band's
+    // saved mode). We mirror locally too so the readout shows the net's first
+    // channel immediately, even before a CAT link is up.
     const first = firstChannelOfNet(nets.find(n => n.name === activeNet));
     const hz = first ? parseInt(first.rx, 10) : 0;
     if (hz) {
       if (bridgeConnected) {
-        bridgeSend('VFO_SET_FREQ', { hz });
-        if (first.mode) bridgeSend('VFO_SET_MODE', { mode: first.mode });
+        bridgeSend('VFO_SET_CHANNEL', { hz, mode: first.mode || '' });
       }
       radioFreqHz = hz;
       radioMode   = first.mode || radioMode;
       radioChannel = -1;
       radioEntry  = '';
+      radioEntryActive = false;
       updateRadioDisplay();
     }
   }
@@ -2234,7 +2355,6 @@ function applyTimingToBridge() {
   if (!bridgeConnected) return;
   const num = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v > 0 ? v : null; };
   const args = {};
-  const d  = num('cfgDwell');       if (d)  args.scan_dwell_ms = d;          // → ALEController::set_scan_dwell_ms → SM ScanConfig.dwell_time_ms
   const s  = num('cfgSounding');    if (s)  args.sounding_interval_sec = s;
   const li = num('cfgLinkIdle');    if (li) args.link_idle_timeout_sec = li;
   const mt = num('cfgMaxTune');     if (mt) args.max_tune_time_ms = mt;
@@ -2300,6 +2420,14 @@ function syncLbtFromBridge() {
     if (elM && typeof r.margin_db         === 'number')  elM.value   = r.margin_db;
     if (elE && typeof r.occupancy_enabled === 'boolean') elE.checked = r.occupancy_enabled;
     if (elO && typeof r.override          === 'boolean') elO.checked = r.override;
+    const chip = document.getElementById('busyChip');
+    if (chip && typeof r.busy === 'boolean') {
+      chip.classList.toggle('busy', r.busy);
+      chip.querySelector('span').textContent = r.busy ? 'FREQ BUSY' : 'FREQ CLEAR';
+      chip.title = r.busy
+        ? `Channel occupied — level ${Math.round(r.level_db)} dB, floor ${Math.round(r.floor_db)} dB (A.5.4.7.2)`
+        : 'Channel clear (A.5.4.7.2)';
+    }
   });
 }
 
@@ -2503,7 +2631,6 @@ function syncTimingFromBridge() {
   bridgeSend('TIMING_GET', {}, (r) => {
     if (!r.ok) return;
     const setNum = (id, v) => { const el = document.getElementById(id); if (el && typeof v === 'number') el.value = v; };
-    setNum('cfgDwell',          r.scan_dwell_ms);
     setNum('cfgSounding',       r.sounding_interval_sec);
     setNum('cfgSoundingLead',   r.sounding_warning_lead_sec);
     setNum('cfgLinkIdle',       r.link_idle_timeout_sec);
@@ -2572,7 +2699,8 @@ let radioChannel = 4;             // index into radioChannels (-1 = manual/off-g
 let radioFreqHz  = radioChannels[radioChannel].hz;
 let radioMode    = radioChannels[radioChannel].mode;
 let radioStep    = 1000;          // Hz per UP/DOWN nudge
-let radioEntry   = '';            // keypad direct-entry buffer (digits)
+let radioEntry       = '';     // keypad direct-entry buffer (digits)
+let radioEntryActive = false;  // true when entry mode is on (even if buffer is empty after CLR)
 let pttOn        = false;
 
 function fmtRadioFreq(hz) {
@@ -2596,10 +2724,10 @@ function updateRadioDisplay() {
   const uEl = document.getElementById('radioUnit');
   const mEl = document.getElementById('radioModeChip');
   if (fEl) {
-    if (radioEntry) { fEl.textContent = radioEntry;             fEl.classList.add('entry'); }
-    else            { fEl.textContent = fmtRadioFreq(radioFreqHz); fEl.classList.remove('entry'); }
+    if (radioEntry || radioEntryActive) { fEl.textContent = radioEntry;             fEl.classList.add('entry'); }
+    else                                { fEl.textContent = fmtRadioFreq(radioFreqHz); fEl.classList.remove('entry'); }
   }
-  if (uEl) uEl.textContent = radioEntry ? 'MHz / kHz ?' : freqUnit(radioFreqHz);
+  if (uEl) uEl.textContent = (radioEntry || radioEntryActive) ? 'MHz / kHz ?' : freqUnit(radioFreqHz);
   if (mEl) mEl.textContent = radioMode;
   // mirror onto the header readout + linked-panel label
   const fv = document.getElementById('freqVal');     if (fv) fv.textContent = fmtRadioFreq(radioFreqHz);
@@ -2671,6 +2799,7 @@ function stepChannel(dir) {
   radioFreqHz = radioChannels[radioChannel].hz;
   radioMode   = radioChannels[radioChannel].mode;
   radioEntry  = '';
+  radioEntryActive = false;
   updateRadioDisplay();
 }
 
@@ -2696,14 +2825,31 @@ function abortTx() {
 }
 
 // keypad direct entry — digits accumulate, MHz/kHz (or ENT) commit
-function radioKey(d)  { if (radioEntry.length < 9) { radioEntry += d; updateRadioDisplay(); } }
-function radioDel()   { radioEntry = radioEntry.slice(0, -1); updateRadioDisplay(); }
-function radioClear() { radioEntry = ''; updateRadioDisplay(); }
+function radioKey(d)  {
+  radioEntryActive = true;
+  if (radioEntry.length < 9) { radioEntry += d; updateRadioDisplay(); }
+}
+function radioDel() {
+  if (!radioEntry && !radioEntryActive) radioEntry = String(radioFreqHz); // seed from live Hz
+  radioEntryActive = true;
+  radioEntry = radioEntry.slice(0, -1);
+  updateRadioDisplay();
+}
+function radioClear() {
+  if (radioEntryActive && radioEntry === '') {
+    radioEntryActive = false;   // second CLR cancels entry mode (live freq resumes)
+  } else {
+    radioEntry = '';
+    radioEntryActive = true;    // blank entry field — operator types fresh frequency
+  }
+  updateRadioDisplay();
+}
 function radioCommit(unitHz) {
   if (radioCtrlLocked()) return;
-  if (!radioEntry) return;
+  if (!radioEntry) { radioEntryActive = false; updateRadioDisplay(); return; }
   const v = parseInt(radioEntry, 10);
   radioEntry = '';
+  radioEntryActive = false;
   if (isNaN(v)) { updateRadioDisplay(); return; }
   const hz = Math.min(v * unitHz, 150000000000);
   if (bridgeConnected) { bridgeSend('VFO_SET_FREQ', { hz }, () => syncVfoFromBridge()); return; }
@@ -2724,6 +2870,7 @@ function radioSetStep(hz){
 function radioNudge(dir) {
   if (radioCtrlLocked()) return;
   radioEntry = '';
+  radioEntryActive = false;
   if (bridgeConnected) { bridgeSend('VFO_NUDGE', { direction: dir }, () => syncVfoFromBridge()); return; }
   radioFreqHz = Math.max(0, Math.min(radioFreqHz + dir * radioStep, 150000000000));
   radioChannel = -1;

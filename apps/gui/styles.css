@@ -156,6 +156,28 @@
       border-radius: var(--r-md);
     }
 
+    .busy-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      background: var(--accent-glow);
+      border: 1px solid rgba(0,220,140,.25);
+      border-radius: var(--r-md);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      cursor: default;
+    }
+    .busy-chip.busy {
+      background: rgba(255,167,38,.12);
+      border-color: rgba(255,167,38,.30);
+      color: #ffa726;
+    }
+    .busy-dot { background: var(--accent); }
+    .busy-chip.busy .busy-dot { background: #ffa726; animation: blink 0.9s infinite; }
+
     .dot {
       width: 7px; height: 7px;
       border-radius: 50%;
@@ -1645,6 +1667,71 @@
     .u-mt-lg      { margin-top: var(--sp-4); }
     .u-mb-md      { margin-bottom: var(--sp-3); }
     .u-w-auto     { width: auto; }
+
+    /* ── Net cards (Settings › Nets) ── */
+    .net-card { border: 1px solid var(--border); border-radius: var(--r-md); margin-bottom: 10px; overflow: hidden; transition: border-color var(--t); }
+    .net-card.active { border-color: rgba(0,220,140,0.35); background: rgba(0,220,140,0.025); }
+    .net-card-hdr { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--bg3); border-bottom: 1px solid var(--border); }
+    .net-name-inp {
+      flex: 1; min-width: 0;
+      font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--tx-bright);
+      background: transparent; border: 1px solid transparent; border-radius: var(--r-sm);
+      padding: 2px 5px; transition: border-color var(--t), background var(--t);
+    }
+    .net-name-inp:hover { border-color: var(--border-md); }
+    .net-name-inp:focus { border-color: var(--accent); background: var(--bg2); outline: none; }
+    .net-active-badge {
+      font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+      color: var(--accent); background: var(--accent-glow); border: 1px solid rgba(0,220,140,0.3);
+      border-radius: 2px; padding: 1px 6px; flex-shrink: 0;
+    }
+    .net-count-badge {
+      font-family: var(--mono); font-size: 10px; color: var(--tx-muted);
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 2px; padding: 1px 6px; flex-shrink: 0;
+    }
+    .net-del-btn {
+      background: none; border: none; color: var(--tx-dim); cursor: pointer;
+      padding: 3px 5px; border-radius: var(--r-sm); display: flex; align-items: center;
+      transition: color var(--t), background var(--t); flex-shrink: 0;
+    }
+    .net-del-btn:hover { color: var(--s-error); background: rgba(255,82,82,0.10); }
+    .net-card-policy {
+      display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+      padding: 7px 10px; border-bottom: 1px solid var(--border);
+    }
+    .net-policy-grp { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--tx-muted); }
+    .net-policy-grp input[type=number] {
+      width: 58px; font-size: 11px; font-family: var(--mono);
+      background: var(--bg2); border: 1px solid var(--border-md);
+      border-radius: var(--r-sm); color: var(--tx); padding: 2px 5px; text-align: right;
+    }
+    .net-policy-grp input[type=number]:disabled { opacity: 0.32; cursor: not-allowed; }
+    .net-policy-sep { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; }
+    .net-ch-summary {
+      display: flex; align-items: center; gap: 7px; padding: 6px 10px;
+      font-size: 11px; color: var(--tx-muted); cursor: pointer; user-select: none;
+      transition: background var(--t);
+    }
+    .net-ch-summary:hover { background: var(--bg-hover); color: var(--tx); }
+    .net-ch-caret { font-size: 9px; transition: transform 0.14s; color: var(--tx-dim); }
+    .net-ch-summary.open .net-ch-caret { transform: rotate(90deg); }
+    .net-ch-grid { display: none; padding: 6px 10px 10px; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 4px; }
+    .net-ch-grid.open { display: grid; }
+    .net-ch-chip {
+      display: flex; align-items: center; gap: 5px; padding: 4px 8px;
+      border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--bg2);
+      cursor: pointer; transition: border-color var(--t), background var(--t); user-select: none;
+    }
+    .net-ch-chip input[type=checkbox] { display: none; }
+    .net-ch-chip:hover { border-color: var(--border-md); background: var(--bg3); }
+    .net-ch-chip.on { border-color: rgba(0,220,140,0.40); background: rgba(0,220,140,0.07); }
+    .net-ch-chip.on:hover { background: rgba(0,220,140,0.12); }
+    .ch-chip-id   { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--tx-bright); flex-shrink: 0; }
+    .ch-chip-freq { font-family: var(--mono); font-size: 10px; color: var(--accent); flex-shrink: 0; }
+    .ch-chip-mode { font-family: var(--mono); font-size: 9px; color: var(--tx-dim); flex-shrink: 0; margin-left: auto; }
+    .net-ch-chip.on .ch-chip-id   { color: var(--accent); }
+    .net-ch-chip.on .ch-chip-mode { color: var(--tx-muted); }
 
     /* ── Utilities ── */
     .hidden { display: none !important; }

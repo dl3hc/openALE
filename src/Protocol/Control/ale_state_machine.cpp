@@ -4,6 +4,7 @@
  */
 
 #include "Protocol/Control/ale_state_machine.h"
+#include "Protocol/Control/ale_call_processor.h"
 #include "Protocol/Message/ale_orderwire_protocols.h"
 #include "Word/ale_sequence.h"
 #include "Word/address_encoder.h"
@@ -274,6 +275,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
         case ALEState::SCANNING:
             scanning_phase_          = ScanningPhase::HOPPING;
             allcall_pause_start_ms_  = 0;
+            traffic_settle_ms_       = 0;
             channel_manager_.clear_override();  // end any sounding-sweep pin
             channel_manager_.start(current_time_ms);
             allcall_silent_ = false;             // leave any AllCall handshake
@@ -403,6 +405,16 @@ void ALEStateMachine::handle_scanning() {
         if ((current_time_ms - allcall_pause_start_ms_) > ALETimingConstants::Tcc_max_ms)
             scanning_phase_ = ScanningPhase::HOPPING;
         return;  // kein Hop während AllCall-Pause
+    }
+    if (scanning_phase_ == ScanningPhase::TRAFFIC_PAUSE) {
+        // A.5.3.1: stay on channel until Tdrw (2×Trw = 784 ms) silence after
+        // the last word — ensures the full frame (including TIS/TWAS conclusion
+        // and DATA address words) has been received before moving on.
+        if ((current_time_ms - traffic_settle_ms_) >= ALETimingConstants::Tdrw_ms) {
+            scanning_phase_ = ScanningPhase::HOPPING;
+            channel_manager_.hop_next(current_time_ms);
+        }
+        return;
     }
     if (channel_manager_.check_dwell_timeout(current_time_ms))
         channel_manager_.hop_next(current_time_ms);
@@ -1192,289 +1204,30 @@ void ALEStateMachine::emergency_manual_control() {
 }
 
 // ============================================================================
-// process_received_word
+// Received-word processing — delegate shims to ALECallProcessor
 // ============================================================================
-
-// ── Fix 6: 3-error tolerance in HANDSHAKE/WAIT_CYCLE_END (A.5.5.3.2) ──
-void ALEStateMachine::handle_invalid_word() {
-    // Any signal (even invalid) during SOUNDING LBT = channel busy → abort (REQ-CHAN-031)
-    if (current_state == ALEState::SOUNDING && sounding_phase_ == SoundingPhase::LBT) {
-        SM_TRACE("[TRACE] handle_invalid_word: signal during SOUNDING LBT → SOUNDING_COMPLETE\n");
-        process_event(ALEEvent::SOUNDING_COMPLETE);
-        return;
-    }
-    if (current_state != ALEState::HANDSHAKE) return;
-    if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
-        if (++contiguous_errors > ALETimingConstants::MAX_SCANNING_CALL_ERRORS) {
-            SM_TRACE("[TRACE] handle_invalid_word: "
-                     + std::to_string(+contiguous_errors)
-                     + " contiguous errors → LINK_TIMEOUT\n");
-            process_event(ALEEvent::LINK_TIMEOUT);
-        }
-    } else if (handshake_phase == HandshakePhase::CHANNEL_CHECK) {
-        // Invalid signal on channel during LBT → busy → abort (AC-LINK-019-3)
-        SM_TRACE("[TRACE] handle_invalid_word: invalid word during LBT → LINK_TIMEOUT\n");
-        process_event(ALEEvent::LINK_TIMEOUT);
-    }
-}
-
-// Shared call-detection logic for IDLE and SCANNING states.
-// Both states can receive an incoming individual call (TO_SELF) or AllCall;
-// the response is identical regardless of whether we were idle on a fixed
-// channel or actively hopping.
-void ALEStateMachine::detect_incoming_call(const WordEvent& ev) {
-    if (ev.type == WordEvent::Type::TO_SELF) {
-        active_call_to = ev.address;
-        process_event(ALEEvent::CALL_DETECTED);
-        return;
-    }
-    // AllCall (A.5.5.4.4): one-way broadcast to the wildcard address @?@ / @A@.
-    // The receiver does NOT respond — it freezes and collects the conclusion via
-    // HANDSHAKE/WAIT_CYCLE_END.  On a TIS conclusion the SM links directly to the
-    // caller (no response frame); on TWAS it aborts back.  The decoder already
-    // decided selective pertinence (self address ends in the selector char).
-    if (ev.type == WordEvent::Type::ALLCALL) {
-        allcall_silent_ = true;
-        process_event(ALEEvent::CALL_DETECTED);
-    }
-}
-
-// IDLE: resting on a fixed channel — only incoming call detection applies.
-void ALEStateMachine::react_idle(const WordEvent& ev) {
-    detect_incoming_call(ev);
-}
-
-// SCANNING: actively hopping — call detection plus AllCall-pause recovery.
-void ALEStateMachine::react_scanning(const WordEvent& ev) {
-    detect_incoming_call(ev);
-    // TWAS während AllCall-Pause → Pause beenden (A.5.5.4.4)
-    if (scanning_phase_ == ScanningPhase::ALLCALL_PAUSE
-        && ev.type == WordEvent::Type::TWAS_REJECTION) {
-        scanning_phase_ = ScanningPhase::HOPPING;
-    }
-}
-
-// JOE's response frame per A.5.5.3.2: TO SAM [DATA]* TIS JOE [DATA]*
-//   TO_SELF      → "TO SAM": JOE has begun his response; arm AC-LINK-019-8 timer.
-//   TIS_CALLER   → "TIS JOE" (first conclusion word); arm Tlww.
-//   DATA_EXTENSION → extended JOE address; Tlww reset each time.
-//   TWAS_REJECTION → call rejected (AC-LINK-019-10).
 //
-// AC-LINK-019-7 (Ungültige Preamble-Sequenz → nächster Kanal) is NOT enforced
-// here: WordEvent::NONE conflates unrelated QRM (TO:OTHER) with genuinely
-// broken sequences.  Triggering a channel hop on QRM would cause false aborts.
-// The existing AC-LINK-019-6/8 timeouts provide sufficient protection.
-void ALEStateMachine::react_calling(const WordEvent& ev) {
-    if (calling_phase != CallingPhase::LISTENING) return;
-
-    switch (ev.type) {
-    case WordEvent::Type::TO_SELF:
-        if (!response_to_detected) {
-            response_to_detected = true;
-            response_rx_start_ms = current_time_ms;
-        }
-        break;
-    case WordEvent::Type::TIS_CALLER:
-        if (response_to_detected && tlww_start_ms == 0) {
-            to_address                   = ev.address;
-            active_call_from             = ev.address;
-            tlww_start_ms                = current_time_ms;
-            collecting_remote_conclusion = true;
-        }
-        break;
-    case WordEvent::Type::DATA_EXTENSION:
-        // Only extend once the responder's TIS has started the conclusion;
-        // otherwise a stray DATA before TIS would pollute to_address.
-        if (collecting_remote_conclusion) {
-            to_address      += ev.address;
-            active_call_from = to_address;
-            tlww_start_ms    = current_time_ms;
-        }
-        break;
-    case WordEvent::Type::TWAS_REJECTION:
-        if (operator_callback)
-            operator_callback(OperatorEvent::CALL_REJECTED);
-        process_event(ALEEvent::LINK_TIMEOUT);
-        break;
-    default:
-        break;
-    }
-}
-
-// WAIT_CYCLE_END: read SAM's conclusion (TIS SAM [DATA]*).
-// CHANNEL_CHECK:  any valid word → channel busy → abort.
-// WAIT_ACK:       read SAM's ACK frame (TO JOE × 2 + TIS SAM [DATA]*).
-void ALEStateMachine::react_handshake(const WordEvent& ev, const ALEWord& word) {
-    if (ev.type == WordEvent::Type::CHANNEL_BUSY) {
-        SM_TRACE("[TRACE] react_handshake: channel busy during LBT → LINK_TIMEOUT\n");
-        process_event(ALEEvent::LINK_TIMEOUT);
-        return;
-    }
-
-    if (handshake_phase == HandshakePhase::WAIT_CYCLE_END) {
-        switch (ev.type) {
-        case WordEvent::Type::TIS_CALLER:
-            if (!hs_conclusion_rcvd) {
-                caller_address     = ev.address;
-                active_call_from   = ev.address;
-                hs_conclusion_rcvd = true;
-                hs_tlww_start_ms   = current_time_ms;
-            }
-            break;
-        case WordEvent::Type::DATA_EXTENSION:
-            caller_address  += ev.address;
-            active_call_from = caller_address;
-            hs_tlww_start_ms = current_time_ms;
-            break;
-        case WordEvent::Type::TWAS_REJECTION:
-            process_event(ALEEvent::LINK_TIMEOUT);
-            break;
-        case WordEvent::Type::NONE:
-            // DATA/REP before TIS → message section has begun; arm Tmmax (AC-LINK-018-5).
-            if (!hs_conclusion_rcvd
-                && (word.type == PreambleType::DATA || word.type == PreambleType::REP)
-                && hs_message_start_ms == 0) {
-                hs_message_start_ms = current_time_ms;
-            }
-            break;
-        default:
-            break;
-        }
-    } else if (handshake_phase == HandshakePhase::WAIT_ACK) {
-        switch (ev.type) {
-        case WordEvent::Type::TO_SELF:
-            // "TO JOE" — start of SAM's ACK frame (A.5.5.3.4).  Records the
-            // arrival so handle_handshake() can switch from the narrow Twr
-            // start-window to the frame-limited conclusion wait.
-            if (hs_ack_to_ms == 0)
-                hs_ack_to_ms = current_time_ms;
-            break;
-        case WordEvent::Type::TIS_CALLER:
-            if (!hs_ack_tis_rcvd) {
-                hs_ack_tis_rcvd  = true;
-                hs_tlww_start_ms = current_time_ms;
-            }
-            break;
-        case WordEvent::Type::DATA_EXTENSION:
-            hs_tlww_start_ms = current_time_ms;
-            break;
-        case WordEvent::Type::TWAS_REJECTION:
-            process_event(ALEEvent::LINK_TIMEOUT);
-            break;
-        default:
-            break;
-        }
-    }
-}
+// All classification, per-state reactions, LQA update, and frame assembly live in
+// ALECallProcessor (friend of this SM).  These public methods are kept as one-line
+// forwards so the SM's existing API (tests, examples, the controller) is unchanged
+// while the SM itself contains no word-processing logic — only states + transitions
+// (+ time evolution / TX).
 
 void ALEStateMachine::process_received_word(const ALEWord& word) {
     check_thread_();
-    if (!word.valid) { handle_invalid_word(); return; }
-    contiguous_errors = 0;
-    last_word_time_ms = current_time_ms;
-
-    LinkQuality lq;
-    lq.fec_errors          = word.fec_errors;
-    lq.total_words         = 1;
-    lq.timestamp_ms        = current_time_ms;
-    lq.sinad_db            = word.sinad_db;
-    lq.snr_db              = (word.unanimous_votes / 48.0f) * 31.0f;
-    lq.golay_uncorrectable = word.golay_uncorrectable;
-    lq.non_unanimous_count = word.golay_uncorrectable
-        ? 48u
-        : (word.unanimous_votes <= 48u
-            ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
-    update_link_quality(lq);
-
-    const bool lbt_active =
-        (current_state == ALEState::HANDSHAKE && handshake_phase == HandshakePhase::CHANNEL_CHECK)
-        || (current_state == ALEState::SOUNDING && sounding_phase_ == SoundingPhase::LBT);
-
-    // Collecting/expected_caller are STATE-SCOPED: collecting_remote_conclusion
-    // belongs to CALLING, hs_*_rcvd to HANDSHAKE. ORing them across states leaks
-    // stale handshake flags (cleared only on HANDSHAKE entry, not CALLING entry)
-    // into a later outbound call, where they misclassify the response's own-TO
-    // DATA/REP words as caller-extension and pollute to_address (→ "HCHC").
-    const bool collecting =
-        (current_state == ALEState::CALLING   && collecting_remote_conclusion)
-        || (current_state == ALEState::HANDSHAKE && (hs_conclusion_rcvd || hs_ack_tis_rcvd));
-
-    WordDecodeContext ctx;
-    ctx.self_address        = address_book.get_self_address();
-    // expected_caller locks the called station onto the calling peer during its
-    // HANDSHAKE only; during CALLING a stale caller_address must not gate (reject)
-    // the responder's TIS.
-    ctx.expected_caller     = (current_state == ALEState::HANDSHAKE)
-                                  ? caller_address.substr(0, 3) : std::string();
-    ctx.lbt_active          = lbt_active;
-    ctx.collecting_conclusion = collecting;
-
-    const WordEvent ev = decoder_.decode(word, ctx);
-
-    switch (current_state) {
-        case ALEState::IDLE:      react_idle(ev);            break;
-        case ALEState::SCANNING:  react_scanning(ev);        break;
-        case ALEState::CALLING:   react_calling(ev);         break;
-        case ALEState::HANDSHAKE: react_handshake(ev, word); break;
-        case ALEState::LINKED:
-            // T-03: Gegenseite sendet TWAS → Link sofort beenden (A.5.5.3.5)
-            if (ev.type == WordEvent::Type::TWAS_REJECTION)
-                process_event(ALEEvent::LINK_TERMINATED);
-            break;
-        case ALEState::SOUNDING:
-            if (ev.type == WordEvent::Type::CHANNEL_BUSY) {
-                // Valid word during LBT → channel busy → abort (AC-SOUND-001-001, REQ-CHAN-031)
-                SM_TRACE("[TRACE] react_sounding: channel busy during LBT → SOUNDING_COMPLETE\n");
-                process_event(ALEEvent::SOUNDING_COMPLETE);
-            } else if (sounding_phase_ == SoundingPhase::LISTENING) {
-                // T-08: im LISTENING-Fenster kann eine Station sofort zurückrufen (A.5.3.4)
-                detect_incoming_call(ev);  // TO_SELF → CALL_DETECTED → HANDSHAKE
-            }
-            break;
-        default: break;
-    }
-
-    if (message_assembler.add_word(word) && frame_assembled_cb_) {
-        ALEMessage assembled;
-        if (message_assembler.get_message(assembled))
-            frame_assembled_cb_(assembled);
-    }
+    ALECallProcessor::process_received_word(*this, word);
 }
 
 void ALEStateMachine::update_link_quality(const LinkQuality& lq) {
-    // Forward to LQAMetrics only when receiving from a settled, known remote station.
-    // CALLING: we are the transmitter; any received words before HANDSHAKE_COMPLETE
-    //   must not create DB entries (no confirmed peer yet, active_call_from = self or
-    //   tentative called-station address after first TIS — neither is a valid FROM key).
-    // IDLE/SCANNING/SOUNDING: controller-level commit_sounding_sample handles foreign
-    //   soundings; active_call_from is empty here, which would create "(sounding)" ghost
-    //   entries in the DB.
-    // HANDSHAKE: record once active_call_from is settled by the first TIS_CALLER word.
-    // LINKED: always valid — active_call_from is the confirmed peer.
-    if (lqa_metrics_
-            && !active_call_from.empty()
-            && (current_state == ALEState::HANDSHAKE
-                || current_state == ALEState::LINKED)) {
-        MetricsSample sample;
-        sample.snr_db               = lq.snr_db;
-        sample.sinad_db             = lq.sinad_db;
-        sample.non_unanimous_count  = lq.non_unanimous_count;
-        sample.golay_uncorrectable  = lq.golay_uncorrectable;
-        sample.fec_errors_corrected = static_cast<int>(lq.fec_errors);
-        sample.decode_success       = (lq.fec_errors <= MAX_GOLAY_ERRORS);
-        sample.timestamp_ms         = lq.timestamp_ms;
-        const Channel* ch = channel_manager_.current();
-        lqa_metrics_->add_sample(sample,
-                                  ch ? ch->rx_frequency_hz : 0u,
-                                  active_call_from);
-    }
+    ALECallProcessor::update_lqa(*this, lq);
+}
 
-    // Route heuristic LQA score update through channel manager (Schritt 6).
-    // Quality scale is 0=worst..30=best (A.4.1.5, AC-GEN-001-002): each
-    // FEC-corrected error costs 3 points; >=10 errors collapses to 0.
-    float score = LQA_QUALITY_MAX - (static_cast<float>(lq.fec_errors) * 3.0f);
-    score = std::max(LQA_QUALITY_MIN, std::min(LQA_QUALITY_MAX, score));
-    channel_manager_.update_lqa_score(channel_manager_.current_index(), score);
+void ALEStateMachine::set_lqa_metrics(LQAMetrics* m) {
+    lqa_metrics_ = m;
+}
+
+void ALEStateMachine::set_frame_assembled_callback(std::function<void(const ALEMessage&)> cb) {
+    frame_assembled_cb_ = std::move(cb);
 }
 
 const Channel* ALEStateMachine::select_best_channel() const {
@@ -1575,30 +1328,32 @@ void ALEStateMachine::enqueue_call_sequence_() {
     //   scanning_seq_  — scan_channels × 2 words (§A.5.2.5.1 / §A.5.5.4.3)
     //   leading_seq_   — full address × 2 (Tlc = 2×Tc, §A.5.5.3.1)
     //   conclusion_seq_ — TIS self address (§A.5.2.3.2.2)
-    // All words enqueued back-to-back; Trw grid emerges from the audio stream
-    // (49 symbols × 8 ms per word).  on_word_complete() advances phase counters
-    // against exactly these word counts.
-    // The calling frame carries NO message section — LQA CMD/Report and AMD
-    // are both inserted in the ACK frame by build_ack_words() (A.5.7.2.2).
-    // active_message_ / active_lqa_cmd_seq_ / active_lqa_report_seq_ survive
-    // channel retries and are consumed by build_ack_words() at SENDING_ACK.
+    // MESSAGE section (A.5.2.5.5 / Table A-XIV): CMD 'a' [+ LQA report] between
+    // leading address words and the TIS conclusion.  active_lqa_cmd_seq_ /
+    // active_lqa_report_seq_ are snapshot at initiate_call() and survive channel
+    // retries unchanged (re-emitted on every retry channel).
+    // AMD is NOT in the calling frame — it goes in build_ack_words() because the
+    // full calling cycle (call + response) must precede AMD content (A.5.7.2.2).
 
     transmit_words(scanning_seq_.words());
     transmit_words(leading_seq_.words());
+    transmit_words(active_lqa_cmd_seq_.words());
+    transmit_words(active_lqa_report_seq_.words());
     transmit_words(conclusion_seq_.words());
 }
 
 void ALEStateMachine::build_ack_words() {
-    // ACK frame per REQ-LINK-008 / §A.5.5.3.4 / Figure A-31 + A.5.7.2.2:
-    //   TO [to_address] × 2 + [CMD 'a'] + [CMD 'r' + DATA...] + [CMD AMD + DATA/REP...] + TIS [self]
+    // ACK frame per REQ-LINK-008 / §A.5.5.3.4 / Figure A-31:
+    //   TO [to_address] × 2 + [CMD AMD + DATA/REP...] + TIS [self]
+    // LQA CMD 'a' and LQA report were already sent in the calling frame MESSAGE
+    // section (enqueue_call_sequence_()) per Table A-XIV — do NOT re-emit here.
+    // AMD goes here because the full calling cycle (call + response) must precede
+    // the AMD content (A.5.7.2.2).
     // to_address is set during the LISTENING phase (process_received_word),
     // so it is encoded here at send time, not pre-computed.
-    // All message content (LQA CMD/Report from SAM + AMD) is inserted before the
-    // TIS conclusion: the complete calling+response cycle precedes it (A.5.7.2.2).
-    const bool has_lqa = !active_lqa_cmd_seq_.empty() || !active_lqa_report_seq_.empty();
     const bool has_amd = (active_message_.type == PendingMessage::Type::AMD)
                       && !active_message_.content.empty();
-    if (has_lqa || has_amd) {
+    if (has_amd) {
         const auto base = ALESequenceBuilder::ack(
             to_address, address_book.get_self_address());
         const auto& bw = base.words();
@@ -1611,14 +1366,10 @@ void ALEStateMachine::build_ack_words() {
             }
         }
         std::vector<ALEWord> words;
-        for (size_t i = 0; i < conc_start; ++i)              words.push_back(bw[i]);
-        for (const auto& w : active_lqa_cmd_seq_.words())    words.push_back(w);
-        for (const auto& w : active_lqa_report_seq_.words()) words.push_back(w);
-        if (has_amd) {
-            const auto amd = encode_amd(active_message_.content);
-            words.insert(words.end(), amd.begin(), amd.end());
-        }
-        for (size_t i = conc_start; i < bw.size(); ++i)      words.push_back(bw[i]);
+        for (size_t i = 0; i < conc_start; ++i) words.push_back(bw[i]);
+        const auto amd = encode_amd(active_message_.content);
+        words.insert(words.end(), amd.begin(), amd.end());
+        for (size_t i = conc_start; i < bw.size(); ++i) words.push_back(bw[i]);
         transmit_words(words);
     } else {
         transmit_words(ALESequenceBuilder::ack(
@@ -1787,9 +1538,12 @@ void ALEStateMachine::on_word_complete() {
 
             case CallingPhase::LEADING_CALL: {
                 // leading_seq_ is pre-doubled (Tlc = 2×Tc, §A.5.5.3.1); its size
-                // equals 2×wpa.  Calling frame carries no message section — any
-                // message content (LQA, AMD) is in the ACK frame (build_ack_words).
-                const uint32_t tlc_slots = static_cast<uint32_t>(leading_seq_.size());
+                // equals 2×wpa.  The MESSAGE section (CMD 'a' + LQA report) is
+                // emitted immediately after leading_seq_ in enqueue_call_sequence_(),
+                // so those words are counted here before transitioning to CONCLUSION.
+                const uint32_t tlc_slots = static_cast<uint32_t>(leading_seq_.size())
+                                         + static_cast<uint32_t>(active_lqa_cmd_seq_.size())
+                                         + static_cast<uint32_t>(active_lqa_report_seq_.size());
                 if (call_cycles_in_phase >= tlc_slots) {
                     SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → CONCLUSION (tlc_slots="
                              + std::to_string(tlc_slots) + ")\n");

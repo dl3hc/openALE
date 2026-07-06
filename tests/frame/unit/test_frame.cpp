@@ -22,6 +22,7 @@
  */
 
 #include "Protocol/Control/ale_state_machine.h"
+#include "Protocol/Message/frame_validator.h"
 #include "Modem/ale2g_modem.h"
 #include "Word/ale_sequence.h"
 #include "Word/address_encoder.h"

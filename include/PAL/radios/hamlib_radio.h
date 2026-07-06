@@ -1,10 +1,15 @@
-// hamlib_radio.h
 #pragma once
 
-#include "pal/radio.h"
-#include <hamlib/rig.h>
+#include "PAL/radio.h"
+#include <chrono>
 #include <cstdint>
 #include <string>
+#include <vector>
+
+
+// Forward-declare hamlib's RIG so this header compiles without <hamlib/rig.h>.
+// The full definition is only needed in hamlib_radio.cpp, where it is included.
+typedef struct s_rig RIG;
 
 namespace pal {
 
@@ -86,6 +91,19 @@ public:
      */
     Channel get_channel() const override;
 
+    // Direct single-attribute setters — over TCP these send exactly one CAT
+    // command (rig_set_freq / rig_set_mode) without the read-modify-write that
+    // set_channel() does, so a manual mode set never re-sends the frequency and
+    // vice versa. See set_channel() for the VFO/passband/order rationale.
+    bool set_frequency(uint32_t hz) override;
+    bool set_mode(RadioMode mode) override;
+
+    // Query the radio for its live frequency and mode and update current_channel_.
+    // Returns true if either changed (caller may push a channel_changed event).
+    // Over TCP/netrigctl this goes to the wire when the hamlib cache has expired
+    // (500 ms timeout set in start()).
+    bool sync_from_radio() override;
+
     /**
      * @brief Schaltet PTT auf Senden oder Empfang.
      * @param transmit true für TX, false für RX
@@ -135,13 +153,6 @@ public:
 
 private:
     /**
-     * @brief Bestimmt das Hamlib-Modus-Enum aus der Radio-Mode-Zeichenkette.
-     * @param mode Modusname, z. B. "USB" oder "LSB"
-     * @return Passendes Hamlib rmode_t
-     */
-    rmode_t to_hamlib_mode(RadioMode mode) const;
-
-    /**
      * @brief Wendet die Portkonfiguration auf den Hamlib-Handle an.
      * @return true bei Erfolg
      */
@@ -153,12 +164,12 @@ private:
 
     bool is_serial_port() const;
 
-    // Over TCP/netrigctl a rig_set_freq timeout (hamlib reports non-RIG_OK even
-    // when rigctld applied the command) leaves the socket in a dirty state — the
-    // next command sent on it is lost during hamlib's internal auto-reconnect.
-    // When set, the next set_channel() forces a rig_close+rig_open so freq/mode
-    // go out on a clean connection. Cleared after any command returns RIG_OK.
-    void reconnect_tcp();
+    // Sends `mode`, then reads it back LIVE and re-sends until the rig reports the
+    // intended mode (bounded, NO delay — must not perturb ALE core timing). Defeats
+    // an SDR front-end (e.g. Quisk) that overrides mode on a band/frequency change.
+    // Returns the last rig_set_mode() return code. Requires the mode cache be live
+    // (HAMLIB_CACHE_MODE = 0, set in start()) or the readback just echoes the set.
+    int assert_mode(RadioMode mode);
 
     std::string      model_;
     std::string      port_;
@@ -167,13 +178,32 @@ private:
 
     RIG* rig_ = nullptr;
 
+    // When PC-ALE last commanded a mode (assert_mode). sync_from_radio() only
+    // re-asserts the intended mode within a short window after this, so a
+    // deliberate external mode change (operator on the rig/SDR) is respected
+    // once the dust from our own command has settled.
+    std::chrono::steady_clock::time_point last_mode_cmd_{};
+
     Channel current_channel_;
     bool transmitting_ = false;
     bool ready_ = false;
-    bool tcp_socket_dirty_ = false;  // TCP: last command failed → reconnect before next
 
     SendCommandCallback send_callback_;
     AckCallback ack_callback_;
 };
+
+// Set HamlibRadio log verbosity. Mirrors the GUI cfgLogLevel values:
+//   0=Off  1=Error  2=Info  3=Debug  4=Trace
+// Info: channel/freq transitions. Debug: assert_mode internals + sync detail.
+void hamlib_set_log_level(int level);
+
+struct RigEntry {
+    int         model;
+    std::string mfg;
+    std::string macro; // RIG_MODEL_ prefix stripped
+};
+
+// Returns all rigs registered in the linked Hamlib, sorted by manufacturer then macro name.
+std::vector<RigEntry> list_rigs();
 
 } // namespace pal

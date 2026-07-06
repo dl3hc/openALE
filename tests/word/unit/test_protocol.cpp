@@ -1,5 +1,6 @@
 ﻿#include "Word/ale_word.h"
 #include "Protocol/Message/ale_message.h"
+#include "Protocol/Message/frame_validator.h"
 #include "Stores/address_book.h"
 #include <iostream>
 #include <iomanip>
@@ -960,10 +961,13 @@ bool test_ac_word_003_001_cmd_system_wide()
         all_pass &= pass;
     }
 
-    // 2. CMD uses Basic-38 charset (not Expanded-64)
+    // 2. CMD uses Basic-38 charset (not Expanded-64); CMD payload is not char-gated
+    //    (function code + binary LQA/noise/AMD args), so uses_basic38(CMD) is the
+    //    legacy routing-set membership used only by encode_ascii(); decode_ascii()
+    //    accepts CMD unconditionally and defers validity to the protocol layer.
     {
         bool pass = WordParser::uses_basic38(PreambleType::CMD);
-        std::cout << "  CMD uses Basic-38 charset: " << (pass ? "PASS" : "FAIL") << "\n";
+        std::cout << "  CMD uses Basic-38 charset (not char-gated): " << (pass ? "PASS" : "FAIL") << "\n";
         all_pass &= pass;
     }
 

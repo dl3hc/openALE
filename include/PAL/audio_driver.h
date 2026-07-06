@@ -92,6 +92,16 @@ public:
      */
     virtual void tick(std::vector<int16_t>& rx_out) = 0;
 
+    // ── TX level ─────────────────────────────────────────────────────────────
+
+    /**
+     * Set TX output amplitude (0.0 = mute, 1.0 = 0 dBFS).
+     *
+     * Thread-safe; effective on the next symbol frame rendered.
+     * Default: 0.25 (−12 dBFS) — matches ale::TX_AMPLITUDE.
+     */
+    virtual void set_tx_volume(float level) { (void)level; }
+
     // ── Inspection ────────────────────────────────────────────────────────────
 
     /** True after a successful open(), false after close(). */

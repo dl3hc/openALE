@@ -81,39 +81,26 @@ CallType MessageAssembler::determine_call_type(const std::vector<ALEWord>& words
 }
 
 bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
-    if (words.empty()) {
-        return false;
-    }
+    if (words.empty()) return false;
 
-    // Scan once for key preamble types.
     bool has_to   = false;
-    bool has_from = false;
+    bool has_twas = false;
     bool has_tis  = false;
+    bool has_from = false;
 
-    for (const auto& word : words) {
-        switch (word.type) {
-            case PreambleType::TO:
-            case PreambleType::TWAS:
-                has_to = true;
-                break;
-            case PreambleType::FROM:
-                has_from = true;
-                break;
-            case PreambleType::TIS:
-                has_tis = true;
-                break;
-            default:
-                break;
+    for (const auto& w : words) {
+        switch (w.type) {
+            case PreambleType::TO:   has_to   = true; break;
+            case PreambleType::TWAS: has_twas = true; break;
+            case PreambleType::TIS:  has_tis  = true; break;
+            case PreambleType::FROM: has_from = true; break;
+            default: break;
         }
     }
 
-    // TIS concludes any frame (sounding = TIS-only; call/response = TO+TIS).
-    if (has_tis) return true;
-
-    // Older FROM-based conclusion (some implementations use FROM instead of TIS).
-    if (has_to && has_from) return true;
-    if (has_from && !has_to) return true;  // FROM-only sounding
-
+    if (has_tis)            return true;  // TIS concludes any frame
+    if (has_twas)           return true;  // TWAS concludes rejection / termination / announcement
+    if (has_to && has_from) return true;  // legacy FROM-based conclusion (older implementations)
     return false;
 }
 
@@ -222,26 +209,11 @@ bool MessageAssembler::check_timeout(uint32_t current_time_ms) {
 // ============================================================================
 
 CallType CallTypeDetector::detect(const std::vector<ALEWord>& words) {
-    if (words.empty()) {
-        return CallType::UNKNOWN;
-    }
-    
-    if (is_sounding(words)) {
-        return CallType::SOUNDING;
-    }
-    
-    if (is_amd(words)) {
-        return CallType::AMD;
-    }
-    
-    if (is_individual_call(words)) {
-        return CallType::INDIVIDUAL;
-    }
-    
-    if (is_net_call(words)) {
-        return CallType::NET;
-    }
-    
+    if (words.empty())             return CallType::UNKNOWN;
+    if (is_sounding(words))        return CallType::SOUNDING;
+    if (is_amd(words))             return CallType::AMD;
+    if (is_individual_call(words)) return CallType::INDIVIDUAL;
+    // NET requires address-book context to distinguish from INDIVIDUAL; see is_net_call().
     return CallType::UNKNOWN;
 }
 
@@ -263,17 +235,13 @@ bool CallTypeDetector::is_individual_call(const std::vector<ALEWord>& words) {
 }
 
 bool CallTypeDetector::is_net_call(const std::vector<ALEWord>& words) {
-    bool has_twas = false;
-    bool has_tis  = false;
-    bool has_from = false;
-
-    for (const auto& word : words) {
-        if (word.type == PreambleType::TWAS) has_twas = true;
-        if (word.type == PreambleType::TIS)  has_tis  = true;
-        if (word.type == PreambleType::FROM) has_from = true;
-    }
-
-    return has_twas && (has_tis || has_from);
+    // Net calls and individual calls are structurally identical at the frame level
+    // (TO[addr] × N + TIS[self] in both cases).  Distinguishing them requires
+    // comparing the TO address against a net-address registry — context not
+    // available here.  The previous TWAS heuristic was wrong: TWAS also appears
+    // in rejection responses and link-termination frames, not just net conclusions.
+    (void)words;
+    return false;
 }
 
 bool CallTypeDetector::is_sounding(const std::vector<ALEWord>& words) {

@@ -18,6 +18,7 @@
 
 #include "Word/ale_word.h"
 #include "Protocol/Control/ale_state_machine.h"
+#include "Protocol/Message/frame_validator.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>
@@ -569,6 +570,108 @@ bool test_called_station_ack_to_linked_and_note1()
                   << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
         std::cout << "  NOTE 1: late \"TO JOE\" treated as a new call: "
                   << (new_call ? "PASS" : "FAIL") << "\n";
+    }
+
+    return all_ok;
+}
+
+// ============================================================================
+// AC-LINK-003-002 — Multi-word self address: DATA extension in ACK frame arms
+// WAIT_ACK sub-phase 2 before TO[self] arrives.
+//
+// When self-address > 3 chars (e.g. "JOE12"), the caller's ACK frame is:
+//   TO:JOE, DATA:12@, TO:JOE, DATA:12@, TIS:SAM
+// If the modem locks mid-cycle, the first decoded word is DATA:12@ — well
+// within the Twr window — while TO:JOE arrives ~Trw later, past the old 2091 ms
+// absolute limit.  Without the fix, hs_ack_to_ms is never armed → LINK_TIMEOUT.
+// Fix (ale_call_processor.cpp react_handshake_ WAIT_ACK/DATA_EXTENSION): arm
+// hs_ack_to_ms on DATA_EXTENSION so sub-phase 2 (silence-based) picks up TO
+// and TIS → LINKED.
+// ============================================================================
+
+static uint32_t drive_joe12_to_wait_ack(ALEStateMachine& sm)
+{
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
+
+    sm.process_event(ALEEvent::START_SCAN);
+    feed_incoming_call(sm, /*self=*/"JOE12", /*caller=*/"SAM"); // 7 words, last at slot 6
+
+    const uint32_t t_last = 1000u + 6u * Trw;   // TIS:SAM at slot 6
+    sm.update(t_last + Tdrw + 1);               // settle → SLOT_WAIT
+    sm.update(t_last + Tdrw + 2);               // SLOT_WAIT → CHANNEL_CHECK
+    const uint32_t lbt0 = t_last + Tdrw + 2;
+    sm.update(lbt0 + Tdrw);                     // CHANNEL_CHECK clear → SENDING_RESPONSE
+    // Response = TO:SAM ×2 + TIS:JOE + DATA:12@ (4 words for 5-char self)
+    for (int i = 0; i < 4; ++i) sm.on_word_complete();
+    return lbt0 + Tdrw;                         // == hs_ack_start_ms
+}
+
+bool test_wait_ack_multiword_self_address()
+{
+    std::cout << "\n[AC-LINK-003-002] Multi-word self address: DATA in ACK arms WAIT_ACK sub-phase\n";
+    bool all_ok = true;
+
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
+
+    // ── Part A: DATA[12@] arrives first (modem locked mid-cycle of ACK frame).
+    //    DATA at ack0+1800 ms (inside 2091 ms window); TO[JOE] at ack0+2192 ms
+    //    (one Trw later — past the old absolute limit); then TIS[SAM].
+    {
+        WordCapture cap;
+        ALEStateMachine sm = make_sm(cap, /*self=*/"JOE12", 0);
+        const uint32_t ack0 = drive_joe12_to_wait_ack(sm);
+
+        const bool in_wait_ack   = sm.get_handshake_phase() == HandshakePhase::WAIT_ACK;
+        const bool response_sent = cap.size() == 4;   // TO SAM ×2 + TIS JOE + DATA 12@
+        cap.clear();
+
+        const uint32_t data_t = ack0 + 1800;
+        const uint32_t to_t   = data_t + Trw;         // 2192 ms — past old 2091 ms limit
+        const uint32_t tis_t  = to_t   + Trw;
+
+        sm.update(data_t);
+        sm.process_received_word(rx_word(PreambleType::DATA, "12@"));
+        sm.update(to_t);
+        sm.process_received_word(rx_word(PreambleType::TO,   "JOE"));
+        sm.update(tis_t);
+        sm.process_received_word(rx_word(PreambleType::TIS,  "SAM"));
+        sm.update(tis_t + Tdrw + 1);    // ACK conclusion settle → LINKED
+
+        const bool linked      = sm.get_state() == ALEState::LINKED;
+        const bool no_pingpong = cap.empty();
+
+        all_ok &= in_wait_ack && response_sent && linked && no_pingpong;
+        std::cout << "  JOE12 reached WAIT_ACK after 4-word response: "
+                  << ((in_wait_ack && response_sent) ? "PASS" : "FAIL") << "\n";
+        std::cout << "  DATA[12@] first, TO[JOE] past old limit → LINKED: "
+                  << (linked ? "PASS" : "FAIL")
+                  << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
+        std::cout << "  no ping-pong response to ACK: "
+                  << (no_pingpong ? "PASS" : "FAIL") << "\n";
+    }
+
+    // ── Part B: TO[JOE] arrives first (canonical order) — also → LINKED.
+    {
+        WordCapture cap;
+        ALEStateMachine sm = make_sm(cap, /*self=*/"JOE12", 0);
+        const uint32_t ack0 = drive_joe12_to_wait_ack(sm);
+        cap.clear();
+
+        sm.update(ack0 + 100);
+        sm.process_received_word(rx_word(PreambleType::TO,   "JOE"));
+        sm.update(ack0 + 100 + Trw);
+        sm.process_received_word(rx_word(PreambleType::DATA, "12@"));
+        sm.update(ack0 + 100 + 2 * Trw);
+        sm.process_received_word(rx_word(PreambleType::TIS,  "SAM"));
+        sm.update(ack0 + 100 + 2 * Trw + Tdrw + 1);
+
+        const bool linked = sm.get_state() == ALEState::LINKED;
+        all_ok &= linked;
+        std::cout << "  TO[JOE] first (canonical order) → LINKED: "
+                  << (linked ? "PASS" : "FAIL")
+                  << " (state=" << ALEStateMachine::state_name(sm.get_state()) << ")\n";
     }
 
     return all_ok;
@@ -2244,6 +2347,10 @@ int run_all_tests()
     // AC-LINK-003-001 + NOTE 1 — called station WAIT_ACK → LINKED, ping-pong, late ACK
     run("AC-LINK-003-001/NOTE1 called station: WAIT_ACK→LINKED, no ping-pong, late ACK = new call",
         test_called_station_ack_to_linked_and_note1());
+
+    // AC-LINK-003-002 — multi-word self address: DATA extension arms WAIT_ACK sub-phase
+    run("AC-LINK-003-002 multi-word self: DATA[ext] in ACK arms WAIT_ACK → LINKED",
+        test_wait_ack_multiword_self_address());
 
     // AC-GEN-009-002 — "not already in a link" guard
     run("ALWAYS-ANSWER individual call while LINKED is silently ignored",

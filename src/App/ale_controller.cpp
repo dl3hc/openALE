@@ -1,4 +1,4 @@
-/**
+﻿/**
  * \file App/ale_controller.cpp
  */
 
@@ -481,6 +481,7 @@ void ALEController::wire_callbacks()
         pal_ch.power        = ch.power_pct;
         pal_ch.antenna      = ch.antenna;
         radio_->set_channel(pal_ch);
+        schedule_mode_verify();
         if (on_channel_changed) on_channel_changed(ch);
     });
 }
@@ -558,25 +559,52 @@ bool ALEController::rx_inhibited(uint32_t rx_hz) const
 bool ALEController::set_frequency(uint32_t hz)
 {
     if (!radio_ || hz == 0) return false;
-    pal::Channel pc = radio_->get_channel();
-    pc.rx_frequency = hz;
-    pc.tx_frequency = hz;  // simplex
-    radio_->set_channel(pc);
-    if (on_channel_changed)
+    radio_->set_frequency(hz);
+    schedule_mode_verify();
+    if (on_channel_changed) {
+        pal::Channel pc = radio_->get_channel();
         on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
                                    mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
+    }
     return true;
 }
 
 bool ALEController::set_mode(const std::string& mode)
 {
     if (!radio_ || !is_ale_mode(mode)) return false;
-    pal::Channel pc = radio_->get_channel();
-    pc.rx_mode = pc.tx_mode = mode_from_string(mode);
-    radio_->set_channel(pc);
-    if (on_channel_changed)
+    radio_->set_mode(mode_from_string(mode));
+    schedule_mode_verify();
+    if (on_channel_changed) {
+        pal::Channel pc = radio_->get_channel();
         on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
                                    mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
+    }
+    return true;
+}
+
+bool ALEController::set_vfo_channel(uint32_t hz, const std::string& mode)
+{
+    if (!radio_ || hz == 0) return false;
+
+    // set_channel() sends freq first, mode last. An SDR front-end (Quisk) restores
+    // its per-band saved mode asynchronously after the frequency command — often
+    // after assert_mode()'s sub-ms readback loop has already returned. The explicit
+    // set_mode() call below re-asserts mode after the frequency is stable: no
+    // frequency is sent, so no second band-restore is triggered. Mirrors step_channel().
+    pal::Channel pc = radio_->get_channel();
+    pc.rx_frequency = hz;
+    pc.tx_frequency = hz;                       // simplex
+    if (!mode.empty())
+        pc.rx_mode = pc.tx_mode = mode_from_string(mode);
+    radio_->set_channel(pc);
+    radio_->set_mode(pc.tx_mode);
+    schedule_mode_verify();
+
+    if (on_channel_changed) {
+        pal::Channel cur = radio_->get_channel();
+        on_channel_changed(Channel(cur.rx_frequency, cur.tx_frequency,
+                                   mode_to_string(cur.rx_mode), mode_to_string(cur.tx_mode)));
+    }
     return true;
 }
 
@@ -615,11 +643,21 @@ bool ALEController::step_channel(int direction)
     idx = (idx + direction % n + n) % n;
 
     const Channel& target = step_set[idx];
-    pal::Channel pc = cur;
+    pal::Channel pc;
     pc.rx_frequency = target.rx_frequency_hz;
     pc.tx_frequency = target.effective_tx_hz();
-    pc.rx_mode = pc.tx_mode = mode_from_string(target.rx_mode);
+    pc.rx_mode      = mode_from_string(target.rx_mode);
+    pc.tx_mode      = mode_from_string(target.tx_mode);
+    pc.power        = target.power_pct;
+    pc.antenna      = target.antenna;
+
     radio_->set_channel(pc);
+    // After a frequency change Quisk's band-restore may fire asynchronously
+    // after assert_mode()'s sub-ms retries. A mode-only re-assertion here
+    // catches any revert that has already landed: no frequency is sent, so
+    // no second band-restore is triggered — identical to the panel-button path.
+    radio_->set_mode(pc.tx_mode);
+    schedule_mode_verify();
     if (on_channel_changed) on_channel_changed(target);
     return true;
 }
@@ -641,6 +679,7 @@ void ALEController::nudge_frequency(int direction)
     const int64_t new_freq = static_cast<int64_t>(pc.rx_frequency) + direction * static_cast<int64_t>(tune_step_hz_);
     pc.rx_frequency = pc.tx_frequency = static_cast<uint32_t>(std::max<int64_t>(0, new_freq));
     radio_->set_channel(pc);
+    schedule_mode_verify();
     if (on_channel_changed)
         on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
                                    mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
@@ -802,6 +841,15 @@ bool ALEController::send_sounding_sweep(const std::vector<Channel>& channels)
     if (!sm_.send_sounding_sweep(channels)) {
         emit_status("Sounding sweep rejected — only available while IDLE or scanning");
         return false;
+    }
+    // Re-arm the auto-sounding timer so this manual sweep counts as "just sounded".
+    // Without this, an overdue timer fires again the moment the SM returns to IDLE,
+    // causing an immediate double-sounding.
+    auto_sounding_last_ms_ = now_ms_;
+    sounding_warning_sent_ = false;
+    if (sounding_warning_active_) {
+        sounding_warning_active_ = false;
+        if (on_sounding_warning) on_sounding_warning(auto_sounding_net_, 0, "cancel");
     }
     emit_status("Sounding sweep — " + std::to_string(channels.size())
                 + " channel(s)");
@@ -1143,6 +1191,36 @@ void ALEController::update(uint32_t now_ms)
     tick_sounding_sweep(now_ms);
     tick_offline_completion();
     tick_lqa_update(now_ms);
+    tick_mode_verify(now_ms);
+}
+
+// Check delays after a channel/mode command: first check catches an SDR
+// front-end's asynchronous band-mode revert (~1-2 GUI timer ticks after the
+// freq change), the later ones cover stragglers. All lie inside the radio
+// backend's re-assert recency window, and each check is a single non-blocking
+// CAT read (sync_from_radio) — no sleeps, nothing on the hop path itself.
+static constexpr uint32_t MODE_VERIFY_DELAYS_MS[] = { 300, 700, 1500 };
+static constexpr int      MODE_VERIFY_CHECKS =
+    static_cast<int>(sizeof(MODE_VERIFY_DELAYS_MS) / sizeof(MODE_VERIFY_DELAYS_MS[0]));
+
+void ALEController::schedule_mode_verify()
+{
+    if (!radio_) return;
+    mode_verify_checks_left_ = MODE_VERIFY_CHECKS;
+    mode_verify_deadline_ms_ = now_ms_ + MODE_VERIFY_DELAYS_MS[0];
+}
+
+void ALEController::tick_mode_verify(uint32_t now_ms)
+{
+    if (mode_verify_checks_left_ <= 0 || now_ms < mode_verify_deadline_ms_) return;
+    if (radio_) radio_->sync_from_radio();  // backend re-asserts intended mode if reverted
+    --mode_verify_checks_left_;
+    if (mode_verify_checks_left_ > 0) {
+        const int next = MODE_VERIFY_CHECKS - mode_verify_checks_left_;
+        mode_verify_deadline_ms_ = now_ms + MODE_VERIFY_DELAYS_MS[next];
+    } else {
+        mode_verify_deadline_ms_ = 0;
+    }
 }
 
 void ALEController::tick_ptt_timing(uint32_t now_ms)
@@ -1969,9 +2047,9 @@ void ALEController::rx_handle_lqa_exchange(const ALEWord& word)
     // ── Block A5 — CMD LQA (char 'a') bilateral RX ───────────────────────
     // Captures in HANDSHAKE/WAIT_CYCLE_END (JOE receiving SAM's CMD 'a')
     // and in CALLING/LISTENING (SAM receiving JOE's CMD 'a' in the response).
-    // cmd_char_code() reads raw_payload bits directly: CMD 'a'=0x61 is in the
-    // b7b6="11" range and fails Basic38/Expanded64 validation, so address[0]
-    // is '?' for received words; raw_payload is always correct.
+    // cmd_char_code() reads raw_payload bits directly so CMD detection is
+    // independent of the char-set gate and the decoded address[] content;
+    // raw_payload is always the authoritative CMD function code.
     {
         const ALEState cur_st = sm_.get_state();
         const bool in_bilateral_window =
@@ -2447,6 +2525,11 @@ bool ALEController::test_rig_connection() const
     return radio_ ? radio_->is_ready() : false;
 }
 
+bool ALEController::sync_radio_state()
+{
+    return radio_ ? radio_->sync_from_radio() : false;
+}
+
 std::string ALEController::get_rig_connection_status() const
 {
     if (!radio_) return "not attached";
@@ -2555,16 +2638,11 @@ bool ALEController::export_settings(const std::string& path)
     f << "nmea_port=" << config_.nmea_port << "\n";
     f << "nmea_baud=" << config_.nmea_baud << "\n";
     f << "sfi_enabled=" << (config_.sfi_enabled ? 1 : 0) << "\n";
-    if (!contact_store_.empty()) {
+    const auto& stations = sm_.get_address_book().all_stations();
+    if (!stations.empty()) {
         f << "\n# ALE address export\n";
-        f << "# contact=callsign|name|status|net_members|valid_channels\n";
-        for (const auto& c : contact_store_.all()) {
-            f << "contact=" << c.callsign << '|' << c.name
-              << '|' << (c.enabled ? "enabled" : "disabled")
-              << '|' << join_csv(c.net_members)
-              << '|' << (c.all_channels ? "ALL" : join_csv(c.valid_channels))
-              << '\n';
-        }
+        for (const auto& [addr, name] : stations)
+            f << "station=" << addr << '|' << name << '\n';
     }
     return f.good();
 }
@@ -2579,9 +2657,9 @@ bool ALEController::import_settings(const std::string& path)
     bool lqa_enabled_val = lqa_enabled();
     std::string station_file_to_load;
     bool first_self_addr = true;
-    // Contacts from ale.conf (# ALE address export section). Applied after
+    // Stations from ale.conf (# ALE address export section). Applied after
     // load_station_file so entries already in the station file are not duplicated.
-    std::vector<std::array<std::string, 5>> conf_contacts;
+    std::vector<std::pair<std::string, std::string>> conf_stations;
 
     std::string line;
     while (std::getline(f, line)) {
@@ -2658,14 +2736,17 @@ bool ALEController::import_settings(const std::string& path)
             cfg.nmea_baud = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "sfi_enabled") {
             cfg.sfi_enabled = (val == "1");
+        } else if (key == "station" && !val.empty()) {
+            // station=callsign|name  (new format)
+            const auto sep = val.find('|');
+            const std::string cs = val.substr(0, sep);
+            const std::string nm = (sep != std::string::npos) ? val.substr(sep + 1) : "";
+            if (!cs.empty()) conf_stations.push_back({cs, nm});
         } else if (key == "contact" && !val.empty()) {
-            // contact=callsign|name|status|net_members|valid_channels
+            // contact=callsign|name|...  (legacy — use only first two fields)
             const auto fields = split_pipe(val);
-            if (!fields.empty() && !fields[0].empty()) {
-                std::array<std::string, 5> row{};
-                for (size_t i = 0; i < fields.size() && i < 5; ++i) row[i] = fields[i];
-                conf_contacts.push_back(row);
-            }
+            if (!fields.empty() && !fields[0].empty())
+                conf_stations.push_back({fields[0], fields.size() > 1 ? fields[1] : ""});
         }
         // net= / net_channel=: legacy keys, silently ignored (nets now in station file)
         // audio_in / audio_out: bridge-level, silently ignored here
@@ -2674,13 +2755,11 @@ bool ALEController::import_settings(const std::string& path)
     if (has_lqa_enabled) set_lqa_enabled(lqa_enabled_val);
     if (!station_file_to_load.empty())
         load_station_file(station_file_to_load);  // sets station_file_ on success
-    // Populate address book from ale.conf contacts (skip callsigns already loaded
+    // Populate address book from ale.conf stations (skip callsigns already loaded
     // from the station file to avoid duplicates).
-    for (const auto& row : conf_contacts) {
-        const std::string& cs = row[0];
-        if (!contact_store_.find(cs))
-            add_contact(cs, row[1], row[2].empty() ? "enabled" : row[2],
-                        row[3], row[4].empty() ? "ALL" : row[4]);
+    for (const auto& [cs, name] : conf_stations) {
+        if (!sm_.get_address_book().is_known_station(cs))
+            sm_.get_address_book().update_station(cs, name);
     }
     update_propagation_context();
     return true;
@@ -3104,7 +3183,7 @@ std::string ALEController::process_command(const std::string& raw)
         start_scanning();
         return "OK: scanning";
     }
-    if (cmd == "CMD:STOP_SCANNING") {
+    if (cmd == "CMD:STOP_SCANNING" || cmd == "CMD:AVAILABLE") {
         start_available();
         return "OK: available (idle)";
     }
@@ -3224,40 +3303,246 @@ std::string ALEController::process_command(const std::string& raw)
         return out;
     }
     if (cmd.rfind("CMD:AMD ", 0) == 0) {
-        std::string text = cmd_trim(cmd.substr(8));
+        const std::string args = cmd_trim(cmd.substr(8));
+        if (args.empty())
+            return "ERROR: CMD:AMD requires message text";
+        // When LINKED, the active peer receives the message.
+        // Accept (and ignore) any <addr> prefix so the bridge can always call
+        // CMD:AMD <addr> <text> regardless of link state.
+        if (is_link_active()) {
+            const auto sp = args.find(' ');
+            if (sp == std::string::npos)
+                return "ERROR: CMD:AMD <ADDR> <text> -- message text is empty";
+            const std::string text = cmd_trim(args.substr(sp + 1));
+            if (text.empty())
+                return "ERROR: CMD:AMD <ADDR> <text> -- message text is empty";
+            return send_amd(active_peer(), text);
+        }
+        const auto sp = args.find(' ');
+        if (sp == std::string::npos)
+            return "ERROR: CMD:AMD <ADDR> <text> -- address required when not linked";
+        const std::string addr = args.substr(0, sp);
+        const std::string text = cmd_trim(args.substr(sp + 1));
         if (text.empty())
-            return "ERROR: CMD:AMD requires message text (max 90 chars, Expanded-64)";
-        if (text.length() > 90) text = text.substr(0, 90);
-        ALEStateMachine::PendingMessage msg;
-        msg.type    = ALEStateMachine::PendingMessage::Type::AMD;
-        msg.content = std::move(text);
-        sm_.set_pending_message(msg);
-        return "OK: AMD text queued — send with CMD:CALL <ADDR>";
+            return "ERROR: CMD:AMD <ADDR> <text> -- message text is empty";
+        return send_amd(addr, text);
+    }
+    // -- Sounding -----------------------------------------------------------------
+    if (cmd == "CMD:SOUND") {
+        if (!send_sounding())
+            return std::string("ERROR: cannot sound in state ")
+                   + ALEStateMachine::state_name(state());
+        return "OK: sounding";
+    }
+    if (cmd.rfind("CMD:SOUND_SWEEP ", 0) == 0) {
+        const std::string net_name = cmd_trim(cmd.substr(16));
+        if (net_name.empty())
+            return "ERROR: CMD:SOUND_SWEEP requires a net name";
+        const std::vector<Channel> chans = resolve_net_sounding_channels(net_name);
+        if (chans.empty())
+            return "ERROR: net '" + net_name + "' not found or has no soundable channels";
+        if (!send_sounding_sweep(chans))
+            return std::string("ERROR: cannot sweep in state ")
+                   + ALEStateMachine::state_name(state());
+        char buf[80];
+        std::snprintf(buf, sizeof(buf), "OK: sounding sweep on %zu channel(s)", chans.size());
+        return buf;
+    }
+    if (cmd.rfind("CMD:SOUND_AUTO ", 0) == 0) {
+        std::istringstream iss(cmd.substr(15));
+        std::string flag, net_name;
+        iss >> flag;
+        std::getline(iss, net_name);
+        net_name = cmd_trim(net_name);
+        if (flag != "on" && flag != "off")
+            return "ERROR: CMD:SOUND_AUTO on|off [net]";
+        set_automatic_sounding(flag == "on", net_name);
+        return std::string("OK: auto-sounding ") + flag
+               + (net_name.empty() ? "" : " net=" + net_name);
+    }
+    if (cmd.rfind("CMD:SOUND_INTERRUPT ", 0) == 0) {
+        const std::string net_name = cmd_trim(cmd.substr(20));
+        if (net_name.empty())
+            return "ERROR: CMD:SOUND_INTERRUPT requires a net name";
+        interrupt_sounding(net_name);
+        return "OK: sounding interrupted for net " + net_name;
+    }
+    // -- Single-channel / group call ----------------------------------------------
+    if (cmd.rfind("CMD:SINGLE_CALL ", 0) == 0) {
+        const std::string target = cmd_trim(cmd.substr(16));
+        if (target.empty())
+            return "ERROR: CMD:SINGLE_CALL requires a target address";
+        if (!initiate_single_channel_call(target))
+            return std::string("ERROR: cannot call in state ")
+                   + ALEStateMachine::state_name(state());
+        return "OK: single-channel call to " + target;
+    }
+    if (cmd.rfind("CMD:GROUP_CALL ", 0) == 0) {
+        const std::string roster = cmd_trim(cmd.substr(15));
+        if (roster.empty())
+            return "ERROR: CMD:GROUP_CALL requires a roster name";
+        if (!initiate_group_call(roster))
+            return "ERROR: roster '" + roster + "' not found or cannot call in current state";
+        return "OK: group call to roster " + roster;
+    }
+    // -- Link control -------------------------------------------------------------
+    if (cmd == "CMD:RESET_IDLE_TIMER") {
+        reset_link_idle_timer();
+        return "OK: idle timer reset";
+    }
+    if (cmd == "CMD:EMERGENCY_STOP") {
+        emergency_stop();
+        return "OK: emergency stop";
+    }
+    if (cmd.rfind("CMD:SET_PTT ", 0) == 0) {
+        const std::string flag = cmd_trim(cmd.substr(12));
+        if (flag != "on" && flag != "off")
+            return "ERROR: CMD:SET_PTT on|off";
+        set_manual_ptt(flag == "on");
+        return std::string("OK: PTT ") + flag;
+    }
+    // -- Scan net -----------------------------------------------------------------
+    if (cmd.rfind("CMD:SET_SCAN_NET ", 0) == 0) {
+        const std::string name = cmd_trim(cmd.substr(17));
+        set_active_scan_net(name);
+        return "OK: scan net set to " + (name.empty() ? std::string("(all)") : name);
+    }
+    // -- Contacts -----------------------------------------------------------------
+    if (cmd == "CMD:LIST_CONTACTS") {
+        const auto contacts = get_all_contacts();
+        if (contacts.empty()) return "CONTACTS: (none)";
+        std::string out = "CONTACTS:\n";
+        for (const auto& c : contacts) out += "  " + c + "\n";
+        return out;
+    }
+    if (cmd.rfind("CMD:ADD_CONTACT ", 0) == 0) {
+        const std::string args = cmd_trim(cmd.substr(16));
+        if (args.empty())
+            return "ERROR: CMD:ADD_CONTACT <callsign> [name]";
+        const auto sp2  = args.find(' ');
+        const std::string cs   = (sp2 == std::string::npos) ? args : args.substr(0, sp2);
+        const std::string name = (sp2 == std::string::npos) ? "" : cmd_trim(args.substr(sp2 + 1));
+        if (!add_contact(cs, name))
+            return "ERROR: callsign must not be empty";
+        return "OK: contact " + cs + " added";
+    }
+    if (cmd.rfind("CMD:DEL_CONTACT ", 0) == 0) {
+        const std::string cs = cmd_trim(cmd.substr(16));
+        if (cs.empty())
+            return "ERROR: CMD:DEL_CONTACT requires a callsign";
+        if (!remove_contact(cs))
+            return "ERROR: contact '" + cs + "' not found";
+        return "OK: contact " + cs + " removed";
+    }
+    if (cmd.rfind("CMD:SELECT_CONTACT ", 0) == 0) {
+        const std::string cs = cmd_trim(cmd.substr(19));
+        if (cs.empty())
+            return "ERROR: CMD:SELECT_CONTACT requires a callsign";
+        if (!select_contact(cs))
+            return "ERROR: contact '" + cs + "' not found";
+        return "OK: " + cs + " selected";
+    }
+    // -- Self addresses -----------------------------------------------------------
+    if (cmd == "CMD:LIST_SELF_ADDRS") {
+        const auto addrs = get_all_self_addresses();
+        if (addrs.empty()) return "SELF_ADDRS: (none)";
+        std::string out = "SELF_ADDRS:\n";
+        for (const auto& a : addrs) out += "  " + a + "\n";
+        return out;
+    }
+    if (cmd.rfind("CMD:ADD_SELF_ADDR ", 0) == 0) {
+        const std::string addr = cmd_trim(cmd.substr(18));
+        if (addr.empty())
+            return "ERROR: CMD:ADD_SELF_ADDR requires an address";
+        if (!add_self_address(addr))
+            return "ERROR: address must not be empty";
+        return "OK: self address " + addr + " added";
+    }
+    if (cmd.rfind("CMD:DEL_SELF_ADDR ", 0) == 0) {
+        const std::string addr = cmd_trim(cmd.substr(18));
+        if (addr.empty())
+            return "ERROR: CMD:DEL_SELF_ADDR requires an address";
+        if (!remove_self_address(addr))
+            return "ERROR: self address '" + addr + "' not found";
+        return "OK: self address " + addr + " removed";
+    }
+    if (cmd.rfind("CMD:SET_PRIMARY_ADDR ", 0) == 0) {
+        const std::string addr = cmd_trim(cmd.substr(21));
+        if (addr.empty())
+            return "ERROR: CMD:SET_PRIMARY_ADDR requires an address";
+        if (!set_primary_self_address(addr))
+            return "ERROR: self address '" + addr + "' not found";
+        return "OK: primary self address set to " + addr;
+    }
+    // -- Channel management -------------------------------------------------------
+    if (cmd.rfind("CMD:RENAME_CHANNEL ", 0) == 0) {
+        std::istringstream iss(cmd.substr(19));
+        std::string old_id, new_id;
+        iss >> old_id >> new_id;
+        if (old_id.empty() || new_id.empty())
+            return "ERROR: CMD:RENAME_CHANNEL <old_id> <new_id>";
+        if (!rename_channel(old_id, new_id))
+            return "ERROR: channel '" + old_id + "' not found";
+        return "OK: channel " + old_id + " renamed to " + new_id;
+    }
+    // -- LQA ----------------------------------------------------------------------
+    if (cmd == "CMD:CLEAR_LQA") {
+        clear_lqa();
+        return "OK: LQA database cleared";
     }
     if (cmd == "CMD:HELP") {
         return
             "Commands:\n"
-            "  CMD:CALL <ADDR>                     initiate individual call\n"
-            "  CMD:AMD <text>                      queue AMD orderwire for next call (max 90 chars)\n"
-            "  CMD:TERMINATE                       terminate current link\n"
-            "  CMD:ACCEPT                          accept incoming call (manual-accept mode)\n"
-            "  CMD:REJECT                          reject incoming call (TWAS)\n"
-            "  CMD:START_SCANNING                  start channel scanning (alias: CMD:SCAN)\n"
-            "  CMD:STOP_SCANNING                   stop scanning, return to IDLE (available)\n"
-            "  CMD:STATUS                          print current SM state\n"
+            "  -- Call/link control --\n"
+            "  CMD:CALL <ADDR>                          initiate individual call\n"
+            "  CMD:SINGLE_CALL <ADDR>                   force single-channel call (no scanning)\n"
+            "  CMD:GROUP_CALL <ROSTER>                  call all members of named roster\n"
+            "  CMD:AMD <ADDR> <text>                    send AMD orderwire (to peer if LINKED)\n"
+            "  CMD:TERMINATE                            terminate current link\n"
+            "  CMD:ACCEPT                               accept incoming call (manual-accept mode)\n"
+            "  CMD:REJECT                               reject incoming call (TWAS)\n"
+            "  CMD:RESET_IDLE_TIMER                     reset the link idle watchdog\n"
+            "  CMD:EMERGENCY_STOP                       abort TX and reset immediately\n"
+            "  CMD:SET_PTT on|off                       manual PTT override\n"
+            "  -- Scanning --\n"
+            "  CMD:START_SCANNING                       start channel scanning (alias: CMD:SCAN)\n"
+            "  CMD:STOP_SCANNING                        stop scanning, return to IDLE (alias: CMD:AVAILABLE)\n"
+            "  CMD:SET_SCAN_NET <name>                  set active scan net (empty = all)\n"
+            "  CMD:STATUS                               print current SM state\n"
+            "  -- Sounding --\n"
+            "  CMD:SOUND                                send a sounding on current channel\n"
+            "  CMD:SOUND_SWEEP <net>                    sounding sweep over a net's channels\n"
+            "  CMD:SOUND_AUTO on|off [net]              enable/disable automatic sounding\n"
+            "  CMD:SOUND_INTERRUPT <net>                cancel an in-progress sounding sweep\n"
+            "  -- Channels --\n"
             "  CMD:ADD_CHANNEL rx_hz[:tx_hz] [mode] [label]  add/update channel\n"
-            "  CMD:DEL_CHANNEL rx_hz               remove channel\n"
-            "  CMD:LIST_CHANNELS                   list all channels\n"
-            "  CMD:CLEAR_CHANNELS                  remove all channels\n"
-            "  CMD:SAVE_CHANNELS [path]            save channel list to file\n"
-            "  CMD:LOAD_CHANNELS <path>            load channel list from file\n"
-            "  CMD:ADD_NET <name>                   add a net\n"
-            "  CMD:DEL_NET <name>                   remove a net\n"
-            "  CMD:ASSIGN_CHANNEL <net> <id>        assign a channel ID to a net\n"
-            "  CMD:UNASSIGN_CHANNEL <net> <id>      remove a channel ID from a net\n"
-            "  CMD:LIST_NETS                        list all nets and their channels";
+            "  CMD:DEL_CHANNEL rx_hz                    remove channel\n"
+            "  CMD:LIST_CHANNELS                        list all channels\n"
+            "  CMD:CLEAR_CHANNELS                       remove all channels\n"
+            "  CMD:RENAME_CHANNEL <old_id> <new_id>     rename a channel by ID\n"
+            "  CMD:SAVE_CHANNELS [path]                 save channel list to file\n"
+            "  CMD:LOAD_CHANNELS <path>                 load channel list from file\n"
+            "  -- Nets --\n"
+            "  CMD:ADD_NET <name>                       add a net\n"
+            "  CMD:DEL_NET <name>                       remove a net\n"
+            "  CMD:ASSIGN_CHANNEL <net> <id>            assign a channel ID to a net\n"
+            "  CMD:UNASSIGN_CHANNEL <net> <id>          remove a channel ID from a net\n"
+            "  CMD:LIST_NETS                            list all nets and their channels\n"
+            "  -- Contacts --\n"
+            "  CMD:LIST_CONTACTS                        list all contacts\n"
+            "  CMD:ADD_CONTACT <callsign> [name]        add/update a contact\n"
+            "  CMD:DEL_CONTACT <callsign>               remove a contact\n"
+            "  CMD:SELECT_CONTACT <callsign>            select contact for next outgoing call\n"
+            "  -- Self addresses --\n"
+            "  CMD:LIST_SELF_ADDRS                      list all self addresses\n"
+            "  CMD:ADD_SELF_ADDR <addr>                 add a self address\n"
+            "  CMD:DEL_SELF_ADDR <addr>                 remove a self address\n"
+            "  CMD:SET_PRIMARY_ADDR <addr>              set primary self address\n"
+            "  -- LQA --\n"
+            "  CMD:CLEAR_LQA                            clear LQA database\n"
+            "  CMD:HELP                                 print this message";
     }
-    return "ERROR: unknown command — try CMD:HELP";
+    return "ERROR: unknown command -- try CMD:HELP";
 }
 
 } // namespace ale
