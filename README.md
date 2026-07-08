@@ -1,10 +1,10 @@
-# PC-ALE 2.0 - Open Source ALE for Amateur Radio
+﻿# openALE 2.0 - Open Source ALE for Amateur Radio
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]() [![Tests](https://img.shields.io/badge/tests-91%2F91%20passing-brightgreen)]() [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue)]() [![License](https://img.shields.io/badge/license-MIT-blue)]()
 
-**Repository:** https://github.com/Alex-Pennington/PC-ALE  
-**Author:** Alex Pennington, AAM402/KY4OLB  
-**UI Concept:** https://alex-pennington.github.io/pcale-ui-concept/  
+**Repository:** https://github.com/dl3hc/openALE  
+**Maintainer:** dl3hc  
+**Based on:** [PC-ALE 2.0](https://github.com/Alex-Pennington/PC-ALE) by Alex Pennington (AAM402/KY4OLB)  
 **License:** MIT
 
 A modern, production-ready C++17 clean-room implementation of **MIL-STD-188-141B Automatic Link Establishment (ALE)** and **FED-STD-1052 ARQ** for HF radio systems.
@@ -30,8 +30,8 @@ This implementation is built **entirely from public MIL-STD specifications**, no
 
 ### Build
 ```bash
-git clone https://github.com/dl3hc/PC-ALE.git
-cd PC-ALE
+git clone https://github.com/dl3hc/openALE.git
+cd openALE
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --verbose
@@ -343,7 +343,7 @@ Defaults):
 | `IR`  | `inhibit_reporting` (bilateraler LQA-CMD-'a'-Austausch) |
 
 ```
-# PC-ALE channel list — MIL-STD-188-141B
+# openALE channel list — MIL-STD-188-141B
 # ID:id rx_hz tx_hz mode [flags] [label]
 ID:C-1 14250000 0 USB 40m-Calling
 ID:C-2 7100000 0 USB [IC] 40m-Backup
@@ -419,7 +419,7 @@ Hamlib-Modell `2` ist `RIG_MODEL_NETRIGCTL` — der eingebaute rigctld-Client-Ba
 
 ## 📶 LQA-Austausch und Auto-Relink (A.5.4.4 / A.5.4.5)
 
-PC-ALE implementiert den vollständigen bilateralen LQA-Austausch nach MIL-STD-188-141B
+openALE implementiert den vollständigen bilateralen LQA-Austausch nach MIL-STD-188-141B
 sowie einen spec-konformen Mechanismus zur automatischen Kanaloptimierung.
 
 ### Bilateraler Kanal-Score
@@ -606,11 +606,11 @@ GPS/SFI thread → PendingUpdate (mutex) → main loop → ctrl.set_gps_fix() / 
 
 ## 🏗️ Architecture: Protocol Stack + Platform Layer
 
-PC-ALE 2.0 uses a **two-repository architecture**:
+openALE 2.0 uses a **two-repository architecture**:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  PC-ALE (This Repository)                           │
+│  openALE (This Repository)                           │
 │  ┌───────────────────────────────────────────────┐  │
 │  │ Layers 3-7: ALE Protocol Stack                │  │
 │  │ • FS-1052 ARQ (Layer 4)                       │  │
@@ -635,15 +635,15 @@ PC-ALE 2.0 uses a **two-repository architecture**:
                    │ Implemented by
 ┌──────────────────▼──────────────────────────────────┐
 │  Platform-Specific Repositories (Community)          │
-│  • PC-ALE-Linux-DRAWS (ALSA, libgpiod)              │
-│  • PC-ALE-Windows (WASAPI, Hamlib)                  │
-│  • PC-ALE-RaspberryPi-Bare (Circle framework)       │
-│  • PC-ALE-SDR (SoapySDR/UHD implementation)         │
+│  • openALE-Linux-DRAWS (ALSA, libgpiod)              │
+│  • openALE-Windows (WASAPI, Hamlib)                  │
+│  • openALE-RaspberryPi-Bare (Circle framework)       │
+│  • openALE-SDR (SoapySDR/UHD implementation)         │
 └─────────────────────────────────────────────────────┘
 ```
 
 **Why Separate Repositories?**
-- PC-ALE = **Pure protocol stack** (no OS dependencies)
+- openALE = **Pure protocol stack** (no OS dependencies)
 - [PC-ALE-PAL](https://github.com/Alex-Pennington/PC-ALE-PAL) = **Interface contracts** (what must be implemented)
 - Platform repos = **Concrete implementations** (ALSA, WASAPI, etc.)
 
@@ -654,9 +654,9 @@ PC-ALE 2.0 uses a **two-repository architecture**:
 - ✅ Community can contribute platform ports without touching core
 
 **Get Started:**
-1. Clone PC-ALE (protocol stack) - this repository
+1. Clone openALE (protocol stack) - this repository
 2. Clone [PC-ALE-PAL](https://github.com/Alex-Pennington/PC-ALE-PAL) (interfaces)
-3. Clone or create a platform implementation (e.g., PC-ALE-Linux-DRAWS)
+3. Clone or create a platform implementation (e.g., openALE-Linux-DRAWS)
 4. Build and run!
 
 ---
@@ -816,7 +816,7 @@ ctest --verbose
 
 This project exists because:
 - ION2G has problems and limited development
-- PC-ALE 1.x is abandonware
+- openALE 1.x is abandonware
 - MARS has excellent tools locked behind membership requirements
 - The ham community deserves modern, open, cross-platform ALE software
 
@@ -869,7 +869,7 @@ This clean-room implementation references:
 
 ---
 
-**PC-ALE 2.0** - Professional-grade HF radio ALE implementation  
+**openALE 2.0** - Professional-grade HF radio ALE implementation  
 *Built from specifications, designed for reliability, open to all*
 
 ---

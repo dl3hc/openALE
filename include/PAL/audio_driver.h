@@ -70,6 +70,28 @@ public:
     virtual void set_symbol_source(std::function<bool(uint8_t*)> fn) = 0;
 
     /**
+     * Register a raw-PCM TX source — the transparent-voice passthrough path.
+     *
+     * When set (non-null), the audio render thread pulls raw 8 kHz mono 16-bit PCM
+     * from @p fn instead of pulling symbol frames from the symbol source. The PCM
+     * is resampled to the device rate and written to the render buffer *without*
+     * ToneGenerator or the ALE band-pass — it is full-band baseband carried
+     * straight to the radio. @p fn must fill up to @p want samples and return the
+     * number filled; returning 0 yields silence. Thread-safe w.r.t. the audio
+     * thread (may be called after open()).
+     *
+     * Passing nullptr (the default) restores the symbol-source render path, i.e.
+     * normal ALE modem TX. The symbol source registered via set_symbol_source()
+     * stays registered across a pcm-source set/clear cycle — only the active
+     * render branch changes.
+     *
+     * The PCM path does not arm frame completions (those are an ALE-modem word
+     * concept); it renders continuously. tx_volume is not applied (voice level is
+     * controlled at the source).
+     */
+    virtual void set_pcm_source(std::function<size_t(int16_t* out, size_t want)> fn) { (void)fn; }
+
+    /**
      * Arm a one-shot frame-completion notification.
      *
      * cb fires from the main-loop thread (inside tick()) after the NEXT symbol

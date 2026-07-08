@@ -304,7 +304,10 @@ ALEController::ALEController()
     // Busy transitions are surfaced to the operator via status (no silent
     // blocking); the A.5.4.7.3 override is handled inside the SM.
     sm_.set_channel_busy_query([this]() {
-        if (!lbt_occupancy_enabled_) return false;
+        // The detector's `busy` flag is the single LBT-busy truth (it already
+        // encodes the LBT-enabled and RX-active gates via set_active).  The
+        // GUI pill reads the same flag (lbt_busy()), so there is exactly one
+        // LBT implementation; this query is just its SM-side consumer.
         const bool busy = occupancy_.is_busy();
         if (busy && !lbt_busy_reported_) {
             char buf[112];
@@ -358,6 +361,22 @@ void ALEController::apply_lbt_policy_(const std::vector<Channel>& channels)
     sm_.set_lbt_shared(!all_ale_only);
 }
 
+void ALEController::notify_channel_changed_(const Channel& ch)
+{
+    fprintf(stderr, "[HOP] t=%u rx=%u\n", now_ms_, ch.rx_frequency_hz); // TEMP
+    // The detector's EWMA floor is channel-specific.  When the RX frequency
+    // changes, drop the floor/busy/vote so the new channel is measured on its
+    // own terms instead of inheriting a stale busy from the previous channel
+    // (which during scan hops — RX stays active, no set_active edge — could
+    // otherwise keep the pill on FREQ BUSY until the floor slowly re-tracked).
+    // A same-frequency notification (channel rename) leaves the detector alone.
+    if (ch.rx_frequency_hz > 0 && ch.rx_frequency_hz != last_lbt_rx_hz_) {
+        occupancy_.reset();
+        last_lbt_rx_hz_ = ch.rx_frequency_hz;
+    }
+    if (on_channel_changed) on_channel_changed(ch);
+}
+
 void ALEController::wire_callbacks()
 {
     // SM → Modem: enqueue word for TX, and arm one frame-completion notification.
@@ -397,7 +416,12 @@ void ALEController::wire_callbacks()
         emit_status(msg);
     });
 
-    // SM frame assembler → passive monitor (on_frame_decoded)
+    // SM frame assembler → passive monitor (on_frame_decoded only).
+    // Per-word display taps fire from rx_track_signal_quality() in strict
+    // on-air arrival order — never reordered or deferred to frame-assembly
+    // time. The assembler concludes a frame on the first TIS/TWAS, so a
+    // repeating sound (TWAS DATA TWAS DATA …) would otherwise group every
+    // later frame as [DATA, TWAS] and display DATA before TWAS.
     sm_.set_frame_assembled_callback([this](const ALEMessage& frame) {
         const uint32_t fid = monitor_frame_id_++;
         if (on_frame_decoded)
@@ -482,7 +506,7 @@ void ALEController::wire_callbacks()
         pal_ch.antenna      = ch.antenna;
         radio_->set_channel(pal_ch);
         schedule_mode_verify();
-        if (on_channel_changed) on_channel_changed(ch);
+        notify_channel_changed_(ch);
     });
 }
 
@@ -561,10 +585,9 @@ bool ALEController::set_frequency(uint32_t hz)
     if (!radio_ || hz == 0) return false;
     radio_->set_frequency(hz);
     schedule_mode_verify();
-    if (on_channel_changed) {
-        pal::Channel pc = radio_->get_channel();
-        on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
-                                   mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
+    {   pal::Channel pc = radio_->get_channel();
+        notify_channel_changed_(Channel(pc.rx_frequency, pc.tx_frequency,
+                                        mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
     }
     return true;
 }
@@ -574,10 +597,9 @@ bool ALEController::set_mode(const std::string& mode)
     if (!radio_ || !is_ale_mode(mode)) return false;
     radio_->set_mode(mode_from_string(mode));
     schedule_mode_verify();
-    if (on_channel_changed) {
-        pal::Channel pc = radio_->get_channel();
-        on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
-                                   mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
+    {   pal::Channel pc = radio_->get_channel();
+        notify_channel_changed_(Channel(pc.rx_frequency, pc.tx_frequency,
+                                        mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
     }
     return true;
 }
@@ -600,10 +622,9 @@ bool ALEController::set_vfo_channel(uint32_t hz, const std::string& mode)
     radio_->set_mode(pc.tx_mode);
     schedule_mode_verify();
 
-    if (on_channel_changed) {
-        pal::Channel cur = radio_->get_channel();
-        on_channel_changed(Channel(cur.rx_frequency, cur.tx_frequency,
-                                   mode_to_string(cur.rx_mode), mode_to_string(cur.tx_mode)));
+    {   pal::Channel cur = radio_->get_channel();
+        notify_channel_changed_(Channel(cur.rx_frequency, cur.tx_frequency,
+                                        mode_to_string(cur.rx_mode), mode_to_string(cur.tx_mode)));
     }
     return true;
 }
@@ -658,7 +679,7 @@ bool ALEController::step_channel(int direction)
     // no second band-restore is triggered — identical to the panel-button path.
     radio_->set_mode(pc.tx_mode);
     schedule_mode_verify();
-    if (on_channel_changed) on_channel_changed(target);
+    notify_channel_changed_(target);
     return true;
 }
 
@@ -680,9 +701,8 @@ void ALEController::nudge_frequency(int direction)
     pc.rx_frequency = pc.tx_frequency = static_cast<uint32_t>(std::max<int64_t>(0, new_freq));
     radio_->set_channel(pc);
     schedule_mode_verify();
-    if (on_channel_changed)
-        on_channel_changed(Channel(pc.rx_frequency, pc.tx_frequency,
-                                   mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
+    notify_channel_changed_(Channel(pc.rx_frequency, pc.tx_frequency,
+                                    mode_to_string(pc.rx_mode), mode_to_string(pc.tx_mode)));
 }
 
 bool ALEController::get_ptt_state() const
@@ -713,6 +733,7 @@ bool ALEController::set_self_address(const std::string& addr)
 
 void ALEController::apply_config(const ALEStationConfig& cfg)
 {
+    fprintf(stderr, "[DWELL] apply_config scan_dwell_ms=%u\n", cfg.scan_dwell_ms); // TEMP
     set_golay_mode(cfg.golay_mode);
     set_min_unanimous_votes(cfg.min_unanimous_votes);
     set_adaptive_fec(cfg.adaptive_fec);
@@ -807,6 +828,7 @@ void ALEController::start_scanning()
                 float sb = (eb && eb->sinad_db > 0.0f) ? eb->sinad_db : 0.0f;
                 return sa > sb;  // higher FROM-quality first
             });
+        fprintf(stderr, "[DWELL] start_scanning configure_scan dwell=%u\n", cfg.dwell_time_ms); // TEMP
         sm_.configure_scan(cfg);
     }
 
@@ -1184,6 +1206,15 @@ void ALEController::set_manual_ptt(bool on)
 void ALEController::update(uint32_t now_ms)
 {
     now_ms_ = now_ms;
+
+    // LBT occupancy (A.5.4.7.2): the detector's `busy` flag is the single
+    // LBT-busy truth, read by both the SM's LBT decision and the GUI pill.
+    // Sync its active state once per tick to "LBT enabled AND an RX stream is
+    // feeding the demodulator".  When either condition drops (operator switch
+    // or every TX closes RX), the detector clears its busy flag — so the pill
+    // can never latch on FREQ BUSY while no detection is actually running.
+    occupancy_.set_active(lbt_occupancy_enabled_ && demodulator_.enabled());
+
     tick_ptt_timing(now_ms);
     tick_sm(now_ms);
     tick_frame_settle(now_ms);
@@ -1854,7 +1885,8 @@ void ALEController::rx_track_signal_quality(const ALEWord& word)
     last_ber_        = (word.fec_errors > 0) ? static_cast<float>(word.fec_errors) / 50.0f : 0.0f;
 
     // Passive monitor tap: neutral decoded-word notification.
-    // Fires regardless of local protocol state or address match.
+    // Fires regardless of local protocol state or address match, in strict
+    // on-air arrival order — no reordering, no deferral.
     if (on_word_decoded)
         on_word_decoded(word, monitor_frame_id_);
 }
@@ -2249,7 +2281,11 @@ std::string ALEController::display_state() const
     }
     if (st == ALEState::CALLING) {
         const CallingPhase cp = sm_.get_calling_phase();
-        if (cp == CallingPhase::LISTENING || cp == CallingPhase::SENDING_ACK)
+        if (cp == CallingPhase::SENDING_ACK)
+            return "HANDSHAKE";
+        // LISTENING sub-phase (a) — waiting for "TO SAM" — is not a handshake;
+        // only promote to HANDSHAKE once the remote has actually responded.
+        if (cp == CallingPhase::LISTENING && sm_.get_response_to_detected())
             return "HANDSHAKE";
     }
     return ALEStateMachine::state_name(st);
@@ -2400,6 +2436,7 @@ void ALEController::set_sounding_use_twas(bool use_twas)
 
 void ALEController::set_scan_dwell_ms(uint32_t ms)
 {
+    fprintf(stderr, "[DWELL] set_scan_dwell_ms(%u)\n", ms); // TEMP
     config_.scan_dwell_ms = ms;
     ScanConfig cfg = sm_.get_scan_config();
     cfg.dwell_time_ms = ms;
@@ -2436,6 +2473,11 @@ std::vector<std::string> ALEController::get_all_lqa_entries() const
     const uint32_t now = lqa_database_.get_current_time_ms();  // same clock as LQADatabase itself
     for (const auto& e : lqa_database_.get_all_entries()) {
         if (e.remote_station.empty()) continue;  // internal channel-aggregate; not for GUI
+        // Skip penalty-only stubs (record_handshake_fail creates an entry with
+        // no FROM measurements and no bilateral data solely for A.5.4.5.1
+        // deprioritisation).  They have no displayable quality data and would
+        // appear as phantom rows in the GUI heard panel.
+        if (e.total_words == 0 && e.bilateral_ber == 31u && e.bilateral_sinad == 31u) continue;
         const uint32_t age_ms = (now > e.last_activity_ms()) ? (now - e.last_activity_ms()) : 0u;
         // Fields: freq|station|snr_db|ber|sinad_db|score|age_ms
         //        |bilateral_sinad|bilateral_ber|bilateral_mp|display_score|available
@@ -2819,7 +2861,7 @@ bool ALEController::rename_channel(const std::string& old_id, const std::string&
     it->id = new_id;
     net_store_.rename_channel(old_id, new_id);                       // propagate to nets
     sm_.set_calling_channels(calling_channels_);
-    if (on_channel_changed) on_channel_changed(*it);                 // GUI readout follows rename
+    notify_channel_changed_(*it);                 // GUI readout follows rename
     if (!station_file_.empty()) save_channels(station_file_);
     return true;
 }
@@ -2921,7 +2963,7 @@ bool ALEController::save_station_file(const std::string& path) const
 {
     std::ofstream f(path);
     if (!f.is_open()) return false;
-    f << "# PC-ALE station file — MIL-STD-188-141B\n";
+    f << "# openALE station file — MIL-STD-188-141B\n";
     f << "# ID:id rx_hz tx_hz mode [flags] [label]   flags=[OFF,RX,IC,IS,IR]\n";
     for (const auto& ch : calling_channels_)
         f << format_channel_line(ch) << '\n';

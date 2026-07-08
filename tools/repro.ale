@@ -1,0 +1,5 @@
+# openALE station file — dwell bug repro
+ID:C-1 14109000 14109000 USB
+ID:C-2 10145000 10145000 USB
+ID:C-3 7102000 7102000 USB
+NET:NET1 C-1,C-2,C-3 dwell=500 scan=1 sound=0 sndint=300 c=10

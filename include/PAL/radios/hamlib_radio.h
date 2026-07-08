@@ -178,7 +178,7 @@ private:
 
     RIG* rig_ = nullptr;
 
-    // When PC-ALE last commanded a mode (assert_mode). sync_from_radio() only
+    // When openALE last commanded a mode (assert_mode). sync_from_radio() only
     // re-asserts the intended mode within a short window after this, so a
     // deliberate external mode change (operator on the rig/SDR) is respected
     // once the dust from our own command has settled.

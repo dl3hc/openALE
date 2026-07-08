@@ -153,7 +153,7 @@ bool HamlibRadio::set_channel(const Channel& channel) {
     // Order: frequency FIRST, mode LAST. Some SDR front-ends (Quisk) restore a
     // per-band saved mode on a frequency change; sending mode last — then having
     // assert_mode() verify via live readback and re-send on mismatch — makes
-    // PC-ALE's channel mode authoritative. assert_mode()'s diagnostic prints
+    // openALE's channel mode authoritative. assert_mode()'s diagnostic prints
     // (level >= Info) provide the natural I/O latency (~5 ms on Windows stderr)
     // that lets the SDR's async band restore complete before the retry fires.
     // No explicit sleep; no scan-rate impact.
@@ -196,7 +196,7 @@ bool HamlibRadio::set_frequency(uint32_t hz) {
 
     // Store intended mode to re-assert after frequency change.
     // An SDR front-end (Quisk) restores a per-band saved mode on freq change;
-    // PC-ALE's mode must be authoritative — always assert it.
+    // openALE's mode must be authoritative — always assert it.
     const RadioMode saved_mode = current_channel_.tx_mode;
 
     // One CAT command, no read-modify-write: a manual frequency change must not
@@ -381,7 +381,7 @@ bool HamlibRadio::sync_from_radio() {
         changed = true;
     }
     // NOTE: Do NOT update current_channel_.tx_mode/rx_mode with the radio's actual mode.
-    // The current_channel_ represents PC-ALE's intended state, not what the radio reports.
+    // The current_channel_ represents openALE's intended state, not what the radio reports.
     const RadioMode new_mode = from_hamlib_mode(mode);
     if (new_mode != current_channel_.tx_mode) {
         const char* actual_mname = rig_strrmode(mode);

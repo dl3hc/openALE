@@ -1,8 +1,8 @@
-# LQA-Austausch und Auto-Relink — Technische Dokumentation
+﻿# LQA-Austausch und Auto-Relink — Technische Dokumentation
 
 ## Überblick
 
-PC-ALE implementiert zwei zusammenhängende Mechanismen aus MIL-STD-188-141B Appendix A:
+openALE implementiert zwei zusammenhängende Mechanismen aus MIL-STD-188-141B Appendix A:
 
 1. **Bilateraler LQA-Austausch (KA1-Response, A.5.4.4):** Während des 3-Wege-Handshakes
    tauschen beide Stationen ihre lokalen Kanalmessungen via CMD-Wörter aus. Nach einem

@@ -56,6 +56,10 @@ public:
     /** Non-blocking dequeue of one received text-frame payload. */
     bool pop_message(std::string& out);
 
+    /** Non-blocking dequeue of one received binary-frame payload (e.g. voice
+     *  mic PCM uplink from the browser). Returns the raw frame bytes. */
+    bool pop_binary(std::vector<uint8_t>& out);
+
     /** Enqueue a text frame for the I/O thread to send (≤5 ms latency). */
     bool send_text(const std::string& payload);
 
@@ -96,6 +100,7 @@ private:
 
     std::mutex               recv_mutex_;
     std::queue<std::string>  recv_queue_;
+    std::queue<std::vector<uint8_t>> recv_binary_queue_;  // voice mic uplink, etc.
 
     // I/O-thread-private state — no locking needed (only io_thread_main touches these):
     PendingHttp pending_http_[kMaxPendingHttp];

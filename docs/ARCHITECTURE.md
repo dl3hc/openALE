@@ -1,8 +1,8 @@
-# PC-ALE 2.0 - System Architecture
+﻿# openALE 2.0 - System Architecture
 
 ## Overview
 
-PC-ALE 2.0 implements a **layered architecture**. Note that MIL-STD-188-141 uses a military-specific layer numbering (Layers 8-9 for subnetwork access) rather than the traditional OSI model (Layers 1-7). For clarity, this documentation uses a simplified 1-5 numbering for the PC-ALE protocol stack, with PAL (Platform Abstraction Layer) sitting below as the hardware interface.
+openALE 2.0 implements a **layered architecture**. Note that MIL-STD-188-141 uses a military-specific layer numbering (Layers 8-9 for subnetwork access) rather than the traditional OSI model (Layers 1-7). For clarity, this documentation uses a simplified 1-5 numbering for the openALE protocol stack, with PAL (Platform Abstraction Layer) sitting below as the hardware interface.
 
 ---
 
@@ -92,7 +92,7 @@ The diagram above shows "Audio I/O" as a future phase. In reality, the **interfa
 
 ```
 ┌──────────────────────────────┬──────────────────────────────────┐
-│  PC-ALE Protocol Stack (This Repo)                               │
+│  openALE Protocol Stack (This Repo)                               │
 │  Application → Data Link → Link → Protocol → Physical (Modem)   │
 │  (Layers 1-5 in this documentation)                             │
 └──────────────────────────────┬──────────────────────────────────┘
@@ -129,12 +129,12 @@ The diagram above shows "Audio I/O" as a future phase. In reality, the **interfa
 - **This documentation** uses Layers 1-5 for clarity, with the modem as Layer 1 (Physical)
 - PAL provides the hardware abstraction that military standards describe as Layers 8-9
 
-**Key Point:** PC-ALE core code **never calls ALSA/WASAPI directly**. It only uses PAL interfaces. Platform implementations provide the concrete classes.
+**Key Point:** openALE core code **never calls ALSA/WASAPI directly**. It only uses PAL interfaces. Platform implementations provide the concrete classes.
 
 **Example:**
 ```cpp
-// In your platform code (e.g., PC-ALE-Linux-DRAWS)
-#include "pc-ale-pal/IAudioDriver.h"
+// In your platform code (e.g., openALE-Linux-DRAWS)
+#include "PC-ALE-PAL/IAudioDriver.h"
 #include <alsa/asoundlib.h>
 
 class ALSAAudioDriver : public IAudioDriver {
@@ -325,7 +325,7 @@ libale_lqa.a
 
 ### Platform Abstraction Layer Interfaces
 
-PC-ALE core depends on **abstractions** defined in [PC-ALE-PAL](https://github.com/Alex-Pennington/PC-ALE-PAL):
+openALE core depends on **abstractions** defined in [PC-ALE-PAL](https://github.com/Alex-Pennington/PC-ALE-PAL):
 
 ```
 PC-ALE-PAL Repository:
@@ -337,7 +337,7 @@ PC-ALE-PAL Repository:
         ├── IEventHandler.h      - Threading/event abstraction
         └── ISIS.h               - Serial I/O abstraction
 
-PC-ALE Core Usage:
+openALE Core Usage:
     FFTDemodulator needs:    IAudioDriver::read()
     ToneGenerator needs:     IAudioDriver::write()
     ALEStateMachine needs:   ITimer::get_time_ms(), IRadio::set_frequency()
@@ -755,7 +755,7 @@ std::cout << "FFT avg: "
 
 ## Summary
 
-PC-ALE 2.0 architecture follows **strict layering** principles:
+openALE 2.0 architecture follows **strict layering** principles:
 
 ✅ **Separation of concerns** - Each phase has clear responsibility  
 ✅ **Loose coupling** - Layers communicate via defined APIs  

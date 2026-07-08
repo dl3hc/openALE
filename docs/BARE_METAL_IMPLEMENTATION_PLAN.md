@@ -1,4 +1,4 @@
-# PC-ALE Bare Metal Implementation Plan
+﻿# openALE Bare Metal Implementation Plan
 ## Raspberry Pi + Circle Framework + DRAWS Hat
 
 **Document:** Implementation Roadmap  
@@ -13,7 +13,7 @@
 This document outlines the path from concept to working bare-metal ALE station using:
 - **Hardware:** Raspberry Pi 4/5 + NW Digital Radio DRAWS Hat
 - **Framework:** Circle (bare-metal C++ framework for Pi)
-- **Software:** PC-ALE 2.0 protocol stack (Phases 1-6, already complete)
+- **Software:** openALE 2.0 protocol stack (Phases 1-6, already complete)
 
 **Goal:** Deterministic, hard real-time ALE transceiver with 2-3 second boot time.
 
@@ -147,7 +147,7 @@ For ALE, symbol timing is 8ms with <1ms jitter tolerance. Linux *can* do it, but
 **Analysis:**
 ```
 DRAWS I2S: 48 kHz (native)
-PC-ALE FFT: 8 kHz (designed for)
+openALE FFT: 8 kHz (designed for)
 
 Options:
 A) Resample in software (6:1 decimation/interpolation)
@@ -156,7 +156,7 @@ C) Redesign FFT for 48 kHz (384-point FFT instead of 64)
 
 Recommendation: Option A (software resample)
 - Most flexible
-- Keeps PC-ALE core unchanged
+- Keeps openALE core unchanged
 - Well-understood algorithms (polyphase FIR)
 ```
 
@@ -202,7 +202,7 @@ IRQ must process 512 samples in <10 ms
 - [ ] Implement `IAudioDriver` for Circle (I2S + TLV320 codec)
 - [ ] Implement `IRadio` for Hamlib (Linux) or direct GPIO (bare metal)
 - [ ] Implement `ITimer` for Circle's CTimer
-- [ ] Wire PAL implementations into PC-ALE core
+- [ ] Wire PAL implementations into openALE core
 
 ---
 
@@ -300,7 +300,7 @@ src/platform/
 - [ ] Design interfaces (1 day)
 - [ ] Implement Linux/ALSA driver (3 days) - for testing
 - [ ] Write unit tests with loopback (2 days)
-- [ ] Verify PC-ALE core works with abstraction (2 days)
+- [ ] Verify openALE core works with abstraction (2 days)
 
 ---
 
@@ -623,7 +623,7 @@ public:
         size_t ale_samples = resampler.decimate(
             i2s_rx, chunk_size, ale_rx);
         
-        // Call user callback (PC-ALE processing)
+        // Call user callback (openALE processing)
         if (user_callback) {
             user_callback(ale_rx, ale_tx, ale_samples);
         }
@@ -662,7 +662,7 @@ public:
 **Dependencies:** All above complete
 
 #### Tasks:
-- [ ] Integrate CircleAudioDriver with PC-ALE state machine
+- [ ] Integrate CircleAudioDriver with openALE state machine
 - [ ] Implement main application loop
 - [ ] Test scanning on 40m ALE frequency
 - [ ] Test call initiation (individual call)
@@ -672,7 +672,7 @@ public:
 
 #### Main Application:
 ```cpp
-// main.cpp - PC-ALE Bare Metal Application
+// main.cpp - openALE Bare Metal Application
 
 #include <circle/startup.h>
 #include <circle/logger.h>
@@ -719,7 +719,7 @@ public:
         state_machine.start_scanning();
         
         CLogger::Get()->Write("PCALE", LogNotice, 
-                              "PC-ALE initialized, scanning...");
+                              "openALE initialized, scanning...");
         return true;
     }
     
@@ -942,7 +942,7 @@ public:
 #define DRAWS_BITS          16      // Bits per sample
 #define DRAWS_CHANNELS      2       // Stereo (L/R connectors)
 
-// PC-ALE expects 8kHz, so we need 6:1 resampling
+// openALE expects 8kHz, so we need 6:1 resampling
 #define ALE_SAMPLE_RATE     8000
 #define RESAMPLE_RATIO      6       // 48000 / 8000
 ```

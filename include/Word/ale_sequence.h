@@ -189,11 +189,14 @@ public:
                            const std::string& self_addr);
 
     /**
-     * Complete termination frame §A.5.5.3.5 / T-07.
+     * Link termination frame (§A.5.5.3.5 / T-07).
      *
      *   TO [peer] × 2 + TWAS [self]
      *
-     * Sent by terminate_link() before the link is torn down.
+     * Sent by terminate_link() before the link is torn down so the peer can
+     * return to the available state immediately.  Example: "TO JOE TO JOE
+     * TWAS SAM" (sent by SAM) terminates the link between SAM and JOE.
+     * Degenerate peer (empty) falls back to TWAS [self] only.
      */
     static ALESequence termination(const std::string& peer_addr,
                                    const std::string& self_addr);

@@ -1,6 +1,6 @@
-# PC-ALE 2.0 - Integration Guide
+﻿# openALE 2.0 - Integration Guide
 
-Complete guide for integrating PC-ALE 2.0 with audio I/O, radio control, and external systems.
+Complete guide for integrating openALE 2.0 with audio I/O, radio control, and external systems.
 
 ---
 
@@ -19,7 +19,7 @@ Complete guide for integrating PC-ALE 2.0 with audio I/O, radio control, and ext
 
 ## Overview
 
-PC-ALE 2.0 is designed as a modular library that integrates with:
+openALE 2.0 is designed as a modular library that integrates with:
 
 1. **Audio subsystem** - Real-time audio I/O for FSK modulation/demodulation
 2. **Radio control** - CAT interface for frequency changes, PTT, power control
@@ -36,7 +36,7 @@ PC-ALE 2.0 is designed as a modular library that integrates with:
              ├────────────────┐               │
              │                │               │
 ┌────────────▼─────┐  ┌───────▼──────┐  ┌────▼───────────┐
-│   PC-ALE 2.0     │  │  Radio CAT   │  │  Data Modem    │
+│   openALE 2.0     │  │  Radio CAT   │  │  Data Modem    │
 │   Libraries      │  │  Control     │  │  (188-110A)    │
 │                  │  │  (Hamlib)    │  │                │
 │ ┌──────────────┐ │  │              │  │                │
@@ -58,7 +58,7 @@ PC-ALE 2.0 is designed as a modular library that integrates with:
 
 ### Callback-Driven Design
 
-PC-ALE uses callbacks for asynchronous events:
+openALE uses callbacks for asynchronous events:
 
 ```cpp
 // Application registers callbacks
@@ -89,10 +89,10 @@ arq_engine.init(
 
 ### Audio Callback Pattern
 
-PC-ALE uses a push/pull model for audio:
+openALE uses a push/pull model for audio:
 
 ```cpp
-// Transmit: Application pulls audio from PC-ALE
+// Transmit: Application pulls audio from openALE
 void audio_tx_callback(float* buffer, size_t num_samples) {
     // Get audio samples from tone generator
     for (size_t i = 0; i < num_samples; i++) {
@@ -100,7 +100,7 @@ void audio_tx_callback(float* buffer, size_t num_samples) {
     }
 }
 
-// Receive: Application pushes audio to PC-ALE
+// Receive: Application pushes audio to openALE
 void audio_rx_callback(const float* buffer, size_t num_samples) {
     // Feed samples to demodulator
     for (size_t i = 0; i < num_samples; i++) {
@@ -260,7 +260,7 @@ public:
             BYTE* data;
             render_client_->GetBuffer(available, &data);
             
-            // Fill buffer with PC-ALE audio
+            // Fill buffer with openALE audio
             float* buffer = reinterpret_cast<float*>(data);
             for (UINT32 i = 0; i < available; i++) {
                 buffer[i] = tone_generator_.get_next_sample();
@@ -387,7 +387,7 @@ public:
         float* data = static_cast<float*>(buffer->mAudioData);
         size_t num_samples = buffer->mAudioDataByteSize / sizeof(float);
         
-        // Fill buffer with PC-ALE audio
+        // Fill buffer with openALE audio
         for (size_t i = 0; i < num_samples; i++) {
             data[i] = engine->tone_generator_.get_next_sample();
         }
@@ -1076,4 +1076,4 @@ int main(int argc, char** argv) {
 ---
 
 *Last Updated: December 2024*  
-*Version: PC-ALE 2.0 Phase 5*
+*Version: openALE 2.0 Phase 5*

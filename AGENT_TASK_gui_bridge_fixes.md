@@ -1,13 +1,13 @@
-# Aufgaben für Coding-Agent: 6 Fehler in der ale_bridge-GUI-Anbindung
+﻿# Aufgaben für Coding-Agent: 6 Fehler in der ale_bridge-GUI-Anbindung
 
 > Diese Anweisung ist **selbstständig** — du hast keinen Kontext aus früheren Sessions.
 > Lies zuerst diesen Orientierungsteil, dann die 6 Aufgaben. Alle Datei-/Zeilenangaben
-> beziehen sich auf den aktuellen Stand des Repos `e:\repos\PC-ALE` (Branch `develop`).
+> beziehen sich auf den aktuellen Stand des Repos `e:\repos\openALE` (Branch `develop`).
 > Zeilennummern können leicht verschoben sein — orientiere dich an den Funktionsnamen.
 
 ## Projekt-Orientierung (wichtig, bevor du anfängst)
 
-**Was das ist:** PC-ALE, eine Clean-Room-Implementierung von MIL-STD-188-141B 2G ALE
+**Was das ist:** openALE, eine Clean-Room-Implementierung von MIL-STD-188-141B 2G ALE
 (Automatic Link Establishment) für den Funkverkehr. C++17, Windows/MSVC, Build über CMake.
 
 **Die hier relevanten Komponenten:**

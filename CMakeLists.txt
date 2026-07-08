@@ -323,6 +323,7 @@ add_library(ale_app_core
     src/App/freq_select_manager.cpp
     src/App/gps_service.cpp
     src/App/sfi_service.cpp
+    src/App/voice_path_manager.cpp
 )
 
 target_include_directories(ale_app_core PUBLIC
@@ -400,27 +401,27 @@ endif()
 
 # ── WebSocket bridge (GUI↔Core) ────────────────────────────────────────────────
 
-add_executable(ale_bridge apps/ale_bridge.cpp apps/bridge/ws_server.cpp)
+add_executable(openALE apps/ale_bridge.cpp apps/bridge/ws_server.cpp)
 
-target_include_directories(ale_bridge PRIVATE
+target_include_directories(openALE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/apps
 )
 
-target_link_libraries(ale_bridge ale_app_core ale_audio_device ale_stores ale_pal)
+target_link_libraries(openALE ale_app_core ale_audio_device ale_stores ale_pal)
 
 if(WIN32)
-    target_link_libraries(ale_bridge ws2_32)
+    target_link_libraries(openALE ws2_32)
 endif()
 
-# DLL-Build: libhamlib-4.dll + Runtime-DLLs neben ale_bridge.exe kopieren
+# DLL-Build: libhamlib-4.dll + Runtime-DLLs neben openALE.exe kopieren
 # (muss nach add_executable stehen)
 if(HAMLIB_FOUND AND DEFINED _hamlib_bin)
     file(GLOB _hamlib_dlls "${_hamlib_bin}/*.dll")
     foreach(_dll ${_hamlib_dlls})
-        add_custom_command(TARGET ale_bridge POST_BUILD
+        add_custom_command(TARGET openALE POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_dll}" "$<TARGET_FILE_DIR:ale_bridge>"
+                "${_dll}" "$<TARGET_FILE_DIR:openALE>"
         )
     endforeach()
 endif()
@@ -568,6 +569,11 @@ add_executable(test_lqa_purity tests/chan/unit/test_lqa_purity.cpp)
 target_link_libraries(test_lqa_purity ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_purity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME LQAPurity COMMAND test_lqa_purity)
+
+add_executable(test_voice_path_manager tests/chan/unit/test_voice_path_manager.cpp)
+target_link_libraries(test_voice_path_manager ale_app_core)
+target_include_directories(test_voice_path_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME VoicePathManager COMMAND test_voice_path_manager)
 
 add_executable(test_lqa_bilateral_tx tests/chan/unit/test_lqa_bilateral_tx.cpp)
 target_link_libraries(test_lqa_bilateral_tx ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
@@ -726,4 +732,12 @@ if(BUILD_EXAMPLES)
     add_executable(tx_wav_dump tools/tx_wav_dump.cpp)
     target_link_libraries(tx_wav_dump ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
     target_include_directories(tx_wav_dump PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+endif()
+
+# ── ALE Monitor (passive RX-only traffic monitor) ────────────────────────────
+# Guard: CMAKE_SOURCE_DIR == CMAKE_CURRENT_SOURCE_DIR only when this file IS
+# the top-level project.  In a standalone ale_monitor build, CMAKE_SOURCE_DIR
+# is ale_monitor/ — the equality fails, preventing infinite re-entry.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    add_subdirectory(ale_monitor)
 endif()

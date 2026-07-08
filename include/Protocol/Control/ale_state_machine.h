@@ -440,6 +440,7 @@ public:
     uint32_t       get_call_cycles_in_phase() const { return call_cycles_in_phase; }
     uint32_t       get_first_call_tx_ms()     const { return first_call_tx_ms; }
     CallingPhase   get_calling_phase()        const { return calling_phase; }
+    bool           get_response_to_detected() const { return response_to_detected; }
     HandshakePhase get_handshake_phase()      const { return handshake_phase; }
     SoundingPhase  get_sounding_phase()       const { return sounding_phase_; }
     uint32_t       get_words_pending()        const { return words_pending; }

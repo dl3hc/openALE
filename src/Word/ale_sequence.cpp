@@ -139,7 +139,11 @@ ALESequence ALESequenceBuilder::ack(const std::string& peer_addr,
 
 ALESequence ALESequenceBuilder::termination(const std::string& peer_addr,
                                             const std::string& self_addr) {
-    // §A.5.5.3.5 / T-07: TO peer (×2) + TWAS self.
+    // §A.5.5.3.5 / T-07: TO peer (×2) + TWAS self — e.g. "TO JOE TO JOE TWAS SAM".
+    // Degenerate peer (empty) falls back to TWAS [self] only so a malformed
+    // TO @@@ prefix is never put on the air.
+    if (peer_addr.empty())
+        return ALESequence(AddressEncoder::encode(self_addr, PreambleType::TWAS));
     return addressed_then_conclusion(peer_addr, PreambleType::TO,
                                      self_addr, PreambleType::TWAS);
 }

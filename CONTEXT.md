@@ -1,4 +1,4 @@
-1. [Context: Automatic Link Establishment (ALE)]
+﻿1. [Context: Automatic Link Establishment (ALE)]
 2. [Architekturüberblick]
 
 # Context: Automatic Link Establishment (ALE)
@@ -273,7 +273,7 @@ APPLICATION LAYER (separates Projekt)
 
         │
         ▼
-PC-ALE CORE (Domain – Referenzimplementierung)
+openALE CORE (Domain – Referenzimplementierung)
   │
   │  Signalfluss TX: Anwendung → Protocol → Word → FEC → FSK → HF
   │  Signalfluss RX: HF → FSK → FEC → Word → Protocol → Anwendung

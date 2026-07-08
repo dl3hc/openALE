@@ -63,6 +63,7 @@ static void test_detector()
     std::printf("[LBT-1] ChannelOccupancyDetector\n");
 
     ChannelOccupancyDetector d;
+    d.set_active(true);                          // controller syncs this each tick
     feed_noise(d, 10, 50);                       // quiet channel: floor ≈ noise
     check(!d.is_busy(), "steady low noise is not busy (floor adapted)");
 
@@ -76,15 +77,101 @@ static void test_detector()
     // margin must NOT read busy — high-noise sites raise the margin instead of
     // being blocked forever.
     ChannelOccupancyDetector d2;
+    d2.set_active(true);
     d2.set_margin_db(20.0f);
     feed_noise(d2, 10, 50);
     feed_noise(d2, 4, 300);                      // ~15 dB above the 50-amp floor
     check(!d2.is_busy(), "level rise below the operator margin is not busy");
 
     ChannelOccupancyDetector d3;                 // same rise, default 6 dB margin
+    d3.set_active(true);
     feed_noise(d3, 10, 50);
     feed_noise(d3, 4, 300);
     check(d3.is_busy(), "same rise above the default margin IS busy");
+}
+
+// Active gating (regression for the "FREQ BUSY never clears" pill bug):
+// the detector's stored busy flag is the single LBT-busy truth, read by the
+// SM decision and the GUI pill.  A.5.4.7.2 detection cannot run without an RX
+// stream, so going inactive (RX closed during TX, or LBT disabled) must clear
+// the flag and starve push_samples — no sticky busy latch outliving its window.
+static void test_active_gating()
+{
+    std::printf("[LBT-1b] Active gating — no sticky busy without an RX stream\n");
+
+    ChannelOccupancyDetector d;
+    d.set_active(true);
+    feed_noise(d, 10, 50);
+    feed_tone(d, 3, 8000);
+    check(d.is_busy(), "detector goes busy while active");
+
+    d.set_active(false);                         // RX closes (TX) / LBT disabled
+    check(!d.is_busy(), "busy flag clears immediately on going inactive");
+
+    feed_tone(d, 5, 8000);                       // would be busy, but no RX stream
+    check(!d.is_busy(), "push_samples is a no-op while inactive (no stale busy)");
+
+    d.set_active(true);                          // RX reopens — fresh start: the
+                                                 // floor is re-learned (a TX is an
+                                                 // RX-off period), not retained.
+    feed_noise(d, 4, 50);                        // ambient noise re-establishes the floor
+    check(!d.is_busy(), "quiet after reactivation not busy (floor re-learned)");
+    feed_tone(d, 1, 8000);                       // one hot block: 2-of-4 not met
+    check(!d.is_busy(), "vote reset on reactivation — single hot block not busy");
+    feed_tone(d, 1, 8000);                       // second hot block: 2-of-4 → busy
+    check(d.is_busy(), "detection resumes after reactivation (2-of-4 hot)");
+}
+
+// reset() is the channel-change contract: ALEController::notify_channel_changed_
+// calls it whenever the RX frequency changes, so the EWMA floor (channel-specific)
+// and any busy/vote from the previous channel cannot bleed into the new one.
+static void test_reset_clears_state()
+{
+    std::printf("[LBT-1c] reset() drops floor + busy (channel-change contract)\n");
+
+    ChannelOccupancyDetector d;
+    d.set_active(true);
+    feed_noise(d, 10, 50);
+    feed_tone(d, 3, 8000);
+    check(d.is_busy(), "busy before reset");
+
+    d.reset();                                   // controller: RX frequency changed
+    check(!d.is_busy(), "busy cleared by reset");
+
+    // Floor is relearned from the first post-reset block; a quiet channel must
+    // read not-busy immediately — no inherited high floor from the tone before.
+    feed_noise(d, 4, 50);
+    check(!d.is_busy(), "quiet channel not busy after reset (floor relearned)");
+}
+
+// Post-TX AGC pump (regression for "stays FREQ BUSY all the time after
+// transmitting"): after RX reopens the radio's RX gain is pumped, so the noise
+// level is far above the pre-TX floor. The detector must re-learn the floor on
+// RX reopen (set_active(false) drops floor_valid_) — otherwise every post-TX
+// block is "hot" against the stale floor and, hot blocks being excluded from
+// ALPHA_UP, the floor only creeps up via the 0.01 dB/block drift (~60 s per
+// 6 dB), keeping the pill BUSY for minutes. Steady elevated noise after TX is
+// NOT a signal and must read CLEAR.
+static void test_floor_relearned_after_inactive()
+{
+    std::printf("[LBT-1d] floor re-learned on RX reopen (post-TX AGC pump)\n");
+
+    ChannelOccupancyDetector d;
+    d.set_active(true);
+    feed_noise(d, 10, 50);                       // quiet channel, floor ≈ 50-amp noise
+    check(!d.is_busy(), "quiet channel not busy before TX");
+
+    d.set_active(false);                         // TX: RX closes — forget floor
+    check(!d.is_busy(), "clear while inactive");
+
+    // RX reopens to a ~18 dB higher STEADY noise level (AGC pumped after TX).
+    d.set_active(true);
+    feed_noise(d, 6, 400);
+    check(!d.is_busy(), "steady elevated noise after TX is not busy (floor re-learned)");
+
+    // A real signal on top of the new floor still drives busy.
+    feed_tone(d, 3, 8000);
+    check(d.is_busy(), "signal above the re-learned floor is still busy");
 }
 
 // ── Part 2: SM LBT windows ───────────────────────────────────────────────────
@@ -192,6 +279,9 @@ int main()
     std::printf("=========================================================\n");
 
     test_detector();
+    test_active_gating();
+    test_reset_clears_state();
+    test_floor_relearned_after_inactive();
     test_sm_calling_busy_blocks();
     test_sm_calling_clear_transmits();
     test_sm_override_bypasses_busy();

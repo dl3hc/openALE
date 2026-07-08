@@ -1,7 +1,7 @@
-# Handoff: True-SINAD DSP rework of `symbol_from_block`
+﻿# Handoff: True-SINAD DSP rework of `symbol_from_block`
 
 **Status:** open follow-up (agreed 2026-07-02). The LQA *rating/ranking* was already
-made BER-led (see `PC-ALE LQA compute_score fix` in memory / `from_direction_quality()`),
+made BER-led (see `openALE LQA compute_score fix` in memory / `from_direction_quality()`),
 so the operator no longer sees "Poor" on a clean link. **This task is only about making
 the reported SINAD dB *number* meaningful** — a clean link should read a high SINAD
 (≈20–30 dB), a noisy link a low one, and the value should roughly track injected SNR.
@@ -145,7 +145,7 @@ There is no audio-loopback in the current unit tests, so add a small harness (mo
 ---
 
 ## 6. Context pointers
-- Memory (Neo4j): entity **`PC-ALE LQA compute_score fix`** — the BER-led decision + this
+- Memory (Neo4j): entity **`openALE LQA compute_score fix`** — the BER-led decision + this
   follow-up.
 - Memory (file): `project_lqa_ber_led_scoring.md`, `reference_lqa_spec_conventions.md`,
   `project_tx_tone_quality.md`.

@@ -901,7 +901,7 @@ void ALEStateMachine::handle_linked() {
         if (!active_call_to.empty() && !address_book.get_self_address().empty())
             transmit_words(ALESequenceBuilder::termination(
                 active_call_to, address_book.get_self_address()).words());
-        // Transmits TWAS, then transitions out immediately (process_event leaves
+        // Transmits TO×2+TWAS, then transitions out immediately (process_event leaves
         // LINKED; the frame still goes out via the modulator).  No drain deadline
         // needed here — handle_linked() won't run again once we leave LINKED.
         process_event(ALEEvent::LINK_TIMEOUT);
@@ -1192,7 +1192,7 @@ void ALEStateMachine::emergency_manual_control() {
     emergency_active = true;
     if (operator_callback)
         operator_callback(OperatorEvent::EMERGENCY_ACTIVE);
-    // AC-LINK-022-4: if linked, send TWAS so the peer returns to available state.
+    // AC-LINK-022-4: if linked, send TO×2+TWAS so the peer returns to available state.
     if (current_state == ALEState::LINKED && !linked_terminating_
         && !active_call_to.empty() && !address_book.get_self_address().empty()) {
         linked_terminating_ = true;

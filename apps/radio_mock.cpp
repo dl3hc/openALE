@@ -10,8 +10,8 @@
  *   radio_mock.exe --port 8766
  *   radio_mock.exe --port 8766 --verbose    # zeigt jeden Rohbefehl
  *
- * ale_bridge verbinden (GUI: Radio → CAT → hamlib:2:tcp://127.0.0.1:8766):
- *   ale_bridge --radio hamlib:2:tcp://127.0.0.1:8766 ...
+ * openALE verbinden (GUI: Radio → CAT → hamlib:2:tcp://127.0.0.1:8766):
+ *   openALE --radio hamlib:2:tcp://127.0.0.1:8766 ...
  *
  * Implementiertes rigctld-Protokoll (Hamlib 4.x, rigs/dummy/netrigctl.c):
  *
@@ -433,7 +433,7 @@ int main(int argc, char* argv[])
     std::printf("║  Mode    : %-44s ║\n", s_mode.c_str());
     std::printf("║  chk_vfo : 0  (simple mode — kein VFO-Präfix)        ║\n");
     std::printf("╠═══════════════════════════════════════════════════════╣\n");
-    std::printf("║  ale_bridge / GUI verbinden:                          ║\n");
+    std::printf("║  openALE / GUI verbinden:                          ║\n");
     std::printf("║    hamlib:2:tcp://127.0.0.1:%-26d ║\n", port);
     std::printf("╠═══════════════════════════════════════════════════════╣\n");
     std::printf("║  Diagnose: [WARN] zeigt falls hamlib VFO-Präfix sendet║\n");

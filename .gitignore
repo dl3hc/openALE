@@ -40,3 +40,6 @@ pc_ale_overview.md
 feat_checklist.json
 FEATURES_DESIGN.md
 ALE_standard_188_141B_extracted.json
+
+# Transient bridge debug log
+tools/bridge_dbg.log

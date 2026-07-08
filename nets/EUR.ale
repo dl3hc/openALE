@@ -1,4 +1,4 @@
-# PC-ALE station file - EUR nets (HFLINK Worldwide Channel Matrix 2019)
+# openALE station file - EUR nets (HFLINK Worldwide Channel Matrix 2019)
 # ID:id rx_hz tx_hz mode [flags] [label]   flags=[OFF,RX,IC,IS,IR]
 # tx_hz=0 = simplex. Dwell/policy set independently (NET lines use defaults).
 ID:00A 473000 0 USB 00ASEL

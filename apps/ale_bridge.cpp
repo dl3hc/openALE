@@ -8,7 +8,7 @@
  * speaking a small JSON protocol (apps/bridge/minijson.h).
  *
  * Usage:
- *   ale_bridge --port N [--remote] [--webroot DIR]
+ *   openALE --port N [--remote] [--webroot DIR]
  *
  * Without --in-device/--out-device, the controller runs in the existing
  * "offline" mode (no AudioDevice attached) — useful for protocol-level GUI
@@ -25,6 +25,7 @@
 #include "App/audio_device.h"
 #include "App/gps_service.h"
 #include "App/sfi_service.h"
+#include "App/voice_path_manager.h"
 #include "PAL/radio.h"
 #include "PAL/radios/hamlib_radio.h"
 #include "PAL/timer.h"
@@ -83,18 +84,19 @@ static std::string exe_dir() {
 static std::string exe_dir() { return ""; }
 #endif
 
-static std::string resolve_web_root() {
+static std::string resolve_web_root(bool mobile = false) {
+    const std::string subdir = mobile ? "apps/gui/mobile" : "apps/gui";
     std::vector<std::string> roots;
     const std::string ed = exe_dir();
     if (!ed.empty()) {
         std::string up = ed;
         for (int i = 0; i < 6; ++i) {       // exe dir + up to 5 parents
-            roots.push_back(up + "/apps/gui");
+            roots.push_back(up + "/" + subdir);
             up += "/..";
         }
     }
-    roots.push_back("apps/gui");
-    roots.push_back("./apps/gui");
+    roots.push_back(subdir);
+    roots.push_back("./" + subdir);
     for (const auto& r : roots)
         if (file_exists(r + "/index.html")) return r;
     return "";
@@ -264,6 +266,9 @@ struct BridgeCtx {
     SfiService*       sfi_svc  = nullptr;
     PendingUpdate*    pending  = nullptr;
     bridge::WsServer* ws       = nullptr;  ///< for GPS/SFI push events from STATION_LOC_SET
+    // Dynamic audio-path owner (ALE-modem ↔ voice passthrough on the VAC).
+    VoicePathManager* voice      = nullptr;
+    bool              voice_armed = false;  ///< persisted in settings (voice_armed=)
 };
 
 // ── Command dispatch ────────────────────────────────────────────────────────
@@ -287,7 +292,7 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
             gcfg.nmea_enabled = (src == PS::NMEA_SERIAL);
             gcfg.nmea_port    = cfg.nmea_port;
             gcfg.nmea_baud    = cfg.nmea_baud;
-            std::printf("[ale_bridge] GPS service: starting (%s)\n",
+            std::printf("[openALE] GPS service: starting (%s)\n",
                         src == PS::GPSD ? "gpsd" : "NMEA serial");
             PendingUpdate*    pend   = ctx.pending;
             bridge::WsServer* ws_ptr = ctx.ws;
@@ -312,7 +317,7 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
     if (ctx.sfi_svc && ctx.pending) {
         ctx.sfi_svc->stop();   // always stop first; start() below will spawn fresh thread
         if (cfg.sfi_enabled) {
-            std::printf("[ale_bridge] SFI service: starting fetch thread\n");
+            std::printf("[openALE] SFI service: starting fetch thread\n");
             PendingUpdate*    pend   = ctx.pending;
             bridge::WsServer* ws_ptr = ctx.ws;
             ctx.sfi_svc->start([pend, ws_ptr](float sfi) {
@@ -325,7 +330,7 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
                 }
             });
         } else {
-            std::printf("[ale_bridge] SFI service: disabled\n");
+            std::printf("[openALE] SFI service: disabled\n");
         }
     }
 }
@@ -349,6 +354,7 @@ static std::string pc(const mj::Value& msg, ALEController& ctrl, const std::stri
 static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     ALEController& ctrl = *ctx.ctrl;   // keeps every existing `ctrl.` call below unchanged
     const std::string cmd = msg.get_string("cmd");
+    fprintf(stderr, "[CMD] %s\n", cmd.c_str());   // TEMP DEBUG dwell-bug hunt
 
     if (cmd == "STATUS") {
         mj::Value r = make_reply(msg, true);
@@ -447,10 +453,29 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     }
     if (cmd == "ACCEPT")           { return pc(msg, ctrl, "CMD:ACCEPT"); }
     if (cmd == "REJECT")           { return pc(msg, ctrl, "CMD:REJECT"); }
-    if (cmd == "TERMINATE")        { return pc(msg, ctrl, "CMD:TERMINATE"); }
+    if (cmd == "TERMINATE") {
+        // If the voice path owns the VAC, release it FIRST so the modem's
+        // symbol-source render path is restored and the TWAS-terminator the SM
+        // is about to send actually goes out on air (passthrough would override
+        // it with silence). The SM's TX_DRAIN_TIMEOUT_MS safety net bounds the
+        // autonomous Twa-timeout case where this ordering isn't possible.
+        if (ctx.voice && ctx.voice->passthrough_active()) ctx.voice->on_link_state(false);
+        return pc(msg, ctrl, "CMD:TERMINATE");
+    }
     if (cmd == "RESET_IDLE_TIMER") { return pc(msg, ctrl, "CMD:RESET_IDLE_TIMER"); }
     if (cmd == "EMERGENCY_STOP")   { return pc(msg, ctrl, "CMD:EMERGENCY_STOP"); }
-    if (cmd == "SET_PTT")          { return pc(msg, ctrl, msg.get_bool("on", false) ? "CMD:SET_PTT on" : "CMD:SET_PTT off"); }
+    if (cmd == "SET_PTT") {
+        // Context-routed: while the voice path owns the VAC (LINKED + armed),
+        // SET_PTT is the operator's voice PTT (half-duplex direction). Otherwise
+        // it is the legacy ALE manual-PTT override (keys the radio with modem
+        // output). The mobile PTT button sends SET_PTT in both cases.
+        const bool on = msg.get_bool("on", false);
+        if (ctx.voice && ctx.voice->passthrough_active()) {
+            ctx.voice->set_ptt(on);
+            return mj::dump(make_reply(msg, true));
+        }
+        return pc(msg, ctrl, on ? "CMD:SET_PTT on" : "CMD:SET_PTT off");
+    }
 
     if (cmd == "AMD") {
         // Typed dispatch: if LINKED, send AMD over the established link; otherwise
@@ -685,7 +710,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "VFO_GET") {
         // Sync from radio before reading so the reply reflects actual radio
         // state (freq/mode the operator may have changed in Quisk or on
-        // hardware), not just the last value PC-ALE commanded.
+        // hardware), not just the last value openALE commanded.
         ctrl.sync_radio_state();
         mj::Value r = make_reply(msg, true);
         r.set("freq_hz", mj::Value::number(ctrl.get_current_frequency()));
@@ -831,6 +856,25 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); ctx.audio->reset(); }
         return mj::dump(make_reply(msg, true));
     }
+    // ── Voice passthrough (dynamic audio-path management) ───────────────────
+    // VOICE_ARM arms/disarms voice capability. When armed, a link_established
+    // event flips the VAC from modem-exclusive to transparent voice passthrough;
+    // link_terminated flips it back. See docs/VOICE_AUDIO_ROUTING.md.
+    if (cmd == "VOICE_ARM") {
+        ctx.voice_armed = msg.get_bool("on", false);
+        if (ctx.voice) ctx.voice->arm(ctx.voice_armed);
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "VOICE_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("armed", mj::Value::boolean(ctx.voice_armed));
+        if (ctx.voice) {
+            const auto m = ctx.voice->mode();
+            r.set("mode", mj::Value::string(m == VoicePathManager::Mode::VOICE_PASSTHROUGH ? "voice" : "ale"));
+            r.set("ptt",  mj::Value::boolean(ctx.voice->ptt()));
+        }
+        return mj::dump(r);
+    }
     if (cmd == "AUDIO_SET_VOL") {
         float vol = static_cast<float>(msg.get_number("vol", 0.25));
         if (vol < 0.0f) vol = 0.0f;
@@ -923,23 +967,26 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "SETTINGS_EXPORT") {
         const std::string path = msg.get_string("path");
         const bool ok = ctrl.export_settings(path);
-        if (ok && (!ctx.audio_in.empty() || !ctx.audio_out.empty())) {
+        if (ok && (!ctx.audio_in.empty() || !ctx.audio_out.empty() || ctx.voice_armed)) {
             std::ofstream fa(path, std::ios::app);
             fa << "audio_in="  << ctx.audio_in  << "\n";
             fa << "audio_out=" << ctx.audio_out << "\n";
+            fa << "voice_armed=" << (ctx.voice_armed ? "1" : "0") << "\n";
         }
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "SETTINGS_IMPORT") {
         const std::string path = msg.get_string("path");
-        // Extract bridge-level keys (audio devices) before handing off to controller.
+        // Extract bridge-level keys (audio devices, voice arm) before handing off to controller.
         std::string audio_in, audio_out;
+        bool voice_armed = false;
         {
             std::ifstream fa(path);
             std::string ln;
             while (std::getline(fa, ln)) {
-                if (ln.rfind("audio_in=", 0) == 0)  audio_in  = ln.substr(9);
+                if (ln.rfind("audio_in=", 0) == 0)       audio_in  = ln.substr(9);
                 else if (ln.rfind("audio_out=", 0) == 0) audio_out = ln.substr(10);
+                else if (ln.rfind("voice_armed=", 0) == 0) voice_armed = (ln.substr(12) == "1");
             }
         }
         const bool ok = ctrl.import_settings(path);
@@ -949,6 +996,11 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             const bool aok = (*ctx.audio)->open(audio_in, audio_out);
             if (aok) { ctrl.set_audio_device(ctx.audio->get()); ctx.audio_in = audio_in; ctx.audio_out = audio_out; }
             else      { ctx.audio->reset(); ctx.audio_in.clear(); ctx.audio_out.clear(); }
+        }
+        // Restore voice-arm state (re-evaluates passthrough against current link).
+        if (ok) {
+            ctx.voice_armed = voice_armed;
+            if (ctx.voice) ctx.voice->arm(voice_armed);
         }
         if (ok) restart_location_services(ctx, ctrl);
         return mj::dump(make_reply(msg, ok));
@@ -978,6 +1030,8 @@ static void print_usage(const char* prog) {
         "               different ports simultaneously)\n"
         "  --remote     Bind to 0.0.0.0 instead of 127.0.0.1 (LAN-reachable)\n"
         "               Without this flag the server is localhost-only.\n"
+        "  --mobile     Serve apps/gui/mobile/ instead of apps/gui/ (responsive UI\n"
+        "               for smartphones/tablets; combine with --remote for LAN access)\n"
         "  --webroot D  Serve static files from DIR instead of auto-detected apps/gui/\n"
         "\n"
         "LQA history is persisted to lqa.bin in the working directory — loaded on\n"
@@ -994,6 +1048,7 @@ int main(int argc, char* argv[]) {
 
     uint16_t    port        = 0;     // 0 = not set; --port is required
     bool        bind_remote = false;
+    bool        serve_mobile = false;
     std::string web_root;            // empty → auto-resolve below
 
     for (int i = 1; i < argc; ++i) {
@@ -1001,6 +1056,8 @@ int main(int argc, char* argv[]) {
             port = static_cast<uint16_t>(std::atoi(argv[++i]));
         } else if (std::strcmp(argv[i], "--remote") == 0) {
             bind_remote = true;
+        } else if (std::strcmp(argv[i], "--mobile") == 0) {
+            serve_mobile = true;
         } else if (std::strcmp(argv[i], "--webroot") == 0 && i + 1 < argc) {
             web_root = argv[++i];
         } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -1015,7 +1072,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (web_root.empty()) web_root = resolve_web_root();
+    if (web_root.empty()) web_root = resolve_web_root(serve_mobile);
 
     std::signal(SIGINT, sig_handler);
     std::signal(SIGTERM, sig_handler);
@@ -1043,17 +1100,25 @@ int main(int argc, char* argv[]) {
 
     const std::string lqa_path = "lqa.bin";
     if (ctrl.load_lqa(lqa_path))
-        std::printf("[ale_bridge] LQA loaded from %s\n", lqa_path.c_str());
+        std::printf("[openALE] LQA loaded from %s\n", lqa_path.c_str());
 
     // GPS / SFI services — started on demand from STATION_LOC_SET
-    GpsService     gps_svc;
-    SfiService     sfi_svc;
-    PendingUpdate  pending;
+    GpsService       gps_svc;
+    SfiService       sfi_svc;
+    PendingUpdate    pending;
+    VoicePathManager voice_mgr;   // dynamic owner of the VAC (modem ↔ voice)
+
+    // Voice PTT counts as link activity: reset the SM idle (Twa) timer so a QSO
+    // does not auto-terminate mid-conversation.
+    voice_mgr.on_ptt_activity = [&]() {
+        if (ctrl.is_link_active()) ctrl.reset_link_idle_timer();
+    };
 
     BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path,
                    /*audio_in*/"", /*audio_out*/"",
                    /*tx_volume*/0.25f,
-                   &gps_svc, &sfi_svc, &pending, &ws };
+                   &gps_svc, &sfi_svc, &pending, &ws,
+                   &voice_mgr, /*voice_armed*/false };
 
     // ── Event push ───────────────────────────────────────────────────────
     ctrl.on_status_changed = [&](const std::string& m) {
@@ -1065,6 +1130,15 @@ int main(int argc, char* argv[]) {
         mj::Value e = make_event("link_established");
         e.set("peer", mj::Value::string(peer));
         ws.send_text(mj::dump(e));
+        // Hand the VAC to the voice path (if armed) and notify the GUI of the
+        // new audio-path owner. Fires on this main-loop thread (from update()).
+        voice_mgr.on_link_state(true);
+        if (voice_mgr.passthrough_active()) {
+            mj::Value v = make_event("voice_path");
+            v.set("mode", mj::Value::string("voice"));
+            v.set("peer", mj::Value::string(peer));
+            ws.send_text(mj::dump(v));
+        }
     };
     ctrl.on_call_received = [&](const std::string& caller) {
         mj::Value e = make_event("call_received");
@@ -1075,6 +1149,15 @@ int main(int argc, char* argv[]) {
         mj::Value e = make_event("link_terminated");
         e.set("reason", mj::Value::string(reason));
         ws.send_text(mj::dump(e));
+        // Return the VAC to the modem and notify the GUI.
+        const bool was_passthrough = voice_mgr.passthrough_active();
+        voice_mgr.on_link_state(false);
+        if (was_passthrough) {
+            mj::Value v = make_event("voice_path");
+            v.set("mode",   mj::Value::string("ale"));
+            v.set("reason", mj::Value::string(reason));
+            ws.send_text(mj::dump(v));
+        }
     };
     ctrl.on_idle_warning = [&](uint32_t remaining_sec) {
         mj::Value e = make_event("idle_warning");
@@ -1170,15 +1253,23 @@ int main(int argc, char* argv[]) {
     // push_samples()). send_binary() is mutex-protected in WsServer regardless.
     // See docs/THREADING.md.
     ctrl.set_spectrum_callback([&](const float* bins, size_t n, float /*hz_per_bin*/) {
-        ws.send_binary(bins, n * sizeof(float));
+        // Tag binary frames so the browser can demux the spectrum stream (0x00)
+        // from the voice-PCM stream (0x01) on the same WebSocket.
+        std::vector<uint8_t> f;
+        f.reserve(1 + n * sizeof(float));
+        f.push_back(0x00);
+        const auto* p = reinterpret_cast<const uint8_t*>(bins);
+        f.insert(f.end(), p, p + n * sizeof(float));
+        ws.send_binary(f.data(), f.size());
     });
 
-    std::printf("[ale_bridge] listening on %s:%u — waiting for GUI to configure\n",
+    std::printf("[openALE] listening on %s:%u — waiting for GUI to configure\n",
                 bind_remote ? "0.0.0.0" : "127.0.0.1", port);
     if (web_root.empty())
-        std::printf("[ale_bridge] (no apps/gui/ found — open the GUI via file:// or pass --webroot)\n");
+        std::printf("[openALE] (no GUI found — open via file:// or pass --webroot)\n");
     else
-        std::printf("[ale_bridge] open GUI:  http://localhost:%u/index.html\n", port);
+        std::printf("[openALE] open GUI (%s):  http://localhost:%u/index.html\n",
+                    serve_mobile ? "mobile" : "desktop", port);
     std::fflush(stdout);
 
     // Start in "available" (IDLE, RX enabled) rather than scanning: scanning
@@ -1209,17 +1300,50 @@ int main(int argc, char* argv[]) {
 
         ctrl.update(t);
 
+        // Keep the voice manager bound to the live audio/radio (cheap no-op
+        // when unchanged) so it tracks AUDIO_OPEN / RIG_CONNECT device swaps.
+        voice_mgr.attach(audio.get(), radio.get());
+
         if (audio) {
             rx_buf.clear();
             audio->tick(rx_buf);
-            if (!rx_buf.empty())
+            if (voice_mgr.passthrough_active()) {
+                // VOICE_PASSTHROUGH: the VAC is a transparent radio<->browser pipe.
+                // Radio RX -> browser speaker (only while not transmitting). The
+                // decoder is NOT fed -- the modem has released the VAC.
+                if (!rx_buf.empty() && !voice_mgr.ptt()) {
+                    std::vector<uint8_t> f;
+                    f.reserve(1 + rx_buf.size() * sizeof(int16_t));
+                    f.push_back(0x01);  // stream tag: voice PCM (int16 LE)
+                    const auto* p = reinterpret_cast<const uint8_t*>(rx_buf.data());
+                    f.insert(f.end(), p, p + rx_buf.size() * sizeof(int16_t));
+                    ws.send_binary(f.data(), f.size());
+                }
+            } else if (!rx_buf.empty()) {
+                // ALE_EXCLUSIVE: unchanged modem path -- VAC capture -> demodulator.
                 ctrl.feed_audio(rx_buf.data(), static_cast<uint32_t>(rx_buf.size()));
+            }
         }
 
         std::string raw;
         while (ws.pop_message(raw)) {
             const mj::Value parsed = mj::parse(raw);
             ws.send_text(dispatch_command(ctx, parsed));
+        }
+
+        // Drain voice mic uplink (binary frames, stream tag 0x01) from the
+        // browser -> voice manager. Discard when not in passthrough-TX so frames
+        // don't accumulate in the WS receive queue.
+        {
+            std::vector<uint8_t> bin;
+            const bool want_mic = voice_mgr.passthrough_active() && voice_mgr.ptt();
+            while (ws.pop_binary(bin)) {
+                if (want_mic && bin.size() >= 1 && bin[0] == 0x01) {
+                    const size_t n = (bin.size() - 1) / sizeof(int16_t);
+                    if (n) voice_mgr.push_mic_pcm(
+                        reinterpret_cast<const int16_t*>(bin.data() + 1), n);
+                }
+            }
         }
 
         // Per-instance display state: derives "HANDSHAKE" for the caller's
@@ -1256,7 +1380,7 @@ int main(int argc, char* argv[]) {
     if (audio) audio->close();
     ws.stop();
     if (ctrl.save_lqa(lqa_path))
-        std::printf("[ale_bridge] LQA saved to %s\n", lqa_path.c_str());
-    std::printf("[ale_bridge] Exiting.\n");
+        std::printf("[openALE] LQA saved to %s\n", lqa_path.c_str());
+    std::printf("[openALE] Exiting.\n");
     return 0;
 }

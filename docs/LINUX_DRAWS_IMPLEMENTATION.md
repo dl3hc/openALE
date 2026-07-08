@@ -1,4 +1,4 @@
-# PC-ALE Linux + DRAWS Implementation Plan
+﻿# openALE Linux + DRAWS Implementation Plan
 ## Phase 7: Audio I/O Integration
 
 **Document:** Linux Implementation Roadmap  
@@ -13,7 +13,7 @@
 **Phase 1:** Linux + DRAWS (fast path to working system)  
 **Phase 2:** Port to Circle bare metal (future, optional)
 
-This document covers Phase 1 - getting PC-ALE running on Raspberry Pi with DRAWS hat under Linux.
+This document covers Phase 1 - getting openALE running on Raspberry Pi with DRAWS hat under Linux.
 
 ---
 
@@ -34,7 +34,7 @@ This document covers Phase 1 - getting PC-ALE running on Raspberry Pi with DRAWS
 
 ```
 ┌─────────────────────────────────────────┐
-│           PC-ALE Application            │
+│           openALE Application            │
 │  (State Machine, Protocol, LQA, ARQ)    │
 └─────────────────┬───────────────────────┘
                   │
@@ -375,7 +375,7 @@ public:
 
 ### Task 4: Sample Rate Conversion
 
-**PC-ALE FFT expects 8 kHz, DRAWS runs at 48 kHz.**
+**openALE FFT expects 8 kHz, DRAWS runs at 48 kHz.**
 
 ```cpp
 // include/platform/resampler.h
@@ -460,7 +460,7 @@ public:
 
 ---
 
-### Task 5: Integration with PC-ALE Core
+### Task 5: Integration with openALE Core
 
 ```cpp
 // src/pcale_linux.cpp - Main application
@@ -526,7 +526,7 @@ public:
     void start() {
         audio.start();
         state_machine.start_scanning();
-        printf("PC-ALE started, scanning...\n");
+        printf("openALE started, scanning...\n");
     }
     
     void run() {
@@ -682,9 +682,9 @@ sudo ./app_config.sh core
 aplay -l  # Should show 'udrc' device
 cat /proc/asound/cards
 
-# Clone PC-ALE
+# Clone openALE
 git clone https://github.com/Alex-Pennington/PC-ALE
-cd PC-ALE
+cd openALE
 mkdir build && cd build
 cmake ..
 make
@@ -726,7 +726,7 @@ make
 |------|------|-------------|
 | 1 | PAL interfaces + ALSA driver | Audio loopback working |
 | 2 | GPIO PTT + resampler | PTT control verified |
-| 3 | Integration with PC-ALE core | Decoding recorded ALE |
+| 3 | Integration with openALE core | Decoding recorded ALE |
 | 4 | Hardware testing | OTA validation |
 
 ---
@@ -737,7 +737,7 @@ Once Linux version is validated:
 
 1. Create `src/platform/circle/` implementations
 2. Same interfaces, different backends
-3. Recompile PC-ALE core with Circle toolchain
+3. Recompile openALE core with Circle toolchain
 4. Test on bare metal
 
 The Platform Abstraction Layer means **zero changes** to protocol code.

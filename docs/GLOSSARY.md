@@ -1,4 +1,4 @@
-# PC-ALE 2.0 - Glossary of Terms
+﻿# openALE 2.0 - Glossary of Terms
 
 Comprehensive terminology reference for Automatic Link Establishment and related standards.
 
@@ -10,7 +10,7 @@ Comprehensive terminology reference for Automatic Link Establishment and related
 MIL-STD-188-141B Appendix A protocol. Uses 8-FSK modulation at 125 baud for automatic link establishment on HF radio. Provides robust calling, scanning, and channel selection.
 
 ### **3G ALE** (Third Generation ALE)
-MIL-STD-188-141C protocol. Enhanced version with higher data rates (up to 8000 bps), better LQA, and advanced features. Not yet implemented in PC-ALE 2.0.
+MIL-STD-188-141C protocol. Enhanced version with higher data rates (up to 8000 bps), better LQA, and advanced features. Not yet implemented in openALE 2.0.
 
 ### **ALE** (Automatic Link Establishment)
 Protocol for automatically establishing HF radio links without operator intervention. Handles frequency selection, calling, handshaking, and channel quality assessment.
@@ -41,10 +41,10 @@ Error control method where receiver requests retransmission of corrupted data. F
 One-way ARQ mode (FED-STD-1052). Transmitter sends data without waiting for acknowledgments. Used for point-to-multipoint.
 
 ### **Circuit ARQ**
-Bidirectional ARQ mode (FED-STD-1052). Both stations can send data simultaneously. Not implemented in PC-ALE 2.0.
+Bidirectional ARQ mode (FED-STD-1052). Both stations can send data simultaneously. Not implemented in openALE 2.0.
 
 ### **Fixed ARQ**
-FED-STD-1052 mode with fixed block size (128 bytes). Simpler than Variable ARQ but less efficient. Not implemented in PC-ALE 2.0.
+FED-STD-1052 mode with fixed block size (128 bytes). Simpler than Variable ARQ but less efficient. Not implemented in openALE 2.0.
 
 ### **FS-1052** (FED-STD-1052)
 Federal Standard 1052: HF Radio Data Link Protocol. Defines ARQ modes, frame formats, and error recovery for HF data transmission.
@@ -56,7 +56,7 @@ Indicates data was received with errors. In selective repeat ARQ, NAK bitmap spe
 ARQ mode where only corrupted blocks are retransmitted. Uses bitmap to track which blocks were received correctly. Most efficient ARQ mode.
 
 ### **Variable ARQ**
-FED-STD-1052 mode with variable block size (1-1023 bytes). Adaptive to channel conditions. Fully implemented in PC-ALE 2.0 Phase 5.
+FED-STD-1052 mode with variable block size (1-1023 bytes). Adaptive to channel conditions. Fully implemented in openALE 2.0 Phase 5.
 
 ---
 
@@ -72,7 +72,7 @@ Percentage of bits received incorrectly. Used to measure channel quality. Lower 
 Symbol rate (symbols per second). For 8-FSK at 125 baud, 3 bits per symbol = 375 bps.
 
 ### **CRC** (Cyclic Redundancy Check)
-Error detection code appended to data. PC-ALE uses:
+Error detection code appended to data. openALE uses:
 - CRC-8 (AQC-ALE): Polynomial 0x07
 - CRC-16 (AQC-ALE): Polynomial 0x1021 (CCITT)
 - CRC-32 (FS-1052): Polynomial 0x04C11DB7 (FED-STD-1003A)
@@ -81,7 +81,7 @@ Error detection code appended to data. PC-ALE uses:
 Error correction added before transmission. 2G ALE uses Golay (24,12) code with 3-bit error correction capability.
 
 ### **FFT** (Fast Fourier Transform)
-Algorithm for frequency analysis. Used in PC-ALE demodulator to detect which of 8 tones is present.
+Algorithm for frequency analysis. Used in openALE demodulator to detect which of 8 tones is present.
 
 ### **Golay (24,12) Code**
 FEC code encoding 12 data bits into 24-bit codeword. Can correct up to 3 bit errors. Used in 2G ALE for robust transmission.
@@ -215,7 +215,7 @@ FS-1052 control frame: Link setup confirmation. Acknowledges T1 and confirms lin
 FS-1052 control frame: Link termination request. Cleanly closes link.
 
 ### **T4 Frame**
-FS-1052 control frame: Link status. Exchanges state information (not implemented in PC-ALE 2.0).
+FS-1052 control frame: Link status. Exchanges state information (not implemented in openALE 2.0).
 
 ### **Transaction Code**
 3-bit AQC-ALE field indicating next action:
@@ -244,25 +244,25 @@ Maximum number of unacknowledged blocks allowed in flight. Larger windows improv
 ## Implementation Terminology
 
 ### **Callback**
-Function pointer registered with PC-ALE libraries. Called when events occur (word received, link established, data received).
+Function pointer registered with openALE libraries. Called when events occur (word received, link established, data received).
 
 ### **Clean-Room Implementation**
-Software written from specifications without reference to existing code. Avoids copyright issues. PC-ALE 2.0 is 100% clean-room.
+Software written from specifications without reference to existing code. Avoids copyright issues. openALE 2.0 is 100% clean-room.
 
 ### **Cross-Platform**
-Code that runs on multiple operating systems without modification. PC-ALE 2.0 supports Windows, Linux, macOS.
+Code that runs on multiple operating systems without modification. openALE 2.0 supports Windows, Linux, macOS.
 
 ### **Demodulator**
-Component extracting digital data from analog signal. PC-ALE uses FFT demodulator for 8-FSK.
+Component extracting digital data from analog signal. openALE uses FFT demodulator for 8-FSK.
 
 ### **Majority Voting**
 Error correction technique. Golay decoder uses triple redundancy: transmit 3 copies, decode using majority rule.
 
 ### **Modulator**
-Component converting digital data to analog signal. PC-ALE uses tone generator for 8-FSK.
+Component converting digital data to analog signal. openALE uses tone generator for 8-FSK.
 
 ### **Phase**
-Development stage in PC-ALE project:
+Development stage in openALE project:
 - Phase 1: FSK modem (FFT, Golay, tones)
 - Phase 2: Protocol layer (words, messages, addressing)
 - Phase 3: Link state machine (scanning, calling, LQA)
@@ -274,7 +274,7 @@ Development stage in PC-ALE project:
 Unit of modulation. In 8-FSK, one symbol encodes 3 bits. Symbol duration is 1/125 second = 8ms.
 
 ### **Unit Test**
-Test of single component in isolation. PC-ALE has 54 unit tests covering all phases.
+Test of single component in isolation. openALE has 54 unit tests covering all phases.
 
 ---
 
@@ -293,7 +293,7 @@ Military Standard 188-110A: HF modem specification. Defines PSK and QAM modes. U
 Military Standard 188-141B: HF ALE specification. Defines 2G ALE (Appendix A) and AQC-ALE (Appendix C).
 
 ### **MIL-STD-188-141C**
-Military Standard 188-141C: Enhanced ALE specification. Defines 3G ALE with higher data rates. Not implemented in PC-ALE 2.0.
+Military Standard 188-141C: Enhanced ALE specification. Defines 3G ALE with higher data rates. Not implemented in openALE 2.0.
 
 ---
 
@@ -303,10 +303,10 @@ Military Standard 188-141C: Enhanced ALE specification. Defines 3G ALE with high
 Serial or USB interface for controlling radio (frequency, mode, power, etc.). Hamlib library provides CAT support.
 
 ### **DirectSound**
-Windows API for low-latency audio I/O. Used in PC-ALE for real-time audio processing.
+Windows API for low-latency audio I/O. Used in openALE for real-time audio processing.
 
 ### **Hamlib**
-Open-source library for radio CAT control. Supports 200+ radio models. Planned for PC-ALE Phase 6.
+Open-source library for radio CAT control. Supports 200+ radio models. Planned for openALE Phase 6.
 
 ### **HF** (High Frequency)
 Radio frequency range 3-30 MHz. Long-distance propagation via ionosphere. ALE is designed for HF operation.
@@ -318,7 +318,7 @@ Radio capable of both transmitting and receiving. ALE requires PTT control to sw
 Signal controlling transmitter. ALE must activate PTT before transmitting, deactivate after.
 
 ### **WASAPI** (Windows Audio Session API)
-Modern Windows audio API. Provides lower latency than DirectSound. Supported in PC-ALE Phase 6.
+Modern Windows audio API. Provides lower latency than DirectSound. Supported in openALE Phase 6.
 
 ---
 
@@ -362,4 +362,4 @@ Modern Windows audio API. Provides lower latency than DirectSound. Supported in 
 ---
 
 *Last Updated: December 2024*  
-*Version: PC-ALE 2.0 Phase 5*
+*Version: openALE 2.0 Phase 5*

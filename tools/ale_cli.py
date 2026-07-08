@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-ale_cli.py — Command-line interface for ale_bridge (WebSocket/JSON).
+ale_cli.py — Command-line interface for openALE (WebSocket/JSON).
 
-Connects to a running ale_bridge instance and provides an interactive
+Connects to a running openALE instance and provides an interactive
 REPL for all ALEController commands.  Async events (link established,
 AMD received, state changes) are printed as they arrive, interleaved
 with the prompt.
@@ -253,14 +253,14 @@ async def run_repl(ws, one_shot: str | None) -> None:
 async def main() -> None:
     ap = argparse.ArgumentParser(
         prog="ale_cli",
-        description="Interactive CLI for ale_bridge (WebSocket/JSON)",
+        description="Interactive CLI for openALE (WebSocket/JSON)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Example:\n"
                "  python tools/ale_cli.py --port 8765\n"
                "  python tools/ale_cli.py --port 8765 --cmd status\n",
     )
     ap.add_argument("--port", type=int, required=True,
-                    help="ale_bridge WebSocket port (same --port used to start ale_bridge)")
+                    help="openALE WebSocket port (same --port used to start openALE)")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bridge host (default: 127.0.0.1)")
     ap.add_argument("--cmd", metavar="COMMAND",
@@ -275,7 +275,7 @@ async def main() -> None:
             await run_repl(ws, one_shot=args.cmd)
     except (ConnectionRefusedError, OSError):
         print(f"\nERROR: could not connect to {url}", file=sys.stderr)
-        print(f"       Start the bridge first:  ale_bridge --port {args.port}", file=sys.stderr)
+        print(f"       Start the bridge first:  openALE --port {args.port}", file=sys.stderr)
         sys.exit(1)
 
     print("\nDisconnected.")

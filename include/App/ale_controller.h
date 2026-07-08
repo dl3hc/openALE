@@ -800,7 +800,7 @@ public:
      * and step_channel() use. Manual channel selection must go through here, NOT
      * set_frequency()+set_mode() as two separate commands: over TCP an SDR
      * front-end (Quisk) restores a per-band saved mode on the frequency change, so
-     * only one atomic freq-first/mode-last set reliably makes PC-ALE authoritative.
+     * only one atomic freq-first/mode-last set reliably makes openALE authoritative.
      * Simplex (RX=TX). Empty mode keeps the radio's current mode.
      * @param hz   Frequency in Hz
      * @param mode Mode string (USB, LSB, USB-D/PKTUSB, LSB-D/PKTLSB, FM, …)
@@ -1163,6 +1163,16 @@ private:
 
     /// A.5.4.7.1: set SM shared/ALE-only LBT duration from the channels involved.
     void apply_lbt_policy_(const std::vector<Channel>& channels);
+
+    /// Centralize every channel-change side effect: reset the LBT occupancy
+    /// detector when the RX frequency actually changes (its EWMA floor is
+    /// channel-specific — carrying it across a hop leaves a stale floor/busy
+    /// from the previous channel), then forward to the on_channel_changed
+    /// callback.  A same-frequency notification (e.g. a channel rename) does
+    /// NOT reset, so no needless blind window.
+    void notify_channel_changed_(const Channel& ch);
+
+    uint32_t                 last_lbt_rx_hz_ = 0;  // RX freq at last detector reset
 
     // Audio input level (get_audio_input_level) — independent of debug_rx_,
     // updated unconditionally on every feed_audio() call.

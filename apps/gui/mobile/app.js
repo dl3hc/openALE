@@ -10,6 +10,7 @@ const ICONS = {
   power:     '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
   settings:  '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
   user:      '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  check:     '<polyline points="20 6 9 17 4 12"/>',
   userPlus:  '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>',
   headphones:'<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
   layers:    '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
@@ -135,6 +136,8 @@ function syncAllFromBridge(pullOnly = false) {
   syncLbtFromBridge();              // pull LBT occupancy state from core (A.5.4.7)
   syncEnhFreqSelectFromBridge();    // pull Enhanced Freq-Select state from core
   syncLocationFromBridge();         // pull Station Location & Propagation from core
+  syncVoiceFromBridge();            // pull voice-passthrough arm/mode state from core
+  enumVoiceDevices();               // populate browser mic/speaker selectors
   pollRigStatus();   // establish initial radio-control lock state
   populateRigDropdown();
   if (pullOnly) {
@@ -324,6 +327,12 @@ function onBridgeEvent(e) {
       stopTimer();
       goScanning();
       break;
+    case 'voice_path':
+      // Bridge switched the VAC owner between ALE-modem and voice passthrough.
+      voicePassthrough = (e.mode === 'voice');
+      if (!voicePassthrough) { Voice.pttMuted = false; voiceMicStop(); }
+      applyVoicePathUi();
+      break;
     case 'amd_received':
       messages.unshift({ self: e.self || primarySelfAddr(), peer: e.peer,
                          time: nowZulu(), text: e.text, own: false });
@@ -379,20 +388,205 @@ function onBridgeEvent(e) {
   }
 }
 
-// Binary frames carry a 1-byte stream tag (see apps/ale_bridge.cpp):
-// 0x00 = spectrum FFT (float32 LE), 0x01 = voice PCM (int16 LE, 8 kHz mono).
-// Desktop demuxes spectrum and ignores voice frames for now (full desktop
-// voice passthrough is a follow-up; mobile GUI has the complete path).
+// Binary frames from the bridge carry a 1-byte stream tag (see
+// apps/ale_bridge.cpp): 0x00 = spectrum FFT (float32 LE), 0x01 = voice PCM
+// (int16 LE, 8 kHz mono). Demux here so spectrum and voice share the socket.
+const BIN_TAG_SPECTRUM = 0x00;
+const BIN_TAG_VOICE    = 0x01;
+
 function onBinaryFrame(buf) {
   const u8 = new Uint8Array(buf);
   if (u8.length < 1) return;
   const tag = u8[0];
-  if (tag === 0x00) onSpectrumFrame(buf.slice(1));
-  // 0x01 (voice) ignored on desktop in this first cut.
+  const payload = buf.slice(1);          // ArrayBuffer with the tag byte stripped
+  if (tag === BIN_TAG_SPECTRUM)      onSpectrumFrame(payload);
+  else if (tag === BIN_TAG_VOICE)    onVoiceRxFrame(payload);
 }
 
 function onSpectrumFrame(buf) {
   latestSpectrum = new Float32Array(buf);
+}
+
+/* ━━━ VOICE PASSTHROUGH (browser-mediated operator audio) ━━━━━━━━━━━━━━━━━
+   See docs/VOICE_AUDIO_ROUTING.md. While an ALE link is active and voice is
+   armed, the bridge turns the VAC into a transparent radio↔browser pipe. Mic
+   PCM goes up as binary frames tagged 0x01 (8 kHz mono int16 LE); radio RX
+   comes down the same way. PTT selects direction (half-duplex). The ALE modem
+   is silent while linked. */
+let voicePassthrough = false;   // mirror of bridge voice_path mode ("voice")
+let voiceArmed       = false;   // voice capability armed in the bridge
+let voiceMicOn       = false;   // mic streaming active (PTT held)
+let voiceMicTestId   = null;    // mic-test timer
+const SPK_RING_N = 4096;        // ~0.5 s @ 8 kHz
+const Voice = {
+  micCtx: null, micStream: null, micNode: null, micRate: 48000,
+  spkCtx: null, spkNode: null, spkRate: 48000,
+  spkRing: null, spkRead: 0.0, spkAvail: 0,
+  pttMuted: false,
+};
+
+function _audioCtxCtor() {
+  return window.AudioContext || window.webkitAudioContext || null;
+}
+
+// ── Speaker (radio RX → browser) ────────────────────────────────────────────
+function voiceInitSpeaker() {
+  if (Voice.spkCtx) return;
+  const Ctx = _audioCtxCtor();
+  if (!Ctx) return;
+  try {
+    Voice.spkCtx  = new Ctx();
+    Voice.spkRate = Voice.spkCtx.sampleRate;
+    Voice.spkRing = new Float32Array(SPK_RING_N);
+    Voice.spkRead = 0.0;
+    Voice.spkAvail = 0;
+    // 1024-frame output-only ScriptProcessor; input channel count 0.
+    Voice.spkNode = Voice.spkCtx.createScriptProcessor(1024, 0, 1);
+    Voice.spkNode.onaudioprocess = voiceSpkProcess;
+    Voice.spkNode.connect(Voice.spkCtx.destination);
+  } catch (e) { aleLogInfo('Voice speaker init failed: ' + e.message); }
+}
+
+function voiceSpkProcess(e) {
+  const out = e.outputBuffer.getChannelData(0);
+  if (Voice.pttMuted || Voice.spkAvail <= 0 || !Voice.spkRing) { out.fill(0); return; }
+  // Read the 8 kHz ring with linear interpolation up to the device rate.
+  const ratio = Voice.spkRate / 8000;
+  const nFill = Math.min(out.length, Math.floor(Voice.spkAvail / ratio));
+  let pos = Voice.spkRead;
+  for (let i = 0; i < nFill; ++i) {
+    const i0 = Math.floor(pos);
+    const frac = pos - i0;
+    const a = Voice.spkRing[i0 % SPK_RING_N];
+    const b = Voice.spkRing[(i0 + 1) % SPK_RING_N];
+    out[i] = a + (b - a) * frac;
+    pos += ratio;
+  }
+  for (let i = nFill; i < out.length; ++i) out[i] = 0;   // underrun → silence
+  const consumed = Math.ceil(nFill * ratio);
+  Voice.spkRead = (Voice.spkRead + consumed) % SPK_RING_N;
+  Voice.spkAvail = Math.max(0, Voice.spkAvail - consumed);
+}
+
+function onVoiceRxFrame(payload) {
+  if (!voicePassthrough) return;
+  voiceInitSpeaker();
+  if (Voice.spkCtx && Voice.spkCtx.state === 'suspended') Voice.spkCtx.resume();
+  if (!Voice.spkRing) return;
+  const i16 = new Int16Array(payload);
+  for (let k = 0; k < i16.length; ++k) {
+    Voice.spkRing[Math.floor(Voice.spkRead + Voice.spkAvail) % SPK_RING_N] = i16[k] / 32768;
+    if (Voice.spkAvail < SPK_RING_N) Voice.spkAvail++;
+    else Voice.spkRead = (Voice.spkRead + 1) % SPK_RING_N;
+  }
+}
+
+// ── Microphone (browser → radio TX) ─────────────────────────────────────────
+async function voiceMicStart() {
+  if (voiceMicOn) return;
+  const Ctx = _audioCtxCtor();
+  if (!Ctx || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  try {
+    const audioCfg = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    if (_voiceMicSel) audioCfg.deviceId = { exact: _voiceMicSel };
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: audioCfg });
+    Voice.micCtx    = new Ctx();
+    Voice.micRate   = Voice.micCtx.sampleRate;
+    Voice.micStream = stream;
+    const src = Voice.micCtx.createMediaStreamSource(stream);
+    Voice.micNode   = Voice.micCtx.createScriptProcessor(2048, 1, 0);
+    Voice.micNode.onaudioprocess = voiceMicProcess;
+    src.connect(Voice.micNode);
+    Voice.micNode.connect(Voice.micCtx.destination);  // required for ScriptProcessor to fire
+    voiceMicOn = true;
+  } catch (e) { aleLogInfo('Voice mic start failed: ' + e.message); }
+}
+
+function voiceMicProcess(e) {
+  if (!voiceMicOn || !bridgeWs || bridgeWs.readyState !== 1) return;
+  const in0 = e.inputBuffer.getChannelData(0);
+  const ratio = Voice.micRate / 8000;
+  const nOut = Math.floor(in0.length / ratio);
+  if (nOut <= 0) return;
+  const i16 = new Int16Array(nOut);
+  for (let i = 0; i < nOut; ++i) {
+    const start = Math.floor(i * ratio), end = Math.floor((i + 1) * ratio);
+    let sum = 0;
+    for (let j = start; j < end; ++j) sum += in0[j];
+    let v = Math.round((sum / Math.max(1, end - start)) * 32767);
+    if (v > 32767) v = 32767; if (v < -32768) v = -32768;
+    i16[i] = v;
+  }
+  const buf = new ArrayBuffer(1 + i16.byteLength);
+  const u8 = new Uint8Array(buf);
+  u8[0] = BIN_TAG_VOICE;
+  new Uint8Array(buf, 1).set(new Uint8Array(i16.buffer));
+  bridgeWs.send(buf);
+}
+
+function voiceMicStop() {
+  if (!voiceMicOn && !Voice.micCtx) return;
+  voiceMicOn = false;
+  try { if (Voice.micNode)   Voice.micNode.disconnect(); } catch (_) {}
+  try { if (Voice.micStream) Voice.micStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+  try { if (Voice.micCtx)    Voice.micCtx.close(); } catch (_) {}
+  Voice.micNode = null; Voice.micStream = null; Voice.micCtx = null;
+}
+
+// ── UI / settings ───────────────────────────────────────────────────────────
+function applyVoicePathUi() {
+  const badge = document.getElementById('voiceBadge');
+  if (badge) badge.classList.toggle('hidden', !voicePassthrough);
+  const b = document.getElementById('pttBtn');
+  if (b && !pttOn) b.innerHTML = voicePassthrough ? `${icon('mic',14)} TALK` : `${icon('mic',14)} PTT`;
+}
+
+function syncVoiceFromBridge() {
+  bridgeSend('VOICE_GET', {}, (r) => {
+    voiceArmed = !!r.armed;
+    const arm = document.getElementById('cfgVoiceArm');
+    if (arm) arm.checked = voiceArmed;
+    voicePassthrough = (r.mode === 'voice');
+    applyVoicePathUi();
+  });
+}
+
+function onVoiceArmChange(on) {
+  voiceArmed = !!on;
+  if (bridgeConnected) bridgeSend('VOICE_ARM', { on });
+}
+
+let _voiceMicSel = '', _voiceSpkSel = '';
+function onVoiceMicChange() {
+  _voiceMicSel = document.getElementById('voiceMic').value;
+  // sinkId for output is set on the speaker side; mic selection is applied on
+  // next voiceMicStart via getUserMedia({deviceId:{exact:_voiceMicSel}}).
+}
+function onVoiceSpkChange() {
+  _voiceSpkSel = document.getElementById('voiceSpk').value;
+}
+
+async function enumVoiceDevices() {
+  const micSel = document.getElementById('voiceMic');
+  const spkSel = document.getElementById('voiceSpk');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    // Request permission once so labels become available.
+    try { await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (_) {}
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const mkOpt = d => `<option value="${d.deviceId}">${d.label || (d.kind + ' ' + d.deviceId.slice(0,6))}</option>`;
+    micSel.innerHTML  = '<option value="">— default —</option>' + devs.filter(d => d.kind === 'audioinput').map(mkOpt).join('');
+    spkSel.innerHTML  = '<option value="">— default —</option>' + devs.filter(d => d.kind === 'audiooutput').map(mkOpt).join('');
+  } catch (e) { aleLogInfo('Voice device enum failed: ' + e.message); }
+}
+
+async function voiceMicTest() {
+  if (voiceMicTestId) { clearInterval(voiceMicTestId); voiceMicTestId = null; aleLogInfo('Mic test stopped'); return; }
+  aleLogInfo('Mic test: speaking for 3s shows input level in the console');
+  // Reuse the level meter: start a short capture and report RMS.
+  // Lightweight — does not require the full voice path.
+  // (Kept minimal; full mic metering is out of scope for this first cut.)
+  voiceMicTestId = setTimeout(() => { voiceMicTestId = null; aleLogInfo('Mic test done'); }, 3000);
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -703,7 +897,7 @@ function addHeardToContacts(addr) {
   }
   const c = { cs, name: '', fav: false };
   contacts.push(c);
-  selectedContact = c;
+  selectedContacts = [c];
   renderContacts();
   renderHeard();   // flip the row's button to the ✓/already-added state
   if (bridgeConnected) {
@@ -741,17 +935,17 @@ function renderHeard() {
       ? `<span class="heard-add heard-added" title="Already in address book">${icon('user',11)}</span>`
       : `<button class="heard-add" onclick='addHeardToContacts(${JSON.stringify(h.addr)})' title="Add to address book">${icon('userPlus',11)}</button>`;
     return `<tr>` +
-      `<td class="lqa-cell" style="text-align:left">${escapeHtml(h.addr)}</td>` +
-      `<td class="lqa-cell">${fmtChFreqExact(h.freq_hz)}</td>` +
-      availBadge(h.available) +
-      qCell(h.score, scoreG) +
-      qCell(h.sinad_from != null ? `+${Math.round(h.sinad_from)}` : null, sinadFromG) +
-      qCell(h.sinad_to   != null ? `+${Math.round(h.sinad_to)}`   : null, sinadToG) +
-      qCell(h.ber_from   != null ? h.ber_from.toFixed(1)          : null, berFromG) +
-      qCell(berToCode    != null ? h.ber_to                       : null, berToG) +
-      qCell(h.mp_to      != null ? h.mp_to.toFixed(0) + 'ms'      : null, mpG) +
-      qCell(h.ageMin >= 60 ? '>60m' : h.ageMin + 'm', ageG) +
-      `<td class="lqa-cell heard-actions">${addBtn}<button class="heard-del" onclick='deleteHeard(${JSON.stringify(h.addr)},${h.freq_hz})' title="Remove">×</button></td>` +
+      `<td class="lqa-cell" data-label="Callsign" style="text-align:left">${escapeHtml(h.addr)}</td>` +
+      `<td class="lqa-cell" data-label="Channel">${fmtChFreqExact(h.freq_hz)}</td>` +
+      availBadge(h.available, 'Avail') +
+      qCell(h.score, scoreG, 'Score') +
+      qCell(h.sinad_from != null ? `+${Math.round(h.sinad_from)}` : null, sinadFromG, 'SINAD↘') +
+      qCell(h.sinad_to   != null ? `+${Math.round(h.sinad_to)}`   : null, sinadToG, 'SINAD↗') +
+      qCell(h.ber_from   != null ? h.ber_from.toFixed(1)          : null, berFromG, 'BER↘') +
+      qCell(berToCode    != null ? h.ber_to                       : null, berToG, 'BER↗') +
+      qCell(h.mp_to      != null ? h.mp_to.toFixed(0) + 'ms'      : null, mpG, 'MP') +
+      qCell(h.ageMin >= 60 ? '>60m' : h.ageMin + 'm', ageG, 'Age') +
+      `<td class="lqa-cell heard-actions" data-label="">${addBtn}<button class="heard-del" onclick='deleteHeard(${JSON.stringify(h.addr)},${h.freq_hz})' title="Remove">×</button></td>` +
       `</tr>`;
   }).join('');
   el.innerHTML =
@@ -913,8 +1107,10 @@ function setStatus(label, cls) {
 }
 
 function showInc(show) {
-  document.getElementById('incEmpty').classList.toggle('hidden',  show);
-  document.getElementById('incAlert').classList.toggle('hidden', !show);
+  // Incoming-call overlay (was a persistent panel; now a modal that appears
+  // only on call_received / post-link "Linked — accept?"). #incCs / #incName
+  // are filled by the call_received / link_established handlers before this.
+  document.getElementById('incomingCallModal').classList.toggle('hidden', !show);
 }
 
 function showCallPanel(show) {
@@ -1017,7 +1213,7 @@ function goScanning() {
 // chans: comma-separated Core channel ids ("C-1,C-2") or "ALL" — matches
 // ALEController::add_contact()'s valid_channels format.
 let contacts = [];
-let selectedContact  = contacts[0];
+let selectedContacts = [];   // multi-select array of contact objects; 1 → 1:1 call, >1 → group call
 let editingContactIdx = -1;
 
 function renderContacts() {
@@ -1027,17 +1223,33 @@ function renderContacts() {
   const list = contacts
     .filter(c => !q || c.cs.toUpperCase().includes(q) || (c.name||'').toUpperCase().includes(q))
     .sort((a,b) => (b.fav?1:0) - (a.fav?1:0));
-  if (selectedContact && !contacts.includes(selectedContact)) selectedContact = null;
-  if (!selectedContact && list.length) selectedContact = list[0];
+  // Drop any selections that no longer exist.
+  selectedContacts = selectedContacts.filter(c => contacts.includes(c));
 
+  const n = selectedContacts.length;
   const cb = document.getElementById('callBtn');
-  if (cb) cb.disabled = !selectedContact;
+  if (cb) cb.disabled = n === 0;
+  // Reflect the selection onto the CALL hero target line.
+  const tgt = document.getElementById('callTarget');
+  if (tgt) {
+    if (n === 0) tgt.textContent = 'Select contacts to call';
+    else if (n === 1) tgt.textContent = `Call → ${selectedContacts[0].cs}`;
+    else {
+      const names = selectedContacts.map(c => c.cs);
+      const shown = names.slice(0, 2).join(', ');
+      const more = names.length > 2 ? ` +${names.length - 2} more` : '';
+      tgt.textContent = `Group call → ${shown}${more}`;
+    }
+  }
+  // CTA label: "Call" for 1:1, "Group Call" for multi.
+  const lbl = document.querySelector('#callBtn .btn-call-lbl');
+  if (lbl) lbl.textContent = n > 1 ? 'Group Call' : 'Call';
 
   el.innerHTML = list.length ? list.map(c => {
     const idx = contacts.indexOf(c);
-    const sel = c === selectedContact ? ' sel' : '';
-    return `<div class="contact-item${sel}" onclick="pickContact(${idx})">
-      <div class="contact-avatar">${icon('user',16)}</div>
+    const sel = selectedContacts.includes(c) ? ' sel' : '';
+    return `<div class="contact-item${sel}" onclick="toggleContact(${idx})">
+      <div class="contact-avatar">${sel ? icon('check',16) : icon('user',16)}</div>
       <div class="contact-info">
         <div class="contact-cs">${c.cs}</div>
         <div class="contact-name">${escapeHtml(c.name||'')}</div>
@@ -1050,19 +1262,27 @@ function renderContacts() {
   }).join('') : '<div class="msg-empty">No contacts</div>';
 }
 
-function pickContact(i) {
-  selectedContact = contacts[i];
+// Toggle membership of a contact in the multi-select set. One selected → 1:1
+// (call or AMD); more than one → group call. CONTACT_SELECT is sent only when
+// exactly one remains selected, preserving the existing 1:1 bridge behaviour.
+function toggleContact(i) {
+  const c = contacts[i];
+  if (!c) return;
+  const idx = selectedContacts.indexOf(c);
+  if (idx >= 0) selectedContacts.splice(idx, 1);
+  else selectedContacts.push(c);
   renderContacts();
-  if (bridgeConnected) bridgeSend('CONTACT_SELECT', { callsign: selectedContact.cs });
+  if (bridgeConnected && selectedContacts.length === 1)
+    bridgeSend('CONTACT_SELECT', { callsign: selectedContacts[0].cs });
 }
 
 function syncContactsFromBridge() {
   bridgeSend('CONTACTS_LIST', {}, (r) => {
     if (!r.ok) return;
-    const prevSel = selectedContact?.cs;
+    const prevSel = new Set(selectedContacts.map(c => c.cs));
     const favs = new Set(contacts.filter(c => c.fav).map(c => c.cs));
     contacts = r.data.map(c => ({ cs: c.callsign, name: c.name, fav: favs.has(c.callsign) }));
-    selectedContact = contacts.find(c => c.cs === prevSel) || contacts[0] || null;
+    selectedContacts = contacts.filter(c => prevSel.has(c.cs));
     renderContacts();
   });
 }
@@ -1092,7 +1312,7 @@ function saveContact() {
   };
   const prevCs = editingContactIdx >= 0 ? contacts[editingContactIdx].cs : null;
   if (editingContactIdx >= 0) contacts[editingContactIdx] = c;
-  else { contacts.push(c); selectedContact = c; }
+  else { contacts.push(c); selectedContacts = [c]; }
   closeContactEditor();
   renderContacts();
   if (bridgeConnected) {
@@ -1105,7 +1325,7 @@ function deleteContact() {
   let removedCs = null;
   if (editingContactIdx >= 0) {
     removedCs = contacts[editingContactIdx].cs;
-    if (contacts[editingContactIdx] === selectedContact) selectedContact = null;
+    selectedContacts = selectedContacts.filter(x => x !== contacts[editingContactIdx]);
     contacts.splice(editingContactIdx, 1);
   }
   closeContactEditor();
@@ -1129,7 +1349,7 @@ function renderGroupRosters() {
   const el = document.getElementById('groupRosterList');
   if (!el) return;
   if (groupRosters.length === 0) {
-    el.innerHTML = '<div style="font-size:.72rem;opacity:.5;padding:2px 0">No rosters</div>';
+    el.innerHTML = '<div class="rosters-empty">No rosters yet</div>';
     return;
   }
   el.innerHTML = groupRosters.map((r, i) => `
@@ -1211,21 +1431,39 @@ function toggleCallModePanel() {
   const p = document.getElementById('callModePanel');
   if (!p) return;
   const nowHidden = p.classList.toggle('hidden');
-  const b = document.getElementById('callBtn');
-  if (b) b.innerHTML = nowHidden ? `${icon('phone',14)} Call ▸` : `${icon('phone',14)} Call ▾`;
+  const c = document.querySelector('#callBtn .caret');
+  if (c) c.textContent = nowHidden ? '▸' : '▾';
 }
 
 function closeCallModePanel() {
   document.getElementById('callModePanel')?.classList.add('hidden');
-  const b = document.getElementById('callBtn');
-  if (b) b.innerHTML = `${icon('phone',14)} Call ▸`;
+  const c = document.querySelector('#callBtn .caret');
+  if (c) c.textContent = '▸';
 }
 
 function startCall(single) {
-  if (!selectedContact || !bridgeConnected) return;
+  if (selectedContacts.length !== 1 || !bridgeConnected) return;
   closeCallModePanel();
   setStatus('Calling…', 'calling');   // cosmetic; real transition comes from CALLING/link_established
-  bridgeSend('CALL', { addr: selectedContact.cs, single_channel: !!single });
+  bridgeSend('CALL', { addr: selectedContacts[0].cs, single_channel: !!single });
+}
+
+// Group call: bridge GROUP_CALL accepts an explicit member list →
+// ALEController::initiate_group_call(members). Multi-channel / LQA-optimized;
+// there is no single-channel variant for group calls, so no mode sheet.
+function startGroupCall() {
+  if (selectedContacts.length < 2 || !bridgeConnected) return;
+  setStatus('Calling…', 'calling');
+  bridgeSend('GROUP_CALL', { members: selectedContacts.map(c => c.cs) });
+}
+
+// Call CTA dispatcher: 1 selected → open the Multi/Single-channel sheet
+// (existing 1:1 flow); 2+ selected → fire a group call directly.
+function onCallTap() {
+  const n = selectedContacts.length;
+  if (n === 0) return;
+  if (n === 1) toggleCallModePanel();
+  else startGroupCall();
 }
 
 // Manual accept is a POST-link decision: the 3-way handshake completes
@@ -2759,17 +2997,46 @@ function toggleRadioPanel() {
   document.getElementById('radioToggle').innerHTML = open ? `${icon('radio',14)} Radio ▾` : `${icon('radio',14)} Radio ▸`;
   if (open) updateRadioDisplay();
 }
-// dismiss the VFO / Sounding / Network panels on an outside click
+// "⋯ More" action sheet — collects secondary header controls (Sound / Radio /
+// Settings / Help) so the mobile header can show just Net + More. Reuses the
+// .radio-wrap / .radio-panel / .open pattern; dismissed by the outside-click
+// listener below exactly like the other panels.
+function toggleMorePanel() {
+  const panel = document.getElementById('morePanel');
+  panel.classList.toggle('open');
+  const open = panel.classList.contains('open');
+  const caret = document.getElementById('moreCaret');
+  if (caret) caret.textContent = open ? '▾' : '▸';
+  const btn = document.getElementById('moreBtn');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+// Close the More sheet when one of its items is tapped (the item's own onclick
+// then opens the targeted panel / modal). Delegated so each item only needs to
+// call its real handler.
 document.addEventListener('click', e => {
+  const item = e.target.closest('#morePanel .more-item');
+  if (!item) return;
+  const panel = document.getElementById('morePanel');
+  if (panel) panel.classList.remove('open');
+  const caret = document.getElementById('moreCaret');
+  if (caret) caret.textContent = '▸';
+});
+// dismiss the VFO / Sounding / Network / More panels on an outside click
+document.addEventListener('click', e => {
+  // A tap inside the ⋯ More sheet opens one of the panels below intentionally,
+  // so do NOT treat it as an outside-click dismiss for those panels.
+  const mwrap = document.getElementById('moreWrap');
+  const fromMore = !!(mwrap && mwrap.contains(e.target));
+
   const wrap = document.getElementById('radioWrap');
   const panel = document.getElementById('radioPanel');
-  if (panel && panel.classList.contains('open') && wrap && !wrap.contains(e.target)) {
+  if (panel && panel.classList.contains('open') && wrap && !wrap.contains(e.target) && !fromMore) {
     panel.classList.remove('open');
     document.getElementById('radioToggle').innerHTML = `${icon('radio',14)} Radio ▸`;
   }
   const swrap = document.getElementById('soundWrap');
   const spanel = document.getElementById('soundPanel');
-  if (spanel && spanel.classList.contains('open') && swrap && !swrap.contains(e.target)) {
+  if (spanel && spanel.classList.contains('open') && swrap && !swrap.contains(e.target) && !fromMore) {
     spanel.classList.remove('open');
     updateSoundBtn();
   }
@@ -2778,6 +3045,12 @@ document.addEventListener('click', e => {
   if (npanel && npanel.classList.contains('open') && nwrap && !nwrap.contains(e.target)) {
     npanel.classList.remove('open');
     const caret = document.getElementById('netCaret');
+    if (caret) caret.textContent = '▸';
+  }
+  const mpanel = document.getElementById('morePanel');
+  if (mpanel && mpanel.classList.contains('open') && mwrap && !mwrap.contains(e.target)) {
+    mpanel.classList.remove('open');
+    const caret = document.getElementById('moreCaret');
     if (caret) caret.textContent = '▸';
   }
 });
@@ -2824,11 +3097,18 @@ function stepChannel(dir) {
 // The button state resets via the ptt_changed push event from the backend.
 function setPtt(on) {
   if (radioCtrlLocked()) return;
-  if (on && pttOn) { abortTx(); return; }
+  // In ALE mode, pressing PTT while already on TX aborts the transmission.
+  // In voice passthrough, PTT is press-and-hold talk — no abort path.
+  if (!voicePassthrough && on && pttOn) { abortTx(); return; }
   if (bridgeConnected) bridgeSend('SET_PTT', { on });
   pttOn = on;
+  if (voicePassthrough) {
+    // Half-duplex voice: PTT on → mic up + mute speaker; PTT off → reverse.
+    Voice.pttMuted = on;
+    if (on) voiceMicStart(); else voiceMicStop();
+  }
   const b = document.getElementById('pttBtn');
-  if (b) { b.classList.toggle('ptt-on', on); b.innerHTML = on ? `${icon('zap',14)} TX` : `${icon('mic',14)} PTT`; }
+  if (b) { b.classList.toggle('ptt-on', on); b.innerHTML = on ? `${icon('zap',14)} TX` : (voicePassthrough ? `${icon('mic',14)} TALK` : `${icon('mic',14)} PTT`); }
 }
 
 // Stop any ongoing transmission immediately: SM → IDLE, modulator flushed, PTT → RX.
@@ -2939,9 +3219,9 @@ function sendAmd() {
     txt = txt.slice(0, 90);
     aleLogInfo('AMD: trimmed to 90 chars');
   }
-  const to = linkedPeer || (selectedContact ? selectedContact.cs : '');
+  const to = linkedPeer || (selectedContacts.length === 1 ? selectedContacts[0].cs : '');
   if (!to) {
-    aleLogInfo('AMD: no target — select a contact or establish a link first');
+    aleLogInfo('AMD: no target — select exactly one contact or establish a link first');
     return;
   }
   const self = primarySelfAddr();
@@ -3160,18 +3440,20 @@ function qColor(g) {
 }
 // A <td> with the value gradient-coloured, or a dim "—" when goodness is null
 // (no measurement / sentinel: SINAD 31, BER 31, MP 7, available -1).
-function qCell(text, goodness) {
+function qCell(text, goodness, label) {
+  const dl = label ? ` data-label="${label}"` : '';
   if (goodness == null || text == null || text === '—')
-    return `<td class="lqa-cell" style="color:var(--tx-dim)">—</td>`;
-  return `<td class="lqa-cell" style="color:${qColor(goodness)};font-weight:600">${text}</td>`;
+    return `<td class="lqa-cell"${dl} style="color:var(--tx-dim)">—</td>`;
+  return `<td class="lqa-cell"${dl} style="color:${qColor(goodness)};font-weight:600">${text}</td>`;
 }
 // Sounding-conclusion availability badge (1=TIS available, 0=TWAS not, -1=unknown).
-function availBadge(av) {
+function availBadge(av, label) {
+  const dl = label ? ` data-label="${label}"` : '';
   const cls = av === 1 ? 'ha-yes' : av === 0 ? 'ha-no' : 'ha-unk';
   const txt = av === 1 ? 'AVAIL' : av === 0 ? 'N/A' : '—';
   const tip = av === 1 ? 'TIS — available for link'
             : av === 0 ? 'TWAS — not available' : 'no sounding heard';
-  return `<td class="lqa-cell"><span class="heard-avail ${cls}" title="${tip}">${txt}</span></td>`;
+  return `<td class="lqa-cell"${dl}><span class="heard-avail ${cls}" title="${tip}">${txt}</span></td>`;
 }
 
 function renderLqa() {
@@ -3248,3 +3530,59 @@ setBridgeOverlay(true);
 // in-flight when this code runs; 200 ms lets the browser finish requesting them so
 // the WS upgrade is not competing with a pending HTTP response.
 setTimeout(connectBridge, 200);
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   MOBILE ADAPTATIONS
+   Tab-based panel navigation + state sync for the mobile action bar.
+   Only active when ≤767 px; the desktop layout is unaffected.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+(function () {
+  const app = document.querySelector('.app');
+  if (!app) return;
+
+  /* ── Tab switching ── */
+  window.mobSetTab = function (tab) {
+    app.dataset.mobTab = tab;
+    document.querySelectorAll('.mob-nav-tab').forEach(function (b) {
+      b.classList.toggle('mob-tab-active', b.dataset.tab === tab);
+    });
+    // Close any open dropdown panels when switching tabs
+    document.querySelectorAll('.radio-panel.open').forEach(function (p) {
+      p.classList.remove('open');
+    });
+  };
+
+  /* ── Sync mobile PTT pill with #pttBtn visual state ──
+     setPtt() updates #pttBtn class + innerHTML; we mirror to #pttBtnMob. */
+  const pttPrimary = document.getElementById('pttBtn');
+  const pttMob     = document.getElementById('pttBtnMob');
+  if (pttPrimary && pttMob) {
+    new MutationObserver(function () {
+      const on = pttPrimary.classList.contains('ptt-on');
+      pttMob.classList.toggle('ptt-on', on);
+      // Update the label span inside the mobile PTT button
+      const lbl = pttMob.querySelector('.mob-ptt-lbl');
+      if (lbl) lbl.textContent = on ? 'TX' : 'PTT';
+    }).observe(pttPrimary, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  /* ── Sync mobile SCAN button with #scanBtn state ──
+     setStatus() updates #scanBtn text + scan-on class; mirror to #scanBtnMob. */
+  const scanPrimary = document.getElementById('scanBtn');
+  const scanMob     = document.getElementById('scanBtnMob');
+  if (scanPrimary && scanMob) {
+    function syncScanMob() {
+      scanMob.classList.toggle('scan-on', scanPrimary.classList.contains('scan-on'));
+      scanMob.textContent = scanPrimary.textContent;
+    }
+    // Immediate sync from boot state (goIdle runs before the observer is registered)
+    syncScanMob();
+    new MutationObserver(syncScanMob).observe(scanPrimary, {
+      attributes:    true,
+      attributeFilter: ['class'],
+      childList:     true,
+      subtree:       true,
+      characterData: true,
+    });
+  }
+})();

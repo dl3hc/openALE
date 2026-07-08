@@ -1,6 +1,6 @@
-# PC-ALE 2.0 - Testing Guide
+﻿# openALE 2.0 - Testing Guide
 
-Comprehensive testing documentation for PC-ALE 2.0 implementation.
+Comprehensive testing documentation for openALE 2.0 implementation.
 
 ---
 
@@ -38,7 +38,7 @@ ctest -V
 
 **Expected Output:**
 ```
-Test project D:/PC-ALE/ALE-Clean-Room/build
+Test project D:/openALE/ALE-Clean-Room/build
     Start 1: Phase1_FFTDemodulator
 1/54 Test #1: Phase1_FFTDemodulator ................   Passed    0.02 sec
     Start 2: Phase1_ToneGenerator
@@ -567,7 +567,7 @@ TEST(CrossPhaseIntegration, ALEWithARQ) {
 Create `.github/workflows/tests.yml`:
 
 ```yaml
-name: PC-ALE Tests
+name: openALE Tests
 
 on: [push, pull_request]
 
@@ -718,4 +718,4 @@ otool -L ./tests/phase3/test_state_machine  # macOS
 ---
 
 *Last Updated: December 2024*  
-*Version: PC-ALE 2.0 Phase 5*
+*Version: openALE 2.0 Phase 5*

@@ -1,4 +1,4 @@
-# PC-ALE 2.0 - API Reference
+﻿# openALE 2.0 - API Reference
 
 Complete API documentation for all public interfaces across all five phases.
 
@@ -1328,7 +1328,7 @@ int main() {
         
         // If linked, can send data
         if (ale_sm.is_linked() && have_data_to_send) {
-            const char* msg = "Hello from PC-ALE 2.0!";
+            const char* msg = "Hello from openALE 2.0!";
             arq.start_transmission((const uint8_t*)msg, strlen(msg));
         }
     }

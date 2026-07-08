@@ -55,6 +55,7 @@ public:
     void close() override;
 
     void set_symbol_source(std::function<bool(uint8_t*)> fn) override;
+    void set_pcm_source(std::function<size_t(int16_t*, size_t)> fn) override;
     void arm_frame_complete(std::function<void()> cb) override;
     void tick(std::vector<int16_t>& rx_out) override;
 
@@ -83,6 +84,10 @@ private:
     // ── Symbol source ────────────────────────────────────────────────────────
     std::mutex                    sym_src_mtx_;
     std::function<bool(uint8_t*)> sym_pull_;
+    // ── Raw-PCM TX source (transparent-voice passthrough) ───────────────────
+    // Same mutex as sym_pull_. When non-null the render thread pulls 8 kHz PCM
+    // from pcm_pull_ instead of symbols — see service_render().
+    std::function<size_t(int16_t*, size_t)> pcm_pull_;
 
     // ── TX signal chain (audio-thread-only) ──────────────────────────────────
     ToneGenerator              at_tone_gen_;
@@ -376,7 +381,7 @@ void AlsaDevice::close()
     total_written_ = 0;
     word_play_targets_.clear();
 
-    { std::lock_guard<std::mutex> lk(sym_src_mtx_); sym_pull_ = nullptr; }
+    { std::lock_guard<std::mutex> lk(sym_src_mtx_); sym_pull_ = nullptr; pcm_pull_ = nullptr; }
     { std::lock_guard<std::mutex> lk(rx_mtx_);      rx_queue_.clear(); }
 
     open_ = false;
@@ -388,6 +393,14 @@ void AlsaDevice::set_symbol_source(std::function<bool(uint8_t*)> fn)
 {
     std::lock_guard<std::mutex> lk(sym_src_mtx_);
     sym_pull_ = std::move(fn);
+}
+
+// ── set_pcm_source ───────────────────────────────────────────────────────────
+
+void AlsaDevice::set_pcm_source(std::function<size_t(int16_t*, size_t)> fn)
+{
+    std::lock_guard<std::mutex> lk(sym_src_mtx_);
+    pcm_pull_ = std::move(fn);
 }
 
 // ── arm_frame_complete ────────────────────────────────────────────────────────
@@ -505,9 +518,10 @@ void AlsaDevice::service_render()
     const int bpf = play_bpf();
     at_write_scratch_.resize((size_t)avail * bpf);
 
-    // Snapshot sym_pull_ once for this batch
-    std::function<bool(uint8_t*)> pull;
-    { std::lock_guard<std::mutex> lk(sym_src_mtx_); pull = sym_pull_; }
+    // Snapshot sym_pull_ / pcm_pull_ once for this batch
+    std::function<bool(uint8_t*)>              pull;
+    std::function<size_t(int16_t*, size_t)>    pcm_pull;
+    { std::lock_guard<std::mutex> lk(sym_src_mtx_); pull = sym_pull_; pcm_pull = pcm_pull_; }
 
     uint8_t syms[SYMBOLS_PER_WORD];
 
@@ -516,28 +530,47 @@ void AlsaDevice::service_render()
     // so they stay correct regardless of whether writei writes all frames at once.
     for (snd_pcm_sframes_t i = 0; i < avail; ) {
         if (at_render_pos_ >= at_render_buf_.size()) {
-            bool pulled = pull && pull(syms);
-            if (pulled) {
-                at_pcm_8k_.resize(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
-                at_tone_gen_.generate_symbols(syms, SYMBOLS_PER_WORD,
-                                              at_pcm_8k_.data(),
-                                              tx_volume_.load(std::memory_order_relaxed));
-                at_pcm_filt_.clear();
-                at_tx_filter_.process(at_pcm_8k_.data(),
-                                      SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL,
-                                      at_pcm_filt_);
-                at_render_buf_.clear();
-                at_tx_resampler_->process(at_pcm_filt_.data(),
-                                          at_pcm_filt_.size(),
-                                          at_render_buf_);
-                at_render_pos_    = 0;
-                at_frame_pending_ = true;
+            if (pcm_pull) {
+                // Transparent-voice passthrough: raw 8 kHz PCM → resampler →
+                // device, no ToneGenerator/band-pass, no completion accounting.
+                constexpr size_t PCM_WANT = 160;  // 20 ms @ 8 kHz
+                at_pcm_8k_.resize(PCM_WANT);
+                const size_t got = pcm_pull(at_pcm_8k_.data(), PCM_WANT);
+                if (got > 0) {
+                    at_render_buf_.clear();
+                    at_tx_resampler_->process(at_pcm_8k_.data(), got, at_render_buf_);
+                    at_render_pos_ = 0;
+                }
+                if (got == 0 || at_render_buf_.empty()) {
+                    std::memset(at_write_scratch_.data() + i * bpf, 0,
+                                (size_t)(avail - i) * bpf);
+                    i = avail;
+                    break;
+                }
             } else {
-                // Silence fill for remainder of batch
-                std::memset(at_write_scratch_.data() + i * bpf, 0,
-                            (size_t)(avail - i) * bpf);
-                i = avail;
-                break;
+                bool pulled = pull && pull(syms);
+                if (pulled) {
+                    at_pcm_8k_.resize(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
+                    at_tone_gen_.generate_symbols(syms, SYMBOLS_PER_WORD,
+                                                  at_pcm_8k_.data(),
+                                                  tx_volume_.load(std::memory_order_relaxed));
+                    at_pcm_filt_.clear();
+                    at_tx_filter_.process(at_pcm_8k_.data(),
+                                          SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL,
+                                          at_pcm_filt_);
+                    at_render_buf_.clear();
+                    at_tx_resampler_->process(at_pcm_filt_.data(),
+                                              at_pcm_filt_.size(),
+                                              at_render_buf_);
+                    at_render_pos_    = 0;
+                    at_frame_pending_ = true;
+                } else {
+                    // Silence fill for remainder of batch
+                    std::memset(at_write_scratch_.data() + i * bpf, 0,
+                                (size_t)(avail - i) * bpf);
+                    i = avail;
+                    break;
+                }
             }
         }
 

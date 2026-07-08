@@ -140,6 +140,7 @@ public:
     void close() override;
 
     void set_symbol_source(std::function<bool(uint8_t*)> fn) override;
+    void set_pcm_source(std::function<size_t(int16_t*, size_t)> fn) override;
     void arm_frame_complete(std::function<void()> cb) override;
 
     // Drain accumulated 8 kHz RX samples; fire pending frame completions.
@@ -171,6 +172,11 @@ private:
     // open() while the audio thread is already running.
     std::mutex                       sym_src_mtx_;
     std::function<bool(uint8_t*)>    sym_pull_;
+    // ── Raw-PCM TX source (transparent-voice passthrough) ─────────────────
+    // Same mutex as sym_pull_. When non-null, the render thread pulls 8 kHz
+    // mono PCM from pcm_pull_ instead of symbols from sym_pull_ — see
+    // service_render(). Mutually exclusive with sym_pull_ in practice.
+    std::function<size_t(int16_t*, size_t)> pcm_pull_;
 
     // ── Audio-thread-only TX state (no locking needed) ────────────────────
     ToneGenerator             at_tone_gen_;
@@ -351,7 +357,7 @@ void WasapiDevice::close()
     total_written_ = 0;          // audio thread joined above — safe to touch
     word_play_targets_.clear();
 
-    { std::lock_guard<std::mutex> lk(sym_src_mtx_); sym_pull_ = nullptr; }
+    { std::lock_guard<std::mutex> lk(sym_src_mtx_); sym_pull_ = nullptr; pcm_pull_ = nullptr; }
     { std::lock_guard<std::mutex> lk(rx_mtx_);      rx_queue_.clear(); }
 
     if (com_init_) { CoUninitialize(); com_init_ = false; }
@@ -364,6 +370,14 @@ void WasapiDevice::set_symbol_source(std::function<bool(uint8_t*)> fn)
 {
     std::lock_guard<std::mutex> lk(sym_src_mtx_);
     sym_pull_ = std::move(fn);
+}
+
+// ── set_pcm_source (main thread) ─────────────────────────────────────────────
+
+void WasapiDevice::set_pcm_source(std::function<size_t(int16_t*, size_t)> fn)
+{
+    std::lock_guard<std::mutex> lk(sym_src_mtx_);
+    pcm_pull_ = std::move(fn);
 }
 
 // ── arm_frame_complete (main thread) ─────────────────────────────────────────
@@ -453,15 +467,39 @@ void WasapiDevice::service_render()
     uint8_t syms[SYMBOLS_PER_WORD];
 
     for (UINT32 i = 0; i < avail; ) {
-        // Refill render buffer when current word is exhausted
+        // Refill render buffer when current word/chunk is exhausted
         if (at_render_pos_ >= at_render_buf_.size()) {
+            std::function<size_t(int16_t*, size_t)> pcm_pull;
             bool pulled = false;
             {
                 std::lock_guard<std::mutex> lk(sym_src_mtx_);
-                if (sym_pull_) pulled = sym_pull_(syms);
+                pcm_pull = pcm_pull_;
+                if (!pcm_pull && sym_pull_) pulled = sym_pull_(syms);
             }
 
-            if (pulled) {
+            if (pcm_pull) {
+                // Transparent-voice passthrough: pull raw 8 kHz mono PCM and
+                // resample to the device rate — no ToneGenerator, no ALE band-pass
+                // (voice is full-band baseband for the radio's SSB modulator), and
+                // no frame-completion accounting (the PCM path renders
+                // continuously; word completion is an ALE-modem concept).
+                constexpr size_t PCM_WANT = 160;  // 20 ms @ 8 kHz
+                at_pcm_8k_.resize(PCM_WANT);
+                const size_t got = pcm_pull(at_pcm_8k_.data(), PCM_WANT);
+                if (got > 0) {
+                    at_render_buf_.clear();
+                    at_tx_resampler_->process(at_pcm_8k_.data(), got, at_render_buf_);
+                    at_render_pos_ = 0;
+                }
+                if (got == 0 || at_render_buf_.empty()) {
+                    // Source underrun or resampler produced nothing — silence.
+                    for (; i < avail; ++i) {
+                        write_frame(data, i, 0);
+                        ++total_written_;
+                    }
+                    break;
+                }
+            } else if (pulled) {
                 at_pcm_8k_.resize(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
                 at_tone_gen_.generate_symbols(syms, SYMBOLS_PER_WORD,
                                               at_pcm_8k_.data(),

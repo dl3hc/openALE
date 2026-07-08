@@ -560,6 +560,9 @@ bool WsServer::parse_ws_frames_(SocketHandle ws_handle) {
                     if (ws_frag_opcode_ == 0x1) {
                         std::lock_guard<std::mutex> lk(recv_mutex_);
                         recv_queue_.push(std::move(ws_frag_acc_));
+                    } else if (ws_frag_opcode_ == 0x2) {
+                        std::lock_guard<std::mutex> lk(recv_mutex_);
+                        recv_binary_queue_.emplace(ws_frag_acc_.begin(), ws_frag_acc_.end());
                     }
                     ws_frag_acc_.clear();
                     ws_frag_opcode_ = 0;
@@ -574,8 +577,14 @@ bool WsServer::parse_ws_frames_(SocketHandle ws_handle) {
                     ws_frag_acc_ = std::move(payload);
                 }
                 break;
-            case 0x2:  // binary — not expected from the GUI; accepted but ignored
-                if (!fin) ws_frag_opcode_ = 0x2;
+            case 0x2:  // binary — voice mic PCM uplink from the GUI
+                if (fin) {
+                    std::lock_guard<std::mutex> lk(recv_mutex_);
+                    recv_binary_queue_.emplace(payload.begin(), payload.end());
+                } else {
+                    ws_frag_opcode_ = 0x2;
+                    ws_frag_acc_ = std::move(payload);
+                }
                 break;
             case 0x8:  // close → echo close frame and signal disconnect
                 ioth_send_frame(ws_sock, 0x8, nullptr, 0);
@@ -600,6 +609,14 @@ bool WsServer::pop_message(std::string& out) {
     if (recv_queue_.empty()) return false;
     out = std::move(recv_queue_.front());
     recv_queue_.pop();
+    return true;
+}
+
+bool WsServer::pop_binary(std::vector<uint8_t>& out) {
+    std::lock_guard<std::mutex> lk(recv_mutex_);
+    if (recv_binary_queue_.empty()) return false;
+    out = std::move(recv_binary_queue_.front());
+    recv_binary_queue_.pop();
     return true;
 }
 

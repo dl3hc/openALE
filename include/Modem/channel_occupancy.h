@@ -28,6 +28,15 @@
  *     channel is BUSY when ≥ 2 of the last 4 blocks are hot (N-of-M vote —
  *     rides through single impulse hits and voice syllable gaps alike).
  *
+ *   - Active gating: the detector owns a single stored `busy` flag that is
+ *     the authoritative LBT-busy state — the SM's LBT decision and the GUI
+ *     "FREQ BUSY" pill both read it, never recompute it.  A.5.4.7.2 detection
+ *     cannot run without an RX stream, so while inactive (RX closed, e.g.
+ *     during TX, or LBT disabled by the operator) the detector clears `busy`,
+ *     drops any half-filled block and the hot-block vote, and push_samples()
+ *     becomes a no-op.  This prevents the sticky-latch failure where `busy`
+ *     lingered true through a TX because no block completed to revise it.
+ *
  * margin_db is operator-settable (default 6 dB) to match local noise
  * conditions; see ALEController::set_lbt_margin_db().
  *
@@ -35,9 +44,10 @@
  * (shared channels, A.5.4.7.1), i.e. 8–20 blocks — ample for the N-of-M vote.
  * Per-sample resolution is deliberately NOT needed here.
  *
- * Threading: single-producer — call push_samples() and the getters from the
- * same (audio) thread, or externally synchronise.  is_busy() is a relaxed
- * atomic read and safe from other threads (the SM update loop).
+ * Threading: single-producer — the controller syncs active state and calls
+ * push_samples() on the same tick (the bridge main loop), so set_active()
+ * is authoritative before any push.  is_busy() is a relaxed atomic read and
+ * safe from any thread.
  */
 
 #pragma once
@@ -54,8 +64,10 @@ public:
     static constexpr float    DEFAULT_MARGIN_DB = 6.0f;
 
     /** Feed RX PCM (8 kHz mono int16). Only feed while RX actually listens on
-     *  the channel — own-TX audio would poison the floor and busy state. */
+     *  the channel — own-TX audio would poison the floor and busy state.
+     *  No-op while inactive (see set_active). */
     void push_samples(const int16_t* samples, uint32_t count) {
+        if (!active_.load(std::memory_order_relaxed)) return;
         for (uint32_t i = 0; i < count; ++i) {
             const float x = static_cast<float>(samples[i]);
             sum_    += x;
@@ -66,8 +78,37 @@ public:
     }
 
     /** True when ≥2 of the last 4 completed 100 ms blocks exceeded
-     *  floor + margin. Safe to call from the SM/update thread. */
+     *  floor + margin.  The single LBT-busy truth: read by the SM's LBT
+     *  decision and by the GUI pill.  False while inactive. */
     bool is_busy() const { return busy_.load(std::memory_order_relaxed); }
+
+    /** Sync whether detection is actually running.  `active` is the conjunction
+     *  of "LBT enabled" and "RX stream feeding the demodulator" (the controller
+     *  sets it once per tick).  Going inactive clears the stored busy flag and
+     *  the pending block/vote so a sticky busy latch can't outlive the RX
+     *  window that produced it — the root cause of the pill never clearing. */
+    void set_active(bool on) {
+        const bool was_active = active_.exchange(on, std::memory_order_relaxed);
+        if (was_active && !on) {
+            // RX closed (every TX) or LBT disabled — forget ALL detection state,
+            // including the floor. The floor is channel- AND gain-specific: after
+            // a TX the radio's RX AGC is typically pumped, so the post-TX noise
+            // level sits far above the pre-TX floor. If we kept it, every post-TX
+            // block would read "hot" against the stale floor, and because hot
+            // blocks are excluded from ALPHA_UP, the floor could only catch up
+            // via the 0.01 dB/block drift (~60 s per 6 dB of margin) — the pill
+            // stayed FREQ BUSY for minutes after a transmission. Dropping the
+            // floor here makes the first post-TX block re-learn the current
+            // noise floor, so steady (even AGC-pumped) noise reads CLEAR at once
+            // and a real signal still drives BUSY. A TX is an RX-off period,
+            // exactly the case reset() anticipates.
+            busy_.store(false, std::memory_order_relaxed);
+            acc_count_ = 0; sum_ = 0.0f; sum_sq_ = 0.0f;
+            floor_valid_ = false;
+            hot_ring_ = 0; blocks_seen_ = 0;
+        }
+    }
+    bool active() const { return active_.load(std::memory_order_relaxed); }
 
     void  set_margin_db(float db) { margin_db_ = (db < 0.0f) ? 0.0f : db; }
     float margin_db() const       { return margin_db_; }
@@ -133,6 +174,7 @@ private:
     uint8_t           hot_ring_    = 0;   ///< last 4 block hot flags
     uint8_t           blocks_seen_ = 0;
     std::atomic<bool> busy_{false};
+    std::atomic<bool> active_{false};  ///< RX stream + LBT enabled → detection running
 };
 
 } // namespace ale
