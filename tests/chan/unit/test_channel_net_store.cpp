@@ -11,6 +11,8 @@
 
 #include "Stores/ale_data_store.h"
 #include "App/ale_controller.h"
+#include "App/ale_event_data.h"
+#include "PAL/events.h"
 #include "PAL/radios/mock_radio.h"
 #include <iostream>
 #include <iomanip>
@@ -655,8 +657,13 @@ bool test_step_channel_scoped_to_active_scan_net()
     pal::MockRadio radio;
     ctrl.set_radio(&radio);
 
+    auto bus = pal::create_event_handler();
     uint32_t lastRx = 0;
-    ctrl.on_channel_changed = [&](const Channel& ch) { lastRx = ch.rx_frequency_hz; };
+    bus->on(pal::EventType::CHANNEL_CHANGED, [&](const pal::Event& ev) {
+        const auto* ch = static_cast<const Channel*>(ev.data);
+        lastRx = ch->rx_frequency_hz;
+    });
+    pal::set_event_handler(std::move(bus));
 
     auto stepN = [&](int dir, int n) {
         std::vector<uint32_t> seq;

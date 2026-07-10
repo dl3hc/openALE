@@ -39,6 +39,7 @@
 #include "App/audio_device.h"
 #include "App/ale_station_config.h"
 #include "PAL/events.h"
+#include "App/ale_event_data.h"
 #include "LQA/lqa_database.h"
 #include "LQA/lqa_analyzer.h"
 #include "LQA/lqa_metrics.h"
@@ -403,105 +404,25 @@ public:
      */
     void feed_audio(const int16_t* samples, uint32_t count);
 
-    // ── Callbacks ───────────────────────────────────────────────────────────
-
-    /** Three-way handshake complete.  peer_addr = remote station address. */
-    std::function<void(const std::string& peer_addr)> on_link_established;
-
-    /**
-     * Incoming call detected.  Fires when the caller's TIS word is received
-     * and the caller address is known.  The SM handles the response
-     * automatically; the operator does not need to call accept_call().
-     * To reject, call reject_call() before the response TX begins.
-     */
-    std::function<void(const std::string& caller_addr)> on_call_received;
-
-    /** Link terminated (reason = informational string). */
-    std::function<void(const std::string& reason)> on_link_terminated;
-
-    /**
-     * Idle-timeout warning (AC-LINK-023): fires once, ~IDLE_WARNING_LEAD_MS
-     * before the configured Twa elapses while LINKED, so the GUI can offer a
-     * "reset timer" popup.  \p remaining_sec is whole seconds left before Twa.
-     * Re-arms on any link activity or reset_link_idle_timer().
-     */
-    std::function<void(uint32_t remaining_sec)> on_idle_warning;
-
-    /**
-     * Pre-sounding countdown warning (per-net automatic sounding). Fires with
-     * phase="warn" once when the active net's sounding timer enters the
-     * configured sounding_warning_lead_sec window while the SM is IDLE (idle→
-     * sounding transition only; during SCANNING the sweep fires silently).
-     * \p remaining_sec is whole seconds left before the sweep starts. The GUI
-     * shows a countdown popup with an Interrupt button. phase="fire" is sent
-     * when the sweep actually starts (GUI dismisses the popup); phase="cancel"
-     * is sent on interrupt, on toggle-off, or when a call pre-empts the pending
-     * idle sounding (GUI dismisses the popup). On interrupt, the controller
-     * re-arms that net's timer to its full original interval.
-     */
-    std::function<void(const std::string& net, uint32_t remaining_sec,
-                       const std::string& phase)> on_sounding_warning;
-
-    /**
-     * AMD orderwire message received (AC-LINK-009-3).
-     * Fires when an incoming AMD is decoded — either from a caller's ACK frame
-     * during handshake (A.5.7.2.2, responder side) or from a linked-orderwire
-     * frame over an established link (A.5.7.2).  This is the boundary-layer
-     * SELF/PEER identity pair: \p self_address is the local station, \p peer_address
-     * is the remote station that sent the message.
-     * \param self_address  Local station address (the receiver).
-     * \param peer_address  Remote station address (the sender).
-     * \param text          Assembled orderwire text (trailing padding stripped).
-     */
-    std::function<void(const std::string& self_address,
-                       const std::string& peer_address,
-                       const std::string& text)> on_amd_received;
-
-    /** Human-readable status change for logging or display. */
-    std::function<void(const std::string& msg)> on_status_changed;
-
-    /**
-     * Passive channel monitor — fires for every successfully decoded ALE word
-     * (valid == true), regardless of local protocol state or address match.
-     * frame_id groups words that belong to the same assembled frame; it
-     * increments each time a frame completes.  Use for the ALE Monitor display.
-     */
-    std::function<void(const ALEWord& word, uint32_t frame_id)> on_word_decoded;
-
-    /**
-     * Passive TX monitor — fires for every ALE word the state machine hands to
-     * the modem for transmission (sounding, calling, ack, …), at SM emit time
-     * (before PTT-lead buffering / flush).  frame_id is a per-instance TX
-     * sequence counter, kept in a distinct space from monitor_frame_id_ so the
-     * GUI can group sent and received log rows independently.  Companion to
-     * on_word_decoded: same payload shape, opposite direction.  Use for the
-     * ALE Monitor "sent" display so sent and received words render consistently.
-     */
-    std::function<void(const ALEWord& word, uint32_t frame_id)> on_word_tx;
-
-    /**
-     * Fires once per complete assembled ALE frame (after the concluding TIS or
-     * equivalent word), carrying the full semantic classification (call_type,
-     * from_address, to_addresses, words).  Companion to on_word_decoded:
-     * the same frame_id links the individual word events to the frame summary.
-     */
-    std::function<void(const ALEMessage& frame, uint32_t frame_id)> on_frame_decoded;
-
-    /**
-     * Active channel changed (scan hop, calling-channel tune, OR a manual VFO
-     * change from the operator).  Fires after the radio tune so the GUI can
-     * update the frequency/channel readout in the real hop cadence instead of
-     * polling.  channel_id is empty for pure VFO tuning (no named channel).
-     */
-    std::function<void(const Channel& ch)> on_channel_changed;
-
-    /**
-     * PTT state changed (SM-driven TX during a call/sounding, or manual PTT).
-     * Fires after radio_->set_ptt() so the GUI PTT indicator tracks without
-     * polling.  The existing emit_event(PTT_ON/OFF) path goes through a
-     * pal::IEventHandler the bridge does not set; this callback is the GUI path.
-     */
-    std::function<void(bool ptt_on)> on_ptt_changed;
+    // ── Event bus ───────────────────────────────────────────────────────────
+    // All runtime events are dispatched via the global pal::IEventHandler.
+    // Subscribe before calling start_available() / start_scanning():
+    //   pal::get_event_handler()->on(pal::EventType::ALE_LINK_ESTABLISHED, cb);
+    // Event types and their payload structs (ale::*Data in ale_event_data.h):
+    //   ALE_STATUS          — message = status string
+    //   ALE_LINK_ESTABLISHED — message = peer address
+    //   ALE_CALL_RECEIVED   — message = caller address
+    //   ALE_LINK_TERMINATED — message = reason string
+    //   ALE_CALL_SENT       — message = target address
+    //   PTT_ON / PTT_OFF    — (no payload)
+    //   ALE_IDLE_WARNING    — code = remaining_sec
+    //   CHANNEL_CHANGED     — data = const Channel* (synchronous)
+    //   ALE_SOUNDING_WARNING — data = const SoundingWarningData* (synchronous)
+    //   ALE_AMD_RECEIVED    — data = const AmdData* (synchronous)
+    //   ALE_WORD_DECODED    — data = const WordData* (synchronous)
+    //   ALE_WORD_TX         — data = const WordData* (synchronous)
+    //   ALE_FRAME_DECODED   — data = const FrameData* (synchronous)
+    //   ALE_SOUNDING        — message = net name
 
     // ── GUI interfaces (CLI uses process_command) ────────────────────────
 
@@ -1380,7 +1301,8 @@ private:
     /// Called from tick_frame_settle() once the frame has settled (Tdrw silence).
     void commit_rx_ber_sample();
     void emit_status(const std::string& msg);
-    void emit_event(pal::EventType type, const std::string& msg = "", int32_t code = 0);
+    void dispatch(pal::EventType type, const std::string& msg = "",
+                  int32_t code = 0, const void* data = nullptr, size_t data_size = 0);
 };
 
 } // namespace ale

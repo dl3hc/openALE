@@ -5,6 +5,7 @@
 #endif
 
 #include "PAL/radios/hamlib_radio.h"
+#include "PAL/logger.h"
 #include <hamlib/rig.h>
 #include <algorithm>
 #include <chrono>
@@ -28,11 +29,22 @@ static RadioMode      from_hamlib_mode(rmode_t m);
 // rejecting backend from spinning forever.
 static constexpr int MODE_ASSERT_MAX_ATTEMPTS = 3;
 
-// Controlled via hamlib_set_debug_logging() — toggled by the GUI "Debug" log level.
-// 0=Off, 1=Error, 2=Info, 3=Debug, 4=Trace — matches the GUI cfgLogLevel values.
-// Info shows channel/freq transitions + assert_mode readback detail; Debug adds sync detail.
-static int s_log_level = 2;
-void pal::hamlib_set_log_level(int level) { s_log_level = level; }
+// Maps the GUI log-level integer (0=Off 1=Error 2=Info 3=Debug 4=Trace) to the
+// PAL logger level and forwards it.  Info shows channel/freq transitions +
+// assert_mode readback detail; Debug adds sync detail.
+void pal::hamlib_set_log_level(int level) {
+    auto* logger = pal::get_logger();
+    if (!logger) return;
+    static const pal::LogLevel kMap[] = {
+        static_cast<pal::LogLevel>(5),  // 0 = Off   → FATAL
+        static_cast<pal::LogLevel>(4),  // 1 = Error  → ERROR
+        static_cast<pal::LogLevel>(2),  // 2 = Info   → INFO
+        static_cast<pal::LogLevel>(1),  // 3 = Debug  → DEBUG
+        static_cast<pal::LogLevel>(0),  // 4 = Trace  → TRACE
+    };
+    const int idx = (level >= 0 && level <= 4) ? level : 2;
+    logger->set_level(kMap[idx]);
+}
 
 // sync_from_radio() re-asserts the intended mode only within this window after
 // the last intentional mode command. An SDR front-end (Quisk) applies its
@@ -68,7 +80,7 @@ bool HamlibRadio::initialize() {
 
     rig_ = rig_init(std::stoi(model_));
     if (!rig_) {
-        std::fprintf(stderr, "[HamlibRadio] rig_init(%s) failed\n", model_.c_str());
+        pal::log_error("HamlibRadio", "rig_init(%s) failed", model_.c_str());
         return false;
     }
 
@@ -78,12 +90,12 @@ bool HamlibRadio::initialize() {
     }
 
     // ready_ bleibt false bis start() rig_open() erfolgreich aufgerufen hat.
-    std::fprintf(stderr, "[HamlibRadio] rig_init(%s) → rig_open pending\n", model_.c_str());
+    pal::log_info("HamlibRadio", "rig_init(%s) -> rig_open pending", model_.c_str());
     return true;
 }
 
 void HamlibRadio::shutdown() {
-    std::fprintf(stderr, "[HamlibRadio] model=%s port=%s\n", model_.c_str(), port_.c_str());
+    pal::log_info("HamlibRadio", "shutdown: model=%s port=%s", model_.c_str(), port_.c_str());
     if (rig_) {
         if (ready_) rig_close(rig_);  // only send "q" when rig_open() succeeded
         rig_cleanup(rig_);
@@ -98,9 +110,8 @@ bool HamlibRadio::start() {
 
     const int ret = rig_open(rig_);
     if (ret != RIG_OK) {
-        std::fprintf(stderr,
-            "[HamlibRadio] rig_open failed (model=%s port=%s): %s\n",
-            model_.c_str(), port_.c_str(), rigerror(ret));
+        pal::log_error("HamlibRadio", "rig_open failed (model=%s port=%s): %s",
+                       model_.c_str(), port_.c_str(), rigerror(ret));
         return false;
     }
 
@@ -129,12 +140,12 @@ bool HamlibRadio::start() {
     }
 
     ready_ = true;
-    std::fprintf(stderr, "[HamlibRadio] model=%s port=%s opened\n", model_.c_str(), port_.c_str());
+    pal::log_info("HamlibRadio", "model=%s port=%s opened", model_.c_str(), port_.c_str());
     return true;
 }
 
 void HamlibRadio::stop() {
-    std::fprintf(stderr, "[HamlibRadio] model=%s port=%s closed\n", model_.c_str(), port_.c_str());
+    pal::log_info("HamlibRadio", "model=%s port=%s closed", model_.c_str(), port_.c_str());
     if (rig_ && ready_) rig_close(rig_);  // only send "q" when rig_open() succeeded
     transmitting_ = false;
     ready_ = false;
@@ -145,10 +156,9 @@ bool HamlibRadio::set_channel(const Channel& channel) {
 
     const bool freq_changed = channel.tx_frequency != current_channel_.tx_frequency;
     const char* mname = rig_strrmode(to_hamlib_mode(channel.tx_mode));
-    if (s_log_level >= 2)
-        std::fprintf(stderr, "[HamlibRadio] set_channel: %u Hz  mode=%s  [freq: %s]\n",
-                     channel.tx_frequency, mname ? mname : "?",
-                     freq_changed ? "set" : "skipped");
+    pal::log_info("HamlibRadio", "set_channel: %u Hz  mode=%s  [freq: %s]",
+                  channel.tx_frequency, mname ? mname : "?",
+                  freq_changed ? "set" : "skipped");
 
     // Order: frequency FIRST, mode LAST. Some SDR front-ends (Quisk) restore a
     // per-band saved mode on a frequency change; sending mode last — then having
@@ -165,11 +175,11 @@ bool HamlibRadio::set_channel(const Channel& channel) {
         freq_ret = rig_set_freq(rig_, RIG_VFO_CURR,
                                 static_cast<freq_t>(channel.tx_frequency));
         if (freq_ret != RIG_OK)
-            std::fprintf(stderr, "[HamlibRadio]   rig_set_freq(%u) → FAILED: %s\n",
-                         channel.tx_frequency, rigerror(freq_ret));
-        else if (s_log_level >= 2)
-            std::fprintf(stderr, "[HamlibRadio]   rig_set_freq: %u Hz → OK\n",
-                         channel.tx_frequency);
+            pal::log_error("HamlibRadio", "  rig_set_freq(%u) -> FAILED: %s",
+                           channel.tx_frequency, rigerror(freq_ret));
+        else
+            pal::log_info("HamlibRadio", "  rig_set_freq: %u Hz -> OK",
+                          channel.tx_frequency);
     }
 
     const int mode_ret = assert_mode(channel.tx_mode);
@@ -182,8 +192,8 @@ bool HamlibRadio::set_channel(const Channel& channel) {
     // overriding what the channel hop correctly set on the radio.
     current_channel_ = channel;
     if (mode_ret != RIG_OK)
-        std::fprintf(stderr, "[HamlibRadio]   assert_mode(%s) → FAILED: %s\n",
-                     mname ? mname : "?", rigerror(mode_ret));
+        pal::log_error("HamlibRadio", "  assert_mode(%s) -> FAILED: %s",
+                       mname ? mname : "?", rigerror(mode_ret));
     return freq_ret == RIG_OK && mode_ret == RIG_OK;
 }
 
@@ -204,18 +214,16 @@ bool HamlibRadio::set_frequency(uint32_t hz) {
     // for the mode). See set_channel() for the netrigctl-flush rationale.
     const int ret = rig_set_freq(rig_, RIG_VFO_CURR, static_cast<freq_t>(hz));
     if (ret != RIG_OK)
-        std::fprintf(stderr, "[HamlibRadio] rig_set_freq(%u) failed: %s\n",
-                     hz, rigerror(ret));
-    else if (s_log_level >= 2)
-        std::fprintf(stderr, "[HamlibRadio] freq=%u Hz (simplex)\n", hz);
+        pal::log_error("HamlibRadio", "rig_set_freq(%u) failed: %s", hz, rigerror(ret));
+    else
+        pal::log_info("HamlibRadio", "freq=%u Hz (simplex)", hz);
 
     current_channel_.rx_frequency = hz;
     current_channel_.tx_frequency = hz;  // simplex
 
     const char* saved_mname = rig_strrmode(to_hamlib_mode(saved_mode));
-    if (s_log_level >= 3)
-        std::fprintf(stderr, "[HamlibRadio]   set_frequency: re-asserting mode %s after freq change\n",
-                     saved_mname ? saved_mname : "?");
+    pal::log_debug("HamlibRadio", "  set_frequency: re-asserting mode %s after freq change",
+                   saved_mname ? saved_mname : "?");
     const int mode_ret = assert_mode(saved_mode);
     
     return ret == RIG_OK && mode_ret == RIG_OK;
@@ -223,20 +231,18 @@ bool HamlibRadio::set_frequency(uint32_t hz) {
 
 bool HamlibRadio::set_mode(RadioMode mode) {
     if (!rig_) {
-        std::fprintf(stderr, "[HamlibRadio] set_mode: rig_ is null — not connected\n");
+        pal::log_error("HamlibRadio", "set_mode: rig_ is null — not connected");
         return false;
     }
 
     const char* mname = rig_strrmode(to_hamlib_mode(mode));
-    if (s_log_level >= 3)
-        std::fprintf(stderr, "[HamlibRadio] set_mode: requesting %s\n",
-                     mname ? mname : "?");
+    pal::log_debug("HamlibRadio", "set_mode: requesting %s", mname ? mname : "?");
     const int ret = assert_mode(mode);
     current_channel_.rx_mode = mode;
     current_channel_.tx_mode = mode;
     if (ret != RIG_OK)
-        std::fprintf(stderr, "[HamlibRadio] set_mode: %s → FAILED: %s\n",
-                     mname ? mname : "?", rigerror(ret));
+        pal::log_error("HamlibRadio", "set_mode: %s -> FAILED: %s",
+                       mname ? mname : "?", rigerror(ret));
     return ret == RIG_OK;
 }
 
@@ -255,37 +261,33 @@ int HamlibRadio::assert_mode(RadioMode mode) {
 
     int mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
     if (mode_ret != RIG_OK)
-        std::fprintf(stderr, "[HamlibRadio]   assert_mode: rig_set_mode(%s) → FAILED: %s\n",
-                     mname ? mname : "?", rigerror(mode_ret));
-    else if (s_log_level >= 2)
-        std::fprintf(stderr, "[HamlibRadio]   assert_mode: rig_set_mode(%s) → sent\n",
-                     mname ? mname : "?");
+        pal::log_error("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> FAILED: %s",
+                       mname ? mname : "?", rigerror(mode_ret));
+    else
+        pal::log_info("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> sent",
+                      mname ? mname : "?");
 
     bool verified = false;
     for (int attempt = 0; attempt < MODE_ASSERT_MAX_ATTEMPTS; ++attempt) {
         rmode_t actual = RIG_MODE_NONE; pbwidth_t bw = 0;
         if (rig_get_mode(rig_, RIG_VFO_CURR, &actual, &bw) != RIG_OK) {
-            std::fprintf(stderr, "[HamlibRadio]   assert_mode: rig_get_mode() failed — cannot verify\n");
+            pal::log_error("HamlibRadio", "  assert_mode: rig_get_mode() failed — cannot verify");
             break;
         }
         if (actual == target) {
             verified = true;
-            if (s_log_level >= 2)
-                std::fprintf(stderr, "[HamlibRadio]   assert_mode: %s confirmed (readback #%d)\n",
-                             mname ? mname : "?", attempt + 1);
+            pal::log_info("HamlibRadio", "  assert_mode: %s confirmed (readback #%d)",
+                          mname ? mname : "?", attempt + 1);
             return mode_ret;
         }
-        if (s_log_level >= 2)
-            std::fprintf(stderr,
-                "[HamlibRadio]   assert_mode: readback #%d: %s ≠ intended %s — re-asserting\n",
-                attempt + 1,
-                rig_strrmode(actual) ? rig_strrmode(actual) : "?", mname ? mname : "?");
+        pal::log_info("HamlibRadio", "  assert_mode: readback #%d: %s != intended %s — re-asserting",
+                      attempt + 1,
+                      rig_strrmode(actual) ? rig_strrmode(actual) : "?", mname ? mname : "?");
         mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
     }
     if (!verified)
-        std::fprintf(stderr,
-            "[HamlibRadio]   assert_mode: %s — readback loop exhausted/failed, mode unverified\n",
-            mname ? mname : "?");
+        pal::log_warn("HamlibRadio", "  assert_mode: %s — readback loop exhausted/failed, mode unverified",
+                      mname ? mname : "?");
     return mode_ret;
 }
 
@@ -295,10 +297,7 @@ void HamlibRadio::set_ptt(bool transmit) {
     const ptt_t ptt_mode = transmit ? RIG_PTT_ON : RIG_PTT_OFF;
     if (rig_set_ptt(rig_, RIG_VFO_CURR, ptt_mode) == RIG_OK) {
         transmitting_ = transmit;
-        if (transmit)
-            std::fprintf(stderr, "[HamlibRadio] PTT ON (transmitting)\n");
-        else
-            std::fprintf(stderr, "[HamlibRadio] PTT OFF (receiving)\n");
+        pal::log_info("HamlibRadio", transmit ? "PTT ON (transmitting)" : "PTT OFF (receiving)");
     }
 }
 
@@ -374,9 +373,8 @@ bool HamlibRadio::sync_from_radio() {
     const auto new_freq = static_cast<uint32_t>(freq);
     bool changed = false;
     if (new_freq != current_channel_.tx_frequency) {
-        if (s_log_level >= 2)
-            std::fprintf(stderr, "[HamlibRadio] sync_from_radio: external retune %u→%u Hz\n",
-                         current_channel_.tx_frequency, new_freq);
+        pal::log_info("HamlibRadio", "sync_from_radio: external retune %u->%u Hz",
+                      current_channel_.tx_frequency, new_freq);
         current_channel_.rx_frequency = current_channel_.tx_frequency = new_freq;
         changed = true;
     }
@@ -386,9 +384,8 @@ bool HamlibRadio::sync_from_radio() {
     if (new_mode != current_channel_.tx_mode) {
         const char* actual_mname = rig_strrmode(mode);
         const char* intend_mname = rig_strrmode(to_hamlib_mode(current_channel_.tx_mode));
-        if (s_log_level >= 3)
-            std::fprintf(stderr, "[HamlibRadio] sync_from_radio: mode mismatch — radio=%s  intended=%s\n",
-                         actual_mname ? actual_mname : "?", intend_mname ? intend_mname : "?");
+        pal::log_debug("HamlibRadio", "sync_from_radio: mode mismatch — radio=%s  intended=%s",
+                       actual_mname ? actual_mname : "?", intend_mname ? intend_mname : "?");
         // Backstop correction: Quisk's per-band saved-mode restore fires
         // ASYNCHRONOUSLY after a frequency change and can land after both
         // assert_mode()'s readback loop AND the immediate set_mode() re-assertion
@@ -406,18 +403,13 @@ bool HamlibRadio::sync_from_radio() {
             std::chrono::steady_clock::now() - last_mode_cmd_ < MODE_REASSERT_WINDOW) {
             const rmode_t target = to_hamlib_mode(current_channel_.tx_mode);
             const int ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
-            if (s_log_level >= 3)
-                std::fprintf(stderr,
-                    "[HamlibRadio] sync_from_radio: re-asserting %s → %s\n",
-                    intend_mname ? intend_mname : "?",
-                    ret == RIG_OK ? "OK" : rigerror(ret));
-        } else if (s_log_level >= 3) {
-            if (changed)
-                std::fprintf(stderr,
-                    "[HamlibRadio] sync_from_radio: freq also changed — not fighting external retune\n");
-            else
-                std::fprintf(stderr,
-                    "[HamlibRadio] sync_from_radio: window expired — not re-asserting\n");
+            pal::log_debug("HamlibRadio", "sync_from_radio: re-asserting %s -> %s",
+                           intend_mname ? intend_mname : "?",
+                           ret == RIG_OK ? "OK" : rigerror(ret));
+        } else {
+            pal::log_debug("HamlibRadio", changed
+                ? "sync_from_radio: freq also changed — not fighting external retune"
+                : "sync_from_radio: window expired — not re-asserting");
         }
     }
     return changed;
@@ -436,7 +428,7 @@ bool HamlibRadio::configure_port() {
         else if (endpoint.rfind("rigctld://", 0) == 0) endpoint.erase(0, 10);
         std::strncpy(rig_->state.rigport.pathname, endpoint.c_str(), HAMLIB_FILPATHLEN);
         rig_->state.rigport.pathname[HAMLIB_FILPATHLEN - 1] = '\0';
-        std::fprintf(stderr, "[HamlibRadio] network: endpoint=%s\n", endpoint.c_str());
+        pal::log_info("HamlibRadio", "network: endpoint=%s", endpoint.c_str());
         return true;
     }
 
@@ -447,8 +439,7 @@ bool HamlibRadio::configure_port() {
     // GUI sends no device for "other" port-type models, so this is the path they
     // take; real serial rigs always carry a non-empty device string.
     if (port_.empty()) {
-        std::fprintf(stderr,
-            "[HamlibRadio] configure_port: empty port — using backend default port type\n");
+        pal::log_info("HamlibRadio", "configure_port: empty port — using backend default port type");
         return true;
     }
 
@@ -484,9 +475,8 @@ bool HamlibRadio::configure_port() {
         if (tok) rig_set_conf(rig_, tok, val);
     }
 
-    std::fprintf(stderr,
-        "[HamlibRadio] configure_port: port=%s baud=%d 8N1 handshake=NONE "
-        "DTR=%s RTS=%s stab=%ums\n",
+    pal::log_info("HamlibRadio",
+        "configure_port: port=%s baud=%d 8N1 handshake=NONE DTR=%s RTS=%s stab=%ums",
         port_.c_str(), baud_,
         policy_.dtr == SerialLinePolicy::State::ON  ? "ON"  :
         policy_.dtr == SerialLinePolicy::State::OFF ? "OFF" : "AUTO",
@@ -519,7 +509,7 @@ void HamlibRadio::apply_line_policy() {
     // da hamlib den Port bereits exklusiv geöffnet hat.
     if (policy_.dtr == SerialLinePolicy::State::AUTO &&
         policy_.rts == SerialLinePolicy::State::AUTO) {
-        std::fprintf(stderr, "[HamlibRadio] DTR/RTS: AUTO (no action)\n");
+        pal::log_debug("HamlibRadio", "DTR/RTS: AUTO (no action)");
         return;  // Nichts zu tun
     }
 
@@ -534,8 +524,7 @@ void HamlibRadio::apply_line_policy() {
     }
 #endif
 
-    std::fprintf(stderr,
-        "[HamlibRadio] apply_line_policy: DTR=%s RTS=%s\n",
+    pal::log_info("HamlibRadio", "apply_line_policy: DTR=%s RTS=%s",
         policy_.dtr == SerialLinePolicy::State::ON  ? "ON"  :
         policy_.dtr == SerialLinePolicy::State::OFF ? "OFF" : "AUTO",
         policy_.rts == SerialLinePolicy::State::ON  ? "ON"  :
@@ -595,7 +584,7 @@ std::vector<RigEntry> list_rigs() {
     std::sort(rigs.begin(), rigs.end(), [](const RigEntry& a, const RigEntry& b) {
         return a.mfg != b.mfg ? a.mfg < b.mfg : a.macro < b.macro;
     });
-    fprintf(stderr, "[RIG_LIST] %zu rigs found\n", rigs.size());
+    pal::log_info("HamlibRadio", "RIG_LIST: %zu rigs found", rigs.size());
     return rigs;
 }
 

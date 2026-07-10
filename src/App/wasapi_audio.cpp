@@ -28,6 +28,7 @@
  */
 
 #include "PAL/audio_driver.h"
+#include "PAL/logger.h"
 #include "App/resampler.h"
 #include "FSK/tone_generator.h"
 #include "FSK/tx_bandpass.h"
@@ -308,12 +309,12 @@ bool WasapiDevice::open(const std::string& in_device, const std::string& out_dev
     at_tx_filter_.reset();
 
     if (rx_only)
-        std::fprintf(stderr,
-            "[audio] WASAPI RX-only capture '%s' %u Hz/%uch %s  (modem %u Hz, no render)\n",
+        pal::log_info("audio",
+            "WASAPI RX-only capture '%s' %u Hz/%uch %s  (modem %u Hz, no render)",
             c_name_.c_str(), c_rate_, c_ch_, c_float_ ? "f32" : "pcm", MODEM_RATE);
     else
-        std::fprintf(stderr,
-            "[audio] WASAPI render '%s' %u Hz/%uch %s  |  capture '%s' %u Hz/%uch %s  (modem %u Hz)\n",
+        pal::log_info("audio",
+            "WASAPI render '%s' %u Hz/%uch %s  |  capture '%s' %u Hz/%uch %s  (modem %u Hz)",
             r_name_.c_str(), r_rate_, r_ch_, r_float_ ? "f32" : "pcm",
             c_name_.c_str(), c_rate_, c_ch_, c_float_ ? "f32" : "pcm",
             MODEM_RATE);
@@ -601,7 +602,7 @@ bool WasapiDevice::open_render(const std::string& name)
 {
     r_dev_ = resolve_device(eRender, name);
     if (!r_dev_) {
-        std::fprintf(stderr, "[audio] render device not found: '%s'\n", name.c_str());
+        pal::log_error("audio", "render device not found: '%s'", name.c_str());
         return false;
     }
     r_name_ = friendly_name(r_dev_);
@@ -631,7 +632,7 @@ bool WasapiDevice::open_capture(const std::string& name)
 {
     c_dev_ = resolve_device(eCapture, name);
     if (!c_dev_) {
-        std::fprintf(stderr, "[audio] capture device not found: '%s'\n", name.c_str());
+        pal::log_error("audio", "capture device not found: '%s'", name.c_str());
         return false;
     }
     c_name_ = friendly_name(c_dev_);

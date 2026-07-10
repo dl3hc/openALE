@@ -30,6 +30,18 @@ endif()
 
 message(STATUS "Building for ${PLATFORM}")
 
+# Optional clang-tidy pass (opt-in: cmake -DENABLE_CLANG_TIDY=ON ..)
+option(ENABLE_CLANG_TIDY "Run clang-tidy on every translation unit during build" OFF)
+if(ENABLE_CLANG_TIDY)
+    find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+    if(CLANG_TIDY_EXE)
+        set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
+        message(STATUS "clang-tidy: ${CLANG_TIDY_EXE}")
+    else()
+        message(WARNING "ENABLE_CLANG_TIDY=ON but clang-tidy not found in PATH")
+    endif()
+endif()
+
 # Modem / FSK layer
 add_library(ale_fsk_core
     src/FSK/tone_generator.cpp
@@ -245,6 +257,8 @@ if(HAMLIB_BUILD)
 endif()
 
 add_library(ale_pal
+    src/PAL/logger.cpp
+    src/PAL/events.cpp
     src/PAL/timer.cpp
     src/PAL/radio.cpp
 )
@@ -332,7 +346,7 @@ target_include_directories(ale_app_core PUBLIC
 )
 
 target_link_libraries(ale_app_core
-    ale_link ale_modem ale_protocol ale_fsk_core ale_fec
+    ale_link ale_modem ale_protocol ale_fsk_core ale_fec ale_pal
 )
 
 if(WIN32)

@@ -19,6 +19,8 @@
 
 #include "App/ale_controller.h"
 #include "App/audio_device.h"
+#include "PAL/events.h"
+#include "PAL/logger.h"
 #include "PAL/radio.h"
 #include "PAL/radios/hamlib_radio.h"
 #include "PAL/timer.h"
@@ -585,7 +587,7 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
 // ── Usage ────────────────────────────────────────────────────────────────────
 
 static void print_usage(const char* prog) {
-    std::fprintf(stderr,
+    std::fprintf(stderr, // NOLINT(pal-logger)
         "ALE Traffic Monitor — passive RX-only WebSocket bridge\n"
         "\n"
         "Decodes all ALE traffic on the configured channels and streams it to a\n"
@@ -618,6 +620,9 @@ int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
+    pal::set_logger(pal::create_logger());
+    pal::set_event_handler(pal::create_event_handler());
+
     // CLI overrides (applied on top of the config file below).
     uint16_t    cli_port        = 0;
     bool        cli_remote       = false;
@@ -649,7 +654,7 @@ int main(int argc, char* argv[]) {
     MonitorConfig cfg;
     if (!config_path.empty()) {
         cfg = parse_config(config_path);
-        std::printf("[ale_monitor] Config: %s\n", config_path.c_str());
+        pal::log_info("ale_monitor", "Config: %s", config_path.c_str());
     } else {
         // No config found — write a commented template next to the exe so the
         // user has something to edit. resolve_relative walked up from the exe
@@ -657,7 +662,7 @@ int main(int argc, char* argv[]) {
         const std::string ed = exe_dir();
         const std::string tmpl = ed.empty() ? "ale_monitor.conf" : ed + "/../ale_monitor.conf";
         write_config_template(tmpl);
-        std::printf("[ale_monitor] No config found — wrote template to %s\n", tmpl.c_str());
+        pal::log_info("ale_monitor", "No config found — wrote template to %s", tmpl.c_str());
         config_path = tmpl;   // so MON_CONFIG_SAVE has somewhere to write
     }
 
@@ -681,7 +686,7 @@ int main(int argc, char* argv[]) {
     bridge::WsServer ws;
     ws.set_web_root(web_root);
     if (!ws.start(cfg.port, cfg.remote)) {
-        std::fprintf(stderr, "ERROR: Failed to start WebSocket server on port %u.\n", cfg.port);
+        pal::log_error("ale_monitor", "Failed to start WebSocket server on port %u.", cfg.port);
         return 1;
     }
 
@@ -690,7 +695,7 @@ int main(int argc, char* argv[]) {
     ALEController ctrl;
 
     if (ctrl.load_lqa(cfg.lqa_file))
-        std::printf("[ale_monitor] LQA loaded from %s\n", cfg.lqa_file.c_str());
+        pal::log_info("ale_monitor", "LQA loaded from %s", cfg.lqa_file.c_str());
 
     // ── Radio ────────────────────────────────────────────────────────────
     std::unique_ptr<pal::IRadio> radio;
@@ -702,10 +707,10 @@ int main(int argc, char* argv[]) {
         radio = pal::create_radio(rig_spec_to_use);
         if (radio && radio->initialize() && radio->start()) {
             ctrl.set_radio(radio.get());
-            std::printf("[ale_monitor] Radio attached: %s\n", rig_spec_to_use.c_str());
+            pal::log_info("ale_monitor", "Radio attached: %s", rig_spec_to_use.c_str());
         } else {
-            std::fprintf(stderr, "WARNING: Could not connect radio (%s) — continuing without rig\n",
-                         rig_spec_to_use.c_str());
+            pal::log_warn("ale_monitor", "Could not connect radio (%s) — continuing without rig",
+                          rig_spec_to_use.c_str());
             radio.reset();
         }
     }
@@ -715,15 +720,15 @@ int main(int argc, char* argv[]) {
     if (net_file_path.empty()) net_file_path = cfg.net_file;  // last resort: CWD
     const bool loaded = ctrl.load_station_file(net_file_path);
     if (!loaded || ctrl.channels().empty()) {
-        std::fprintf(stderr, "ERROR: No channels loaded from '%s'\n", net_file_path.c_str());
+        pal::log_error("ale_monitor", "No channels loaded from '%s'", net_file_path.c_str());
         return 1;
     }
     // The monitor must never auto-save the shipped net file: set_channel_enabled
     // / set_channel_mode auto-save to station_file_ when set, which would
     // overwrite nets/*.ale. Clear it so mutations stay in-memory only.
     ctrl.set_station_file("");
-    std::printf("[ale_monitor] Loaded %zu channel(s) from %s\n",
-                ctrl.channels().size(), net_file_path.c_str());
+    pal::log_info("ale_monitor", "Loaded %zu channel(s) from %s",
+                  ctrl.channels().size(), net_file_path.c_str());
 
     // Apply channel filter + mode override before scanning.
     apply_filter(ctrl, cfg.channel_filter);
@@ -737,59 +742,66 @@ int main(int argc, char* argv[]) {
         audio = make_audio_device();
         if (audio->open(cfg.audio_in, "")) {   // empty out-device = RX-only
             ctrl.set_audio_device(audio.get());
-            std::printf("[ale_monitor] Audio RX opened: %s\n", cfg.audio_in.c_str());
+            pal::log_info("ale_monitor", "Audio RX opened: %s", cfg.audio_in.c_str());
         } else {
-            std::fprintf(stderr, "WARNING: Could not open audio device '%s' — no audio input\n",
-                         cfg.audio_in.c_str());
+            pal::log_warn("ale_monitor", "Could not open audio device '%s' — no audio input",
+                          cfg.audio_in.c_str());
             audio.reset();
         }
     }
 
     MonitorCtx ctx{ &ctrl, &audio, &radio, &cfg, config_path, net_file_path };
 
-    // ── Callbacks ────────────────────────────────────────────────────────
-    ctrl.on_status_changed = [&](const std::string& m) {
-        mj::Value e = make_event("status");
-        e.set("msg", mj::Value::string(m));
-        ws.send_text(mj::dump(e));
-    };
+    // ── Event bus subscriptions ──────────────────────────────────────────
+    {
+        auto* bus = pal::get_event_handler();
 
-    ctrl.on_word_decoded = [&](const ALEWord& w, uint32_t fid) {
-        mj::Value e = make_event("word_decoded");
-        e.set("frame_id", mj::Value::number(fid));
-        e.set("preamble", mj::Value::string(WordParser::word_type_name(w.type)));
-        e.set("addr",     mj::Value::string(std::string(w.address)));
-        e.set("votes",    mj::Value::number(w.unanimous_votes));
-        e.set("fec",      mj::Value::number(w.fec_errors));
-        e.set("ts_ms",    mj::Value::number(w.timestamp_ms));
-        e.set("freq_hz",  mj::Value::number(ctrl.get_current_channel().rx_frequency_hz));
-        ws.send_text(mj::dump(e));
-    };
+        bus->on(pal::EventType::ALE_STATUS, [&](const pal::Event& ev) {
+            mj::Value e = make_event("status");
+            e.set("msg", mj::Value::string(ev.message));
+            ws.send_text(mj::dump(e));
+        });
 
-    ctrl.on_frame_decoded = [&](const ALEMessage& frame, uint32_t fid) {
-        mj::Value e = make_event("frame_decoded");
-        e.set("frame_id",    mj::Value::number(fid));
-        e.set("call_type",   mj::Value::string(CallTypeDetector::call_type_name(frame.call_type)));
-        e.set("from",        mj::Value::string(frame.from_address));
-        e.set("word_count",  mj::Value::number(static_cast<double>(frame.words.size())));
-        e.set("start_ms",    mj::Value::number(frame.start_time_ms));
-        e.set("duration_ms", mj::Value::number(frame.duration_ms));
-        e.set("freq_hz",     mj::Value::number(ctrl.get_current_channel().rx_frequency_hz));
-        mj::Value to_arr = mj::arr();
-        for (const auto& a : frame.to_addresses)
-            to_arr.push_back(mj::Value::string(a));
-        e.set("to", std::move(to_arr));
-        ws.send_text(mj::dump(e));
-    };
+        bus->on(pal::EventType::ALE_WORD_DECODED, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::WordData*>(ev.data);
+            mj::Value e = make_event("word_decoded");
+            e.set("frame_id", mj::Value::number(d->frame_id));
+            e.set("preamble", mj::Value::string(d->preamble));
+            e.set("addr",     mj::Value::string(d->addr));
+            e.set("votes",    mj::Value::number(d->votes));
+            e.set("fec",      mj::Value::number(d->fec));
+            e.set("ts_ms",    mj::Value::number(d->ts_ms));
+            e.set("freq_hz",  mj::Value::number(d->freq_hz));
+            ws.send_text(mj::dump(e));
+        });
 
-    ctrl.on_channel_changed = [&](const Channel& ch) {
-        mj::Value e = make_event("channel_changed");
-        e.set("channel_id", mj::Value::string(ch.id));
-        e.set("rx_hz",      mj::Value::number(ch.rx_frequency_hz));
-        e.set("tx_hz",      mj::Value::number(ch.tx_frequency_hz));
-        e.set("mode",       mj::Value::string(ch.rx_mode));
-        ws.send_text(mj::dump(e));
-    };
+        bus->on(pal::EventType::ALE_FRAME_DECODED, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::FrameData*>(ev.data);
+            mj::Value e = make_event("frame_decoded");
+            e.set("frame_id",    mj::Value::number(d->frame_id));
+            e.set("call_type",   mj::Value::string(d->call_type));
+            e.set("from",        mj::Value::string(d->from_addr));
+            e.set("word_count",  mj::Value::number(static_cast<double>(d->word_count)));
+            e.set("start_ms",    mj::Value::number(d->start_ms));
+            e.set("duration_ms", mj::Value::number(d->duration_ms));
+            e.set("freq_hz",     mj::Value::number(d->freq_hz));
+            mj::Value to_arr = mj::arr();
+            for (const auto& a : *d->to_addrs)
+                to_arr.push_back(mj::Value::string(a));
+            e.set("to", std::move(to_arr));
+            ws.send_text(mj::dump(e));
+        });
+
+        bus->on(pal::EventType::CHANNEL_CHANGED, [&](const pal::Event& ev) {
+            const auto* ch = static_cast<const Channel*>(ev.data);
+            mj::Value e = make_event("channel_changed");
+            e.set("channel_id", mj::Value::string(ch->id));
+            e.set("rx_hz",      mj::Value::number(ch->rx_frequency_hz));
+            e.set("tx_hz",      mj::Value::number(ch->tx_frequency_hz));
+            e.set("mode",       mj::Value::string(ch->rx_mode));
+            ws.send_text(mj::dump(e));
+        });
+    }
 
     ctrl.set_spectrum_callback([&](const float* bins, size_t n, float /*hz_per_bin*/) {
         ws.send_binary(bins, n * sizeof(float));
@@ -798,20 +810,19 @@ int main(int argc, char* argv[]) {
     // ── Startup ──────────────────────────────────────────────────────────
     if (ctrl.channels().size() >= 2) {
         ctrl.start_scanning();
-        std::printf("[ale_monitor] Scanning started (%zu channels, dwell %ums, filter %s)\n",
-                    ctrl.channels().size(), cfg.dwell_ms, cfg.channel_filter.c_str());
+        pal::log_info("ale_monitor", "Scanning started (%zu channels, dwell %ums, filter %s)",
+                      ctrl.channels().size(), cfg.dwell_ms, cfg.channel_filter.c_str());
     } else {
         ctrl.start_available();
-        std::printf("[ale_monitor] Single channel — monitoring in AVAILABLE state\n");
+        pal::log_info("ale_monitor", "Single channel — monitoring in AVAILABLE state");
     }
 
-    std::printf("[ale_monitor] Listening on %s:%u\n",
-                cfg.remote ? "0.0.0.0" : "127.0.0.1", cfg.port);
+    pal::log_info("ale_monitor", "Listening on %s:%u",
+                  cfg.remote ? "0.0.0.0" : "127.0.0.1", cfg.port);
     if (web_root.empty())
-        std::printf("[ale_monitor] GUI not found — open via file:// or pass --webroot\n");
+        pal::log_info("ale_monitor", "GUI not found — open via file:// or pass --webroot");
     else
-        std::printf("[ale_monitor] Open GUI:  http://localhost:%u/index.html\n", cfg.port);
-    std::fflush(stdout);
+        pal::log_info("ale_monitor", "Open GUI:  http://localhost:%u/index.html", cfg.port);
 
     // ── Main loop ────────────────────────────────────────────────────────
     std::vector<int16_t> rx_buf;
@@ -863,7 +874,7 @@ int main(int argc, char* argv[]) {
     if (audio) audio->close();
     ws.stop();
     if (ctrl.save_lqa(cfg.lqa_file))
-        std::printf("[ale_monitor] LQA saved to %s\n", cfg.lqa_file.c_str());
-    std::printf("[ale_monitor] Exiting.\n");
+        pal::log_info("ale_monitor", "LQA saved to %s", cfg.lqa_file.c_str());
+    pal::log_info("ale_monitor", "Exiting.");
     return 0;
 }

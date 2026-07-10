@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace pal {
@@ -40,7 +41,14 @@ enum class EventType {
     ALE_LINK_TERMINATED,
     ALE_SOUNDING,
     ALE_LQA_UPDATE,
-    
+    ALE_STATUS,           ///< Human-readable status/log line
+    ALE_IDLE_WARNING,     ///< Link idle-timeout warning; code = remaining_sec
+    ALE_SOUNDING_WARNING, ///< Pre-sounding countdown; data = SoundingWarningData*
+    ALE_AMD_RECEIVED,     ///< AMD orderwire decoded; data = AmdData*
+    ALE_WORD_DECODED,     ///< Every decoded RX ALE word; data = WordData*
+    ALE_WORD_TX,          ///< Every transmitted ALE word; data = WordData*
+    ALE_FRAME_DECODED,    ///< Complete assembled ALE frame; data = FrameData*
+
     // Data events
     DATA_RECEIVED,
     DATA_SENT,

@@ -4,6 +4,7 @@
 
 #include "ws_server.h"
 #include "ws_handshake.h"
+#include "PAL/logger.h"
 
 #ifdef _WIN32
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -213,13 +214,13 @@ bool WsServer::start(uint16_t port, bool bind_remote) {
 #ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        std::fprintf(stderr, "[ws_server] WSAStartup failed\n");
+        pal::log_error("ws_server", "WSAStartup failed");
         return false;
     }
 #endif
     const raw_sock_t server = socket(AF_INET, SOCK_STREAM, 0);
     if (server == kRawInvalid) {
-        std::fprintf(stderr, "[ws_server] socket() failed\n");
+        pal::log_error("ws_server", "socket() failed");
         return false;
     }
 
@@ -233,7 +234,7 @@ bool WsServer::start(uint16_t port, bool bind_remote) {
     bind_remote_ = bind_remote;
 
     if (bind(server, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::fprintf(stderr, "[ws_server] bind() on port %u failed\n", port);
+        pal::log_error("ws_server", "bind() on port %u failed", port);
         close_sock(server);
         return false;
     }
@@ -409,7 +410,7 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                     ws_frag_opcode_ = 0;
                     ws_reject_count_ = 0;
                     client_ = static_cast<SocketHandle>(fd);
-                    std::fprintf(stdout, "[ws_server] client connected\n");
+                    pal::log_info("ws_server", "client connected");
                     std::fflush(stdout);
                 } else {
                     // A WS session is already active, or the Sec-WebSocket-Key header is
@@ -424,9 +425,8 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                     close_sock(fd);
                     ++ws_reject_count_;
                     if (ws_reject_count_ == 1 || ws_reject_count_ % 50 == 0) {
-                        std::fprintf(stdout, "[ws_server] WS upgrade rejected — session already active"
-                                             " (×%u)\n", ws_reject_count_);
-                        std::fflush(stdout);
+                        pal::log_warn("ws_server", "WS upgrade rejected — session already active (x%u)",
+                                      ws_reject_count_);
                     }
                 }
             } else {
@@ -466,7 +466,7 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                 ws_frag_acc_.clear();
                 ws_frag_opcode_ = 0;
                 ws_reject_count_ = 0;
-                std::fprintf(stdout, "[ws_server] client disconnected\n");
+                pal::log_info("ws_server", "client disconnected");
                 std::fflush(stdout);
             }
         }

@@ -1,0 +1,16 @@
+---
+# Enabled checks for openALE.
+# Run: clang-tidy -p build <file.cpp>
+# Opt-in build: cmake -DENABLE_CLANG_TIDY=ON ..
+Checks: >
+  -*,
+  cppcoreguidelines-pro-type-vararg,
+  modernize-use-nullptr,
+  modernize-use-override,
+  readability-redundant-member-init
+
+# Fail the build on any pro-type-vararg hit (enforces PAL logger convention).
+WarningsAsErrors: 'cppcoreguidelines-pro-type-vararg'
+
+# Only diagnose project headers, not third-party or system headers.
+HeaderFilterRegex: '^(?!.*(LinuxALE|_deps|hamlib)).*\.(h|hpp)$'

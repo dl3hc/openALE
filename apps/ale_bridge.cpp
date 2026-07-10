@@ -27,6 +27,8 @@
 #include "App/gps_service.h"
 #include "App/sfi_service.h"
 #include "App/voice_path_manager.h"
+#include "PAL/events.h"
+#include "PAL/logger.h"
 #include "PAL/radio.h"
 #include "PAL/radios/hamlib_radio.h"
 #include "PAL/timer.h"
@@ -303,8 +305,8 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
             gcfg.nmea_enabled = (src == PS::NMEA_SERIAL);
             gcfg.nmea_port    = cfg.nmea_port;
             gcfg.nmea_baud    = cfg.nmea_baud;
-            std::printf("[openALE] GPS service: starting (%s)\n",
-                        src == PS::GPSD ? "gpsd" : "NMEA serial");
+            pal::log_info("openALE", "GPS service: starting (%s)",
+                          src == PS::GPSD ? "gpsd" : "NMEA serial");
             PendingUpdate*    pend   = ctx.pending;
             bridge::WsServer* ws_ptr = ctx.ws;
             ctx.gps_svc->start(gcfg, [pend, ws_ptr](bool acq, double lat, double lon) {
@@ -328,7 +330,7 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
     if (ctx.sfi_svc && ctx.pending) {
         ctx.sfi_svc->stop();   // always stop first; start() below will spawn fresh thread
         if (cfg.sfi_enabled) {
-            std::printf("[openALE] SFI service: starting fetch thread\n");
+            pal::log_info("openALE", "SFI service: starting fetch thread");
             PendingUpdate*    pend   = ctx.pending;
             bridge::WsServer* ws_ptr = ctx.ws;
             ctx.sfi_svc->start([pend, ws_ptr](float sfi) {
@@ -341,7 +343,7 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
                 }
             });
         } else {
-            std::printf("[openALE] SFI service: disabled\n");
+            pal::log_info("openALE", "SFI service: disabled");
         }
     }
 }
@@ -365,7 +367,7 @@ static std::string pc(const mj::Value& msg, ALEController& ctrl, const std::stri
 static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     ALEController& ctrl = *ctx.ctrl;   // keeps every existing `ctrl.` call below unchanged
     const std::string cmd = msg.get_string("cmd");
-    fprintf(stderr, "[CMD] %s\n", cmd.c_str());   // TEMP DEBUG dwell-bug hunt
+    pal::log_trace("CMD", "%s", cmd.c_str());
 
     if (cmd == "STATUS") {
         mj::Value r = make_reply(msg, true);
@@ -689,7 +691,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "LOG_LEVEL_SET") {
         // level: 0=Off, 1=Error, 2=Info, 3=Debug, 4=Trace  (matches GUI cfgLogLevel)
         const int level = static_cast<int>(msg.get_number("level"));
-        pal::hamlib_set_log_level(level);
+        pal::hamlib_set_log_level(level);  // also updates pal::get_logger()->set_level()
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "FREQ_SELECT_SET") {
@@ -1024,27 +1026,15 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
 // ── Usage ───────────────────────────────────────────────────────────────────
 
 static void print_usage(const char* prog) {
-    std::fprintf(stderr,
+    std::fprintf(stderr, // NOLINT(pal-logger)
         "ALE 2G WebSocket bridge — connects apps/gui/ to a live ALEController\n"
         "\n"
-        "Starts bare and waits for a GUI to connect; everything (self address,\n"
-        "channels, audio device, radio, …) is configured from apps/gui/ over the\n"
-        "WebSocket.\n"
+        "Usage: %s --port N [--remote] [--webroot DIR]\n"
         "\n"
-        "Usage:\n"
-        "  %s --port N [--remote] [--webroot DIR]\n"
-        "\n"
-        "Options:\n"
-        "  --port N     WebSocket listen port (required; multiple instances may use\n"
-        "               different ports simultaneously)\n"
-        "  --remote     Bind to 0.0.0.0 instead of 127.0.0.1 (LAN-reachable)\n"
-        "               Without this flag the server is localhost-only.\n"
-        "  --mobile     Serve apps/gui/mobile/ instead of apps/gui/ (responsive UI\n"
-        "               for smartphones/tablets; combine with --remote for LAN access)\n"
-        "  --webroot D  Serve static files from DIR instead of auto-detected apps/gui/\n"
-        "\n"
-        "LQA history is persisted to lqa.bin in the working directory — loaded on\n"
-        "startup, saved on exit. Delete the file to reset channel quality history.\n",
+        "  --port N     WebSocket listen port (required)\n"
+        "  --remote     Bind to 0.0.0.0 (LAN-reachable)\n"
+        "  --mobile     Serve apps/gui/mobile/ (for smartphones)\n"
+        "  --webroot D  Serve static files from DIR\n",
         prog);
 }
 
@@ -1054,6 +1044,9 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
+
+    pal::set_logger(pal::create_logger());
+    pal::set_event_handler(pal::create_event_handler());
 
     uint16_t    port        = 0;     // 0 = not set; --port is required
     bool        bind_remote = false;
@@ -1076,7 +1069,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (port == 0) {
-        std::fprintf(stderr, "ERROR: --port <N> is required.\n\n");
+        pal::log_error("openALE", "ERROR: --port <N> is required.");
         print_usage(argv[0]);
         return 1;
     }
@@ -1097,7 +1090,7 @@ int main(int argc, char* argv[]) {
     bridge::WsServer ws;
     ws.set_web_root(web_root);   // serve apps/gui/ over HTTP on the same port
     if (!ws.start(port, bind_remote)) {
-        std::fprintf(stderr, "ERROR: Failed to start WebSocket server on port %u.\n", port);
+        pal::log_error("openALE", "Failed to start WebSocket server on port %u.", port);
         return 1;
     }
 
@@ -1109,7 +1102,7 @@ int main(int argc, char* argv[]) {
 
     const std::string lqa_path = "lqa.bin";
     if (ctrl.load_lqa(lqa_path))
-        std::printf("[openALE] LQA loaded from %s\n", lqa_path.c_str());
+        pal::log_info("openALE", "LQA loaded from %s", lqa_path.c_str());
 
     // GPS / SFI services — started on demand from STATION_LOC_SET
     GpsService       gps_svc;
@@ -1150,134 +1143,143 @@ int main(int argc, char* argv[]) {
                    &gps_svc, &sfi_svc, &pending, &ws,
                    &voice_mgr, /*voice_armed*/false };
 
-    // ── Event push ───────────────────────────────────────────────────────
-    ctrl.on_status_changed = [&](const std::string& m) {
-        mj::Value e = make_event("status");
-        e.set("msg", mj::Value::string(m));
-        ws.send_text(mj::dump(e));
-    };
-    ctrl.on_link_established = [&](const std::string& peer) {
-        mj::Value e = make_event("link_established");
-        e.set("peer", mj::Value::string(peer));
-        ws.send_text(mj::dump(e));
-        // Hand the VAC to the voice path (if armed) and notify the GUI of the
-        // new audio-path owner. Fires on this main-loop thread (from update()).
-        voice_mgr.on_link_state(true);
-        if (voice_mgr.passthrough_active()) {
-            mj::Value v = make_event("voice_path");
-            v.set("mode", mj::Value::string("voice"));
-            v.set("peer", mj::Value::string(peer));
-            ws.send_text(mj::dump(v));
-        }
-    };
-    ctrl.on_call_received = [&](const std::string& caller) {
-        mj::Value e = make_event("call_received");
-        e.set("caller", mj::Value::string(caller));
-        ws.send_text(mj::dump(e));
-    };
-    ctrl.on_link_terminated = [&](const std::string& reason) {
-        mj::Value e = make_event("link_terminated");
-        e.set("reason", mj::Value::string(reason));
-        ws.send_text(mj::dump(e));
-        // Return the VAC to the modem and notify the GUI.
-        const bool was_passthrough = voice_mgr.passthrough_active();
-        voice_mgr.on_link_state(false);
-        if (was_passthrough) {
-            mj::Value v = make_event("voice_path");
-            v.set("mode",   mj::Value::string("ale"));
-            v.set("reason", mj::Value::string(reason));
-            ws.send_text(mj::dump(v));
-        }
-    };
-    ctrl.on_idle_warning = [&](uint32_t remaining_sec) {
-        mj::Value e = make_event("idle_warning");
-        e.set("remaining_sec", mj::Value::number(remaining_sec));
-        ws.send_text(mj::dump(e));
-    };
-    ctrl.on_sounding_warning = [&](const std::string& net, uint32_t remaining_sec,
-                                   const std::string& phase) {
-        mj::Value e = make_event("sounding_warning");
-        e.set("net",           mj::Value::string(net));
-        e.set("remaining_sec", mj::Value::number(remaining_sec));
-        e.set("phase",         mj::Value::string(phase));
-        ws.send_text(mj::dump(e));
-    };
-    ctrl.on_amd_received = [&](const std::string& self_address,
-                               const std::string& peer_address,
-                               const std::string& text) {
-        mj::Value e = make_event("amd_received");
-        e.set("self", mj::Value::string(self_address));
-        e.set("peer", mj::Value::string(peer_address));
-        e.set("text", mj::Value::string(text));
-        ws.send_text(mj::dump(e));
-    };
-    // ── Passive channel monitor ──────────────────────────────────────────
-    // word_decoded: fires for every successfully decoded ALE word, regardless
-    // of whether it is locally relevant. frame_id groups words into frames.
-    ctrl.on_word_decoded = [&](const ALEWord& w, uint32_t fid) {
-        mj::Value e = make_event("word_decoded");
-        e.set("frame_id", mj::Value::number(fid));
-        e.set("preamble", mj::Value::string(WordParser::word_type_name(w.type)));
-        e.set("addr",     mj::Value::string(std::string(w.address)));
-        e.set("votes",    mj::Value::number(w.unanimous_votes));
-        e.set("fec",      mj::Value::number(w.fec_errors));
-        e.set("ts_ms",    mj::Value::number(w.timestamp_ms));
-        e.set("freq_hz",  mj::Value::number(ctrl.get_current_channel().rx_frequency_hz));
-        ws.send_text(mj::dump(e));
-    };
-    // ── Passive TX monitor ────────────────────────────────────────────────
-    // word_tx: fires for every ALE word the SM hands to the modem for TX
-    // (sounding/calling/ack/…). Mirrors word_decoded's payload (same preamble /
-    // addr / votes / fec fields) so the GUI can render sent and received rows
-    // with identical color coding; only freq_hz (tx) and the event name differ.
-    // frame_id is the controller's TX sequence counter, kept in a separate
-    // space from the RX monitor_frame_id_ so the two log streams don't collide.
-    ctrl.on_word_tx = [&](const ALEWord& w, uint32_t fid) {
-        mj::Value e = make_event("word_tx");
-        e.set("frame_id", mj::Value::number(fid));
-        e.set("preamble", mj::Value::string(WordParser::word_type_name(w.type)));
-        e.set("addr",     mj::Value::string(std::string(w.address)));
-        e.set("votes",    mj::Value::number(w.unanimous_votes));
-        e.set("fec",      mj::Value::number(w.fec_errors));
-        e.set("ts_ms",    mj::Value::number(w.timestamp_ms));
-        e.set("freq_hz",  mj::Value::number(ctrl.get_current_channel().tx_frequency_hz));
-        ws.send_text(mj::dump(e));
-    };
-    // frame_decoded: fires once per assembled ALE frame with semantic summary.
-    ctrl.on_frame_decoded = [&](const ALEMessage& frame, uint32_t fid) {
-        mj::Value e = make_event("frame_decoded");
-        e.set("frame_id",    mj::Value::number(fid));
-        e.set("call_type",   mj::Value::string(CallTypeDetector::call_type_name(frame.call_type)));
-        e.set("from",        mj::Value::string(frame.from_address));
-        e.set("word_count",  mj::Value::number(static_cast<double>(frame.words.size())));
-        e.set("start_ms",    mj::Value::number(frame.start_time_ms));
-        e.set("duration_ms", mj::Value::number(frame.duration_ms));
-        e.set("freq_hz",     mj::Value::number(ctrl.get_current_channel().rx_frequency_hz));
-        mj::Value to_arr = mj::arr();
-        for (const auto& a : frame.to_addresses)
-            to_arr.push_back(mj::Value::string(a));
-        e.set("to", std::move(to_arr));
-        ws.send_text(mj::dump(e));
-    };
-    // Active channel changed (scan hop, calling tune, or manual VFO change).
-    // Push event so the GUI frequency/channel readout tracks the real hop
-    // cadence instead of the 2 s VFO_GET poll. Fires from ctrl.update() on
-    // this main-loop thread (same as the events above).
-    ctrl.on_channel_changed = [&](const Channel& ch) {
-        mj::Value e = make_event("channel_changed");
-        e.set("channel_id", mj::Value::string(ch.id));
-        e.set("rx_hz",      mj::Value::number(ch.rx_frequency_hz));
-        e.set("tx_hz",      mj::Value::number(ch.tx_frequency_hz));
-        e.set("mode",       mj::Value::string(ch.rx_mode));
-        ws.send_text(mj::dump(e));
-    };
-    // PTT state changed (SM-driven TX or manual PTT) — replaces the VFO_GET
-    // poll's ptt field for the GUI PTT indicator.
-    ctrl.on_ptt_changed = [&](bool ptt_on) {
-        mj::Value e = make_event("ptt_changed");
-        e.set("ptt", mj::Value::boolean(ptt_on));
-        ws.send_text(mj::dump(e));
-    };
+    // ── Event bus subscriptions ──────────────────────────────────────────
+    // All ALEController events arrive via the global PAL event handler.
+    // Data pointer lifetime: valid only for the synchronous callback duration.
+    {
+        auto* bus = pal::get_event_handler();
+
+        bus->on(pal::EventType::ALE_STATUS, [&](const pal::Event& ev) {
+            mj::Value e = make_event("status");
+            e.set("msg", mj::Value::string(ev.message));
+            ws.send_text(mj::dump(e));
+        });
+
+        bus->on(pal::EventType::ALE_LINK_ESTABLISHED, [&](const pal::Event& ev) {
+            mj::Value e = make_event("link_established");
+            e.set("peer", mj::Value::string(ev.message));
+            ws.send_text(mj::dump(e));
+            // Hand the VAC to the voice path (if armed) and notify the GUI.
+            voice_mgr.on_link_state(true);
+            if (voice_mgr.passthrough_active()) {
+                mj::Value v = make_event("voice_path");
+                v.set("mode", mj::Value::string("voice"));
+                v.set("peer", mj::Value::string(ev.message));
+                ws.send_text(mj::dump(v));
+            }
+        });
+
+        bus->on(pal::EventType::ALE_CALL_RECEIVED, [&](const pal::Event& ev) {
+            mj::Value e = make_event("call_received");
+            e.set("caller", mj::Value::string(ev.message));
+            ws.send_text(mj::dump(e));
+        });
+
+        bus->on(pal::EventType::ALE_LINK_TERMINATED, [&](const pal::Event& ev) {
+            mj::Value e = make_event("link_terminated");
+            e.set("reason", mj::Value::string(ev.message));
+            ws.send_text(mj::dump(e));
+            // Return the VAC to the modem and notify the GUI.
+            const bool was_passthrough = voice_mgr.passthrough_active();
+            voice_mgr.on_link_state(false);
+            if (was_passthrough) {
+                mj::Value v = make_event("voice_path");
+                v.set("mode",   mj::Value::string("ale"));
+                v.set("reason", mj::Value::string(ev.message));
+                ws.send_text(mj::dump(v));
+            }
+        });
+
+        bus->on(pal::EventType::ALE_IDLE_WARNING, [&](const pal::Event& ev) {
+            mj::Value e = make_event("idle_warning");
+            e.set("remaining_sec", mj::Value::number(static_cast<uint32_t>(ev.code)));
+            ws.send_text(mj::dump(e));
+        });
+
+        bus->on(pal::EventType::ALE_SOUNDING_WARNING, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::SoundingWarningData*>(ev.data);
+            mj::Value e = make_event("sounding_warning");
+            e.set("net",           mj::Value::string(d->net));
+            e.set("remaining_sec", mj::Value::number(d->remaining_sec));
+            e.set("phase",         mj::Value::string(d->phase));
+            ws.send_text(mj::dump(e));
+        });
+
+        bus->on(pal::EventType::ALE_AMD_RECEIVED, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::AmdData*>(ev.data);
+            mj::Value e = make_event("amd_received");
+            e.set("self", mj::Value::string(d->self_addr));
+            e.set("peer", mj::Value::string(d->peer_addr));
+            e.set("text", mj::Value::string(d->text));
+            ws.send_text(mj::dump(e));
+        });
+
+        // Passive channel monitor: every decoded RX ALE word.
+        bus->on(pal::EventType::ALE_WORD_DECODED, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::WordData*>(ev.data);
+            mj::Value e = make_event("word_decoded");
+            e.set("frame_id", mj::Value::number(d->frame_id));
+            e.set("preamble", mj::Value::string(d->preamble));
+            e.set("addr",     mj::Value::string(d->addr));
+            e.set("votes",    mj::Value::number(d->votes));
+            e.set("fec",      mj::Value::number(d->fec));
+            e.set("ts_ms",    mj::Value::number(d->ts_ms));
+            e.set("freq_hz",  mj::Value::number(d->freq_hz));
+            ws.send_text(mj::dump(e));
+        });
+
+        // Passive TX monitor: every ALE word emitted by the SM for TX.
+        bus->on(pal::EventType::ALE_WORD_TX, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::WordData*>(ev.data);
+            mj::Value e = make_event("word_tx");
+            e.set("frame_id", mj::Value::number(d->frame_id));
+            e.set("preamble", mj::Value::string(d->preamble));
+            e.set("addr",     mj::Value::string(d->addr));
+            e.set("votes",    mj::Value::number(d->votes));
+            e.set("fec",      mj::Value::number(d->fec));
+            e.set("ts_ms",    mj::Value::number(d->ts_ms));
+            e.set("freq_hz",  mj::Value::number(d->freq_hz));
+            ws.send_text(mj::dump(e));
+        });
+
+        // Assembled ALE frame: fires once per complete frame with semantic summary.
+        bus->on(pal::EventType::ALE_FRAME_DECODED, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::FrameData*>(ev.data);
+            mj::Value e = make_event("frame_decoded");
+            e.set("frame_id",    mj::Value::number(d->frame_id));
+            e.set("call_type",   mj::Value::string(d->call_type));
+            e.set("from",        mj::Value::string(d->from_addr));
+            e.set("word_count",  mj::Value::number(static_cast<double>(d->word_count)));
+            e.set("start_ms",    mj::Value::number(d->start_ms));
+            e.set("duration_ms", mj::Value::number(d->duration_ms));
+            e.set("freq_hz",     mj::Value::number(d->freq_hz));
+            mj::Value to_arr = mj::arr();
+            for (const auto& a : *d->to_addrs)
+                to_arr.push_back(mj::Value::string(a));
+            e.set("to", std::move(to_arr));
+            ws.send_text(mj::dump(e));
+        });
+
+        // Channel changed: scan hop, calling tune, or manual VFO change.
+        bus->on(pal::EventType::CHANNEL_CHANGED, [&](const pal::Event& ev) {
+            const auto* ch = static_cast<const Channel*>(ev.data);
+            mj::Value e = make_event("channel_changed");
+            e.set("channel_id", mj::Value::string(ch->id));
+            e.set("rx_hz",      mj::Value::number(ch->rx_frequency_hz));
+            e.set("tx_hz",      mj::Value::number(ch->tx_frequency_hz));
+            e.set("mode",       mj::Value::string(ch->rx_mode));
+            ws.send_text(mj::dump(e));
+        });
+
+        // PTT state changed (SM-driven TX or manual PTT).
+        auto ptt_handler = [&](const pal::Event& ev) {
+            mj::Value e = make_event("ptt_changed");
+            e.set("ptt", mj::Value::boolean(ev.type == pal::EventType::PTT_ON));
+            ws.send_text(mj::dump(e));
+        };
+        bus->on(pal::EventType::PTT_ON,  ptt_handler);
+        bus->on(pal::EventType::PTT_OFF, ptt_handler);
+    }
     // Fires inline from ctrl.feed_audio() below — i.e. on THIS main-loop thread,
     // not the WASAPI audio thread (the modem's spectrum FFT runs in
     // push_samples()). send_binary() is mutex-protected in WsServer regardless.
@@ -1293,14 +1295,13 @@ int main(int argc, char* argv[]) {
         ws.send_binary(f.data(), f.size());
     });
 
-    std::printf("[openALE] listening on %s:%u — waiting for GUI to configure\n",
-                bind_remote ? "0.0.0.0" : "127.0.0.1", port);
+    pal::log_info("openALE", "listening on %s:%u — waiting for GUI to configure",
+                  bind_remote ? "0.0.0.0" : "127.0.0.1", port);
     if (web_root.empty())
-        std::printf("[openALE] (no GUI found — open via file:// or pass --webroot)\n");
+        pal::log_info("openALE", "(no GUI found — open via file:// or pass --webroot)");
     else
-        std::printf("[openALE] open GUI (%s):  http://localhost:%u/index.html\n",
-                    serve_mobile ? "mobile" : "desktop", port);
-    std::fflush(stdout);
+        pal::log_info("openALE", "open GUI (%s):  http://localhost:%u/index.html",
+                      serve_mobile ? "mobile" : "desktop", port);
 
     // Start in "available" (IDLE, RX enabled) rather than scanning: scanning
     // only makes sense once >=2 channels are configured from the GUI, and the
@@ -1413,7 +1414,7 @@ int main(int argc, char* argv[]) {
     if (audio) audio->close();
     ws.stop();
     if (ctrl.save_lqa(lqa_path))
-        std::printf("[openALE] LQA saved to %s\n", lqa_path.c_str());
-    std::printf("[openALE] Exiting.\n");
+        pal::log_info("openALE", "LQA saved to %s", lqa_path.c_str());
+    pal::log_info("openALE", "Exiting.");
     return 0;
 }

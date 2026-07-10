@@ -373,7 +373,7 @@ void ALEController::notify_channel_changed_(const Channel& ch)
         occupancy_.reset();
         last_lbt_rx_hz_ = ch.rx_frequency_hz;
     }
-    if (on_channel_changed) on_channel_changed(ch);
+    dispatch(pal::EventType::CHANNEL_CHANGED, ch.id, 0, &ch, sizeof(ch));
 }
 
 void ALEController::wire_callbacks()
@@ -388,8 +388,12 @@ void ALEController::wire_callbacks()
         // Passive TX monitor: notify exactly once per SM-emitted word, at emit
         // time, regardless of PTT-lead buffering. Pairs with on_word_decoded so
         // the ALE Monitor shows sent and received words with the same layout.
-        if (on_word_tx)
-            on_word_tx(w, tx_word_seq_++);
+        {
+            ale::WordData wd{ WordParser::word_type_name(w.type), w.address,
+                              tx_word_seq_++, w.unanimous_votes, w.fec_errors,
+                              w.timestamp_ms, get_current_channel().tx_frequency_hz };
+            dispatch(pal::EventType::ALE_WORD_TX, "", 0, &wd, sizeof(wd));
+        }
 
         if (ptt_lead_deadline_ms_ > 0) {
             pending_tx_words_.push_back({ w, audio_device_ != nullptr });
@@ -423,8 +427,15 @@ void ALEController::wire_callbacks()
     // later frame as [DATA, TWAS] and display DATA before TWAS.
     sm_.set_frame_assembled_callback([this](const ALEMessage& frame) {
         const uint32_t fid = monitor_frame_id_++;
-        if (on_frame_decoded)
-            on_frame_decoded(frame, fid);
+        ale::FrameData fd{ fid,
+                           CallTypeDetector::call_type_name(frame.call_type),
+                           frame.from_address.c_str(),
+                           frame.words.size(),
+                           frame.start_time_ms,
+                           frame.duration_ms,
+                           get_current_channel().rx_frequency_hz,
+                           &frame.to_addresses };
+        dispatch(pal::EventType::ALE_FRAME_DECODED, "", 0, &fd, sizeof(fd));
     });
 
     // RX pipeline word → SM
@@ -442,7 +453,7 @@ void ALEController::wire_callbacks()
         sm_rx_enabled_ = rx_on;
         if (manual_ptt_) {
             if (!rx_on) demodulator_.set_enabled(false);
-            emit_event(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
+            dispatch(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
             return;
         }
         if (rx_on) {
@@ -474,7 +485,7 @@ void ALEController::wire_callbacks()
                 abort_tx_pending_ = true;
                 emit_status("Incoming call not answered — channel " + cur_tx_ch.id
                             + " is RX-only (Direction=RX); TX suppressed");
-                emit_event(pal::EventType::PTT_OFF);
+                dispatch(pal::EventType::PTT_OFF);
                 return;
             }
             // RX→TX: cancel any pending tail, assert PTT, start lead
@@ -484,13 +495,13 @@ void ALEController::wire_callbacks()
             ptt_lead_deadline_ms_ = (config_.ptt_lead_ms > 0)
                 ? now_ms_ + config_.ptt_lead_ms : 0;
         }
-        emit_event(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
+        dispatch(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
     });
 
     // Idle-timeout warning (Twa lead) → forward to the controller callback so
     // the bridge can push an `idle_warning` event to the GUI popup.
     sm_.set_idle_warning_callback([this](uint32_t remaining_sec) {
-        if (on_idle_warning) on_idle_warning(remaining_sec);
+        dispatch(pal::EventType::ALE_IDLE_WARNING, "", static_cast<int32_t>(remaining_sec));
     });
 
     // Channel hops (scan / calling) → radio frequency/mode change
@@ -868,7 +879,8 @@ bool ALEController::send_sounding_sweep(const std::vector<Channel>& channels)
     sounding_warning_sent_ = false;
     if (sounding_warning_active_) {
         sounding_warning_active_ = false;
-        if (on_sounding_warning) on_sounding_warning(auto_sounding_net_, 0, "cancel");
+        ale::SoundingWarningData swd{ auto_sounding_net_.c_str(), 0, "cancel" };
+        dispatch(pal::EventType::ALE_SOUNDING_WARNING, "", 0, &swd, sizeof(swd));
     }
     emit_status("Sounding sweep — " + std::to_string(channels.size())
                 + " channel(s)");
@@ -965,7 +977,11 @@ bool ALEController::initiate_call(const std::string& target_addr)
     apply_lbt_policy_(callable);
 
     emit_status("Initiating call to " + target_addr);
-    return sm_.initiate_call(target_addr);
+    if (sm_.initiate_call(target_addr)) {
+        dispatch(pal::EventType::ALE_CALL_SENT, target_addr);
+        return true;
+    }
+    return false;
 }
 
 bool ALEController::initiate_single_channel_call(const std::string& target_addr)
@@ -1155,7 +1171,7 @@ void ALEController::emergency_stop()
 void ALEController::set_ptt_and_notify(bool on)
 {
     if (radio_) radio_->set_ptt(on);
-    if (on_ptt_changed) on_ptt_changed(on);
+    dispatch(on ? pal::EventType::PTT_ON : pal::EventType::PTT_OFF);
 }
 
 void ALEController::set_manual_ptt(bool on)
@@ -1195,7 +1211,7 @@ void ALEController::set_manual_ptt(bool on)
         }
         // If SM wants TX, the rx_enabled_callback already manages PTT — nothing to do
     }
-    emit_event(on ? pal::EventType::PTT_ON : pal::EventType::PTT_OFF);
+    dispatch(on ? pal::EventType::PTT_ON : pal::EventType::PTT_OFF);
 }
 
 // ── Main-loop drivers ─────────────────────────────────────────────────────────
@@ -1369,7 +1385,10 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
         sounding_warning_sent_   = true;
         sounding_warning_active_ = true;
         const uint32_t remaining_sec = (static_cast<uint32_t>(remaining_ms) + 999u) / 1000u;
-        if (on_sounding_warning) on_sounding_warning(auto_sounding_net_, remaining_sec, "warn");
+        {
+            ale::SoundingWarningData swd{ auto_sounding_net_.c_str(), remaining_sec, "warn" };
+            dispatch(pal::EventType::ALE_SOUNDING_WARNING, "", 0, &swd, sizeof(swd));
+        }
     }
 
     // Fire when due — from IDLE or SCANNING.
@@ -1385,7 +1404,9 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
         sounding_warning_sent_ = false;
         if (sounding_warning_active_) {
             sounding_warning_active_ = false;
-            if (on_sounding_warning) on_sounding_warning(auto_sounding_net_, 0, "fire");
+            ale::SoundingWarningData swd{ auto_sounding_net_.c_str(), 0, "fire" };
+            dispatch(pal::EventType::ALE_SOUNDING_WARNING, "", 0, &swd, sizeof(swd));
+            dispatch(pal::EventType::ALE_SOUNDING, auto_sounding_net_);
         }
     }
     // When remaining_ms <= 0 but SM is CALLING/HANDSHAKE/LINKED, leave
@@ -1487,8 +1508,7 @@ void ALEController::maybe_emit_call_alert()
         lqa_exchange_.apply_pending(caller, true,
                                      [this](const std::string& m){ emit_status(m); });
 
-    if (on_call_received) on_call_received(caller);
-    emit_event(pal::EventType::ALE_CALL_RECEIVED, caller);
+    dispatch(pal::EventType::ALE_CALL_RECEIVED, caller);
 }
 
 void ALEController::commit_sounding_sample()
@@ -1656,7 +1676,8 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         && (to == ALEState::CALLING || to == ALEState::HANDSHAKE
             || to == ALEState::LINKED)) {
         sounding_warning_active_ = false;
-        if (on_sounding_warning) on_sounding_warning(auto_sounding_net_, 0, "cancel");
+        ale::SoundingWarningData swd{ auto_sounding_net_.c_str(), 0, "cancel" };
+        dispatch(pal::EventType::ALE_SOUNDING_WARNING, "", 0, &swd, sizeof(swd));
     }
 
     // Reset caller tracking when leaving HANDSHAKE
@@ -1718,9 +1739,7 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     if (from == ALEState::LINKED && to != ALEState::LINKED) {
         link_start_ms_ = 0;
         pending_operator_accept_ = false;  // clear any unresolved manual-accept gate
-        if (on_link_terminated)
-            on_link_terminated("Link state exited");
-        emit_event(pal::EventType::ALE_LINK_TERMINATED, "Link state exited");
+        dispatch(pal::EventType::ALE_LINK_TERMINATED, "Link state exited");
     }
 }
 
@@ -1789,8 +1808,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
                 emit_status("LINK ESTABLISHED with " + peer);
             }
             link_start_ms_ = now_ms_;
-            if (on_link_established) on_link_established(peer);
-            emit_event(pal::EventType::ALE_LINK_ESTABLISHED, peer);
+            dispatch(pal::EventType::ALE_LINK_ESTABLISHED, peer);
             break;
         }
         case OperatorEvent::CALL_REJECTED:
@@ -1815,8 +1833,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
             if (config_.lqa_exchange_enabled)
                 lqa_exchange_.on_call_concluded();
             emit_status("Call rejected by remote station (TWAS)");
-            if (on_link_terminated) on_link_terminated("Call rejected");
-            emit_event(pal::EventType::ALE_LINK_TERMINATED, "Call rejected");
+            dispatch(pal::EventType::ALE_LINK_TERMINATED, "Call rejected");
             break;
         case OperatorEvent::NO_CHANNELS_LEFT:
             // No JOE response received on any channel → discard response-frame acc.
@@ -1834,12 +1851,11 @@ void ALEController::on_operator_event(OperatorEvent ev)
                 lqa_exchange_.on_call_concluded();
             }
             emit_status("No reply — all calling channels exhausted");
-            if (on_link_terminated) on_link_terminated("No reply");
-            emit_event(pal::EventType::ALE_LINK_TERMINATED, "No reply");
+            dispatch(pal::EventType::ALE_LINK_TERMINATED, "No reply");
             break;
         case OperatorEvent::EMERGENCY_ACTIVE:
             emit_status("Emergency manual control is now active");
-            emit_event(pal::EventType::SYSTEM_WARNING, "Emergency manual control active");
+            dispatch(pal::EventType::SYSTEM_WARNING, "Emergency manual control active");
             break;
     }
 }
@@ -1887,8 +1903,12 @@ void ALEController::rx_track_signal_quality(const ALEWord& word)
     // Passive monitor tap: neutral decoded-word notification.
     // Fires regardless of local protocol state or address match, in strict
     // on-air arrival order — no reordering, no deferral.
-    if (on_word_decoded)
-        on_word_decoded(word, monitor_frame_id_);
+    {
+        ale::WordData wd{ WordParser::word_type_name(word.type), word.address,
+                          monitor_frame_id_, word.unanimous_votes, word.fec_errors,
+                          word.timestamp_ms, get_current_channel().rx_frequency_hz };
+        dispatch(pal::EventType::ALE_WORD_DECODED, "", 0, &wd, sizeof(wd));
+    }
 }
 
 void ALEController::rx_accumulate_caller_identity(const ALEWord& word)
@@ -1996,8 +2016,11 @@ void ALEController::commit_linked_amd()
     linked_amd_settle_ms_ = 0;
     const auto p = linked_amd_acc_.find_last_not_of(" @");
     if (p != std::string::npos) linked_amd_acc_ = linked_amd_acc_.substr(0, p + 1);
-    if (!linked_amd_acc_.empty() && on_amd_received)
-        on_amd_received(get_primary_self_address(), linked_amd_peer_, linked_amd_acc_);
+    if (!linked_amd_acc_.empty()) {
+        const std::string self = get_primary_self_address();
+        ale::AmdData ad{ self.c_str(), linked_amd_peer_.c_str(), linked_amd_acc_.c_str() };
+        dispatch(pal::EventType::ALE_AMD_RECEIVED, "", 0, &ad, sizeof(ad));
+    }
     linked_amd_acc_.clear();
     linked_amd_peer_.clear();
 }
@@ -2066,8 +2089,11 @@ void ALEController::commit_ack_amd()
     ack_amd_collecting_ = false;
     const auto p = ack_amd_acc_.find_last_not_of(" @");
     if (p != std::string::npos) ack_amd_acc_ = ack_amd_acc_.substr(0, p + 1);
-    if (!ack_amd_acc_.empty() && on_amd_received)
-        on_amd_received(get_primary_self_address(), ack_amd_peer_, ack_amd_acc_);
+    if (!ack_amd_acc_.empty()) {
+        const std::string self = get_primary_self_address();
+        ale::AmdData ad{ self.c_str(), ack_amd_peer_.c_str(), ack_amd_acc_.c_str() };
+        dispatch(pal::EventType::ALE_AMD_RECEIVED, "", 0, &ad, sizeof(ad));
+    }
     ack_amd_acc_.clear();
     ack_amd_peer_.clear();
 }
@@ -2296,23 +2322,24 @@ void ALEController::set_event_handler(pal::IEventHandler* handler)
     event_handler_ = handler;
 }
 
-void ALEController::emit_event(pal::EventType type, const std::string& msg, int32_t code)
+void ALEController::dispatch(pal::EventType type, const std::string& msg,
+                              int32_t code, const void* data, size_t data_size)
 {
-    if (!event_handler_) return;
     pal::Event ev{};
     ev.type         = type;
     ev.source       = "ALEController";
     ev.message      = msg;
     ev.code         = code;
     ev.timestamp_ms = 0;
-    ev.data         = nullptr;
-    ev.data_size    = 0;
-    event_handler_->emit(ev);
+    ev.data         = const_cast<void*>(data);
+    ev.data_size    = data_size;
+    if (event_handler_) event_handler_->emit(ev);
+    if (auto* gh = pal::get_event_handler()) gh->emit(ev);
 }
 
 void ALEController::emit_status(const std::string& msg)
 {
-    if (on_status_changed) on_status_changed(msg);
+    dispatch(pal::EventType::ALE_STATUS, msg);
 }
 
 // ── LQA ──────────────────────────────────────────────────────────────────────
@@ -2342,8 +2369,10 @@ void ALEController::enable_automatic_sounding(bool on)
 void ALEController::set_automatic_sounding(bool on, const std::string& net_name)
 {
     // Cancel an active warning popup before changing state.
-    if (sounding_warning_active_ && on_sounding_warning)
-        on_sounding_warning(auto_sounding_net_, 0, "cancel");
+    if (sounding_warning_active_) {
+        ale::SoundingWarningData swd{ auto_sounding_net_.c_str(), 0, "cancel" };
+        dispatch(pal::EventType::ALE_SOUNDING_WARNING, "", 0, &swd, sizeof(swd));
+    }
     sounding_warning_sent_   = false;
     sounding_warning_active_ = false;
 
@@ -2398,7 +2427,8 @@ void ALEController::interrupt_sounding(const std::string& net)
     sounding_warning_sent_   = false;
     if (sounding_warning_active_) {
         sounding_warning_active_ = false;
-        if (on_sounding_warning) on_sounding_warning(net, 0, "cancel");
+        ale::SoundingWarningData swd{ net.c_str(), 0, "cancel" };
+        dispatch(pal::EventType::ALE_SOUNDING_WARNING, "", 0, &swd, sizeof(swd));
     }
     emit_status("Sounding on net '" + net + "' interrupted — timer reset");
 }

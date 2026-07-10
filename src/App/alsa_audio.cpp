@@ -23,6 +23,7 @@
  */
 
 #include "PAL/audio_driver.h"
+#include "PAL/logger.h"
 #include "App/resampler.h"
 #include "FSK/tone_generator.h"
 #include "FSK/tx_bandpass.h"
@@ -270,7 +271,7 @@ bool AlsaDevice::open_pcm(snd_pcm_t**      pcm_out,
 {
     int rc = snd_pcm_open(pcm_out, dev.c_str(), dir, 0);
     if (rc < 0) {
-        std::fprintf(stderr, "[alsa] open '%s': %s\n", dev.c_str(), snd_strerror(rc));
+        pal::log_error("alsa", "open '%s': %s", dev.c_str(), snd_strerror(rc));
         return false;
     }
 
@@ -280,12 +281,12 @@ bool AlsaDevice::open_pcm(snd_pcm_t**      pcm_out,
 
     fmt = negotiate_format(*pcm_out, hw);
     if ((rc = snd_pcm_hw_params_set_format(*pcm_out, hw, fmt)) < 0) {
-        std::fprintf(stderr, "[alsa] set_format: %s\n", snd_strerror(rc));
+        pal::log_error("alsa", "set_format: %s", snd_strerror(rc));
         goto fail;
     }
     if ((rc = snd_pcm_hw_params_set_access(*pcm_out, hw,
                                             SND_PCM_ACCESS_RW_INTERLEAVED)) < 0) {
-        std::fprintf(stderr, "[alsa] set_access: %s\n", snd_strerror(rc));
+        pal::log_error("alsa", "set_access: %s", snd_strerror(rc));
         goto fail;
     }
 
@@ -303,7 +304,7 @@ bool AlsaDevice::open_pcm(snd_pcm_t**      pcm_out,
     }
 
     if ((rc = snd_pcm_hw_params(*pcm_out, hw)) < 0) {
-        std::fprintf(stderr, "[alsa] hw_params: %s\n", snd_strerror(rc));
+        pal::log_error("alsa", "hw_params: %s", snd_strerror(rc));
         goto fail;
     }
 
@@ -331,7 +332,7 @@ bool AlsaDevice::open(const std::string& rx_device, const std::string& tx_device
 
     if (!open_pcm(&cap_pcm_, cap_dev, SND_PCM_STREAM_CAPTURE,
                   cap_fmt_, cap_rate_, cap_chans_)) {
-        std::fprintf(stderr, "[alsa] capture unavailable — TX only.\n");
+        pal::log_warn("alsa", "capture unavailable — TX only.");
     }
 
     at_tx_resampler_ = std::make_unique<Resampler>(8000, (int)play_rate_);
@@ -346,8 +347,8 @@ bool AlsaDevice::open(const std::string& rx_device, const std::string& tx_device
     const int bpf = snd_pcm_format_physical_width(play_fmt_) / 8 * (int)play_chans_;
     at_write_scratch_.resize((size_t)period_frames_ * 4 * bpf);
 
-    std::fprintf(stderr,
-        "[audio] ALSA play '%s' %u Hz/%uch  |  capture '%s' %u Hz/%uch  (modem 8000 Hz)\n",
+    pal::log_info("audio",
+        "ALSA play '%s' %u Hz/%uch  |  capture '%s' %u Hz/%uch  (modem 8000 Hz)",
         play_dev.c_str(), play_rate_, play_chans_,
         cap_pcm_ ? cap_dev.c_str() : "none", cap_rate_, cap_chans_);
 
@@ -479,7 +480,7 @@ void AlsaDevice::audio_loop()
         if (rc < 0) {
             rc = snd_pcm_recover(play_pcm_, rc, 1);
             if (rc < 0) {
-                std::fprintf(stderr, "[alsa] render unrecoverable: %s\n", snd_strerror(rc));
+                pal::log_error("alsa", "render unrecoverable: %s", snd_strerror(rc));
                 break;
             }
         }

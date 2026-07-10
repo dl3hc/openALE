@@ -1,0 +1,4 @@
+---
+# radio_mock.cpp and test_hamlib_mock.cpp are standalone diagnostic tools,
+# not part of the openALE binary — raw printf is acceptable here.
+Checks: '-cppcoreguidelines-pro-type-vararg'

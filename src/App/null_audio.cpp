@@ -7,8 +7,8 @@
  */
 
 #include "PAL/audio_driver.h"
+#include "PAL/logger.h"
 #include "FSK/ale_waveform.h"
-#include <cstdio>
 #include <queue>
 
 namespace ale {
@@ -21,7 +21,7 @@ class NullDevice : public pal::IAudioDriver {
 
 public:
     bool open(const std::string& = "", const std::string& = "") override {
-        std::fprintf(stderr, "[audio] NullDevice — no real-time audio on this platform.\n");
+        pal::log_info("audio", "NullDevice — no real-time audio on this platform.");
         open_ = true;
         return true;
     }
