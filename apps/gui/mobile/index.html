@@ -36,8 +36,14 @@
         <div class="logo-std">MIL-STD-188-141B · 2G ALE</div>
         <div class="logo-self" id="selfCs">SELF: —</div>
       </div>
+      <!-- Cross-tab LBT busy indicator (mobile only; hidden on desktop). Mirrors
+           #busyChip via applyBusyUi() so the operator sees channel occupancy on
+           every tab, not just CALL. -->
+      <div id="hdrBusy" class="hdr-busy" title="Channel clear (A.5.4.7.2)">
+        <div class="dot busy-dot"></div>
+        <span>FREQ CLEAR</span>
+      </div>
     </div>
-
 
     <div class="hdr-right">
       <!-- Hidden state anchors: #scanBtn / #pttBtn are driven by app.js and mirrored
@@ -212,9 +218,9 @@
         </div>
         <div class="pbody" id="msgList"></div>
         <div class="msg-compose">
-          <input class="msg-input" id="msgInput" type="text" placeholder="AMD message — max 90 chars, caps…" maxlength="90"
+          <textarea class="msg-input" id="msgInput" rows="2" placeholder="AMD message — max 90 chars, caps…" maxlength="90"
             oninput="updateMsgCount()"
-            onkeydown="if(event.key==='Enter')sendAmd()">
+            onkeydown="if(event.key==='Enter'){event.preventDefault();sendAmd();}"></textarea>
           <button class="btn-send" onclick="sendAmd()">Send</button>
           <span class="msg-count" id="msgCount">0/90</span>
         </div>
@@ -301,7 +307,7 @@
         <button class="mon-btn" onclick="clearAleLog()">Clear</button>
       </div>
       <div class="ale-log-body" id="aleLogBody">
-        <div class="ale-log-empty">No ALE activity yet</div>
+        <div class="ale-log-empty">No ALE activity yet — sent and received frames appear here</div>
       </div>
     </div>
 
@@ -352,6 +358,7 @@
     <button class="mob-ptt" id="pttBtnMob"
       onmousedown="setPtt(true)" onmouseup="setPtt(false)" onmouseleave="setPtt(false)"
       ontouchstart="setPtt(true);event.preventDefault()" ontouchend="setPtt(false);event.preventDefault()"
+      ontouchcancel="setPtt(false);event.preventDefault()"
       aria-label="Push to talk">
       <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
       <span class="mob-ptt-lbl">PTT</span>
@@ -365,11 +372,13 @@
     <button class="mob-nav-tab mob-tab-active" data-tab="call" onclick="mobSetTab('call')" aria-label="Calls">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
       <span>CALL</span>
+      <span class="mob-nav-dot" id="callNavDot" hidden></span>
     </button>
 
     <button class="mob-nav-tab" data-tab="msg" onclick="mobSetTab('msg')" aria-label="Messages">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       <span>MSG</span>
+      <span class="mob-nav-badge" id="msgNavBadge" hidden></span>
     </button>
 
     <button class="mob-nav-tab" data-tab="heard" onclick="mobSetTab('heard')" aria-label="Heard stations">
@@ -556,24 +565,14 @@
           <div class="ssec-title">Radio / CAT Control</div>
 
           <div class="fg">
-            <label class="flabel">Backend</label>
-            <div class="fradio-group" id="rigBackend">
-              <label class="fradio-opt">
-                <input type="radio" name="rigbe" value="netrigctl" checked onchange="updateRigFields()">
-                <span class="fradio-dot"></span> TCP netrigctl
-              </label>
-              <label class="fradio-opt">
-                <input type="radio" name="rigbe" value="serial" onchange="updateRigFields()">
-                <span class="fradio-dot"></span> Serial (Hamlib)
-              </label>
-              <label class="fradio-opt">
-                <input type="radio" name="rigbe" value="none" onchange="updateRigFields()">
-                <span class="fradio-dot"></span> None / Offline
-              </label>
-            </div>
+            <label class="flabel" for="rigModel">Hamlib Model</label>
+            <select class="fselect" id="rigModel" onchange="updateRigFields()">
+              <option value="">— None / Offline —</option>
+            </select>
+            <div class="fhint">Single selector for every Hamlib-supported rig. Network backends (NET rigctl, FLRig, Quisk, GQRX, …) reveal Host/Port below; serial backends reveal the serial device + line-state; Dummy/USB need nothing.</div>
           </div>
 
-          <div id="rigFieldsTcp">
+          <div id="rigFieldsTcp" style="display:none">
             <div class="fg-row col2">
               <div>
                 <label class="flabel">Host</label>
@@ -590,7 +589,7 @@
           </div>
 
           <div id="rigFieldsSerial" style="display:none">
-            <div class="fg-row col3">
+            <div class="fg-row col2">
               <div>
                 <label class="flabel">Serial Port</label>
                 <input class="finput" id="rigSerial" type="text" placeholder="COM3 or /dev/ttyUSB0">
@@ -600,12 +599,6 @@
                 <select class="fselect" id="rigBaud">
                   <option>4800</option><option>9600</option><option selected>19200</option>
                   <option>38400</option><option>57600</option>
-                </select>
-              </div>
-              <div>
-                <label class="flabel">Hamlib Model</label>
-                <select class="fselect" id="rigModel">
-                  <option value="">— connect bridge to load —</option>
                 </select>
               </div>
             </div>

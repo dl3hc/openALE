@@ -126,6 +126,17 @@ public:
      *  Reconfigures the SM and auto-saves station_file_ if set. */
     bool rename_channel(const std::string& old_id, const std::string& new_id);
 
+    /** Toggle a channel's \c enabled flag by id. Disabling removes it from the
+     *  scan list (start_scanning() skips !enabled channels). Reconfigures the SM
+     *  and auto-saves station_file_ if set. Returns false if the id is unknown. */
+    bool set_channel_enabled(const std::string& id, bool enabled);
+
+    /** Override a channel's RX/TX mode by id (e.g. USB → USB-D for radios that
+     *  route digital-mode audio to the PC). Reconfigures the SM, auto-saves
+     *  station_file_ if set, and re-asserts the new mode on the radio live if it
+     *  is the currently-active channel. Returns false if the id is unknown. */
+    bool set_channel_mode(const std::string& id, const std::string& mode);
+
     /** Read-only access to the current channel list. */
     const std::vector<Channel>& channels() const { return calling_channels_; }
 
@@ -980,6 +991,11 @@ public:
      */
     bool is_link_active() const;
 
+    /// True while the modem has a TX burst in progress: PTT lead, pending words,
+    /// or modulator actively transmitting. Used by AudioTransport::arbitrate_tx_()
+    /// to preempt voice passthrough and restore the symbol source.
+    bool is_tx_active() const;
+
     // ── FEC / sync tuning (MIL-STD-188-141B A.5.2.6.3) ──────────────────────
     // Forwarded to the receive demodulator.  Defaults are the most tolerant
     // operating point (full Golay correction + MIN_UNANIMOUS_VOTES) so any
@@ -1014,6 +1030,11 @@ public:
     float lbt_margin_db() const;
     void  set_lbt_occupancy_enabled(bool on)     { lbt_occupancy_enabled_ = on; }
     bool  lbt_occupancy_enabled() const          { return lbt_occupancy_enabled_; }
+    /// Gate occupancy detection off during voice PTT. While voice PTT is active
+    /// the radio is transmitting and the VAC loopback would drive the occupancy
+    /// detector to BUSY — identical to the ALE-TX case where the demodulator is
+    /// disabled. Call with transport.media_tx_active() each main-loop tick.
+    void  set_voice_tx_active(bool on)           { voice_tx_active_ = on; }
     void  set_lbt_override(bool on);              ///< A.5.4.7.3 operator override (emergency)
     bool  lbt_override() const;
     bool  lbt_busy() const;                       ///< current occupancy-busy state (diagnostics)
@@ -1159,6 +1180,7 @@ private:
     // enabled; queried by the SM via set_channel_busy_query.
     ChannelOccupancyDetector occupancy_;
     bool                     lbt_occupancy_enabled_ = true;
+    bool                     voice_tx_active_        = false;  // set by bridge during voice PTT
     bool                     lbt_busy_reported_     = false;  // edge-detect for status emission
 
     /// A.5.4.7.1: set SM shared/ALE-only LBT duration from the channels involved.

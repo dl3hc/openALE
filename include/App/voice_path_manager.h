@@ -1,46 +1,37 @@
 /**
  * \file App/voice_path_manager.h
- * \brief VoicePathManager — dynamic owner of the radio (VAC) audio path.
+ * \brief VoicePathManager — voice media producer/consumer for the AudioTransport.
  *
- * Switches the radio-side audio path (the Virtual Audio Cable / loopback that
- * connects openALE to the radio) between two owners based **solely** on ALE
- * link state:
+ * Tracks ALE link state and the operator's PTT to expose two observable flags
+ * that the AudioTransport TX arbiter queries each tick:
  *
- *   ALE_EXCLUSIVE     — the ALE modem owns the VAC (today's behaviour). The
- *                       bridge feeds VAC capture → ALEController::feed_audio()
- *                       and the modem's symbol source drives VAC render.
- *   VOICE_PASSTHROUGH — entered on link_established (when armed). The modem
- *                       releases the VAC; it becomes a transparent bidirectional
- *                       pipe between the radio and the operator's voice device
- *                       (the browser, via WebSocket PCM — see
- *                       docs/VOICE_AUDIO_ROUTING.md). PTT selects the half-duplex
- *                       direction: on  ⇒ mic → radio TX (speaker muted);
- *                       off ⇒ radio RX → speaker (mic ignored).
+ *   passthrough_active() — a voice link is established (LINKED + armed).
+ *     The transport routes captured radio RX to the operator's browser speaker.
+ *   media_tx_wanted()    — passthrough is active AND the operator has asserted
+ *     voice PTT.  The transport installs `pull_mic_pcm` on the VAC render path
+ *     so the mic ring drives the radio transmitter.
  *
- * On link_terminated (any reason) ownership returns to the modem automatically.
+ * VoicePathManager does **not** own `IAudioDriver::set_pcm_source()` — that
+ * responsibility now belongs to AudioTransport (TX arbitration). VPM is a pure
+ * media producer/consumer: it owns the mic SPSC ring and CAT PTT assertion;
+ * the transport decides when each source wins the VAC render path.
  *
- * The modem `AudioDevice` (VAC) is **never closed/reopened** across a
- * transition — entering passthrough overrides the render path via
- * `IAudioDriver::set_pcm_source()`; leaving clears it, restoring the symbol
- * source that was registered by `ALEController::set_audio_device()`. This keeps
- * the exclusive-ownership invariant: exactly one consumer owns the VAC at any
- * instant, and the modem/decoder signal-processing code is untouched (the
- * decoder is simply not fed while passthrough is active — the bridge gates
- * `feed_audio()` on `passthrough_active()`).
+ * Mode semantics (internal):
+ *   ALE_EXCLUSIVE     — no voice link (or disarmed). Transport uses the modem
+ *                       symbol source for TX; RX goes to the ALE decoder only.
+ *   VOICE_PASSTHROUGH — voice link active. Transport fans RX to both decoder
+ *                       and browser speaker; selects media or silence for TX.
  *
- * Threading: all public methods are called from the bridge main loop. The only
- * cross-thread touch is the mic ring: `push_mic_pcm()` produces on the main
- * loop; `pull_mic_pcm()` consumes on the modem audio render thread (via the
- * `set_pcm_source` callback). The ring is single-producer/single-consumer and
- * lock-free.
- *
- * Bridge-owned (audio/radio lifecycle is owned by the bridge caller, not the
- * controller — see docs/GUI_BRIDGE_GAPS.md). The controller is not modified.
+ * Threading: all public methods called from the bridge main loop. The mic ring
+ * is SPSC lock-free: push_mic_pcm() produces on the main loop; pull_mic_pcm()
+ * consumes on the audio render thread (via the set_pcm_source callback that the
+ * transport installs when media wins the arbiter).
  */
 
 #pragma once
 
 #include "App/audio_device.h"      // AudioDevice = pal::IAudioDriver
+#include "App/audio_transport.h"   // RxSink; AudioTransport (pointer only)
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -51,7 +42,7 @@ namespace pal { class IRadio; }
 
 namespace ale {
 
-class VoicePathManager {
+class VoicePathManager : public RxSink {
 public:
     enum class Mode { ALE_EXCLUSIVE, VOICE_PASSTHROUGH };
 
@@ -64,6 +55,18 @@ public:
     /// Bind the modem (VAC) audio device and the radio used for PTT. Both must
     /// outlive this instance. Pass nullptr for either to detach.
     void attach(AudioDevice* vac, pal::IRadio* radio);
+
+    /// Register the AudioTransport that this VPM self-registers with as an
+    /// RxSink on passthrough entry/exit. Must be set before on_link_state(true).
+    void set_transport(AudioTransport* t) { transport_ = t; }
+
+    // RxSink implementation — called by the transport each tick when not
+    // transmitting and VPM is registered (i.e. passthrough is active).
+    void on_rx_audio(const int16_t* buf, size_t samples) override;
+
+    /// Speaker output callback (set by the bridge). Called by on_rx_audio with
+    /// the radio RX PCM to be forwarded to the browser (WebSocket 0x01 frame).
+    std::function<void(const int16_t* buf, size_t samples)> on_speaker_pcm;
 
     /// Enable/disable voice capability. When disarmed, the manager never enters
     /// VOICE_PASSTHROUGH — the modem keeps the VAC (legacy ALE-only behaviour).
@@ -91,9 +94,17 @@ public:
     /// render thread. Returns samples filled; 0 ⇒ silence/underrun.
     size_t pull_mic_pcm(int16_t* out, size_t want);
 
-    /// True while the voice path owns the VAC (LINKED + armed).
+    /// True while a voice link is active (LINKED + armed). Queried by
+    /// AudioTransport to gate the browser speaker sink.
     bool passthrough_active() const { return mode_ == Mode::VOICE_PASSTHROUGH; }
-    Mode  mode() const { return mode_; }
+
+    /// True while passthrough is active AND the operator has voice PTT asserted.
+    /// Queried by AudioTransport to install the mic-pull source on the VAC.
+    bool media_tx_wanted() const {
+        return ptt_.load(std::memory_order_relaxed) && mode_ == Mode::VOICE_PASSTHROUGH;
+    }
+
+    Mode mode() const { return mode_; }
 
     /// Fired on each voice-PTT activation so the bridge can reset the link idle
     /// timer (voice counts as link activity, preventing Twa auto-termination).
@@ -103,8 +114,9 @@ private:
     void enter_passthrough_();
     void exit_passthrough_();
 
-    AudioDevice*        vac_   = nullptr;
-    pal::IRadio*        radio_ = nullptr;
+    AudioDevice*        vac_       = nullptr;
+    pal::IRadio*        radio_     = nullptr;
+    AudioTransport*     transport_ = nullptr;
 
     std::atomic<bool> armed_{false};
     std::atomic<bool> linked_{false};

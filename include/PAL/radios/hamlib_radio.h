@@ -200,10 +200,16 @@ void hamlib_set_log_level(int level);
 struct RigEntry {
     int         model;
     std::string mfg;
-    std::string macro; // RIG_MODEL_ prefix stripped
+    std::string macro;     // RIG_MODEL_ prefix stripped
+    std::string port_type;  // coarse connection kind: "network" | "serial" | "other"
 };
 
 // Returns all rigs registered in the linked Hamlib, sorted by manufacturer then macro name.
 std::vector<RigEntry> list_rigs();
+
+// Coarse port type for a single model number, derived from rig_caps::port_type
+// (the single source of truth for whether a rig connects over the network or a
+// serial device). Returns "network" | "serial" | "other"; "other" if unknown.
+std::string rig_port_type(int model);
 
 } // namespace pal

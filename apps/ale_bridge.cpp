@@ -23,6 +23,7 @@
 
 #include "App/ale_controller.h"
 #include "App/audio_device.h"
+#include "App/audio_transport.h"
 #include "App/gps_service.h"
 #include "App/sfi_service.h"
 #include "App/voice_path_manager.h"
@@ -213,13 +214,24 @@ static mj::Value make_event(const std::string& name) {
 }
 
 // Assemble the pal::create_radio() spec from structured GUI fields (so the GUI
-// never needs to know the hamlib spec syntax). "" for the "none" backend.
+// never needs to know the hamlib spec syntax). The Hamlib rig MODEL is the single
+// selector; its port type (derived from rig_caps::port_type via pal::rig_port_type)
+// decides whether the spec carries a tcp:// endpoint or a serial device + line
+// state. Empty model → "" (None / Offline → no radio attached).
 static std::string build_radio_spec(const mj::Value& msg) {
-    const std::string backend = msg.get_string("backend", "netrigctl");
-    if (backend == "none") return "";
-    if (backend == "serial") {
-        const std::string model = msg.get_string("model", "1");
-        const std::string port  = msg.get_string("serial");
+    const std::string model = msg.get_string("model", "");
+    if (model.empty()) return "";
+    int model_id = 0;
+    try { model_id = std::stoi(model); } catch (...) { return "hamlib:" + model + ":"; }
+    const std::string ptype = pal::rig_port_type(model_id);
+    if (ptype == "network") {
+        // "hamlib:<model>:tcp://<host>:<port>" — works for any network backend
+        // (NET rigctl #2, FLRig #4, Quisk #10, GQRX #11, …), not just model 2.
+        return "hamlib:" + model + ":tcp://" + msg.get_string("host", "127.0.0.1")
+             + ":" + msg.get_string("port", "4532");
+    }
+    if (ptype == "serial") {
+        const std::string port  = msg.get_string("serial", "");
         const int baud  = static_cast<int>(msg.get_number("baud", 0));
         // Line-state policy: defaults ON/ON/200 wenn nicht gesetzt
         const std::string dtr = msg.get_string("dtr", "on");
@@ -232,9 +244,8 @@ static std::string build_radio_spec(const mj::Value& msg) {
              + ",rts=" + rts
              + ",stab=" + std::to_string(stab);
     }
-    // netrigctl (TCP rigctld) — hamlib model 2 = NET_RIGCTL
-    return "hamlib:2:tcp://" + msg.get_string("host", "127.0.0.1")
-         + ":" + msg.get_string("port", "4532");
+    // other (Dummy / USB / Audio / …) — no connection parameters.
+    return "hamlib:" + model + ":";
 }
 
 // Thread-safe mailbox: GPS/SFI worker callbacks write here; the main loop
@@ -454,12 +465,9 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "ACCEPT")           { return pc(msg, ctrl, "CMD:ACCEPT"); }
     if (cmd == "REJECT")           { return pc(msg, ctrl, "CMD:REJECT"); }
     if (cmd == "TERMINATE") {
-        // If the voice path owns the VAC, release it FIRST so the modem's
-        // symbol-source render path is restored and the TWAS-terminator the SM
-        // is about to send actually goes out on air (passthrough would override
-        // it with silence). The SM's TX_DRAIN_TIMEOUT_MS safety net bounds the
-        // autonomous Twa-timeout case where this ordering isn't possible.
-        if (ctx.voice && ctx.voice->passthrough_active()) ctx.voice->on_link_state(false);
+        // AudioTransport's TX arbiter sees is_tx_active()=true when the SM
+        // queues the TWAS burst and immediately switches the VAC to the symbol
+        // path, so no pre-release of the voice path is needed here.
         return pc(msg, ctrl, "CMD:TERMINATE");
     }
     if (cmd == "RESET_IDLE_TIMER") { return pc(msg, ctrl, "CMD:RESET_IDLE_TIMER"); }
@@ -903,7 +911,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (spec.empty()) {
             mj::Value r = make_reply(msg, true);
             r.set("reachable", mj::Value::boolean(false));
-            r.set("status", mj::Value::string("no backend selected"));
+            r.set("status", mj::Value::string("no model selected"));
             return mj::dump(r);
         }
         auto probe = pal::create_radio(spec);
@@ -919,7 +927,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         // Tear down any existing radio first.
         if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
         const std::string spec = build_radio_spec(msg);
-        if (spec.empty()) {  // "none" backend → stay disconnected, succeed
+        if (spec.empty()) {  // empty model → None / Offline, stay disconnected, succeed
             mj::Value r = make_reply(msg, true);
             r.set("connected", mj::Value::boolean(false));
             r.set("status", mj::Value::string("not attached"));
@@ -957,6 +965,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             v.set("id",    mj::Value::number(e.model));
             v.set("mfg",   mj::Value::string(e.mfg));
             v.set("macro", mj::Value::string(e.macro));
+            v.set("port",  mj::Value::string(e.port_type));
             arr.push_back(std::move(v));
         }
         r.set("rigs", std::move(arr));
@@ -1106,13 +1115,34 @@ int main(int argc, char* argv[]) {
     GpsService       gps_svc;
     SfiService       sfi_svc;
     PendingUpdate    pending;
-    VoicePathManager voice_mgr;   // dynamic owner of the VAC (modem ↔ voice)
+    AudioTransport   transport;   // declared first → destroyed after voice_mgr
+    VoicePathManager voice_mgr;   // declared second → destroyed before transport
 
     // Voice PTT counts as link activity: reset the SM idle (Twa) timer so a QSO
     // does not auto-terminate mid-conversation.
     voice_mgr.on_ptt_activity = [&]() {
         if (ctrl.is_link_active()) ctrl.reset_link_idle_timer();
     };
+
+    // Decoder: always feed the ALE demodulator (including during voice links so
+    // remote TWAS terminations are decoded). Spectrum callback fires from here.
+    transport.set_decoder_sink([&](const int16_t* buf, size_t n) {
+        ctrl.feed_audio(buf, static_cast<uint32_t>(n));
+    });
+    // Speaker: VoicePathManager self-registers as an RxSink on passthrough
+    // entry and delegates here. The transport gates TX suppression; VPM gates
+    // passthrough state via add/remove_rx_sink. One callback, no coupling.
+    voice_mgr.on_speaker_pcm = [&](const int16_t* buf, size_t n) {
+        std::vector<uint8_t> f;
+        f.reserve(1 + n * sizeof(int16_t));
+        f.push_back(0x01);  // stream tag: voice PCM (int16 LE)
+        const auto* p = reinterpret_cast<const uint8_t*>(buf);
+        f.insert(f.end(), p, p + n * sizeof(int16_t));
+        ws.send_binary(f.data(), f.size());
+    };
+    voice_mgr.set_transport(&transport);
+    transport.set_media_producer(&voice_mgr);
+    transport.set_protocol_tx_query([&ctrl]() { return ctrl.is_tx_active(); });
 
     BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path,
                    /*audio_in*/"", /*audio_out*/"",
@@ -1278,9 +1308,9 @@ int main(int argc, char* argv[]) {
     ctrl.start_available();
 
     // ── Main loop — mirrors ale_cli.cpp exactly, plus WS command drain ─────
-    std::vector<int16_t> rx_buf;
-    std::string last_state    = ctrl.display_state();
-    bool        last_lbt_busy = false;
+    std::string last_state      = ctrl.display_state();
+    bool        last_lbt_busy   = false;
+    std::string last_voice_state;   // "" = not in voice session
     while (g_running) {
         const uint32_t t = static_cast<uint32_t>(timer->get_time_ms());
 
@@ -1300,30 +1330,18 @@ int main(int argc, char* argv[]) {
 
         ctrl.update(t);
 
-        // Keep the voice manager bound to the live audio/radio (cheap no-op
-        // when unchanged) so it tracks AUDIO_OPEN / RIG_CONNECT device swaps.
+        // Keep the voice manager and transport bound to the live audio/radio
+        // (cheap no-ops when unchanged) so they track AUDIO_OPEN / RIG_CONNECT
+        // device swaps.
         voice_mgr.attach(audio.get(), radio.get());
-
-        if (audio) {
-            rx_buf.clear();
-            audio->tick(rx_buf);
-            if (voice_mgr.passthrough_active()) {
-                // VOICE_PASSTHROUGH: the VAC is a transparent radio<->browser pipe.
-                // Radio RX -> browser speaker (only while not transmitting). The
-                // decoder is NOT fed -- the modem has released the VAC.
-                if (!rx_buf.empty() && !voice_mgr.ptt()) {
-                    std::vector<uint8_t> f;
-                    f.reserve(1 + rx_buf.size() * sizeof(int16_t));
-                    f.push_back(0x01);  // stream tag: voice PCM (int16 LE)
-                    const auto* p = reinterpret_cast<const uint8_t*>(rx_buf.data());
-                    f.insert(f.end(), p, p + rx_buf.size() * sizeof(int16_t));
-                    ws.send_binary(f.data(), f.size());
-                }
-            } else if (!rx_buf.empty()) {
-                // ALE_EXCLUSIVE: unchanged modem path -- VAC capture -> demodulator.
-                ctrl.feed_audio(rx_buf.data(), static_cast<uint32_t>(rx_buf.size()));
-            }
-        }
+        transport.attach(audio.get());
+        // Capture RX → fan-out to decoder (always) + speaker (when eligible) →
+        // arbitrate TX source on the VAC. No-op when audio is null.
+        transport.tick();
+        // Gate occupancy detection off during voice PTT: the VAC loopback of
+        // our own TX would drive the detector BUSY just like ALE TX does.
+        // set_voice_tx_active syncs state into update()'s gate on the next tick.
+        ctrl.set_voice_tx_active(transport.media_tx_active());
 
         std::string raw;
         while (ws.pop_message(raw)) {
@@ -1355,6 +1373,21 @@ int main(int argc, char* argv[]) {
             e.set("value", mj::Value::string(s));
             ws.send_text(mj::dump(e));
             last_state = std::move(s);
+        }
+
+        // Voice session sub-state: push on every sub-state transition so the GUI
+        // can distinguish receiving / transmitting / protocol-burst / inactive.
+        {
+            const std::string vst =
+                transport.protocol_pending()   ? "protocol" :
+                transport.transmitting_voice() ? "transmitting" :
+                transport.receiving_voice()    ? "receiving" : "";
+            if (vst != last_voice_state) {
+                mj::Value e = make_event("voice_session");
+                e.set("state", mj::Value::string(vst));
+                ws.send_text(mj::dump(e));
+                last_voice_state = vst;
+            }
         }
 
         // Channel-occupancy indicator: push on every busy→idle / idle→busy edge

@@ -320,6 +320,7 @@ endif()
 
 add_library(ale_app_core
     src/App/ale_controller.cpp
+    src/App/audio_transport.cpp
     src/App/freq_select_manager.cpp
     src/App/gps_service.cpp
     src/App/sfi_service.cpp
@@ -574,6 +575,11 @@ add_executable(test_voice_path_manager tests/chan/unit/test_voice_path_manager.c
 target_link_libraries(test_voice_path_manager ale_app_core)
 target_include_directories(test_voice_path_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME VoicePathManager COMMAND test_voice_path_manager)
+
+add_executable(test_audio_transport tests/chan/unit/test_audio_transport.cpp)
+target_link_libraries(test_audio_transport ale_app_core)
+target_include_directories(test_audio_transport PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AudioTransport COMMAND test_audio_transport)
 
 add_executable(test_lqa_bilateral_tx tests/chan/unit/test_lqa_bilateral_tx.cpp)
 target_link_libraries(test_lqa_bilateral_tx ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)

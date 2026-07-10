@@ -450,24 +450,14 @@
           <div class="ssec-title">Radio / CAT Control</div>
 
           <div class="fg">
-            <label class="flabel">Backend</label>
-            <div class="fradio-group" id="rigBackend">
-              <label class="fradio-opt">
-                <input type="radio" name="rigbe" value="netrigctl" checked onchange="updateRigFields()">
-                <span class="fradio-dot"></span> TCP netrigctl
-              </label>
-              <label class="fradio-opt">
-                <input type="radio" name="rigbe" value="serial" onchange="updateRigFields()">
-                <span class="fradio-dot"></span> Serial (Hamlib)
-              </label>
-              <label class="fradio-opt">
-                <input type="radio" name="rigbe" value="none" onchange="updateRigFields()">
-                <span class="fradio-dot"></span> None / Offline
-              </label>
-            </div>
+            <label class="flabel" for="rigModel">Hamlib Model</label>
+            <select class="fselect" id="rigModel" onchange="updateRigFields()">
+              <option value="">— None / Offline —</option>
+            </select>
+            <div class="fhint">Single selector for every Hamlib-supported rig. Network backends (NET rigctl, FLRig, Quisk, GQRX, …) reveal Host/Port below; serial backends reveal the serial device + line-state; Dummy/USB need nothing.</div>
           </div>
 
-          <div id="rigFieldsTcp">
+          <div id="rigFieldsTcp" style="display:none">
             <div class="fg-row col2">
               <div>
                 <label class="flabel">Host</label>
@@ -484,7 +474,7 @@
           </div>
 
           <div id="rigFieldsSerial" style="display:none">
-            <div class="fg-row col3">
+            <div class="fg-row col2">
               <div>
                 <label class="flabel">Serial Port</label>
                 <input class="finput" id="rigSerial" type="text" placeholder="COM3 or /dev/ttyUSB0">
@@ -494,12 +484,6 @@
                 <select class="fselect" id="rigBaud">
                   <option>4800</option><option>9600</option><option selected>19200</option>
                   <option>38400</option><option>57600</option>
-                </select>
-              </div>
-              <div>
-                <label class="flabel">Hamlib Model</label>
-                <select class="fselect" id="rigModel">
-                  <option value="">— connect bridge to load —</option>
                 </select>
               </div>
             </div>

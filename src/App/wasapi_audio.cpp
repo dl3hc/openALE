@@ -273,7 +273,11 @@ bool WasapiDevice::open(const std::string& in_device, const std::string& out_dev
 {
     if (open_) return true;
 
-    const std::string out_name = out_device.empty() ? in_device : out_device;
+    // RX-only mode: an empty out_device means "capture only, no render" — used by
+    // passive listeners (ale_monitor) that never transmit and have no playback
+    // endpoint to pair with the capture device. The main app always passes both
+    // devices, so this path is monitor-only and does not change openALE behaviour.
+    const bool rx_only = out_device.empty();
 
     if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return false;
     com_init_ = true;
@@ -288,12 +292,14 @@ bool WasapiDevice::open(const std::string& in_device, const std::string& out_dev
     stop_event_    = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (!render_event_ || !capture_event_ || !stop_event_) { close(); return false; }
 
-    if (!open_render(out_name))  { close(); return false; }
-    if (!open_capture(in_device)){ close(); return false; }
+    if (!rx_only && !open_render(out_device)) { close(); return false; }
+    if (!open_capture(in_device))              { close(); return false; }
 
     // Both resamplers are audio-thread-only — created here (before thread starts)
-    // so the thread start provides the happens-before edge.
-    at_tx_resampler_ = std::make_unique<Resampler>(MODEM_RATE, r_rate_);
+    // so the thread start provides the happens-before edge. The TX resampler drives
+    // the render path, which is absent in RX-only mode.
+    if (!rx_only)
+        at_tx_resampler_ = std::make_unique<Resampler>(MODEM_RATE, r_rate_);
     rx_resampler_    = std::make_unique<Resampler>(c_rate_, MODEM_RATE);
 
     // Pre-reserve audio-thread scratch buffers to avoid RT allocations.
@@ -301,13 +307,18 @@ bool WasapiDevice::open(const std::string& in_device, const std::string& out_dev
     at_pcm_filt_.reserve(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
     at_tx_filter_.reset();
 
-    std::fprintf(stderr,
-        "[audio] WASAPI render '%s' %u Hz/%uch %s  |  capture '%s' %u Hz/%uch %s  (modem %u Hz)\n",
-        r_name_.c_str(), r_rate_, r_ch_, r_float_ ? "f32" : "pcm",
-        c_name_.c_str(), c_rate_, c_ch_, c_float_ ? "f32" : "pcm",
-        MODEM_RATE);
+    if (rx_only)
+        std::fprintf(stderr,
+            "[audio] WASAPI RX-only capture '%s' %u Hz/%uch %s  (modem %u Hz, no render)\n",
+            c_name_.c_str(), c_rate_, c_ch_, c_float_ ? "f32" : "pcm", MODEM_RATE);
+    else
+        std::fprintf(stderr,
+            "[audio] WASAPI render '%s' %u Hz/%uch %s  |  capture '%s' %u Hz/%uch %s  (modem %u Hz)\n",
+            r_name_.c_str(), r_rate_, r_ch_, r_float_ ? "f32" : "pcm",
+            c_name_.c_str(), c_rate_, c_ch_, c_float_ ? "f32" : "pcm",
+            MODEM_RATE);
 
-    r_client_->Start();
+    if (r_client_) r_client_->Start();
     c_client_->Start();
 
     audio_running_ = true;
@@ -443,6 +454,7 @@ void WasapiDevice::audio_loop()
 
 void WasapiDevice::service_render()
 {
+    if (!r_client_ || !r_svc_) return;   // RX-only mode: no render device
     UINT32 padding = 0;
     if (FAILED(r_client_->GetCurrentPadding(&padding))) return;
 

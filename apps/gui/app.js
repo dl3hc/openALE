@@ -58,8 +58,13 @@ function setBridgeOverlay(show) {
   const el = document.getElementById('bridgeOverlay');
   el.classList.toggle('hidden', !show);
   if (show) {
-    const port = window.location.port || '…';
-    document.getElementById('bridgeOverlayCmd').textContent = 'openALE --port ' + port;
+    const cmd = document.getElementById('bridgeOverlayCmd');
+    if (window.location.protocol === 'file:') {
+      cmd.textContent = 'Open via http://localhost:PORT/index.html (not file://)';
+    } else {
+      const port = window.location.port || '…';
+      cmd.textContent = 'openALE --port ' + port;
+    }
   }
 }
 
@@ -78,7 +83,11 @@ function bridgeSend(cmd, args, onReply) {
 function connectBridge() {
   let ws;
   try { ws = new WebSocket(bridgeWsUrl()); }
-  catch { return; }
+  catch {
+    if (!bridgeReconnectTimer)
+      bridgeReconnectTimer = setTimeout(() => { bridgeReconnectTimer = null; connectBridge(); }, 1000);
+    return;
+  }
   bridgeWs = ws;
   // Spectrum frames arrive as binary; without this they'd be Blobs and the
   // `ev.data instanceof ArrayBuffer` check below would never match → waterfall
@@ -434,11 +443,11 @@ const ctx    = canvas.getContext('2d');
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TONES  = [750, 1000, 1250, 1500, 1750, 2000, 2250, 2500]; // ALE 8-FSK tones (Hz)
-const BW_LO  = 0, BW_HI = 4000;       // ❶ displayed Hz range; must equal 0…Nyquist
+const BW_LO  = 0, BW_HI = 3500;       // ❶ displayed Hz range (0–3.5 kHz)
 const ALE_LO = 750, ALE_HI = 2500;    // ALE sub-band for the band-frame overlay only
 const ALE_GUARD = 125;                // frame padding beyond the edge tones (Hz)
-const AXIS_MAJOR = [0, 1000, 2000, 3000, 4000];  // labelled gridlines (Hz)
-const AXIS_MINOR = [500, 1500, 2500, 3500];      // unlabelled gridlines (Hz)
+const AXIS_MAJOR = [0, 1000, 2000, 3000, 3500];  // labelled gridlines (Hz)
+const AXIS_MINOR = [500, 1500, 2500];             // unlabelled gridlines (Hz)
 
 let rows = [];
 let wfState  = 'scanning';
@@ -486,7 +495,7 @@ function buildTicks() {
     el.appendChild(lbl);
   });
 
-  // ALE 8-FSK band frame inside the 0–4 kHz window, padded by ALE_GUARD on each
+  // ALE 8-FSK band frame inside the 0–3.5 kHz window, padded by ALE_GUARD on each
   // side (625–2625 Hz) so it encloses the full waveform, not just the edge tones.
   const bandL = (ALE_LO - ALE_GUARD - BW_LO) / span * 100;
   const bandR = (ALE_HI + ALE_GUARD - BW_LO) / span * 100;
@@ -1284,6 +1293,7 @@ function openSettings() {
   document.getElementById('settingsModal').classList.remove('hidden');
   showSec('identity');
   enumDevices();
+  populateRigDropdown();
 }
 
 // Closing Settings does NOT auto-tune the radio — per the workflow, no
@@ -1312,16 +1322,26 @@ function showSec(sec) {
     el.classList.toggle('active', el.dataset.sec === sec));
 }
 
-// Rig backend field visibility
+// Rig connection-field visibility, driven by the selected Hamlib model's port
+// type (network → Host/Port, serial → device/baud/line-state, other/none →
+// nothing). The model dropdown is the single selector; there is no separate
+// backend radio group. rigPortTypeById is populated by populateRigDropdown().
+let rigPortTypeById = {};
 function updateRigFields() {
-  const val = document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl';
-  document.getElementById('rigFieldsTcp').style.display    = val === 'netrigctl' ? '' : 'none';
-  document.getElementById('rigFieldsSerial').style.display = val === 'serial'    ? '' : 'none';
+  const sel = document.getElementById('rigModel');
+  const ptype = rigPortTypeById[sel?.value ?? ''] || '';
+  const tcp = document.getElementById('rigFieldsTcp');
+  const ser = document.getElementById('rigFieldsSerial');
+  if (tcp) tcp.style.display = ptype === 'network' ? '' : 'none';
+  if (ser) ser.style.display = ptype === 'serial'  ? '' : 'none';
 }
 
 // Populate the Hamlib model dropdown from the bridge's RIG_LIST reply.
 // Groups entries by manufacturer using <optgroup>. Restores any previously
-// selected model number after rebuilding the list.
+// selected model number after rebuilding the list. Records each model's port
+// type (network/serial/other) so updateRigFields() can adapt the connection
+// fields. Defaults to NET rigctl (model 2) on first load — preserves the prior
+// TCP-netrigctl default — then re-evaluates field visibility.
 function populateRigDropdown() {
   const sel = document.getElementById('rigModel');
   if (!sel || !bridgeConnected) return;
@@ -1329,6 +1349,7 @@ function populateRigDropdown() {
   bridgeSend('RIG_LIST', {}, (r) => {
     if (!r.ok || !Array.isArray(r.rigs)) return;
     sel.innerHTML = '';
+    rigPortTypeById = { '': '' };  // "None / Offline" → no fields
     let grp = null, lastMfg = null;
     for (const e of r.rigs) {
       if (e.mfg !== lastMfg) {
@@ -1340,9 +1361,17 @@ function populateRigDropdown() {
       const opt = document.createElement('option');
       opt.value = String(e.id);
       opt.textContent = e.macro;
+      rigPortTypeById[String(e.id)] = e.port || 'other';
       grp.appendChild(opt);
     }
-    if (prev) sel.value = prev;
+    if (prev && [...sel.options].some(o => o.value === prev)) {
+      sel.value = prev;
+    } else if ([...sel.options].some(o => o.value === '2')) {
+      sel.value = '2';   // NET rigctl — default network backend
+    } else {
+      sel.value = '';
+    }
+    updateRigFields();
   });
 }
 
@@ -1453,14 +1482,16 @@ document.getElementById('cfgTxVol')?.addEventListener('input', function() {
 // button label and the radio-control lock (see setRadioCtrlEnabled).
 let rigConnected = false;
 
-// Read the structured rig fields the bridge needs for create_radio().
+// Read the structured rig fields the bridge needs for create_radio(). The model
+// is the single selector; the bridge derives the connection kind from it, so
+// there is no separate "backend" field. Host/Port and serial fields are both
+// read regardless — the bridge uses only the ones matching the model's port type.
 function rigArgs() {
   return {
-    backend: document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl',
+    model:   document.getElementById('rigModel').value,
     host:    document.getElementById('rigHost').value,
     port:    document.getElementById('rigPort').value,
     serial:  document.getElementById('rigSerial').value,
-    model:   document.getElementById('rigModel').value,
     baud:    parseInt(document.getElementById('rigBaud')?.value, 10) || 0,
     dtr:     document.getElementById('rigDtr')?.value  ?? 'on',
     rts:     document.getElementById('rigRts')?.value  ?? 'on',
@@ -1498,13 +1529,13 @@ function connectRig() {
     el.textContent = '✗ Not connected to openALE — start it first';
     return;
   }
-  const backend = document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl';
-  if (rigConnected || backend === 'none') {
+  const model = document.getElementById('rigModel').value;
+  if (rigConnected || model === '') {
     el.textContent = rigConnected ? '⟳ Disconnecting…' : '⟳ …';
     bridgeSend('RIG_DISCONNECT', {}, (r) => {
       applyRigState(false);
       el.classList.add('ok');
-      el.textContent = backend === 'none' ? '○ offline (no radio)' : '○ disconnected';
+      el.textContent = model === '' ? '○ offline (no radio)' : '○ disconnected';
     });
     return;
   }

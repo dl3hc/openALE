@@ -1,265 +1,202 @@
-# Voice Audio Routing & Dynamic Audio Path Management
+# Voice Audio Routing
 
-**Status:** Design + implementation plan (analog voice). Digital-voice extension point
-defined, not yet implemented.
-**Date:** 2026-07-08
-**Scope:** Simultaneous ALE operation and operator voice communication over separate audio
-paths, with the radio (VAC) audio path ownership switched automatically by ALE link state.
+**Status:** Implemented and tested (`ctest` 57/57).
+**Scope:** Simultaneous ALE operation + operator voice over the radio (VAC) audio path.
 
 ---
 
 ## 1. Problem
 
-OpenALE today uses a **single audio device** — a Virtual Audio Cable (Windows) or loopback
-(Linux) — as the exclusive bridge between the ALE modem and the radio:
+A single VAC bridges the ALE modem to the radio. The old `VoicePathManager`
+implementation handed the VAC to the voice path exclusively during a phone-patch link,
+which had two critical defects:
 
-- RX: `audio->tick(rx_buf)` → `ALEController::feed_audio()` → demodulator.
-- TX: modulator → `IAudioDriver::set_symbol_source()` pull callback → ToneGenerator →
-  TxBandpass → resampler → device → radio.
-- PTT is radio CAT only (`pal::IRadio::set_ptt`). The operator's manual-PTT button keys the
-  radio with **modem output**. There is **no operator-voice / microphone path.**
+1. **Remote termination impossible.** The ALE decoder (`feed_audio`) was gated behind an
+   `else`—never called during voice passthrough. When the remote station sent `TWAS` to
+   end the link, it was forwarded to the browser speaker and silently discarded.
+2. **Local termination hack.** The bridge forced `voice->on_link_state(false)` before
+   forwarding `CMD:TERMINATE`, temporarily restoring the modem symbol path to allow
+   the termination burst to go out. This was fragile and relied on the arbiter not
+   noticing the path had been illegally released.
 
-The requirement adds two things:
+Both defects share the same root cause: exclusive VAC ownership prevents the ALE decoder
+from running in parallel with voice passthrough. RX is not a contended resource—only TX is.
 
-1. **Simultaneous ALE + voice** via separate audio paths — the modem keeps the VAC; the operator
-   uses a physical mic/speaker, **or the mic/speaker of a connected smartphone/tablet when using
-   the mobile GUI**.
-2. **Dynamic ownership** of the radio (VAC) audio path, switched **automatically by ALE link
-   state**: modem-exclusive while not linked; transparent bidirectional voice passthrough while
-   LINKED; back to modem on link termination. PTT controls the half-duplex direction. Must
-   support analog voice now and digital voice later without architectural change.
+---
 
-## 2. Key architectural decision
+## 2. Architecture
 
-The smartphone/tablet mic/speaker is reachable **only** from the mobile GUI running in a browser
-on that device. The bridge (openALE) runs on the PC and cannot access a phone's audio hardware
-directly. Therefore the operator-side voice path **must be browser-mediated**: the GUI captures
-mic via `getUserMedia` and plays RX via Web Audio, streaming PCM over the existing WebSocket as
-binary frames. This single path unifies the desktop case (PC mic/speaker through the desktop
-browser) and the mobile case (phone mic/speaker through the mobile browser).
+### 2.1 AudioTransport — central hub
 
-A PC-local second WASAPI/ALSA device on the bridge side is a possible future low-latency option
-for desktop, but it does **not** satisfy the smartphone requirement and is out of scope.
+`include/App/audio_transport.h` / `src/App/audio_transport.cpp`
 
-## 3. Constraint honoured
-
-The modem/decoder signal-processing logic (ToneGenerator, modulator, demodulator, Goertzel,
-Golay, WordGridTracker) is **not modified**. The only audio-adjacent change is in the
-**transport layer** (`pal::IAudioDriver`): an optional raw-PCM TX source so the VAC device can
-carry arbitrary PCM during passthrough. The decoder is simply *not fed* during passthrough — its
-code is untouched.
-
-## 4. Architecture
-
-### 4.1 Two audio domains
-
-| Domain | Device | Owner when not linked | Owner when LINKED |
-|---|---|---|---|
-| Radio side | modem `AudioDevice` = VAC (`BridgeCtx.audio`) | modem (symbol RX/TX) | transparent pipe (browser ↔ radio) |
-| Operator side | **browser Web Audio** (mic `getUserMedia`, speaker `AudioWorklet`) | idle / not captured | voice PCM over WebSocket |
-
-No second native audio device is opened by the bridge. **The browser is the operator-side
-device.**
-
-### 4.2 Audio-path ownership state machine (single authority)
-
-Driven **solely** by ALE link state (`on_link_established` / `on_link_terminated`, already wired
-in `apps/ale_bridge.cpp`).
+The transport permanently owns the VAC and drives all audio movement each tick:
 
 ```
-                 link_established (voice armed)
-  ALE_EXCLUSIVE ─────────────────────────────────▶ VOICE_PASSTHROUGH
-       ▲                                                │  PTT off: radio RX → browser speaker
-       │                                                │  PTT on : browser mic → radio TX (speaker muted)
-       │  link_terminated (any reason)                  │
-       └────────────────────────────────────────────────┘
+                  ┌─────────────────────────────────────┐
+       VAC RX ───▶│  tick()  [bridge main loop]         │──▶ ctrl.feed_audio()  [always]
+                  │                                      │
+                  │  RX fan-out:                         │──▶ on_speaker_pcm()  [when registered
+                  │    decoder_sink_  (permanent)        │     + not TX]
+                  │    rx_sinks_[]    (dynamic)          │
+                  │                                      │
+                  │  TX arbiter: arbitrate_tx_()         │──▶ VAC set_pcm_source()
+                  └─────────────────────────────────────┘
 ```
 
-- **ALE_EXCLUSIVE** (IDLE / SCANNING / CALLING / HANDSHAKE / SOUNDING, or LINKED-but-voice-not-armed):
-  today's behaviour, byte-for-byte unchanged. Modem owns the VAC; `feed_audio`→demodulator;
-  TX = symbol source.
-- **VOICE_PASSTHROUGH** (LINKED **and** voice armed): the modem *releases* the VAC. RX from VAC
-  (radio) → browser speaker. Browser mic → VAC → radio TX, **gated by PTT**. Demodulator not fed.
-  `ALEController::update()` keeps running so the SM's Twa idle-timeout can terminate the link —
-  which is exactly what returns ownership to the modem (the spec's link-termination rule).
+**RX fan-out (the core fix):**
+- `decoder_sink_` (bound to `ctrl.feed_audio`) is called **every tick, in every state**.
+  Voice passthrough no longer mutes the decoder. A remote `TWAS` arriving during a QSO
+  is decoded normally and triggers `on_link_terminated`.
+- `rx_sinks_[]` is a list of dynamic `RxSink*` entries, called each tick **when not
+  transmitting** (both protocol and media TX suppress them — half-duplex). Dynamic sinks
+  self-register / self-unregister; the transport does not know their lifecycle.
 
-**Exclusive-ownership invariant:** at every instant exactly one consumer owns the VAC. Entering
-passthrough = stop `feed_audio` + set `pcm_source` (mic). Leaving = clear `pcm_source` (restores
-symbol source, already registered) + resume `feed_audio`. The modem device is **never
-closed/reopened** across the transition (avoids re-acquisition latency and device-loss races).
+**TX arbitration by priority (runs every tick):**
 
-### 4.3 PTT (half-duplex direction)
+| Priority | Condition | pcm_source installed |
+|---|---|---|
+| 1. Protocol | `ctrl.is_tx_active()` | `nullptr` → modem symbol path |
+| 2. Media | `vpm.media_tx_wanted()` (PTT + passthrough) | mic ring pull |
+| 3. Idle | `vpm.passthrough_active()` | silence |
+| 4. ALE exclusive | (default) | `nullptr` → modem symbol path |
 
-HF voice is simplex. Inside VOICE_PASSTHROUGH:
+`set_pcm_source` is only called on state **change** (`last_source_` tracking), never
+redundantly. The modem symbol source stays registered for the life of the device.
 
-| PTT | Radio | Mic → VAC TX | VAC RX → speaker |
-|---|---|---|---|
-| off (receive) | RX | ignored (mic not pulled) | played |
-| on (transmit) | TX (CAT PTT asserted) | streamed to radio | muted |
+### 2.2 VoicePathManager — media producer / RxSink
 
-The existing mobile PTT button (`#pttBtnMob` / `#pttBtn`) already sends `SET_PTT`; the bridge
-**context-routes** it: `voice->set_ptt()` when passthrough active, `ctrl.set_manual_ptt()`
-otherwise (legacy ALE manual PTT, unchanged). Voice PTT does **not** invoke ALE
-`ptt_lead`/`ptt_tail` (those are ALE-modem word-framing concerns). Voice PTT activity resets the
-link idle timer (Twa) so a QSO does not time out.
+`include/App/voice_path_manager.h` / `src/App/voice_path_manager.cpp`
 
-## 5. Components
+VPM implements the `RxSink` interface and self-manages its registration:
 
-### 5.1 `pal::IAudioDriver` — raw-PCM TX source (transport layer, additive)
+- **`enter_passthrough_()`**: calls `transport_->add_rx_sink(*this)` — VPM joins the
+  dynamic sink list and will receive speaker audio each tick.
+- **`exit_passthrough_()`**: calls `transport_->remove_rx_sink(*this)` — VPM leaves
+  the list before releasing PTT and resetting mode.
+- **`on_rx_audio(buf, n)`**: calls `on_speaker_pcm(buf, n)` — the bridge-provided
+  callback that sends the tagged binary WS frame (0x01) to the browser.
 
-`include/PAL/audio_driver.h` + `wasapi_audio.cpp` / `alsa_audio.cpp` / `null_audio.cpp`.
+VPM **never calls `set_pcm_source()`** — TX source arbitration belongs entirely to the
+transport. VPM exposes `media_tx_wanted()` (PTT + passthrough) and `pull_mic_pcm()`
+(SPSC ring consumer) so the transport can select and pull the mic source.
+
+### 2.3 State machine
+
+```
+              link_established (voice armed)
+ALE_EXCLUSIVE ──────────────────────────────▶ VOICE_PASSTHROUGH
+     ▲          enter_passthrough_():              │  PTT off: decoder + speaker
+     │            add_rx_sink(*this)               │  PTT on : decoder only (mic TX)
+     │                                             │
+     │  link_terminated (any reason)               │
+     └─────────────────────────────────────────────┘
+       exit_passthrough_():
+         remove_rx_sink(*this)
+```
+
+The modem's `ctrl.update()` continues running in both states so the SM's Twa idle-timeout
+can fire and terminate the link — which is exactly what calls `on_link_terminated` and
+drives the state machine back to `ALE_EXCLUSIVE`.
+
+### 2.4 Observable session sub-states (Phase 4)
+
+`AudioTransport` exposes three read-only flags, polled by the bridge after each tick:
+
+| Method | Meaning |
+|---|---|
+| `receiving_voice()` | Passthrough active, radio in RX, speaker forwarded |
+| `transmitting_voice()` | Media (mic) TX won arbitration this tick |
+| `protocol_pending()` | Protocol burst preempting active voice session |
+
+The bridge pushes a `voice_session {state: "receiving"|"transmitting"|"protocol"|""}` event
+on every sub-state transition. `""` = not in a voice session.
+
+---
+
+## 3. Wire protocol
+
+Binary WS frames carry a 1-byte stream tag:
+
+| Tag | Direction | Content |
+|---|---|---|
+| `0x00` | bridge → browser | Spectrum (float32 LE FFT bins) |
+| `0x01` | bridge → browser | Voice RX PCM (int16 LE, 8 kHz mono) |
+| `0x01` | browser → bridge | Mic TX PCM (int16 LE, 8 kHz mono) |
+
+---
+
+## 4. Threading model
+
+```
+bridge main loop:
+  ctrl.feed_audio()  ──────────────────────────────────────▶ decoder
+  on_speaker_pcm()   ──▶ ws.send_binary(0x01) ──▶ browser speaker
+
+browser → WS ──▶ main loop: push_mic_pcm() ──▶ mic_ring_ [SPSC]
+                                                     │
+                                          audio render thread:
+                                          pull_mic_pcm() → resampler → VAC TX
+```
+
+- The mic ring is SPSC lock-free: main loop produces, render thread consumes.
+- All other calls (decoder, speaker, arbitration) run on the main loop.
+- `set_pcm_source` is called from the main loop; the render thread reads the snapshot
+  atomically per the existing driver guarantee (`sym_src_mtx_`).
+
+---
+
+## 5. Bridge setup (summary)
 
 ```cpp
-// New virtual, default no-op (existing symbol path untouched when null).
-// When set: the audio render thread pulls raw 8 kHz mono int16 PCM from fn
-// (skipping ToneGenerator + TxBandpass), resamples to the device rate, writes to
-// the render buffer. Returns samples filled; 0 ⇒ silence. Thread-safe w.r.t. the
-// main thread. Passing nullptr restores the symbol-source render path.
-virtual void set_pcm_source(std::function<size_t(int16_t* out, size_t want)> fn) { (void)fn; }
+// Transport (declared before VoicePathManager — destroyed after it)
+AudioTransport   transport;
+VoicePathManager voice_mgr;
+
+// Wire up
+transport.set_decoder_sink([&](const int16_t* buf, size_t n) {
+    ctrl.feed_audio(buf, n);          // permanent, every tick
+});
+voice_mgr.on_speaker_pcm = [&](const int16_t* buf, size_t n) {
+    ws.send_binary(tagged_frame(0x01, buf, n));  // called by VPM's on_rx_audio
+};
+voice_mgr.set_transport(&transport);  // enables self-registration
+transport.set_media_producer(&voice_mgr);
+transport.set_protocol_tx_query([&]() { return ctrl.is_tx_active(); });
+
+// Each main-loop tick:
+voice_mgr.attach(audio.get(), radio.get()); // no-op when unchanged
+transport.attach(audio.get());              // no-op when unchanged
+transport.tick();                           // capture → fan-out → arbitrate
 ```
 
-- WASAPI/ALSA: in `service_render()`, branch on `pcm_pull_` vs `sym_pull_`. The PCM path reuses
-  the existing TX resampler (`at_tx_resampler_`) — **no new DSP**. It does **not** apply
-  `tx_volume_` (that is a modem-level setting; voice level is controlled browser-side) and does
-  **not** pass through `TxBandpass` (the 750–2500 Hz ALE bandpass is too narrow for voice; voice
-  is full-band baseband for the radio's SSB modulator).
-- `frames_rendered_` / word-completion accounting stays on the symbol path only (completion is an
-  ALE-modem concept; the PCM path renders continuously and never arms frame completions).
-- NullAudioDriver: stores `pcm_pull_` so `VoicePathManager` tests can exercise the pull path.
+---
 
-This is the **only** signal-adjacent change and it lives in the driver, not the modem/decoder.
+## 6. Future digital-voice extension
 
-### 5.2 `VoicePathManager` — new, bridge-owned
-
-`include/App/voice_path_manager.h` + `src/App/voice_path_manager.cpp`. Added to the `ale_app_core`
-CMake target. Bridge-owned, mirroring the established rule that audio/radio lifecycle is owned by
-the bridge caller, not the controller.
-
-Responsibilities:
-- Hold a pointer to the modem `AudioDevice` (VAC) and to `pal::IRadio` (for PTT).
-- One SPSC lock-free ring `mic_ring_` (browser mic → modem render thread). The speaker direction
-  needs no ring: the main loop has `rx_buf` in hand and sends it straight to the browser.
-- Mode + PTT state, enforcing the exclusive-ownership invariant.
-- API:
-  - `void attach(AudioDevice* vac, pal::IRadio* radio);`
-  - `void arm(bool on);` — enable/disable voice capability (off ⇒ ALE_EXCLUSIVE always = legacy).
-  - `void on_link_state(bool linked);` — linked && armed ⇒ VOICE_PASSTHROUGH; !linked ⇒ ALE_EXCLUSIVE.
-  - `void set_ptt(bool on);` — voice PTT: `radio->set_ptt(on)`; on ⇒ `vac->set_pcm_source(pull mic_ring)`; off ⇒ `vac->set_pcm_source(silence)`. Mute speaker while on.
-  - `void push_mic_pcm(const int16_t*, size_t);` — from WS voice frames (main loop). No-op unless passthrough + PTT.
-  - `bool passthrough_active() const;` / `bool ptt() const;` — for the main-loop routing decision.
-  - `std::function<void()> on_ptt_activity;` — bridge wires to `ctrl.reset_link_idle_timer()`.
-- Entering passthrough: stop `feed_audio` (bridge-side gate), set `vac` `pcm_source`. Leaving:
-  clear `pcm_source` (symbol source restored), resume `feed_audio`.
-
-### 5.3 Bridge changes (`apps/ale_bridge.cpp`)
-
-- `BridgeCtx`: add `VoicePathManager* voice; bool voice_armed;`.
-- Wire `on_link_established` / `on_link_terminated` to also call `voice->on_link_state(...)` and
-  push a new `voice_path` event `{mode:"ale"|"voice", reason}`.
-- **Binary WS protocol tag.** The existing spectrum path uses raw float binary. Voice coexists on
-  the same socket via a **1-byte stream tag** on binary frames: `0x00` = spectrum, `0x01` = voice
-  int16 PCM. Mic-up frames (browser → bridge) are tagged `0x01`.
-- New / changed commands:
-  - `VOICE_ARM {on}` — arm/disarm voice capability.
-  - `VOICE_GET` → `{armed, mode, ptt}`.
-  - `SET_PTT` is **context-routed** (see §4.3).
-- Main-loop routing (`apps/ale_bridge.cpp`):
-  ```cpp
-  audio->tick(rx_buf);
-  if (voice->passthrough_active()) {
-      if (!rx_buf.empty() && !voice->ptt())
-          ws.send_binary(voice_frame(rx_buf));   // radio RX → browser speaker
-      // do NOT feed_audio (decoder idle during voice)
-  } else if (!rx_buf.empty()) {
-      ctrl.feed_audio(rx_buf.data(), (uint32_t)rx_buf.size());  // unchanged
-  }
-  ctrl.update(t);                               // still drives SM (Twa → terminate)
-  // drain WS messages; voice mic binary frames → voice->push_mic_pcm(...)
-  ```
-- Settings export/import: add `voice_armed=` line (mirrors `audio_in=`/`audio_out=`).
-
-### 5.4 `ALEController` — essentially unchanged
-
-No new ownership. One optional hook: the bridge wires
-`voice->on_ptt_activity = [&]{ if (ctrl.is_link_active()) ctrl.reset_link_idle_timer(); };`
-so voice keeps the link alive. `ctrl.update()` continues during passthrough; the SM's Twa
-idle-timeout is the natural link-termination path.
-
-### 5.5 GUI — browser Web Audio (`apps/gui/mobile/{app.js,index.html,styles.css}` and `apps/gui/`)
-
-- **Mic capture**: `getUserMedia({audio:{echoCancellation,noiseSuppression,autoGainControl}})` →
-  an `AudioWorklet` (or `ScriptProcessor` fallback) that resamples the device rate to **8000 Hz
-  mono int16** and emits ~20 ms frames. Each frame is sent as a binary WS message tagged `0x01`,
-  only while PTT is held.
-- **Speaker playback**: `AudioContext` + ring-buffer `AudioWorklet` that consumes incoming `0x01`
-  int16 frames and plays them (resampled to the output device rate). Muted while PTT held.
-- **Device selection**: `enumerateDevices()` for mic (`audioinput`) and speaker (`audiooutput`)
-  in a new **Voice** settings section (browser devices, distinct from the bridge-side VAC devices
-  in the existing Audio section).
-- **PTT button** (existing `#pttBtnMob` / `#pttBtn`): pointer-down → start mic streaming +
-  `SET_PTT{on:true}` + mute speaker; pointer-up → stop mic + `SET_PTT{on:false}` + unmute.
-- **`voice_path` event** → show a "VOICE" badge in the call panel, swap the PTT label to voice
-  PTT. End Link (`TERMINATE`) returns to ALE_EXCLUSIVE (driven by `link_terminated`).
-- Desktop GUI (`apps/gui/`) gets the same Web Audio plumbing (same browser context).
-
-## 6. Threading model
-
-```
-browser mic ──WS binary 0x01──▶ bridge main loop ──push_mic_pcm──▶ mic_ring_ (SPSC)
-                                                                     │
-                                                          modem render thread pulls
-                                                          via vac->set_pcm_source(fn)
-                                                                     │
-                                                          resampler → VAC render → radio TX
-
-radio RX ──VAC capture──▶ modem tick (main loop) ──rx_buf──▶ ws.send_binary(0x01) ──▶ browser speaker
-```
-
-- `mic_ring_`: written by the main loop (WS receive), read by the modem audio render thread →
-  single-producer/single-consumer, lock-free.
-- Speaker direction: no ring — the main loop already holds `rx_buf` and sends it directly.
-- `set_pcm_source` / `set_symbol_source` are mutually exclusive and protected by the driver's
-  existing `sym_src_mtx_`. The render thread snapshots the active source once per batch.
-
-Buffer sizing: ~20–50 ms rings for low end-to-end latency. Browser round-trip latency
-(~150–300 ms) is acceptable for half-duplex HF voice.
-
-## 7. Configuration
-
-- `ale.conf` / settings file: new `voice_armed=` key (persisted alongside `audio_in=`/`audio_out=`).
-- Browser-side mic/speaker device choice is a GUI preference (not persisted in `ale.conf` — it is
-  per-browser/per-device).
-- Voice routing engages on LINKED **iff** voice is armed **and** the browser has mic permission.
-  Otherwise the modem keeps the VAC (legacy behaviour).
-
-## 8. Future digital-voice extension
-
-A pluggable `IVoiceCodec` strategy:
+The `RxSink` interface and `IVoiceCodec` hook points are the seams for digital voice:
 
 ```cpp
 class IVoiceCodec {
 public:
     virtual ~IVoiceCodec() = default;
-    // mic PCM (8 kHz int16) → radio-bound bytes/frames
     virtual size_t encode(const int16_t* in, size_t n, uint8_t* out, size_t cap) = 0;
-    // radio RX bytes/frames → speaker PCM (8 kHz int16)
     virtual size_t decode(const uint8_t* in, size_t n, int16_t* out, size_t cap) = 0;
 };
 ```
 
-`PassthroughCodec` (raw PCM, analog) is the default. A future codec (e.g. M17, FreeDV) replaces
-only the encode/decode step. **The ownership/routing state machine is codec-agnostic** —
-`VoicePathManager` calls the codec at the browser↔radio boundary; everything else (link-state
-switching, PTT, exclusive ownership) is unchanged. Analog-only is implemented now.
+A `PassthroughCodec` (raw PCM, today's default) satisfies the interface without
+modification. A future codec (M17, FreeDV, etc.) replaces only the encode/decode step;
+the routing state machine, TX arbiter, and mic ring are codec-agnostic.
 
-## 9. Verification
+---
 
-1. **Build**: `cmake --build build` green; existing suites green (`ctest` 54/54 baseline).
-2. **Unit tests**: `test_voice_path_manager` (NullAudioDriver + MockRadio) asserts the
-   exclusive-ownership invariant and PTT routing.
-3. **Manual E2E (desktop, VAC + browser)**: arm voice, grant mic, establish a link → VOICE badge,
-   VAC switches to passthrough; hold PTT → peer hears voice; release → peer's voice plays; link
-   ends → VAC returns to modem, ALE resumes automatically.
-4. **Mobile E2E**: open the mobile GUI on a phone → phone mic/speaker used (the spec's central
-   requirement).
-5. **Regression**: voice disarmed ⇒ ALE-only operation byte-for-byte identical to today.
+## 7. Verification
+
+1. `cmake --build build` — clean build, 0 warnings.
+2. `ctest` — 57/57 green (includes `test_audio_transport` AT-1 + AT-2, `test_voice_path_manager` 1–8).
+3. **Manual E2E**: arm voice, establish link → `receiving_voice()` fires, browser speaker
+   plays. Remote sends `TWAS` → `on_link_terminated` fires, ALE resumes (critical fix).
+4. **Local End Link**: `CMD:TERMINATE` → `TWAS` goes out via protocol TX arbiter, no path
+   release hack needed.
+5. **Voice-disarmed regression**: ALE-only operation byte-identical to pre-refactor.

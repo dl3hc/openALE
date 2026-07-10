@@ -10,6 +10,7 @@ diag_wav/
 /*.raw
 /*.wav
 /*.pdb
+/*.bin
 
 # Hamlib Build-Artefakte (via scripts/build_hamlib.sh erstellt)
 libs/hamlib-src/

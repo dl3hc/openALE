@@ -10,13 +10,6 @@
 
 namespace ale {
 
-// Silence source handed to the VAC while passthrough is active but PTT is off:
-// returns 0 samples ⇒ the driver fills silence on the render side, so nothing
-// is transmitted to the radio (the modem's symbol source is overridden). The
-// radio stays in RX and its captured audio flows to the browser speaker via
-// the bridge main loop.
-static size_t silence_pcm_source_(int16_t* /*out*/, size_t /*want*/) { return 0; }
-
 VoicePathManager::VoicePathManager()
     : ring_buf_(RING_CAP, 0)
 {
@@ -30,13 +23,12 @@ VoicePathManager::~VoicePathManager()
 void VoicePathManager::attach(AudioDevice* vac, pal::IRadio* radio)
 {
     // No-op when unchanged — the bridge re-binds every main-loop tick so the
-    // manager tracks AUDIO_OPEN/RIG_CONNECT device swaps. Acting on every call
-    // would clobber the pcm_source override mid-passthrough.
+    // manager tracks AUDIO_OPEN/RIG_CONNECT device swaps.
     if (vac == vac_ && radio == radio_) return;
-    // If we are currently overriding the VAC, restore it before swapping.
-    if (mode_ == Mode::VOICE_PASSTHROUGH && vac_) vac_->set_pcm_source(nullptr);
     vac_   = vac;
     radio_ = radio;
+    // VAC pcm_source arbitration is owned by AudioTransport; it resets its
+    // source-tracking when its own attach() detects the pointer change.
 }
 
 void VoicePathManager::arm(bool on)
@@ -61,23 +53,33 @@ void VoicePathManager::on_link_state(bool linked)
 
 void VoicePathManager::enter_passthrough_()
 {
-    if (!vac_) return;  // nothing to override — behave as ALE_EXCLUSIVE
     mode_ = Mode::VOICE_PASSTHROUGH;
-    // PTT off on entry: VAC render is silence (override the modem symbol
-    // source), radio stays in RX, captured audio flows to the browser.
     ptt_.store(false, std::memory_order_relaxed);
-    vac_->set_pcm_source(silence_pcm_source_);
+    // Self-register as an RxSink so the transport fan-outs speaker audio here
+    // each tick while not transmitting.
+    if (transport_) transport_->add_rx_sink(*this);
+    // TX arbitration (set_pcm_source) is handled by AudioTransport on the
+    // next tick: it will see passthrough_active()=true and install silence.
 }
 
 void VoicePathManager::exit_passthrough_()
 {
+    // Unregister from the transport before clearing mode so on_rx_audio is
+    // never called on a half-exited state.
+    if (transport_) transport_->remove_rx_sink(*this);
     // Release PTT if the operator was mid-transmit when the link dropped.
     if (ptt_.load(std::memory_order_relaxed)) {
         if (radio_) radio_->set_ptt(false);
         ptt_.store(false, std::memory_order_relaxed);
     }
-    if (vac_) vac_->set_pcm_source(nullptr);  // restore modem symbol-source path
     mode_ = Mode::ALE_EXCLUSIVE;
+    // AudioTransport will see passthrough_active()=false on the next tick and
+    // restore the symbol path (set_pcm_source(nullptr)).
+}
+
+void VoicePathManager::on_rx_audio(const int16_t* buf, size_t samples)
+{
+    if (on_speaker_pcm) on_speaker_pcm(buf, samples);
 }
 
 void VoicePathManager::set_ptt(bool on)
@@ -88,15 +90,13 @@ void VoicePathManager::set_ptt(bool on)
     ptt_.store(on, std::memory_order_relaxed);
 
     if (on) {
-        if (radio_) radio_->set_ptt(true);          // key the transmitter
-        if (vac_) vac_->set_pcm_source(
-            [this](int16_t* out, size_t want) {
-                return this->pull_mic_pcm(out, want);
-            });
-        if (on_ptt_activity) on_ptt_activity();     // reset link idle timer
+        if (radio_) radio_->set_ptt(true);     // key the transmitter
+        if (on_ptt_activity) on_ptt_activity(); // reset link idle timer
+        // AudioTransport sees media_tx_wanted()=true on the next tick and
+        // installs the mic-pull source on the VAC.
     } else {
-        if (radio_) radio_->set_ptt(false);         // back to receive
-        if (vac_) vac_->set_pcm_source(silence_pcm_source_);
+        if (radio_) radio_->set_ptt(false);    // back to receive
+        // AudioTransport sees media_tx_wanted()=false and restores silence.
     }
 }
 

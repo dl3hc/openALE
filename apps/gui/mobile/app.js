@@ -59,8 +59,13 @@ function setBridgeOverlay(show) {
   const el = document.getElementById('bridgeOverlay');
   el.classList.toggle('hidden', !show);
   if (show) {
-    const port = window.location.port || '…';
-    document.getElementById('bridgeOverlayCmd').textContent = 'openALE --port ' + port;
+    const cmd = document.getElementById('bridgeOverlayCmd');
+    if (window.location.protocol === 'file:') {
+      cmd.textContent = 'Open via http://localhost:PORT/index.html (not file://)';
+    } else {
+      const port = window.location.port || '…';
+      cmd.textContent = 'openALE --port ' + port;
+    }
   }
 }
 
@@ -79,7 +84,11 @@ function bridgeSend(cmd, args, onReply) {
 function connectBridge() {
   let ws;
   try { ws = new WebSocket(bridgeWsUrl()); }
-  catch { return; }
+  catch {
+    if (!bridgeReconnectTimer)
+      bridgeReconnectTimer = setTimeout(() => { bridgeReconnectTimer = null; connectBridge(); }, 1000);
+    return;
+  }
   bridgeWs = ws;
   // Spectrum frames arrive as binary; without this they'd be Blobs and the
   // `ev.data instanceof ArrayBuffer` check below would never match → waterfall
@@ -336,6 +345,11 @@ function onBridgeEvent(e) {
     case 'amd_received':
       messages.unshift({ self: e.self || primarySelfAddr(), peer: e.peer,
                          time: nowZulu(), text: e.text, own: false });
+      // Unread badge: count only while the operator isn't looking at MSG.
+      if (document.querySelector('.app')?.dataset.mobTab !== 'msg') {
+        unreadMsg++;
+        updateNavBadges();
+      }
       renderMessages();
       break;
     case 'idle_warning':
@@ -362,19 +376,10 @@ function onBridgeEvent(e) {
       // Push event from the core on every PTT transition (SM-driven TX or
       // manual PTT) — replaces the VFO_GET poll's ptt field for the indicator.
       pttOn = !!e.ptt;
-      { const b = document.getElementById('pttBtn');
-        if (b) { b.classList.toggle('ptt-on', pttOn); b.innerHTML = pttOn ? `${icon('zap',14)} TX` : `${icon('mic',14)} PTT`; } }
+      applyPttUi();
       break;
     case 'channel_busy':
-      { const chip = document.getElementById('busyChip');
-        if (chip) {
-          chip.classList.toggle('busy', !!e.busy);
-          chip.querySelector('span').textContent = e.busy ? 'FREQ BUSY' : 'FREQ CLEAR';
-          chip.title = e.busy
-            ? `Channel occupied — level ${Math.round(e.level_db)} dB, floor ${Math.round(e.floor_db)} dB (A.5.4.7.2)`
-            : 'Channel clear (A.5.4.7.2)';
-        }
-      }
+      applyBusyUi(!!e.busy, e.level_db, e.floor_db);
       break;
     case 'gps_fix':
       locGpsFix = !!e.acquired;
@@ -450,9 +455,13 @@ function voiceInitSpeaker() {
 function voiceSpkProcess(e) {
   const out = e.outputBuffer.getChannelData(0);
   if (Voice.pttMuted || Voice.spkAvail <= 0 || !Voice.spkRing) { out.fill(0); return; }
-  // Read the 8 kHz ring with linear interpolation up to the device rate.
-  const ratio = Voice.spkRate / 8000;
-  const nFill = Math.min(out.length, Math.floor(Voice.spkAvail / ratio));
+  // Upsample 8 kHz ring → device rate using linear interpolation.
+  // ratio = deviceRate / 8000 (e.g. 6 at 48 kHz). Per output sample the 8 kHz
+  // read position advances by 1/ratio; from spkAvail input samples we can fill
+  // spkAvail * ratio output frames.
+  const ratio    = Voice.spkRate / 8000;
+  const invRatio = 1 / ratio;
+  const nFill = Math.min(out.length, Math.floor(Voice.spkAvail * ratio));
   let pos = Voice.spkRead;
   for (let i = 0; i < nFill; ++i) {
     const i0 = Math.floor(pos);
@@ -460,10 +469,10 @@ function voiceSpkProcess(e) {
     const a = Voice.spkRing[i0 % SPK_RING_N];
     const b = Voice.spkRing[(i0 + 1) % SPK_RING_N];
     out[i] = a + (b - a) * frac;
-    pos += ratio;
+    pos += invRatio;
   }
   for (let i = nFill; i < out.length; ++i) out[i] = 0;   // underrun → silence
-  const consumed = Math.ceil(nFill * ratio);
+  const consumed = Math.ceil(nFill / ratio);  // input (8 kHz) samples consumed
   Voice.spkRead = (Voice.spkRead + consumed) % SPK_RING_N;
   Voice.spkAvail = Math.max(0, Voice.spkAvail - consumed);
 }
@@ -537,8 +546,66 @@ function voiceMicStop() {
 function applyVoicePathUi() {
   const badge = document.getElementById('voiceBadge');
   if (badge) badge.classList.toggle('hidden', !voicePassthrough);
+  applyPttUi();
+}
+
+// Single-source PTT indicator: derives label + icon from pttOn + voicePassthrough
+// and writes BOTH the hidden anchor #pttBtn (innerHTML + .ptt-on) and the mobile
+// pill #pttBtnMob (.ptt-on + .mob-ptt-lbl text). Replaces the old
+// MutationObserver mirror, which watched only the class attribute and so never
+// propagated the voice-mode "TALK" label to the mobile pill — the pill stayed
+// "PTT" while the operator was actually in voice passthrough.
+function applyPttUi() {
+  const label = pttOn ? 'TX' : (voicePassthrough ? 'TALK' : 'PTT');
+  const ic    = pttOn ? 'zap' : 'mic';
   const b = document.getElementById('pttBtn');
-  if (b && !pttOn) b.innerHTML = voicePassthrough ? `${icon('mic',14)} TALK` : `${icon('mic',14)} PTT`;
+  if (b) { b.classList.toggle('ptt-on', pttOn); b.innerHTML = `${icon(ic,14)} ${label}`; }
+  const m = document.getElementById('pttBtnMob');
+  if (m) {
+    m.classList.toggle('ptt-on', pttOn);
+    const lbl = m.querySelector('.mob-ptt-lbl');
+    if (lbl) lbl.textContent = label;
+  }
+}
+
+// Single-source LBT busy indicator: updates both the CALL-tab strip chip
+// (#busyChip, desktop + CALL tab) and the always-visible header chip (#hdrBusy,
+// mobile-only) from one event. One writer → two views; no observer mirror.
+function applyBusyUi(busy, levelDb, floorDb) {
+  const text  = busy ? 'FREQ BUSY' : 'FREQ CLEAR';
+  const title = busy
+    ? `Channel occupied — level ${Math.round(levelDb)} dB, floor ${Math.round(floorDb)} dB (A.5.4.7.2)`
+    : 'Channel clear (A.5.4.7.2)';
+  const chip = document.getElementById('busyChip');
+  if (chip) {
+    chip.classList.toggle('busy', !!busy);
+    const s = chip.querySelector('span'); if (s) s.textContent = text;
+    chip.title = title;
+  }
+  const h = document.getElementById('hdrBusy');
+  if (h) {
+    h.classList.toggle('busy', !!busy);
+    const s = h.querySelector('span'); if (s) s.textContent = text;
+    h.title = title;
+  }
+}
+
+// ── Nav-tab badges ───────────────────────────────────────────────────────────
+// MSG unread count (incremented on incoming AMD while the MSG tab isn't open,
+// cleared when the operator opens MSG) and a CALL linked dot (on while the
+// active-call panel is shown, so an active link is visible from any tab).
+let unreadMsg = 0;
+function updateNavBadges() {
+  const b = document.getElementById('msgNavBadge');
+  if (!b) return;
+  if (unreadMsg > 0) { b.textContent = String(unreadMsg); b.hidden = false; }
+  else b.hidden = true;
+}
+function applyCallDot() {
+  const d = document.getElementById('callNavDot');
+  if (!d) return;
+  const panel = document.getElementById('callPanel');
+  d.hidden = !panel || panel.classList.contains('hidden');
 }
 
 function syncVoiceFromBridge() {
@@ -628,11 +695,11 @@ const ctx    = canvas.getContext('2d');
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TONES  = [750, 1000, 1250, 1500, 1750, 2000, 2250, 2500]; // ALE 8-FSK tones (Hz)
-const BW_LO  = 0, BW_HI = 4000;       // ❶ displayed Hz range; must equal 0…Nyquist
+const BW_LO  = 0, BW_HI = 3500;       // ❶ displayed Hz range (0–3.5 kHz)
 const ALE_LO = 750, ALE_HI = 2500;    // ALE sub-band for the band-frame overlay only
 const ALE_GUARD = 125;                // frame padding beyond the edge tones (Hz)
-const AXIS_MAJOR = [0, 1000, 2000, 3000, 4000];  // labelled gridlines (Hz)
-const AXIS_MINOR = [500, 1500, 2500, 3500];      // unlabelled gridlines (Hz)
+const AXIS_MAJOR = [0, 1000, 2000, 3000, 3500];  // labelled gridlines (Hz)
+const AXIS_MINOR = [500, 1500, 2500];             // unlabelled gridlines (Hz)
 
 let rows = [];
 let wfState  = 'scanning';
@@ -643,6 +710,7 @@ function resizeCanvas() {
   canvas.height = el.clientHeight;
   rows = [];
   buildTicks();
+  wfDirty = true;   // force a redraw on the next frame after a resize
 }
 
 function buildTicks() {
@@ -680,7 +748,7 @@ function buildTicks() {
     el.appendChild(lbl);
   });
 
-  // ALE 8-FSK band frame inside the 0–4 kHz window, padded by ALE_GUARD on each
+  // ALE 8-FSK band frame inside the 0–3.5 kHz window, padded by ALE_GUARD on each
   // side (625–2625 Hz) so it encloses the full waveform, not just the edge tones.
   const bandL = (ALE_LO - ALE_GUARD - BW_LO) / span * 100;
   const bandR = (ALE_HI + ALE_GUARD - BW_LO) / span * 100;
@@ -711,14 +779,15 @@ function buildTicks() {
   if (cap) cap.style.left = (((ALE_LO + ALE_HI) / 2 - BW_LO) / span * 100) + '%';
 }
 
-new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
-resizeCanvas();
-
 // Real spectrum (bridge connected): 1025 bins, 0–4000 Hz, ≈3.9 Hz/bin — values in dBFS.
 // Adaptive peak+floor tracking with fast-attack / slow-decay (inspired by waterfall.c AGC).
 let emaFloor  = -80;  // tracks per-frame average (noise floor proxy)
 let emaPeak   = -20;  // tracks per-frame maximum (signal peak proxy)
 let nextRowAt = 0;    // timestamp-throttle: add waterfall row every 100 ms (10 fps)
+let wfDirty   = true; // force a redraw on the next rAF (set on resize / boot)
+
+new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
+resizeCanvas();
 
 function genRowFromSpectrum(spec) {
   const W = canvas.width || 1;
@@ -783,30 +852,38 @@ function drawWaterfall() {
   if (W < 4 || H < 4) { requestAnimationFrame(drawWaterfall); return; }
 
   const now = performance.now();
+  let added = false;
   if (now >= nextRowAt) {
     rows.unshift(genRow());
     if (rows.length > H) rows.length = H;
     nextRowAt = now + 100;
+    added = true;
     for (const m of wfMarkers) m.age++;
   }
 
-  const img = ctx.createImageData(W, H);
-  const d   = img.data;
-  for (let y = 0; y < rows.length; y++) {
-    const r = rows[y];
-    for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * 4;
-      const [rr, gg, bb] = energy2rgb(r[x]);
-      d[i] = rr; d[i+1] = gg; d[i+2] = bb; d[i+3] = 255;
+  // Redraw only when a new row landed (10 fps) or after a resize. Skipping the
+  // ~5 wasted full-canvas putImageData passes between rows frees the main thread
+  // for scroll/input — the waterfall was the main cause of jerky CALL-tab scroll.
+  if (added || wfDirty) {
+    wfDirty = false;
+    const img = ctx.createImageData(W, H);
+    const d   = img.data;
+    for (let y = 0; y < rows.length; y++) {
+      const r = rows[y];
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const [rr, gg, bb] = energy2rgb(r[x]);
+        d[i] = rr; d[i+1] = gg; d[i+2] = bb; d[i+3] = 255;
+      }
     }
-  }
-  ctx.putImageData(img, 0, 0);
+    ctx.putImageData(img, 0, 0);
 
-  // Draw frame markers as 4 px-wide colored ticks on the left edge
-  for (const m of wfMarkers) {
-    if (m.age >= H) continue;
-    ctx.fillStyle = m.color;
-    ctx.fillRect(0, m.age, 4, 3);
+    // Draw frame markers as 4 px-wide colored ticks on the left edge
+    for (const m of wfMarkers) {
+      if (m.age >= H) continue;
+      ctx.fillStyle = m.color;
+      ctx.fillRect(0, m.age, 4, 3);
+    }
   }
 
   requestAnimationFrame(drawWaterfall);
@@ -910,7 +987,7 @@ function renderHeard() {
   const el = document.getElementById('heardList');
   if (!el) return;
   if (!heardStations.length) {
-    el.innerHTML = '<div class="heard-empty">No stations heard yet</div>';
+    el.innerHTML = '<div class="heard-empty">No stations heard yet — scanning will list them here</div>';
     return;
   }
   // Same column layout and gradient math as renderLqa() (Settings/LQA), so the
@@ -1068,7 +1145,7 @@ function aleLogInfo(text) {
 
 function clearAleLog() {
   const body = document.getElementById('aleLogBody');
-  if (body) body.innerHTML = '<div class="ale-log-empty">No ALE activity yet</div>';
+  if (body) body.innerHTML = '<div class="ale-log-empty">No ALE activity yet — sent and received frames appear here</div>';
   aleLogCount = 0;
   document.getElementById('aleLogCount').textContent = '0 entries';
   aleLogFrameCh.clear();
@@ -1116,6 +1193,7 @@ function showInc(show) {
 function showCallPanel(show) {
   document.getElementById('callPanel').classList.toggle('hidden', !show);
   document.getElementById('callZone').classList.toggle('hidden',   show);
+  applyCallDot();
 }
 
 
@@ -1259,7 +1337,7 @@ function renderContacts() {
         <button class="contact-edit" title="Edit" onclick="event.stopPropagation();openContactEditor(${idx})">${icon('pencil',12)}</button>
       </div>
     </div>`;
-  }).join('') : '<div class="msg-empty">No contacts</div>';
+  }).join('') : '<div class="msg-empty">No contacts yet — tap + Add to save a station</div>';
 }
 
 // Toggle membership of a contact in the multi-select set. One selected → 1:1
@@ -1522,6 +1600,7 @@ function openSettings() {
   document.getElementById('settingsModal').classList.remove('hidden');
   showSec('identity');
   enumDevices();
+  populateRigDropdown();
 }
 
 // Closing Settings does NOT auto-tune the radio — per the workflow, no
@@ -1550,16 +1629,26 @@ function showSec(sec) {
     el.classList.toggle('active', el.dataset.sec === sec));
 }
 
-// Rig backend field visibility
+// Rig connection-field visibility, driven by the selected Hamlib model's port
+// type (network → Host/Port, serial → device/baud/line-state, other/none →
+// nothing). The model dropdown is the single selector; there is no separate
+// backend radio group. rigPortTypeById is populated by populateRigDropdown().
+let rigPortTypeById = {};
 function updateRigFields() {
-  const val = document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl';
-  document.getElementById('rigFieldsTcp').style.display    = val === 'netrigctl' ? '' : 'none';
-  document.getElementById('rigFieldsSerial').style.display = val === 'serial'    ? '' : 'none';
+  const sel = document.getElementById('rigModel');
+  const ptype = rigPortTypeById[sel?.value ?? ''] || '';
+  const tcp = document.getElementById('rigFieldsTcp');
+  const ser = document.getElementById('rigFieldsSerial');
+  if (tcp) tcp.style.display = ptype === 'network' ? '' : 'none';
+  if (ser) ser.style.display = ptype === 'serial'  ? '' : 'none';
 }
 
 // Populate the Hamlib model dropdown from the bridge's RIG_LIST reply.
 // Groups entries by manufacturer using <optgroup>. Restores any previously
-// selected model number after rebuilding the list.
+// selected model number after rebuilding the list. Records each model's port
+// type (network/serial/other) so updateRigFields() can adapt the connection
+// fields. Defaults to NET rigctl (model 2) on first load — preserves the prior
+// TCP-netrigctl default — then re-evaluates field visibility.
 function populateRigDropdown() {
   const sel = document.getElementById('rigModel');
   if (!sel || !bridgeConnected) return;
@@ -1567,6 +1656,7 @@ function populateRigDropdown() {
   bridgeSend('RIG_LIST', {}, (r) => {
     if (!r.ok || !Array.isArray(r.rigs)) return;
     sel.innerHTML = '';
+    rigPortTypeById = { '': '' };  // "None / Offline" → no fields
     let grp = null, lastMfg = null;
     for (const e of r.rigs) {
       if (e.mfg !== lastMfg) {
@@ -1578,9 +1668,17 @@ function populateRigDropdown() {
       const opt = document.createElement('option');
       opt.value = String(e.id);
       opt.textContent = e.macro;
+      rigPortTypeById[String(e.id)] = e.port || 'other';
       grp.appendChild(opt);
     }
-    if (prev) sel.value = prev;
+    if (prev && [...sel.options].some(o => o.value === prev)) {
+      sel.value = prev;
+    } else if ([...sel.options].some(o => o.value === '2')) {
+      sel.value = '2';   // NET rigctl — default network backend
+    } else {
+      sel.value = '';
+    }
+    updateRigFields();
   });
 }
 
@@ -1691,14 +1789,16 @@ document.getElementById('cfgTxVol')?.addEventListener('input', function() {
 // button label and the radio-control lock (see setRadioCtrlEnabled).
 let rigConnected = false;
 
-// Read the structured rig fields the bridge needs for create_radio().
+// Read the structured rig fields the bridge needs for create_radio(). The model
+// is the single selector; the bridge derives the connection kind from it, so
+// there is no separate "backend" field. Host/Port and serial fields are both
+// read regardless — the bridge uses only the ones matching the model's port type.
 function rigArgs() {
   return {
-    backend: document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl',
+    model:   document.getElementById('rigModel').value,
     host:    document.getElementById('rigHost').value,
     port:    document.getElementById('rigPort').value,
     serial:  document.getElementById('rigSerial').value,
-    model:   document.getElementById('rigModel').value,
     baud:    parseInt(document.getElementById('rigBaud')?.value, 10) || 0,
     dtr:     document.getElementById('rigDtr')?.value  ?? 'on',
     rts:     document.getElementById('rigRts')?.value  ?? 'on',
@@ -1736,13 +1836,13 @@ function connectRig() {
     el.textContent = '✗ Not connected to openALE — start it first';
     return;
   }
-  const backend = document.querySelector('input[name="rigbe"]:checked')?.value ?? 'netrigctl';
-  if (rigConnected || backend === 'none') {
+  const model = document.getElementById('rigModel').value;
+  if (rigConnected || model === '') {
     el.textContent = rigConnected ? '⟳ Disconnecting…' : '⟳ …';
     bridgeSend('RIG_DISCONNECT', {}, (r) => {
       applyRigState(false);
       el.classList.add('ok');
-      el.textContent = backend === 'none' ? '○ offline (no radio)' : '○ disconnected';
+      el.textContent = model === '' ? '○ offline (no radio)' : '○ disconnected';
     });
     return;
   }
@@ -2670,14 +2770,7 @@ function syncLbtFromBridge() {
     if (elM && typeof r.margin_db         === 'number')  elM.value   = r.margin_db;
     if (elE && typeof r.occupancy_enabled === 'boolean') elE.checked = r.occupancy_enabled;
     if (elO && typeof r.override          === 'boolean') elO.checked = r.override;
-    const chip = document.getElementById('busyChip');
-    if (chip && typeof r.busy === 'boolean') {
-      chip.classList.toggle('busy', r.busy);
-      chip.querySelector('span').textContent = r.busy ? 'FREQ BUSY' : 'FREQ CLEAR';
-      chip.title = r.busy
-        ? `Channel occupied — level ${Math.round(r.level_db)} dB, floor ${Math.round(r.floor_db)} dB (A.5.4.7.2)`
-        : 'Channel clear (A.5.4.7.2)';
-    }
+    if (typeof r.busy === 'boolean') applyBusyUi(r.busy, r.level_db, r.floor_db);
   });
 }
 
@@ -3066,8 +3159,7 @@ function syncVfoFromBridge() {
     radioMode   = r.mode;
     radioStep   = r.tune_step_hz;
     pttOn       = r.ptt;
-    const b = document.getElementById('pttBtn');
-    if (b) { b.classList.toggle('ptt-on', pttOn); b.innerHTML = pttOn ? `${icon('zap',14)} TX` : `${icon('mic',14)} PTT`; }
+    applyPttUi();
     updateRadioDisplay();
   });
 }
@@ -3107,8 +3199,7 @@ function setPtt(on) {
     Voice.pttMuted = on;
     if (on) voiceMicStart(); else voiceMicStop();
   }
-  const b = document.getElementById('pttBtn');
-  if (b) { b.classList.toggle('ptt-on', on); b.innerHTML = on ? `${icon('zap',14)} TX` : (voicePassthrough ? `${icon('mic',14)} TALK` : `${icon('mic',14)} PTT`); }
+  applyPttUi();
 }
 
 // Stop any ongoing transmission immediately: SM → IDLE, modulator flushed, PTT → RX.
@@ -3178,7 +3269,7 @@ let messages = [];
 let linkedPeer = '';
 function renderMessages() {
   const el = document.getElementById('msgList');
-  if (!messages.length) { el.innerHTML = '<div class="msg-empty">No messages</div>'; return; }
+  if (!messages.length) { el.innerHTML = '<div class="msg-empty">No messages yet — type an AMD below and press Send</div>'; return; }
   el.innerHTML = '<div class="msg-list">' + messages.map((m, i) => {
     // Direction = sender → receiver.  own: self → peer; incoming: peer → self.
     const from = m.own ? (m.self || '') : (m.peer || '');
@@ -3550,21 +3641,12 @@ setTimeout(connectBridge, 200);
     document.querySelectorAll('.radio-panel.open').forEach(function (p) {
       p.classList.remove('open');
     });
+    // Opening MSG clears the unread badge.
+    if (tab === 'msg') { unreadMsg = 0; updateNavBadges(); }
   };
 
-  /* ── Sync mobile PTT pill with #pttBtn visual state ──
-     setPtt() updates #pttBtn class + innerHTML; we mirror to #pttBtnMob. */
-  const pttPrimary = document.getElementById('pttBtn');
-  const pttMob     = document.getElementById('pttBtnMob');
-  if (pttPrimary && pttMob) {
-    new MutationObserver(function () {
-      const on = pttPrimary.classList.contains('ptt-on');
-      pttMob.classList.toggle('ptt-on', on);
-      // Update the label span inside the mobile PTT button
-      const lbl = pttMob.querySelector('.mob-ptt-lbl');
-      if (lbl) lbl.textContent = on ? 'TX' : 'PTT';
-    }).observe(pttPrimary, { attributes: true, attributeFilter: ['class'] });
-  }
+  /* ── PTT pill state is driven by applyPttUi() (single source: pttOn +
+     voicePassthrough → both #pttBtn and #pttBtnMob). No observer mirror. ── */
 
   /* ── Sync mobile SCAN button with #scanBtn state ──
      setStatus() updates #scanBtn text + scan-on class; mirror to #scanBtnMob. */

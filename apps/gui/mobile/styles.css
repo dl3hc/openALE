@@ -178,6 +178,11 @@
     .busy-dot { background: var(--accent); }
     .busy-chip.busy .busy-dot { background: #ffa726; animation: blink 0.9s infinite; }
 
+    /* Cross-tab busy indicator — lives in the header on mobile only (see the
+       mobile @media block). Hidden on desktop, where #busyChip in the signal
+       strip is the single indicator. */
+    .hdr-busy { display: none; }
+
     .dot {
       width: 7px; height: 7px;
       border-radius: 50%;
@@ -395,6 +400,8 @@
       font-family: var(--mono);
       font-size: 11px;
       outline: none;
+      resize: none;
+      overflow-y: auto;
       transition: border-color 0.14s, box-shadow 0.14s;
     }
     .msg-input::placeholder { color: var(--tx-dim); }
@@ -1814,7 +1821,7 @@
 
   /* ── Touch + a11y floor ── */
   button, [role="button"], .plabel-btn, .hdr-btn, .mob-nav-tab,
-  .more-item, .call-mode-btn, .sound-opt {
+  .more-item, .call-mode-btn, .sound-opt, .contact-item {
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
@@ -1877,8 +1884,35 @@
   }
   .logo-mark { font-size: 15px; }
   .logo-divider { height: 22px; }
-  .logo-std  { font-size: 7.5px; }
+  .logo-std  { display: none; }   /* hide decorative subtitle — room for the busy chip */
   .logo-self { font-size: 11px; }
+
+  /* Cross-tab busy indicator on the logo row: same look as the strip chip,
+     compact, pushed to the right edge. Visible on every tab so the operator
+     sees channel occupancy before pressing PTT, not only on CALL. */
+  .hdr-busy {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 4px 8px;
+    background: var(--accent-glow);
+    border: 1px solid rgba(0,220,140,.25);
+    border-radius: var(--r-md);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    cursor: default;
+  }
+  .hdr-busy.busy {
+    background: rgba(255,167,38,.12);
+    border-color: rgba(255,167,38,.30);
+    color: #ffa726;
+  }
+  .hdr-busy .busy-dot { background: var(--accent); }
+  .hdr-busy.busy .busy-dot { background: #ffa726; animation: blink 0.9s infinite; }
 
   /* Status + clock live in hdr-right → reflow them next to logo */
   .status-chip {
@@ -1959,14 +1993,10 @@
   .strip     { grid-column: auto; grid-row: auto; order: 3;
                height: auto; flex-direction: column; }
 
-  .strip-stats {
-    padding: 8px 14px;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    flex-direction: row;
-    align-items: center;
-    gap: 12px;
-  }
+  /* The busy indicator moves to the header (#hdrBusy) so it shows on every tab;
+     the strip's stats column is redundant on mobile — the strip is just the
+     waterfall. */
+  .strip-stats { display: none; }
   .strip-wf { height: 80px; }
 
   /* Panel height overrides */
@@ -1990,8 +2020,39 @@
   [data-mob-tab="call"] .left-col,
   [data-mob-tab="call"] .ale-log { display: none; }
   [data-mob-tab="call"] .mob-freq   { display: flex; order: 0; }
-  [data-mob-tab="call"] .right-col  { order: 1; }
-  [data-mob-tab="call"] .strip      { display: flex; order: 3; }
+  [data-mob-tab="call"] .strip      { display: flex; order: 1; }
+  [data-mob-tab="call"] .right-col  { order: 2; }
+
+  /* CALL tab is a fixed viewport — no page scroll. The header + freq readout
+     stay put at the top, the waterfall stays pinned at the bottom, and only the
+     contacts list scrolls (inside its panel). Whole-page scrolling here was the
+     source of the jerky feel: the waterfall's per-frame redraw competed with
+     scrolling a tall page past it. */
+  [data-mob-tab="call"] {
+    height: 100dvh;
+    overflow: hidden;
+  }
+  [data-mob-tab="call"] .main {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  [data-mob-tab="call"] .right-col {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  [data-mob-tab="call"] .panel-contacts {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  /* Contact list scrolls here; the search row + Call CTA stay pinned top/bottom. */
+  [data-mob-tab="call"] .panel-contacts .pbody {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    min-height: 0;
+  }
+  [data-mob-tab="call"] .panel-contacts .search-wrap { flex-shrink: 0; }
+  [data-mob-tab="call"] .strip { flex: 0 0 auto; }
 
   /* MSG tab: messages panel only */
   [data-mob-tab="msg"] .panel-heard,
@@ -2004,7 +2065,10 @@
   [data-mob-tab="heard"] .right-col,
   [data-mob-tab="heard"] .ale-log,
   [data-mob-tab="heard"] .strip      { display: none; }
-  [data-mob-tab="heard"] .panel-heard { max-height: none; height: auto; }
+  [data-mob-tab="heard"] .panel-heard {
+    height: calc(100dvh - var(--mob-hdr-h) - var(--mob-bar-h) - var(--mob-nav-h) - 16px);
+    max-height: none;
+  }
 
   /* LOG tab: ALE log only */
   [data-mob-tab="log"] .left-col,
@@ -2016,7 +2080,7 @@
   }
 
   /* Waterfall sizing on the CALL tab — useful but not dominant. */
-  [data-mob-tab="call"] .strip-wf { height: 140px; flex: 0 0 auto; }
+  [data-mob-tab="call"] .strip-wf { height: 80px; flex: 0 0 auto; }
 
   /* Frequency readout on the CALL tab — the signature element: the live VFO
      frequency is the most characteristic thing on a radio control surface, so
@@ -2165,6 +2229,8 @@
     letter-spacing: 0.06em;
     text-transform: none;
   }
+  /* Match panel headers to ale-log-hdr height (28 px). */
+  .plabel { height: 28px; min-height: 28px; padding-top: 0; padding-bottom: 0; }
 
   /* ══════════════════════════
      PANELS — visual tweaks
@@ -2176,6 +2242,23 @@
   /* Message compose + search: 16 px inputs avoid iOS auto-zoom on focus. */
   .msg-input   { font-size: 16px; padding: 12px 14px; min-height: 44px; }
   .msg-compose { padding: 8px; gap: 6px; }
+
+  /* MSG tab: pin compose bar above action bar; reduce to ~80% height. */
+  [data-mob-tab="msg"] .msg-compose {
+    position: fixed;
+    bottom: calc(var(--mob-bar-h) + var(--mob-nav-h) + env(safe-area-inset-bottom));
+    left: 0; right: 0;
+    z-index: 75;
+    padding: 5px 10px;
+  }
+  [data-mob-tab="msg"] .msg-input {
+    max-height: 44px;
+    font-size: 14px;
+    padding: 8px 12px;
+    min-height: 0;
+  }
+  /* Keep message list from sliding under the fixed compose bar. */
+  [data-mob-tab="msg"] .panel-messages { padding-bottom: 68px; }
 
   /* Search */
   .search-input { font-size: 16px; padding: 12px 14px; min-height: 44px; }
@@ -2281,13 +2364,14 @@
   }
   /* Settings nav: horizontal scrollable tab strip */
   .modal-body { flex-direction: column; }
+  /* Settings nav: wrap to 2–3 rows instead of a horizontal scroll, with the
+     three section headers (Station / ALE / RX · Modem) as full-width row
+     breaks so all 13 sections are visible and grouped without scrolling. */
   .snav {
     width: 100%;
     flex-direction: row;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+    flex-wrap: wrap;
+    overflow-x: visible;
     padding: 5px 8px;
     gap: 2px;
     border-right: none;
@@ -2297,8 +2381,12 @@
     min-height: auto;
     background: var(--bg);
   }
-  .snav::-webkit-scrollbar { display: none; }
-  .snav-section-hdr { display: none; }
+  .snav-section-hdr {
+    display: block;
+    flex: 0 0 100%;
+    padding: 6px 4px 2px;
+    font-size: 8px;
+  }
   .snav-item {
     flex-shrink: 0;
     white-space: nowrap;
@@ -2510,6 +2598,44 @@
     box-shadow: 0 0 10px rgba(0,220,140,0.5);
   }
   .mob-nav-tab { position: relative; }
+
+  /* MSG unread count badge — top-right of the tab, clear of the active tick. */
+  .mob-nav-badge {
+    position: absolute;
+    top: 2px;
+    left: 50%;
+    transform: translateX(12px);
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    box-shadow: 0 0 8px rgba(0,220,140,0.45);
+    pointer-events: none;
+  }
+  .mob-nav-badge[hidden] { display: none; }
+
+  /* CALL linked dot — signals an active link is up from any tab. Sits right of
+     the active tick so the two never overlap. */
+  .mob-nav-dot {
+    position: absolute;
+    top: 3px;
+    left: 50%;
+    transform: translateX(16px);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--s-linked);
+    box-shadow: 0 0 8px rgba(0,230,118,0.6);
+    pointer-events: none;
+  }
+  .mob-nav-dot[hidden] { display: none; }
 
 }
 

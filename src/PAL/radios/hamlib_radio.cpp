@@ -440,6 +440,18 @@ bool HamlibRadio::configure_port() {
         return true;
     }
 
+    // ── Kein Port (Dummy / USB / Audio-Backends) ─────────────────────────
+    // Empty port: leave the backend's declared port type (the rig_caps default)
+    // intact. Forcing RIG_PORT_SERIAL with no device would make rig_open() fail
+    // for backends that don't use a port at all (Dummy, USB, Audio). The unified
+    // GUI sends no device for "other" port-type models, so this is the path they
+    // take; real serial rigs always carry a non-empty device string.
+    if (port_.empty()) {
+        std::fprintf(stderr,
+            "[HamlibRadio] configure_port: empty port — using backend default port type\n");
+        return true;
+    }
+
     // ── Serieller Pfad ────────────────────────────────────────────────────
     rig_->state.rigport.type.rig = RIG_PORT_SERIAL;
 
@@ -530,24 +542,83 @@ void HamlibRadio::apply_line_policy() {
         policy_.rts == SerialLinePolicy::State::OFF ? "OFF" : "AUTO");
 }
 
+// Coarse connection category from a rig's declared port type. This is the
+// single source of truth for whether a model connects over the network or a
+// serial device — both the GUI (field visibility) and the bridge (spec grammar)
+// derive from it. Everything that is neither network nor serial (Dummy, USB,
+// Audio, None, …) collapses to "other" (no connection fields).
+static std::string port_type_str(rig_port_t t) {
+    switch (t) {
+        case RIG_PORT_NETWORK: return "network";
+        case RIG_PORT_SERIAL:  return "serial";
+        default:               return "other";
+    }
+}
+
+// rig_list_foreach only iterates backends that have been registered, and
+// rig_load_all_backends() is otherwise only called from HamlibRadio::initialize()
+// (i.e. when a rig is actually opened). RIG_LIST / rig_port_type fire from the GUI
+// before any rig is connected, so we must register the backends ourselves — once
+// per process — or the dropdown stays empty on a fresh bridge session.
+static void ensure_backends_loaded() {
+    static bool backends_loaded = false;
+    if (!backends_loaded) {
+        rig_set_debug(RIG_DEBUG_ERR);
+        rig_load_all_backends();
+        backends_loaded = true;
+    }
+}
+
 static int collect_rig_cb(const struct rig_caps *caps, rig_ptr_t data) {
-    if (!caps || !caps->macro_name) return 1;
+    if (!caps) return 1;
+    // macro_name is null in some Hamlib builds; fall back to model_name then rig_model number.
+    const char* raw = caps->macro_name ? caps->macro_name
+                    : caps->model_name ? caps->model_name
+                    : nullptr;
+    if (!raw) return 1;
     auto *vec = static_cast<std::vector<RigEntry>*>(data);
-    std::string macro = caps->macro_name;
+    std::string macro = raw;
     constexpr std::string_view prefix = "RIG_MODEL_";
     if (macro.size() > prefix.size() && macro.compare(0, prefix.size(), prefix) == 0)
         macro.erase(0, prefix.size());
-    vec->push_back({(int)caps->rig_model, caps->mfg_name ? caps->mfg_name : "", std::move(macro)});
+    vec->push_back({(int)caps->rig_model,
+                    caps->mfg_name ? caps->mfg_name : "",
+                    std::move(macro),
+                    port_type_str(caps->port_type)});
     return 1;
 }
 
 std::vector<RigEntry> list_rigs() {
+    ensure_backends_loaded();
     std::vector<RigEntry> rigs;
     rig_list_foreach(collect_rig_cb, &rigs);
     std::sort(rigs.begin(), rigs.end(), [](const RigEntry& a, const RigEntry& b) {
         return a.mfg != b.mfg ? a.mfg < b.mfg : a.macro < b.macro;
     });
+    fprintf(stderr, "[RIG_LIST] %zu rigs found\n", rigs.size());
     return rigs;
+}
+
+// Finder callback for rig_port_type(): stops at the first rig whose model
+// number matches the target, capturing its port type.
+struct PortTypeFinder {
+    int         target;
+    std::string result;
+};
+static int find_port_type_cb(const struct rig_caps *caps, rig_ptr_t data) {
+    if (!caps) return 1;
+    if ((int)caps->rig_model == static_cast<PortTypeFinder*>(data)->target) {
+        static_cast<PortTypeFinder*>(data)->result = port_type_str(caps->port_type);
+        return 0;  // stop iterating
+    }
+    return 1;
+}
+
+std::string rig_port_type(int model) {
+    ensure_backends_loaded();
+    PortTypeFinder f{model, "other"};
+    rig_list_foreach(find_port_type_cb, &f);
+    return f.result;
 }
 
 } // namespace pal

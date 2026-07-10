@@ -363,7 +363,6 @@ void ALEController::apply_lbt_policy_(const std::vector<Channel>& channels)
 
 void ALEController::notify_channel_changed_(const Channel& ch)
 {
-    fprintf(stderr, "[HOP] t=%u rx=%u\n", now_ms_, ch.rx_frequency_hz); // TEMP
     // The detector's EWMA floor is channel-specific.  When the RX frequency
     // changes, drop the floor/busy/vote so the new channel is measured on its
     // own terms instead of inheriting a stale busy from the previous channel
@@ -733,7 +732,6 @@ bool ALEController::set_self_address(const std::string& addr)
 
 void ALEController::apply_config(const ALEStationConfig& cfg)
 {
-    fprintf(stderr, "[DWELL] apply_config scan_dwell_ms=%u\n", cfg.scan_dwell_ms); // TEMP
     set_golay_mode(cfg.golay_mode);
     set_min_unanimous_votes(cfg.min_unanimous_votes);
     set_adaptive_fec(cfg.adaptive_fec);
@@ -828,7 +826,6 @@ void ALEController::start_scanning()
                 float sb = (eb && eb->sinad_db > 0.0f) ? eb->sinad_db : 0.0f;
                 return sa > sb;  // higher FROM-quality first
             });
-        fprintf(stderr, "[DWELL] start_scanning configure_scan dwell=%u\n", cfg.dwell_time_ms); // TEMP
         sm_.configure_scan(cfg);
     }
 
@@ -1213,7 +1210,10 @@ void ALEController::update(uint32_t now_ms)
     // feeding the demodulator".  When either condition drops (operator switch
     // or every TX closes RX), the detector clears its busy flag — so the pill
     // can never latch on FREQ BUSY while no detection is actually running.
-    occupancy_.set_active(lbt_occupancy_enabled_ && demodulator_.enabled());
+    // Gate: LBT enabled AND demodulator is running (ALE TX disables it) AND
+    // voice PTT is not active (voice TX also feeds the VAC loopback which
+    // would poison the floor — same treatment as ALE TX).
+    occupancy_.set_active(lbt_occupancy_enabled_ && demodulator_.enabled() && !voice_tx_active_);
 
     tick_ptt_timing(now_ms);
     tick_sm(now_ms);
@@ -2436,7 +2436,6 @@ void ALEController::set_sounding_use_twas(bool use_twas)
 
 void ALEController::set_scan_dwell_ms(uint32_t ms)
 {
-    fprintf(stderr, "[DWELL] set_scan_dwell_ms(%u)\n", ms); // TEMP
     config_.scan_dwell_ms = ms;
     ScanConfig cfg = sm_.get_scan_config();
     cfg.dwell_time_ms = ms;
@@ -2507,6 +2506,13 @@ std::vector<std::string> ALEController::get_all_lqa_entries() const
 bool ALEController::is_link_active() const
 {
     return state() == ALEState::LINKED;
+}
+
+bool ALEController::is_tx_active() const
+{
+    return ptt_lead_deadline_ms_ > 0
+        || !pending_tx_words_.empty()
+        || modulator_.is_transmitting();
 }
 
 uint32_t ALEController::get_call_duration_seconds() const
@@ -2863,6 +2869,38 @@ bool ALEController::rename_channel(const std::string& old_id, const std::string&
     sm_.set_calling_channels(calling_channels_);
     notify_channel_changed_(*it);                 // GUI readout follows rename
     if (!station_file_.empty()) save_channels(station_file_);
+    return true;
+}
+
+bool ALEController::set_channel_enabled(const std::string& id, bool enabled)
+{
+    auto it = std::find_if(calling_channels_.begin(), calling_channels_.end(),
+        [&](const Channel& c){ return c.id == id; });
+    if (it == calling_channels_.end()) return false;
+    if (it->enabled == enabled) return true;                          // no-op if unchanged
+    it->enabled = enabled;
+    sm_.set_calling_channels(calling_channels_);
+    if (!station_file_.empty()) save_channels(station_file_);
+    return true;
+}
+
+bool ALEController::set_channel_mode(const std::string& id, const std::string& mode)
+{
+    if (mode.empty()) return false;
+    auto it = std::find_if(calling_channels_.begin(), calling_channels_.end(),
+        [&](const Channel& c){ return c.id == id; });
+    if (it == calling_channels_.end()) return false;
+    it->rx_mode = mode;
+    it->tx_mode = mode;
+    sm_.set_calling_channels(calling_channels_);
+    if (!station_file_.empty()) save_channels(station_file_);
+    // Re-assert on the radio if this is the currently-active channel so the
+    // override takes effect immediately (freq-first/mode-last, set_vfo_channel).
+    if (radio_) {
+        const Channel* cur = sm_.get_current_channel();
+        if (cur && cur->rx_frequency_hz == it->rx_frequency_hz)
+            set_vfo_channel(it->rx_frequency_hz, mode);
+    }
     return true;
 }
 

@@ -86,6 +86,120 @@ function syncAllFromBridge() {
   syncChannelsFromBridge();
   syncLqaFromBridge();
   syncVfoFromBridge();
+  syncSettingsFromBridge();
+}
+
+// ── Settings panel sync ──────────────────────────────────────────────────────
+
+function syncSettingsFromBridge() {
+  // Audio device dropdown (enumerate; select the currently-open device if any).
+  // The bridge's WASAPI resolve_device() matches the BARE device name, so strip
+  // the "IN:"/"OUT:" prefix the enumerator adds (mirrors apps/gui/app.js enumDevices).
+  bridgeSend('AUDIO_DEVICES', {}, (r) => {
+    if (!r.ok) return;
+    const strip = s => s.replace(/^(IN:|OUT:)\s*/, '');
+    const sel = document.getElementById('setAudioIn');
+    sel.innerHTML = '<option value="">(none — RX idle)</option>' +
+      r.inputs.map(d => { const n = strip(d); return `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`; }).join('');
+  });
+  // Radio model dropdown (full Hamlib rig list).
+  bridgeSend('RIG_LIST', {}, (r) => {
+    if (!r.ok) return;
+    const sel = document.getElementById('setRigModel');
+    sel.innerHTML = '<option value="">(no radio)</option>' +
+      r.rigs.map(g => `<option value="${g.id}">${escapeHtml(g.mfg + ' ' + g.macro + ' [' + g.port + ']')}</option>`).join('');
+  });
+  // Current monitor config → fill the panel fields.
+  bridgeSend('MON_CONFIG_GET', {}, (r) => {
+    if (!r.ok) return;
+    setField('setDwell',         r.dwell_ms);
+    setField('setFilter',         r.channel_filter || 'all');
+    setField('setModeOverride',   r.mode_override || '');
+    setField('setRigHost',        r.rig_host || '127.0.0.1');
+    setField('setRigPort',        r.rig_port || '4532');
+    setField('setRigSerial',      r.rig_serial || '');
+    setField('setRigBaud',        r.rig_baud || 0);
+    if (r.rig_model) setField('setRigModel', String(r.rig_model));
+    // Reflect the active audio device after the device list has populated.
+    setTimeout(() => {
+      if (r.audio_in) setField('setAudioIn', r.audio_in);
+      document.getElementById('audioStatus').textContent = r.audio_in ? 'open: ' + r.audio_in : 'idle';
+    }, 50);
+  });
+  bridgeSend('RIG_STATUS', {}, (r) => {
+    if (!r.ok) return;
+    document.getElementById('rigStatus').textContent = r.status;
+  });
+}
+
+function setField(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (el.tagName === 'SELECT') {
+    for (const o of el.options) if (String(o.value) === String(val)) { o.selected = true; return; }
+  } else {
+    el.value = val;
+  }
+}
+
+function toggleSettings() {
+  document.getElementById('settingsPanel').classList.toggle('hidden');
+}
+
+// ── Settings actions ─────────────────────────────────────────────────────────
+
+function doAudioOpen() {
+  const inDev = document.getElementById('setAudioIn').value;
+  bridgeSend('AUDIO_OPEN', { in: inDev }, (r) => {
+    document.getElementById('audioStatus').textContent =
+      r.ok ? 'open: ' + inDev : ('failed: ' + (r.error || '?'));
+  });
+}
+function doAudioClose() {
+  bridgeSend('AUDIO_CLOSE', {}, () => {
+    document.getElementById('audioStatus').textContent = 'idle';
+  });
+}
+function doRigConnect() {
+  const args = {
+    model:  document.getElementById('setRigModel').value,
+    host:   document.getElementById('setRigHost').value,
+    port:   document.getElementById('setRigPort').value,
+    serial: document.getElementById('setRigSerial').value,
+    baud:   Number(document.getElementById('setRigBaud').value || 0),
+  };
+  bridgeSend('RIG_CONNECT', args, (r) => {
+    document.getElementById('rigStatus').textContent =
+      r.ok ? r.status : ('failed: ' + (r.error || '?'));
+  });
+}
+function doRigDisconnect() {
+  bridgeSend('RIG_DISCONNECT', {}, (r) => {
+    document.getElementById('rigStatus').textContent = r.status || 'disconnected';
+  });
+}
+function doDwellSet() {
+  const ms = Number(document.getElementById('setDwell').value || 0);
+  bridgeSend('TIMING_SET', { scan_dwell_ms: ms }, (r) => {
+    if (r.ok) aleLogInfo('Dwell set to ' + ms + ' ms');
+  });
+}
+function doFilterSet() {
+  const f = document.getElementById('setFilter').value;
+  bridgeSend('MON_FILTER', { filter: f }, (r) => {
+    if (r.ok) aleLogInfo('Channel filter: ' + f);
+  });
+}
+function doModeOverrideSet() {
+  const m = document.getElementById('setModeOverride').value.trim();
+  bridgeSend('MON_MODE_OVERRIDE', { mode: m }, (r) => {
+    if (r.ok) aleLogInfo(m ? ('Mode override: ' + m) : 'Mode restored from file');
+  });
+}
+function doConfigSave() {
+  bridgeSend('MON_CONFIG_SAVE', {}, (r) => {
+    aleLogInfo(r.ok ? 'Settings saved as startup config' : ('Save failed: ' + (r.error || '?')));
+  });
 }
 
 // Pull current freq/mode from the radio on connect and on channel_changed events.

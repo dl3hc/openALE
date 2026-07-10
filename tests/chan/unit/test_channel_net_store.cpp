@@ -765,6 +765,48 @@ bool test_rename_channel_propagates_to_nets()
     return ok1 && idChanged && netFollows && rejectEmpty && rejectWs && rejectDup && rejectUnknown && noop;
 }
 
+// set_channel_enabled() toggles the scan-list membership flag; set_channel_mode()
+// overrides RX/TX mode. Both reject unknown ids; set_channel_mode rejects empty.
+bool test_controller_set_channel_enabled_and_mode()
+{
+    std::cout << "\n[set_channel_enabled / set_channel_mode] toggle + override\n";
+    ALEController ctrl;
+    ctrl.add_channel(Channel(14250000, 0, "USB", "USB"));
+    ctrl.add_channel(Channel(7100000,  0, "USB", "USB"));
+
+    auto findCh = [&](const std::string& id) -> const Channel* {
+        for (const auto& c : ctrl.channels()) if (c.id == id) return &c;
+        return nullptr;
+    };
+
+    bool okDisable = ctrl.set_channel_enabled("C-1", false);
+    bool disabled  = okDisable && findCh("C-1") && !findCh("C-1")->enabled;
+    std::cout << "  disable C-1: " << (disabled ? "PASS" : "FAIL") << "\n";
+
+    bool noop = ctrl.set_channel_enabled("C-1", false);  // already disabled
+    std::cout << "  re-disable is no-op true: " << (noop ? "PASS" : "FAIL") << "\n";
+
+    ctrl.set_channel_enabled("C-1", true);
+    bool reEnabled = findCh("C-1") && findCh("C-1")->enabled;
+    std::cout << "  re-enable C-1: " << (reEnabled ? "PASS" : "FAIL") << "\n";
+
+    bool unknownRejected = !ctrl.set_channel_enabled("NOPE", true);
+    std::cout << "  unknown id rejected: " << (unknownRejected ? "PASS" : "FAIL") << "\n";
+
+    bool okMode  = ctrl.set_channel_mode("C-2", "USB-D");
+    bool modeCh  = okMode && findCh("C-2") && findCh("C-2")->rx_mode == "USB-D"
+                   && findCh("C-2")->tx_mode == "USB-D";
+    std::cout << "  override C-2 mode to USB-D: " << (modeCh ? "PASS" : "FAIL") << "\n";
+
+    bool emptyRejected    = !ctrl.set_channel_mode("C-2", "");
+    bool unknownModeRej   = !ctrl.set_channel_mode("NOPE", "USB-D");
+    std::cout << "  empty mode rejected: " << (emptyRejected ? "PASS" : "FAIL") << "\n";
+    std::cout << "  unknown id mode rejected: " << (unknownModeRej ? "PASS" : "FAIL") << "\n";
+
+    return disabled && noop && reEnabled && unknownRejected && modeCh
+        && emptyRejected && unknownModeRej;
+}
+
 bool test_channel_store_min_capacity_100()
 {
     std::cout << "\n[ChannelStore] minimum capacity 100 entries, all fields present (AC-GEN-004-001)\n";
@@ -1334,6 +1376,8 @@ int run_all_tests()
         test_step_channel_scoped_to_active_scan_net());
     run("rename_channel renames id + propagates to net membership",
         test_rename_channel_propagates_to_nets());
+    run("set_channel_enabled / set_channel_mode toggle + override",
+        test_controller_set_channel_enabled_and_mode());
 
     std::cout << "\n";
     std::cout << "================================================================\n";

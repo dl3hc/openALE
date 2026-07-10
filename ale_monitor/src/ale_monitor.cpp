@@ -3,13 +3,18 @@
  * \brief Passive ALE traffic monitor — RX-only WebSocket bridge.
  *
  * Decodes and logs all ALE traffic on the configured channels.
- * Never transmits.  All config (audio, radio, channel file) is via CLI;
- * the browser GUI is display-only.
+ * Never transmits.  Configuration is read from ale_monitor.conf (resolved by
+ * walking up from the exe directory, so the monitor runs with zero CLI args
+ * from build/ale_monitor/Debug); CLI flags override the config file.  A
+ * lightweight Settings panel in the GUI exposes audio device, radio, dwell,
+ * the ALE/SEL channel filter and the mode override at runtime, persisting
+ * changes back to the config file.
  *
  * Usage:
+ *   ale_monitor                       # uses ale_monitor.conf / defaults
  *   ale_monitor --port N --net-file path/to/nets/USA.ale
  *               [--remote] [--audio "IN:device"] [--rig "hamlib:2:tcp://host:4532"]
- *               [--lqa-file monitor_lqa.bin] [--webroot DIR]
+ *               [--lqa-file monitor_lqa.bin] [--webroot DIR] [--config FILE]
  */
 
 #include "App/ale_controller.h"
@@ -24,6 +29,7 @@
 #include <windows.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -42,7 +48,7 @@ namespace mj = bridge::minijson;
 static std::atomic<bool> g_running{true};
 static void sig_handler(int) { g_running = false; }
 
-// ── Web-root resolution ──────────────────────────────────────────────────────
+// ── Path helpers ──────────────────────────────────────────────────────────────
 
 static bool file_exists(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
@@ -67,6 +73,29 @@ static std::string exe_dir() {
 static std::string exe_dir() { return ""; }
 #endif
 
+// Resolve a repo-relative FILE path (e.g. "nets/USA.ale", "ale_monitor.conf")
+// by walking up from the exe directory, with CWD fallbacks. Returns the first
+// existing file, or "" if none. (Use resolve_web_root for a directory.)
+static std::string resolve_relative(const std::string& rel) {
+    std::vector<std::string> roots;
+    const std::string ed = exe_dir();
+    if (!ed.empty()) {
+        std::string up = ed;
+        for (int i = 0; i < 6; ++i) {       // exe dir + up to 5 parents
+            roots.push_back(up + "/" + rel);
+            up += "/..";
+        }
+    }
+    roots.push_back(rel);
+    roots.push_back("./" + rel);
+    for (const auto& r : roots)
+        if (file_exists(r)) return r;
+    return "";
+}
+
+// Resolve the GUI directory by walking up from the exe dir looking for
+// ale_monitor/gui/index.html (a directory is not a file, so file_exists on the
+// directory itself would fail — test for the index.html marker instead).
 static std::string resolve_web_root() {
     const std::string subdir = "ale_monitor/gui";
     std::vector<std::string> roots;
@@ -85,7 +114,113 @@ static std::string resolve_web_root() {
     return "";
 }
 
+// ── Config file ──────────────────────────────────────────────────────────────
+
+struct MonitorConfig {
+    uint16_t    port = 8081;
+    bool        remote = false;
+    std::string net_file = "nets/USA.ale";
+    std::string audio_in;                 // empty = no auto-open
+    std::string rig_model;                // empty = no rig
+    std::string rig_host = "127.0.0.1";
+    std::string rig_port = "4532";
+    std::string rig_serial;
+    int         rig_baud = 0;
+    uint32_t    dwell_ms = 2000;
+    std::string channel_filter = "all";   // all | ale | sel
+    std::string mode_override;            // empty = use file mode
+    std::string lqa_file = "monitor_lqa.bin";
+};
+
+static std::string trim(const std::string& s) {
+    const auto a = s.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return "";
+    return s.substr(a, s.find_last_not_of(" \t\r\n") - a + 1);
+}
+
+// Parse "key = value" lines (# comments). Unknown keys ignored (forward-compat).
+static MonitorConfig parse_config(const std::string& path) {
+    MonitorConfig cfg;
+    std::ifstream f(path);
+    if (!f.is_open()) return cfg;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = trim(line.substr(0, eq));
+        const std::string val = trim(line.substr(eq + 1));
+        if      (key == "port")           { try { cfg.port = static_cast<uint16_t>(std::stoul(val)); } catch (...) {} }
+        else if (key == "remote")         { cfg.remote = (val == "1" || val == "true"); }
+        else if (key == "net_file")       { if (!val.empty()) cfg.net_file = val; }
+        else if (key == "audio_in")       { cfg.audio_in = val; }
+        else if (key == "rig_model")      { cfg.rig_model = val; }
+        else if (key == "rig_host")       { cfg.rig_host = val; }
+        else if (key == "rig_port")       { cfg.rig_port = val; }
+        else if (key == "rig_serial")     { cfg.rig_serial = val; }
+        else if (key == "rig_baud")       { try { cfg.rig_baud = std::stoi(val); } catch (...) {} }
+        else if (key == "dwell_ms")       { try { cfg.dwell_ms = static_cast<uint32_t>(std::stoul(val)); } catch (...) {} }
+        else if (key == "channel_filter") { cfg.channel_filter = val.empty() ? "all" : val; }
+        else if (key == "mode_override")  { cfg.mode_override = val; }
+        else if (key == "lqa_file")       { if (!val.empty()) cfg.lqa_file = val; }
+    }
+    return cfg;
+}
+
+static void save_config(const std::string& path, const MonitorConfig& cfg) {
+    std::ofstream f(path, std::ios::trunc);
+    if (!f.is_open()) return;
+    f << "# ale_monitor configuration — written by the Settings panel.\n"
+      << "# Lines: key = value  (# comments). Edit or delete a value to revert.\n"
+      << "port = " << cfg.port << "\n"
+      << "remote = " << (cfg.remote ? 1 : 0) << "\n"
+      << "net_file = " << cfg.net_file << "\n"
+      << "audio_in = " << cfg.audio_in << "\n"
+      << "rig_model = " << cfg.rig_model << "\n"
+      << "rig_host = " << cfg.rig_host << "\n"
+      << "rig_port = " << cfg.rig_port << "\n"
+      << "rig_serial = " << cfg.rig_serial << "\n"
+      << "rig_baud = " << cfg.rig_baud << "\n"
+      << "dwell_ms = " << cfg.dwell_ms << "\n"
+      << "channel_filter = " << cfg.channel_filter << "\n"
+      << "mode_override = " << cfg.mode_override << "\n"
+      << "lqa_file = " << cfg.lqa_file << "\n";
+}
+
+// Write a commented default template so a first run gives the user something
+// to edit — values left at their in-code defaults.
+static void write_config_template(const std::string& path) {
+    std::ofstream f(path, std::ios::trunc);
+    if (!f.is_open()) return;
+    f << "# ale_monitor configuration.\n"
+      << "# key = value  (# comments). All keys optional; defaults shown.\n"
+      << "# net_file is resolved by walking up from the exe dir, so it works\n"
+      << "# from build/ale_monitor/Debug without an absolute path.\n"
+      << "\n"
+      << "port = 8081\n"
+      << "remote = 0\n"
+      << "net_file = nets/USA.ale\n"
+      << "audio_in =\n"
+      << "rig_model =\n"
+      << "rig_host = 127.0.0.1\n"
+      << "rig_port = 4532\n"
+      << "rig_serial =\n"
+      << "rig_baud = 0\n"
+      << "dwell_ms = 2000\n"
+      << "# channel_filter: all | ale | sel\n"
+      << "channel_filter = all\n"
+      << "# mode_override: empty = use each channel's file mode; e.g. USB-D\n"
+      << "mode_override =\n"
+      << "lqa_file = monitor_lqa.bin\n";
+}
+
 // ── Small helpers ────────────────────────────────────────────────────────────
+
+static mj::Value string_array(const std::vector<std::string>& items) {
+    mj::Value v = mj::arr();
+    for (const auto& s : items) v.push_back(mj::Value::string(s));
+    return v;
+}
 
 // "freq|station|snr|ber|sinad|score|age_ms|bilat_sinad|bilat_ber|bilat_mp|display_score|available"
 static mj::Value lqa_line_to_json(const std::string& line) {
@@ -142,25 +277,76 @@ static mj::Value make_event(const std::string& name) {
     return e;
 }
 
+// Assemble a pal::create_radio() spec from structured fields. The Hamlib rig
+// MODEL is the single selector; its port type decides tcp:// vs serial device.
+// Empty model → "" (no radio). Mirrors apps/ale_bridge.cpp build_radio_spec().
+static std::string build_rig_spec(const std::string& model,
+                                  const std::string& host, const std::string& port,
+                                  const std::string& serial, int baud) {
+    if (model.empty()) return "";
+    int model_id = 0;
+    try { model_id = std::stoi(model); }
+    catch (...) { return "hamlib:" + model + ":"; }
+    const std::string ptype = pal::rig_port_type(model_id);
+    if (ptype == "network")
+        return "hamlib:" + model + ":tcp://" + host + ":" + port;
+    if (ptype == "serial")
+        return "hamlib:" + model + ":" + serial
+             + "," + (baud > 0 ? std::to_string(baud) : "0")
+             + ",dtr=on,rts=on,stab=200";
+    return "hamlib:" + model + ":";
+}
+
+// Channel-type classification from the HFLINK label suffix (e.g. 00ASEL/00BALE).
+// "ALE" / "SEL" are the only two classes in the bundled net files; anything
+// else is treated as "ale" (the class a passive ALE monitor cares about).
+static std::string channel_class(const Channel& c) {
+    const std::string& l = c.label;
+    if (l.size() >= 3) {
+        const std::string suf = l.substr(l.size() - 3);
+        if (suf == "SEL") return "sel";
+        if (suf == "ALE") return "ale";
+    }
+    return "ale";
+}
+
 // ── Context ──────────────────────────────────────────────────────────────────
 
 struct MonitorCtx {
     ALEController*                ctrl;
     std::unique_ptr<AudioDevice>* audio;
-    std::string                   lqa_path;
-    std::string                   audio_in;
+    std::unique_ptr<pal::IRadio>* radio;
+    MonitorConfig*                cfg;
+    std::string                   config_path;   // empty = persistence disabled
+    std::string                   net_file_path;  // resolved, for reload
 };
 
+// Apply the channel filter (all|ale|sel) to the loaded channel list by
+// toggling Channel::enabled. Idempotent.
+static void apply_filter(ALEController& ctrl, const std::string& filter) {
+    for (const auto& c : ctrl.channels()) {
+        bool on = true;
+        if (filter == "ale") on = (channel_class(c) == "ale");
+        else if (filter == "sel") on = (channel_class(c) == "sel");
+        ctrl.set_channel_enabled(c.id, on);
+    }
+}
+
+// Override every channel's mode, or reload the net file (restoring file modes)
+// when mode is empty. Filter is re-applied after a reload.
+static void apply_mode_override(ALEController& ctrl, const std::string& net_file_path,
+                                const std::string& filter, const std::string& mode) {
+    if (mode.empty()) {
+        ctrl.load_station_file(net_file_path);
+        ctrl.set_station_file("");   // never auto-save the shipped net file
+        apply_filter(ctrl, filter);
+        return;
+    }
+    for (const auto& c : ctrl.channels())
+        ctrl.set_channel_mode(c.id, mode);
+}
+
 // ── Command dispatch ─────────────────────────────────────────────────────────
-//
-// Wire protocol: GUI → bridge: {"id":N,"cmd":"...", ...args}   (text frame)
-//                bridge → GUI: {"id":N,"ok":bool,...}          (reply)
-//                              {"event":"...",...}              (async event)
-//                              <float32 spectrum bins × N>      (binary frame)
-//
-// Monitor exposes a SUBSET of openALE's command set — only what is needed for
-// passive display.  Commands that modify channels, load audio, or connect a
-// radio at runtime are intentionally absent; all config is at CLI startup.
 
 static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
     ALEController& ctrl = *ctx.ctrl;
@@ -199,14 +385,110 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
     }
 
     // ── Audio ─────────────────────────────────────────────────────────────
+    if (cmd == "AUDIO_DEVICES") {
+        // Enumerate via a throwaway device — works before any device is attached.
+        std::vector<std::string> inputs, outputs;
+        for (const auto& d : make_audio_device()->list_devices()) {
+            if (d.rfind("IN:", 0) == 0)       inputs.push_back(d);
+            else if (d.rfind("OUT:", 0) == 0) outputs.push_back(d);
+        }
+        mj::Value r = make_reply(msg, true);
+        r.set("inputs",  string_array(inputs));
+        r.set("outputs", string_array(outputs));
+        return mj::dump(r);
+    }
+    if (cmd == "AUDIO_OPEN") {
+        // Close any open device first (detach from controller before close()).
+        if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); }
+        *ctx.audio = make_audio_device();
+        const std::string in_dev = msg.get_string("in");
+        const bool ok = (*ctx.audio)->open(in_dev, "");   // RX-only (empty out)
+        if (ok) {
+            ctrl.set_audio_device(ctx.audio->get());
+            ctx.cfg->audio_in = in_dev;
+        } else {
+            ctx.audio->reset();
+            ctx.cfg->audio_in.clear();
+        }
+        mj::Value r = make_reply(msg, ok);
+        if (!ok) r.set("error", mj::Value::string("could not open audio device"));
+        return mj::dump(r);
+    }
+    if (cmd == "AUDIO_CLOSE") {
+        if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); ctx.audio->reset(); }
+        ctx.cfg->audio_in.clear();
+        return mj::dump(make_reply(msg, true));
+    }
     if (cmd == "AUDIO_LEVEL") {
         mj::Value r = make_reply(msg, true);
         r.set("level", mj::Value::number(ctrl.get_audio_input_level()));
         return mj::dump(r);
     }
-    // Accept but ignore — monitor has no TX, GUI may still call this
-    if (cmd == "AUDIO_SET_VOL") {
+    if (cmd == "AUDIO_SET_VOL") {   // accepted, no-op (monitor has no TX)
         return mj::dump(make_reply(msg, true));
+    }
+
+    // ── Radio ──────────────────────────────────────────────────────────────
+    if (cmd == "RIG_LIST") {
+        mj::Value r = make_reply(msg, true);
+        mj::Value arr = mj::arr();
+        for (const auto& e : pal::list_rigs()) {
+            mj::Value v = mj::obj();
+            v.set("id",    mj::Value::number(e.model));
+            v.set("mfg",   mj::Value::string(e.mfg));
+            v.set("macro", mj::Value::string(e.macro));
+            v.set("port",  mj::Value::string(e.port_type));
+            arr.push_back(std::move(v));
+        }
+        r.set("rigs", std::move(arr));
+        return mj::dump(r);
+    }
+    if (cmd == "RIG_CONNECT") {
+        if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
+        const std::string model  = msg.get_string("model");
+        const std::string host   = msg.get_string("host", ctx.cfg->rig_host);
+        const std::string port   = msg.get_string("port", ctx.cfg->rig_port);
+        const std::string serial = msg.get_string("serial", ctx.cfg->rig_serial);
+        const int baud            = static_cast<int>(msg.get_number("baud", ctx.cfg->rig_baud));
+        const std::string spec   = build_rig_spec(model, host, port, serial, baud);
+        if (spec.empty()) {  // None / Offline
+            ctx.cfg->rig_model.clear();
+            mj::Value r = make_reply(msg, true);
+            r.set("connected", mj::Value::boolean(false));
+            r.set("status", mj::Value::string("not attached"));
+            return mj::dump(r);
+        }
+        *ctx.radio = pal::create_radio(spec);
+        const bool ok = *ctx.radio && (*ctx.radio)->initialize() && (*ctx.radio)->start();
+        if (ok) {
+            ctrl.set_radio(ctx.radio->get());
+            ctx.cfg->rig_model  = model;
+            ctx.cfg->rig_host   = host;
+            ctx.cfg->rig_port   = port;
+            ctx.cfg->rig_serial = serial;
+            ctx.cfg->rig_baud   = baud;
+        } else {
+            ctx.radio->reset();
+        }
+        mj::Value r = make_reply(msg, ok);
+        r.set("connected", mj::Value::boolean(ok && ctrl.test_rig_connection()));
+        r.set("status", mj::Value::string(ctrl.get_rig_connection_status()));
+        if (!ok) r.set("error", mj::Value::string("could not connect radio (" + spec + ")"));
+        return mj::dump(r);
+    }
+    if (cmd == "RIG_DISCONNECT") {
+        if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
+        ctx.cfg->rig_model.clear();
+        mj::Value r = make_reply(msg, true);
+        r.set("connected", mj::Value::boolean(false));
+        r.set("status", mj::Value::string("not attached"));
+        return mj::dump(r);
+    }
+    if (cmd == "RIG_STATUS") {
+        mj::Value r = make_reply(msg, true);
+        r.set("connected", mj::Value::boolean(ctrl.test_rig_connection()));
+        r.set("status", mj::Value::string(ctrl.get_rig_connection_status()));
+        return mj::dump(r);
     }
 
     // ── LQA ──────────────────────────────────────────────────────────────
@@ -220,7 +502,7 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
     }
     if (cmd == "LQA_CLEAR") {
         ctrl.process_command("CMD:CLEAR_LQA");
-        if (!ctx.lqa_path.empty()) ctrl.save_lqa(ctx.lqa_path);
+        if (!ctx.cfg->lqa_file.empty()) ctrl.save_lqa(ctx.cfg->lqa_file);
         return mj::dump(make_reply(msg, true));
     }
 
@@ -235,6 +517,66 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
         return mj::dump(r);
     }
 
+    // ── Timing (dwell + the read-only subset the monitor needs) ───────────
+    if (cmd == "TIMING_SET") {
+        if (msg.has("scan_dwell_ms")) {
+            ctrl.set_scan_dwell_ms(static_cast<uint32_t>(msg.get_number("scan_dwell_ms")));
+            ctx.cfg->dwell_ms = ctrl.get_scan_dwell_ms();
+        }
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "TIMING_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("scan_dwell_ms", mj::Value::number(ctrl.get_scan_dwell_ms()));
+        return mj::dump(r);
+    }
+
+    // ── Monitor-only configuration (bug 4/5/6 + persistence) ───────────────
+    if (cmd == "MON_CONFIG_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("dwell_ms",        mj::Value::number(ctx.cfg->dwell_ms));
+        r.set("channel_filter",  mj::Value::string(ctx.cfg->channel_filter));
+        r.set("mode_override",   mj::Value::string(ctx.cfg->mode_override));
+        r.set("audio_in",        mj::Value::string(ctx.cfg->audio_in));
+        r.set("rig_model",       mj::Value::string(ctx.cfg->rig_model));
+        r.set("rig_host",        mj::Value::string(ctx.cfg->rig_host));
+        r.set("rig_port",        mj::Value::string(ctx.cfg->rig_port));
+        r.set("rig_serial",      mj::Value::string(ctx.cfg->rig_serial));
+        r.set("rig_baud",        mj::Value::number(ctx.cfg->rig_baud));
+        r.set("net_file",        mj::Value::string(ctx.cfg->net_file));
+        return mj::dump(r);
+    }
+    if (cmd == "MON_FILTER") {
+        const std::string f = msg.get_string("filter");
+        if (f == "all" || f == "ale" || f == "sel") {
+            ctx.cfg->channel_filter = f;
+            apply_filter(ctrl, f);
+            // Re-apply the mode override so every channel — including any
+            // newly-(re)enabled one — adheres to it. Idempotent; no-op if unset.
+            if (!ctx.cfg->mode_override.empty())
+                apply_mode_override(ctrl, ctx.net_file_path, f, ctx.cfg->mode_override);
+            return mj::dump(make_reply(msg, true));
+        }
+        mj::Value r = make_reply(msg, false);
+        r.set("error", mj::Value::string("filter must be all|ale|sel"));
+        return mj::dump(r);
+    }
+    if (cmd == "MON_MODE_OVERRIDE") {
+        const std::string m = msg.get_string("mode");
+        ctx.cfg->mode_override = m;
+        apply_mode_override(ctrl, ctx.net_file_path, ctx.cfg->channel_filter, m);
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "MON_CONFIG_SAVE") {
+        if (ctx.config_path.empty()) {
+            mj::Value r = make_reply(msg, false);
+            r.set("error", mj::Value::string("no config path"));
+            return mj::dump(r);
+        }
+        save_config(ctx.config_path, *ctx.cfg);
+        return mj::dump(make_reply(msg, true));
+    }
+
     mj::Value r = make_reply(msg, false);
     r.set("error", mj::Value::string("unknown command: " + cmd));
     return mj::dump(r);
@@ -246,28 +588,26 @@ static void print_usage(const char* prog) {
     std::fprintf(stderr,
         "ALE Traffic Monitor — passive RX-only WebSocket bridge\n"
         "\n"
-        "Decodes all ALE traffic on the configured channels and streams it\n"
-        "to a browser UI.  Never transmits.  All config is via CLI flags;\n"
-        "the GUI is display-only (no audio/radio controls in the browser).\n"
+        "Decodes all ALE traffic on the configured channels and streams it to a\n"
+        "browser UI.  Never transmits.  Configuration is read from ale_monitor.conf\n"
+        "(resolved by walking up from the exe dir); CLI flags override the file.\n"
         "\n"
         "Usage:\n"
-        "  %s --port N --net-file FILE [options]\n"
+        "  %s [options]\n"
         "\n"
-        "Required:\n"
-        "  --port N           WebSocket listen port\n"
-        "  --net-file FILE    .ale channel file (e.g. nets/USA.ale)\n"
-        "\n"
-        "Options:\n"
-        "  --remote           Bind to 0.0.0.0 instead of 127.0.0.1\n"
+        "Options (all optional — defaults/ale_monitor.conf suffice):\n"
+        "  --port N           WebSocket listen port (default 8081)\n"
+        "  --net-file FILE    .ale channel file (default nets/USA.ale)\n"
         "  --audio SPEC       Audio input device, e.g. \"IN:CABLE Output\"\n"
         "  --rig SPEC         Hamlib radio spec, e.g. \"hamlib:2:tcp://127.0.0.1:4532\"\n"
-        "  --lqa-file FILE    LQA persistence file (default: monitor_lqa.bin)\n"
-        "  --webroot DIR      Serve GUI from DIR instead of auto-detected path\n"
+        "  --lqa-file FILE     LQA persistence file (default monitor_lqa.bin)\n"
+        "  --config FILE       Config file (default ale_monitor.conf next to exe)\n"
+        "  --remote            Bind to 0.0.0.0 instead of 127.0.0.1\n"
+        "  --webroot DIR       Serve GUI from DIR instead of auto-detected path\n"
         "\n"
         "Examples:\n"
-        "  %s --port 8081 --net-file nets/USA.ale\n"
-        "  %s --port 8081 --net-file nets/EUR.ale --rig \"hamlib:2:tcp://localhost:4532\"\n"
-        "       --audio \"IN:CABLE Output\" --remote\n",
+        "  %s                           # uses ale_monitor.conf / defaults\n"
+        "  %s --port 8081 --net-file nets/USA.ale\n",
         prog, prog, prog);
 }
 
@@ -278,37 +618,57 @@ int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
-    uint16_t    port        = 0;
-    bool        bind_remote = false;
-    std::string net_file;
-    std::string startup_audio;
-    std::string rig_spec;
-    std::string lqa_path   = "monitor_lqa.bin";
+    // CLI overrides (applied on top of the config file below).
+    uint16_t    cli_port        = 0;
+    bool        cli_remote       = false;
+    bool        cli_remote_set   = false;
+    std::string cli_net_file;
+    std::string cli_audio;
+    std::string cli_rig_spec;     // raw hamlib spec override (auto-connect only)
+    std::string cli_lqa;
+    std::string cli_config;
     std::string web_root;
 
     for (int i = 1; i < argc; ++i) {
-        if      (std::strcmp(argv[i], "--port")     == 0 && i + 1 < argc) { port        = static_cast<uint16_t>(std::atoi(argv[++i])); }
-        else if (std::strcmp(argv[i], "--remote")   == 0)                  { bind_remote = true; }
-        else if (std::strcmp(argv[i], "--net-file") == 0 && i + 1 < argc) { net_file    = argv[++i]; }
-        else if (std::strcmp(argv[i], "--audio")    == 0 && i + 1 < argc) { startup_audio = argv[++i]; }
-        else if (std::strcmp(argv[i], "--rig")      == 0 && i + 1 < argc) { rig_spec    = argv[++i]; }
-        else if (std::strcmp(argv[i], "--lqa-file") == 0 && i + 1 < argc) { lqa_path    = argv[++i]; }
-        else if (std::strcmp(argv[i], "--webroot")  == 0 && i + 1 < argc) { web_root    = argv[++i]; }
+        if      (std::strcmp(argv[i], "--port")     == 0 && i + 1 < argc) { cli_port = static_cast<uint16_t>(std::atoi(argv[++i])); }
+        else if (std::strcmp(argv[i], "--remote")   == 0)                  { cli_remote = true; cli_remote_set = true; }
+        else if (std::strcmp(argv[i], "--net-file") == 0 && i + 1 < argc) { cli_net_file = argv[++i]; }
+        else if (std::strcmp(argv[i], "--audio")    == 0 && i + 1 < argc) { cli_audio = argv[++i]; }
+        else if (std::strcmp(argv[i], "--rig")      == 0 && i + 1 < argc) { cli_rig_spec = argv[++i]; }
+        else if (std::strcmp(argv[i], "--lqa-file") == 0 && i + 1 < argc) { cli_lqa = argv[++i]; }
+        else if (std::strcmp(argv[i], "--config")   == 0 && i + 1 < argc) { cli_config = argv[++i]; }
+        else if (std::strcmp(argv[i], "--webroot")  == 0 && i + 1 < argc) { web_root = argv[++i]; }
         else if (std::strcmp(argv[i], "--help")     == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]); return 0;
         }
     }
 
-    if (port == 0) {
-        std::fprintf(stderr, "ERROR: --port <N> is required.\n\n");
-        print_usage(argv[0]);
-        return 1;
+    // ── Config file (walk-up from exe dir, then CWD) ───────────────────────
+    std::string config_path = cli_config.empty()
+        ? resolve_relative("ale_monitor.conf") : cli_config;
+    MonitorConfig cfg;
+    if (!config_path.empty()) {
+        cfg = parse_config(config_path);
+        std::printf("[ale_monitor] Config: %s\n", config_path.c_str());
+    } else {
+        // No config found — write a commented template next to the exe so the
+        // user has something to edit. resolve_relative walked up from the exe
+        // dir; write it one level up from the exe (the repo root) when possible.
+        const std::string ed = exe_dir();
+        const std::string tmpl = ed.empty() ? "ale_monitor.conf" : ed + "/../ale_monitor.conf";
+        write_config_template(tmpl);
+        std::printf("[ale_monitor] No config found — wrote template to %s\n", tmpl.c_str());
+        config_path = tmpl;   // so MON_CONFIG_SAVE has somewhere to write
     }
-    if (net_file.empty()) {
-        std::fprintf(stderr, "ERROR: --net-file <FILE> is required.\n\n");
-        print_usage(argv[0]);
-        return 1;
-    }
+
+    // CLI overrides on top of config.
+    if (cli_port != 0)          cfg.port = cli_port;
+    if (cli_remote_set)         cfg.remote = cli_remote;
+    if (!cli_net_file.empty())  cfg.net_file = cli_net_file;
+    if (!cli_audio.empty())     cfg.audio_in = cli_audio;
+    if (!cli_lqa.empty())       cfg.lqa_file = cli_lqa;
+
+    if (cfg.port == 0) cfg.port = 8081;
 
     if (web_root.empty()) web_root = resolve_web_root();
 
@@ -320,8 +680,8 @@ int main(int argc, char* argv[]) {
     // ── WebSocket server ─────────────────────────────────────────────────
     bridge::WsServer ws;
     ws.set_web_root(web_root);
-    if (!ws.start(port, bind_remote)) {
-        std::fprintf(stderr, "ERROR: Failed to start WebSocket server on port %u.\n", port);
+    if (!ws.start(cfg.port, cfg.remote)) {
+        std::fprintf(stderr, "ERROR: Failed to start WebSocket server on port %u.\n", cfg.port);
         return 1;
     }
 
@@ -329,47 +689,63 @@ int main(int argc, char* argv[]) {
     // No self-address: the SM will never respond to calls — purely passive.
     ALEController ctrl;
 
-    if (ctrl.load_lqa(lqa_path))
-        std::printf("[ale_monitor] LQA loaded from %s\n", lqa_path.c_str());
+    if (ctrl.load_lqa(cfg.lqa_file))
+        std::printf("[ale_monitor] LQA loaded from %s\n", cfg.lqa_file.c_str());
 
     // ── Radio ────────────────────────────────────────────────────────────
     std::unique_ptr<pal::IRadio> radio;
-    if (!rig_spec.empty()) {
-        radio = pal::create_radio(rig_spec);
+    std::string rig_spec_to_use = cli_rig_spec;
+    if (rig_spec_to_use.empty() && !cfg.rig_model.empty())
+        rig_spec_to_use = build_rig_spec(cfg.rig_model, cfg.rig_host, cfg.rig_port,
+                                         cfg.rig_serial, cfg.rig_baud);
+    if (!rig_spec_to_use.empty()) {
+        radio = pal::create_radio(rig_spec_to_use);
         if (radio && radio->initialize() && radio->start()) {
             ctrl.set_radio(radio.get());
-            std::printf("[ale_monitor] Radio attached: %s\n", rig_spec.c_str());
+            std::printf("[ale_monitor] Radio attached: %s\n", rig_spec_to_use.c_str());
         } else {
             std::fprintf(stderr, "WARNING: Could not connect radio (%s) — continuing without rig\n",
-                         rig_spec.c_str());
+                         rig_spec_to_use.c_str());
             radio.reset();
         }
     }
 
-    // ── Net file (required) ──────────────────────────────────────────────
-    const bool loaded = ctrl.load_station_file(net_file);
+    // ── Net file (required) — walk-up resolved so it works from build/Debug ─
+    std::string net_file_path = resolve_relative(cfg.net_file);
+    if (net_file_path.empty()) net_file_path = cfg.net_file;  // last resort: CWD
+    const bool loaded = ctrl.load_station_file(net_file_path);
     if (!loaded || ctrl.channels().empty()) {
-        std::fprintf(stderr, "ERROR: No channels loaded from '%s'\n", net_file.c_str());
+        std::fprintf(stderr, "ERROR: No channels loaded from '%s'\n", net_file_path.c_str());
         return 1;
     }
+    // The monitor must never auto-save the shipped net file: set_channel_enabled
+    // / set_channel_mode auto-save to station_file_ when set, which would
+    // overwrite nets/*.ale. Clear it so mutations stay in-memory only.
+    ctrl.set_station_file("");
     std::printf("[ale_monitor] Loaded %zu channel(s) from %s\n",
-                ctrl.channels().size(), net_file.c_str());
+                ctrl.channels().size(), net_file_path.c_str());
 
-    // ── Audio (RX-only) ──────────────────────────────────────────────────
+    // Apply channel filter + mode override before scanning.
+    apply_filter(ctrl, cfg.channel_filter);
+    if (!cfg.mode_override.empty())
+        apply_mode_override(ctrl, net_file_path, cfg.channel_filter, cfg.mode_override);
+    ctrl.set_scan_dwell_ms(cfg.dwell_ms);
+
+    // ── Audio (RX-only) — auto-open if configured ──────────────────────────
     std::unique_ptr<AudioDevice> audio;
-    if (!startup_audio.empty()) {
+    if (!cfg.audio_in.empty()) {
         audio = make_audio_device();
-        if (audio->open(startup_audio, "")) {   // empty out-device = RX-only
+        if (audio->open(cfg.audio_in, "")) {   // empty out-device = RX-only
             ctrl.set_audio_device(audio.get());
-            std::printf("[ale_monitor] Audio RX opened: %s\n", startup_audio.c_str());
+            std::printf("[ale_monitor] Audio RX opened: %s\n", cfg.audio_in.c_str());
         } else {
             std::fprintf(stderr, "WARNING: Could not open audio device '%s' — no audio input\n",
-                         startup_audio.c_str());
+                         cfg.audio_in.c_str());
             audio.reset();
         }
     }
 
-    MonitorCtx ctx{ &ctrl, &audio, lqa_path, startup_audio };
+    MonitorCtx ctx{ &ctrl, &audio, &radio, &cfg, config_path, net_file_path };
 
     // ── Callbacks ────────────────────────────────────────────────────────
     ctrl.on_status_changed = [&](const std::string& m) {
@@ -422,19 +798,19 @@ int main(int argc, char* argv[]) {
     // ── Startup ──────────────────────────────────────────────────────────
     if (ctrl.channels().size() >= 2) {
         ctrl.start_scanning();
-        std::printf("[ale_monitor] Scanning started (%zu channels)\n",
-                    ctrl.channels().size());
+        std::printf("[ale_monitor] Scanning started (%zu channels, dwell %ums, filter %s)\n",
+                    ctrl.channels().size(), cfg.dwell_ms, cfg.channel_filter.c_str());
     } else {
         ctrl.start_available();
         std::printf("[ale_monitor] Single channel — monitoring in AVAILABLE state\n");
     }
 
     std::printf("[ale_monitor] Listening on %s:%u\n",
-                bind_remote ? "0.0.0.0" : "127.0.0.1", port);
+                cfg.remote ? "0.0.0.0" : "127.0.0.1", cfg.port);
     if (web_root.empty())
         std::printf("[ale_monitor] GUI not found — open via file:// or pass --webroot\n");
     else
-        std::printf("[ale_monitor] Open GUI:  http://localhost:%u/index.html\n", port);
+        std::printf("[ale_monitor] Open GUI:  http://localhost:%u/index.html\n", cfg.port);
     std::fflush(stdout);
 
     // ── Main loop ────────────────────────────────────────────────────────
@@ -486,8 +862,8 @@ int main(int argc, char* argv[]) {
     if (radio) radio->stop();
     if (audio) audio->close();
     ws.stop();
-    if (ctrl.save_lqa(lqa_path))
-        std::printf("[ale_monitor] LQA saved to %s\n", lqa_path.c_str());
+    if (ctrl.save_lqa(cfg.lqa_file))
+        std::printf("[ale_monitor] LQA saved to %s\n", cfg.lqa_file.c_str());
     std::printf("[ale_monitor] Exiting.\n");
     return 0;
 }

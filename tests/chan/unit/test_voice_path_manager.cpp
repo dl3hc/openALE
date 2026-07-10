@@ -1,11 +1,11 @@
-// test_voice_path_manager.cpp — unit tests for the dynamic audio-path owner.
+// test_voice_path_manager.cpp — unit tests for VoicePathManager.
 //
 // Verifies the ALE_EXCLUSIVE <-> VOICE_PASSTHROUGH state machine, PTT routing,
-// the SPSC mic ring, and the exclusive-ownership invariant (the modem device's
-// pcm_source is set on entry, cleared on exit). Uses a fake IAudioDriver (so
-// no platform audio backend is needed) and the header-only pal::MockRadio.
+// and the SPSC mic ring. VoicePathManager no longer owns set_pcm_source — that
+// belongs to AudioTransport. Tests verify the observable state flags
+// (passthrough_active, media_tx_wanted) and the mic ring, not VAC transitions.
 //
-// See docs/VOICE_AUDIO_ROUTING.md for the architecture.
+// See docs/VOICE_AUDIO_ROUTING.md and test_audio_transport.cpp (TX arbiter).
 
 #include "App/voice_path_manager.h"
 #include "PAL/audio_driver.h"
@@ -78,7 +78,7 @@ int main()
         CHECK(vpm.mode() == M::ALE_EXCLUSIVE);
     }
 
-    // ── 2. Armed + link → passthrough; VAC render is silence (PTT off) ─────
+    // ── 2. Armed + link → passthrough; AudioTransport owns set_pcm_source ────
     {
         FakeAudioDriver vac;
         pal::MockRadio radio;
@@ -90,13 +90,12 @@ int main()
         vpm.on_link_state(true);
         CHECK(vpm.mode() == M::VOICE_PASSTHROUGH);
         CHECK(vpm.passthrough_active());
-        CHECK(vac.has_pcm_source());               // symbol source overridden
-        int16_t buf[160];
-        CHECK(vac.call_pcm(buf, 160) == 0);        // silence (PTT off → no TX)
+        CHECK(!vpm.media_tx_wanted());             // PTT off → media not wanted
+        CHECK(!vac.has_pcm_source());              // VPM no longer calls set_pcm_source
         CHECK(!radio.is_transmitting());           // radio stays in RX
     }
 
-    // ── 3. PTT on → radio TX + mic-pull source; mic ring round-trips ───────
+    // ── 3. PTT on → radio TX + media_tx_wanted; mic ring round-trips ───────
     {
         FakeAudioDriver vac;
         pal::MockRadio radio;
@@ -111,21 +110,22 @@ int main()
         vpm.set_ptt(true);
         CHECK(radio.is_transmitting());            // CAT PTT asserted
         CHECK(vpm.ptt() == true);
+        CHECK(vpm.media_tx_wanted());              // AudioTransport will install mic source
         CHECK(ptt_activity == 1);                  // link-idle reset hook fired
 
-        // Push mic PCM (simulates a browser frame arriving on the main loop),
-        // then pull it (audio render thread) — data must match.
+        // Push mic PCM (simulates a browser frame) then pull via pull_mic_pcm
+        // directly — AudioTransport installs this as the VAC pcm_source callback.
         int16_t in[64];
         for (int i = 0; i < 64; ++i) in[i] = static_cast<int16_t>(-32000 + i * 1000);
         vpm.push_mic_pcm(in, 64);
         int16_t out[64] = {};
-        const size_t got = vac.call_pcm(out, 64);
+        const size_t got = vpm.pull_mic_pcm(out, 64);
         CHECK(got == 64);
         bool match = true;
         for (int i = 0; i < 64; ++i) if (out[i] != in[i]) match = false;
         CHECK(match);
 
-        // pull_mic_pcm directly also drains the ring.
+        // Secondary pull also drains correctly.
         int16_t out2[16] = {};
         vpm.push_mic_pcm(in, 16);
         CHECK(vpm.pull_mic_pcm(out2, 16) == 16);
@@ -134,7 +134,7 @@ int main()
         CHECK(match);
     }
 
-    // ── 4. PTT off → radio RX + silence source; mic ignored ────────────────
+    // ── 4. PTT off → radio RX; mic ring ignored; media_tx_wanted false ──────
     {
         FakeAudioDriver vac;
         pal::MockRadio radio;
@@ -147,16 +147,15 @@ int main()
         vpm.set_ptt(false);
         CHECK(!radio.is_transmitting());
         CHECK(vpm.ptt() == false);
-        int16_t buf[160];
-        CHECK(vac.call_pcm(buf, 160) == 0);        // silence again
-        // Mic pushed while PTT off is dropped (push_mic_pcm is a no-op).
+        CHECK(!vpm.media_tx_wanted());             // AudioTransport will restore silence
+        // Mic pushed while PTT off is dropped (push_mic_pcm is a no-op then).
         int16_t in[16] = {1, 2, 3};
         vpm.push_mic_pcm(in, 16);
         int16_t out[16] = {};
-        CHECK(vpm.pull_mic_pcm(out, 16) == 0);     // ring empty — mic was ignored
+        CHECK(vpm.pull_mic_pcm(out, 16) == 0);    // ring empty — mic was ignored
     }
 
-    // ── 5. Link terminated → ownership returns to modem (pcm_source cleared)─
+    // ── 5. Link terminated → ALE_EXCLUSIVE; PTT released ────────────────────
     {
         FakeAudioDriver vac;
         pal::MockRadio radio;
@@ -171,8 +170,9 @@ int main()
         vpm.on_link_state(false);
         CHECK(vpm.mode() == M::ALE_EXCLUSIVE);
         CHECK(!vpm.passthrough_active());
-        CHECK(!vac.has_pcm_source());              // symbol-source path restored
-        CHECK(!radio.is_transmitting());           // PTT released even mid-TX
+        CHECK(!vpm.media_tx_wanted());
+        CHECK(!vac.has_pcm_source());  // VPM never set it; AudioTransport will clear on next tick
+        CHECK(!radio.is_transmitting()); // PTT released even mid-TX
     }
 
     // ── 6. Disarm mid-link → returns to ALE_EXCLUSIVE ──────────────────────
@@ -187,7 +187,8 @@ int main()
         CHECK(vpm.passthrough_active());
         vpm.arm(false);
         CHECK(vpm.mode() == M::ALE_EXCLUSIVE);
-        CHECK(!vac.has_pcm_source());
+        CHECK(!vpm.passthrough_active());
+        CHECK(!vac.has_pcm_source());  // VPM never calls set_pcm_source
     }
 
     // ── 7. set_ptt is a no-op outside passthrough (modem owns PTT then) ────
@@ -213,9 +214,10 @@ int main()
         vpm.attach(&vac, &radio);
         vpm.arm(true);
         vpm.on_link_state(true);
-        const int sets = vac.pcm_set_count();
+        CHECK(vpm.passthrough_active());
+        const int sets = vac.pcm_set_count();     // VPM never set pcm_source → 0
         vpm.attach(&vac, &radio);                  // same pointers → no-op
-        CHECK(vac.pcm_set_count() == sets);
+        CHECK(vac.pcm_set_count() == sets);        // still 0; no spurious flip
         CHECK(vpm.passthrough_active());           // still in passthrough
     }
 

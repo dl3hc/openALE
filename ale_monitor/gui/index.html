@@ -41,9 +41,64 @@
     </div>
     <button class="hdr-btn" id="scanBtn" onclick="doScan()">▶ Scan</button>
     <button class="hdr-btn" id="availBtn" onclick="doAvailable()">■ Stop</button>
+    <button class="hdr-btn" id="settingsToggle" onclick="toggleSettings()">⚙ Settings</button>
     <button class="hdr-btn" onclick="clearLog()">Clear Log</button>
   </div>
 </header>
+
+<!-- ── Settings panel (collapsible) ────────────────────────────────────────── -->
+<div id="settingsPanel" class="settings-panel hidden">
+  <div class="settings-grid">
+    <fieldset class="settings-group">
+      <legend>Audio Input</legend>
+      <select id="setAudioIn" class="set-select"></select>
+      <div class="set-row">
+        <button class="set-btn" onclick="doAudioOpen()">Open</button>
+        <button class="set-btn" onclick="doAudioClose()">Close</button>
+        <span id="audioStatus" class="set-status">—</span>
+      </div>
+    </fieldset>
+
+    <fieldset class="settings-group">
+      <legend>Radio</legend>
+      <select id="setRigModel" class="set-select"></select>
+      <div class="set-row"><label>Host</label><input id="setRigHost" class="set-input" value="127.0.0.1"></div>
+      <div class="set-row"><label>Port</label><input id="setRigPort" class="set-input" value="4532"></div>
+      <div class="set-row"><label>Serial</label><input id="setRigSerial" class="set-input" placeholder="COM3 / /dev/ttyUSB0"></div>
+      <div class="set-row"><label>Baud</label><input id="setRigBaud" class="set-input" type="number" value="0"></div>
+      <div class="set-row">
+        <button class="set-btn" onclick="doRigConnect()">Connect</button>
+        <button class="set-btn" onclick="doRigDisconnect()">Disconnect</button>
+        <span id="rigStatus" class="set-status">—</span>
+      </div>
+    </fieldset>
+
+    <fieldset class="settings-group">
+      <legend>Scan / Filter / Mode</legend>
+      <div class="set-row">
+        <label>Dwell (ms)</label>
+        <input id="setDwell" class="set-input" type="number" value="2000">
+        <button class="set-btn" onclick="doDwellSet()">Set</button>
+      </div>
+      <div class="set-row">
+        <label>Filter</label>
+        <select id="setFilter" class="set-select" onchange="doFilterSet()">
+          <option value="all">All channels</option>
+          <option value="ale">ALE only</option>
+          <option value="sel">SEL only</option>
+        </select>
+      </div>
+      <div class="set-row">
+        <label>Mode</label>
+        <input id="setModeOverride" class="set-input" placeholder="blank=file mode; e.g. USB-D">
+        <button class="set-btn" onclick="doModeOverrideSet()">Apply</button>
+      </div>
+      <div class="set-row">
+        <button class="set-btn set-save" onclick="doConfigSave()">💾 Save as startup</button>
+      </div>
+    </fieldset>
+  </div>
+</div>
 
 <!-- ── Main content ───────────────────────────────────────────────────────── -->
 <main class="main">
