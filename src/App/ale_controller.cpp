@@ -870,6 +870,10 @@ bool ALEController::send_sounding()
     // Re-arm LBT (see initiate_call): drop a stale busy latch from the last
     // 400 ms of dwelling so SoundingPhase::LBT measures fresh; keep the floor.
     occupancy_.clear_busy_latch();
+    // Sounding uses the same "call width" C as calling (Tsrs = (C+2)·Ta) — take it
+    // from the active scan net's calling_length_c, falling back to the global
+    // assumed_scan_channels.  See resolve_sounding_C() and handle_sounding().
+    sm_.set_target_scan_channels(resolve_sounding_C(active_scan_net_));
     if (!sm_.send_sounding()) {
         emit_status("Manual sounding rejected — only available while IDLE or scanning");
         return false;
@@ -1425,6 +1429,10 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
     // Fire when due — from IDLE or SCANNING.
     if (remaining_ms <= 0 && (st == ALEState::IDLE || st == ALEState::SCANNING)) {
         auto channels = resolve_net_sounding_channels(auto_sounding_net_);
+        // Sounding uses the same "call width" C as calling (Tsrs = (C+2)·Ta) —
+        // take it from the auto-sounding net's calling_length_c.  See
+        // resolve_sounding_C() and handle_sounding().
+        sm_.set_target_scan_channels(resolve_sounding_C(auto_sounding_net_));
         const bool started = !channels.empty() && sm_.send_sounding_sweep(channels);
         if (started) {
             emit_status("Auto-sounding sweep on net '" + auto_sounding_net_
@@ -2789,6 +2797,23 @@ std::vector<Channel> ALEController::resolve_net_sounding_channels(
     return out;
 }
 
+uint32_t ALEController::resolve_sounding_C(const std::string& net_name) const
+{
+    // Same "call width" C calling uses (Tsc = C·2·Trw), from the net's
+    // calling_length_c policy.  Precedence: the named net, then the auto-sounding
+    // net, then the active scan net, then the global assumed_scan_channels default.
+    auto C_of = [this](const std::string& nm) -> uint32_t {
+        if (!nm.empty())
+            if (const Net* n = net_store_.find(nm)) return n->calling_length_c;
+        return 0;  // 0 = "not found" sentinel; caller falls through.
+    };
+    uint32_t C = C_of(net_name);
+    if (C == 0) C = C_of(auto_sounding_net_);
+    if (C == 0) C = C_of(active_scan_net_);
+    if (C == 0) C = config_.assumed_scan_channels;
+    return C;
+}
+
 void ALEController::set_sounding_interval_sec(uint32_t sec)
 {
     config_.sounding_interval_sec = sec;
@@ -3790,6 +3815,9 @@ std::string ALEController::process_command(const std::string& raw)
         const std::vector<Channel> chans = resolve_net_sounding_channels(net_name);
         if (chans.empty())
             return "ERROR: net '" + net_name + "' not found or has no soundable channels";
+        // Sounding uses the same "call width" C as calling (Tsrs = (C+2)·Ta) —
+        // take it from this net's calling_length_c.  See resolve_sounding_C().
+        sm_.set_target_scan_channels(resolve_sounding_C(net_name));
         if (!send_sounding_sweep(chans))
             return std::string("ERROR: cannot sweep in state ")
                    + ALEStateMachine::state_name(state());

@@ -378,6 +378,9 @@ bool test_sounding() {
 
     // ── Arrange: start from SCANNING (typical caller context) ───────────────
     sm.process_event(ALEEvent::START_SCAN);
+    // Bare redundant sound (reps=2): this test drains exactly 2 words.  The sound
+    // count is (C+2) where C=target_scan_channels; C=0 → reps=2 (Trs only).
+    sm.set_target_scan_channels(0u);
 
     // ── Act 1: initiate sounding ─────────────────────────────────────────────
     std::cout << "  Initiating sounding: ";
@@ -587,6 +590,9 @@ bool test_sounding_no_calling_phase() {
     // Arrange: enter SCANNING, then clear the initial transition log
     sm.process_event(ALEEvent::START_SCAN);
     states_visited.clear();
+    // Bare redundant sound (reps=2): this test drains exactly 2 words.  C=0 →
+    // reps=2 (Trs only); the word count itself is covered by TEST 7f.
+    sm.set_target_scan_channels(0u);
 
     bool calling_phase_ok = true;   // SCANNING_CALL and MESSAGE must never appear
     auto check_cp = [&]() {
@@ -675,7 +681,8 @@ bool test_sounding_trs_timing() {
               << (wc_ok ? "PASS" : "FAIL")
               << " (got=" << wc << ")\n";
 
-    // ── Assert 3–5: State Machine sendet 2 TIS-Wörter für "SAM" ─────────────
+    // ── Assert 3–6: SM sends (C+2) TIS words for "SAM", where C is the same
+    //    "call width" (target_scan_channels) calling uses — Tsrs = (C+2)·Ta.
     ALEStateMachine sm;
     sm.set_self_address("SAM");
     WordTracker tracker;
@@ -683,14 +690,19 @@ bool test_sounding_trs_timing() {
         tracker.record(word);
     });
 
+    // Sounding's n = target_scan_channels (the net's call width C), so the sound
+    // is (C+2) conclusion words.  C=3 → 5 words (= Tsrs on air, ≥ Trs_min).
+    constexpr uint32_t C = 3u;
+    sm.set_target_scan_channels(C);
     sm.process_event(ALEEvent::START_SCAN);
     sm.send_sounding();
     sm.update(ALETimingConstants::Twt_ms + 10);  // advance past LBT → TX begins
 
     const uint32_t tx_count = static_cast<uint32_t>(tracker.count());
-    const bool count_ge_2 = (tx_count >= 2u);
-    std::cout << "  >= 2 Conclusion-Wörter gesendet (sound_repeat_count >= 2): "
-              << (count_ge_2 ? "PASS" : "FAIL")
+    const uint32_t expected = C + 2u;
+    const bool count_eq = (tx_count == expected);
+    std::cout << "  genau (C+2)=" << expected << " Conclusion-Wörter (Tsrs=(C+2)·Ta): "
+              << (count_eq ? "PASS" : "FAIL")
               << " (count=" << tx_count << ")\n";
 
     bool all_tis = true;
@@ -704,14 +716,14 @@ bool test_sounding_trs_timing() {
     std::cout << "  Alle TIS-Wörter tragen Eigenadresse \"SAM\": "
               << (all_addr_correct ? "PASS" : "FAIL") << "\n";
 
-    // ── Assert: Trs-Dauer == count × Trw >= Trs_min_ms ──────────────────────
+    // ── Assert: Tsrs-Dauer == count × Trw >= Trs_min_ms ─────────────────────
     const uint64_t trs_ms = static_cast<uint64_t>(tx_count) * ALETimingConstants::Trw_ms;
     const bool trs_ge_min = (trs_ms >= ALETimingConstants::Trs_min_ms);
-    std::cout << "  Trs (count×Trw) >= Trs_min_ms (784 ms): "
+    std::cout << "  Tsrs (count×Trw) >= Trs_min_ms (784 ms): "
               << (trs_ge_min ? "PASS" : "FAIL")
-              << " (Trs=" << trs_ms << " ms)\n";
+              << " (Tsrs=" << trs_ms << " ms)\n";
 
-    return trs_const_ok && wc_ok && count_ge_2 && all_tis && all_addr_correct && trs_ge_min;
+    return trs_const_ok && wc_ok && count_eq && all_tis && all_addr_correct && trs_ge_min;
 }
 
 // ============================================================================
@@ -743,6 +755,11 @@ bool test_sounding_sweep_multichannel() {
         Channel(18100000, "USB"),
     };
 
+    // Sounding's per-channel word count is (C+2) where C = target_scan_channels
+    // (the net's call width).  Set C=0 so each channel sends the bare redundant
+    // sound (reps=2) — this test focuses on the sweep walking channels in order,
+    // not the word count (covered by TEST 7f).  Drain 2 words/channel below.
+    sm.set_target_scan_channels(0u);
     bool started = sm.send_sounding_sweep(chans);
     std::cout << "  send_sounding_sweep() accepted (IDLE): "
               << (started ? "PASS" : "FAIL") << "\n";
@@ -1384,6 +1401,8 @@ bool test_emergency_does_not_leak_words_pending() {
           "no stale words_pending after emergency (would leak into next op)");
 
     // The real failure mode: a subsequent sounding must not hang in TRANSMITTING.
+    // Bare redundant sound (reps=2): this test asserts exactly 2 conclusion words.
+    sm.set_target_scan_channels(0u);
     check(sm.send_sounding(), "send_sounding from IDLE accepted");
     check(sm.get_state() == ALEState::SOUNDING, "Entered SOUNDING");
     check(sm.get_sounding_phase() == SoundingPhase::LBT, "SOUNDING starts in LBT");

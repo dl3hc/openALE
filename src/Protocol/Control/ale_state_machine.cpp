@@ -952,23 +952,23 @@ void ALEStateMachine::handle_sounding() {
             sounding_phase_ = SoundingPhase::TRANSMITTING;
             if (rx_enabled_callback) rx_enabled_callback(false);
             if (!address_book.get_self_address().empty()) {
-                // A.5.3.1: Trs = 2×Ta (non-scan) or Tsrs = (n+2)×Ta (scan, §A.5.3.1).
-                // n = own scan channel count; Tss (n×Ta) covers the scan period of receivers,
-                // Trs (2×Ta) is the minimum redundant sound appended after it.
+                // A.5.3.1/A.5.3.3: the (scanning) sound is the whole-address conclusion
+                // repeated for Tsrs = Tss + Trs = (n + 2)·Ta, where n is the number of
+                // scan channels the sound must cover (Tss = n·Ta ≥ the receivers' scan
+                // period) and the trailing +2 is the redundant sound Trs = 2·Ta.
                 //
-                // NOTE (2026-07-14, reopened): the spec-correct redundant sound is Trs =
-                // 2×Ta(caller) = 2 conclusion repetitions (784 ms for a 1-word address),
-                // derived via trs_word_count(addr_words)/addr_words == 2.  That change was
-                // reverted because the 784 ms burst did not actually transmit on the live
-                // radio (PTT keyed but no words on-air), while the longer (n+2)-word burst
-                // did.  Root cause of the short-burst failure not yet determined (candidate:
-                // ptt_lead_ms=100 ms default too short for the rig's TX ramp, so the brief
-                // 784 ms audio is eaten before the radio is ready).  Bug #1 (word count)
-                // remains OPEN: do NOT re-introduce reps=2 here until the radio/PTT-lead
-                // issue is understood — verify with a live TX first, not just the SM unit
-                // tests (which use the no-audio offline drain path and do not exercise
-                // real audio→radio TX).  See memory "PC-ALE Sounding Timing Fix".
-                const size_t n    = channel_manager_.channel_count();
+                // n is taken from target_scan_channels — the SAME "call width" C the
+                // controller configures for calling (Tsc = C·2·Trw), resolved per net
+                // from the active sounding/scan net's calling_length_c (see
+                // ALEController::resolve_sounding_C).  This makes sounding use the same
+                // configurable scan-channel count as calling, instead of the own scan-
+                // channel count (which was arbitrary and not configurable).  The burst
+                // length is therefore (C+2) conclusions = (C+2)·Ta on air; for the
+                // default C=10 that is ~4.7 s — long enough to actually get through the
+                // radio's PTT/TX ramp, unlike the 784 ms single-channel Trs=2 burst that
+                // keyed PTT but transmitted no words on the live rig.  C=0 (no scan
+                // channels assumed) falls back to reps=2 (the bare redundant sound Trs).
+                const size_t n    = target_scan_channels;
                 const size_t reps = (n > 0) ? (n + 2) : 2;
                 const ALESequence conclusion_seq =
                     ALESequenceBuilder::conclusion(address_book.get_self_address(),

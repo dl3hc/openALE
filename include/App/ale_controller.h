@@ -1286,6 +1286,15 @@ private:
     /// doesn't exist or has no enabled member channels.
     std::vector<Channel> resolve_net_sounding_channels(const std::string& net_name) const;
 
+    /// Resolve the scan-channel count "C" for a sounding on @p net_name — the SAME
+    /// call-width value calling uses (Tsc = C·2·Trw), taken from the net's
+    /// calling_length_c policy.  Falls back to the auto-sounding net, then the active
+    /// scan net, then config_.assumed_scan_channels when @p net_name is empty or the
+    /// named net is absent.  The SM uses this as `n` in Tsrs = (n+2)·Ta (see
+    /// handle_sounding), so sounding and calling share one configurable scan-channel
+    /// count instead of the SM's own (arbitrary) scan-channel count.
+    uint32_t resolve_sounding_C(const std::string& net_name) const;
+
     /// Resolve a net's *callable* channels (by id, from calling_channels_) for a
     /// Test-Channel sweep — filters inhibit_calling and rx_only (a test call must
     /// be able to transmit). Empty @p net_name falls back to active_scan_net_,
