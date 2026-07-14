@@ -952,25 +952,28 @@ void ALEStateMachine::handle_sounding() {
             sounding_phase_ = SoundingPhase::TRANSMITTING;
             if (rx_enabled_callback) rx_enabled_callback(false);
             if (!address_book.get_self_address().empty()) {
-                // A.5.3.1/A.5.3.2 (AC-SOUND-003-002): a sound is the whole-address
-                // conclusion repeated for the redundant-sound time Trs = 2×Ta(caller).
-                // This holds for a single-channel sound AND for EACH channel of a sweep.
-                // The scanning-sound extension (Tss = n×Ta ≥ Ts, the 128-word single-
-                // channel mode of AC-SOUND-002-001) is a separate mode not used by the
-                // sweep — applying (own-channel-count + 2) here inflated the per-channel
-                // word count in production (tests masked it by never configuring scan
-                // channels).  trs_word_count(w) = 2·w  =>  reps = 2 regardless of
-                // address length: repeating the whole-address conclusion twice is
-                // exactly 2×Ta on air (= 784 ms for a 1-word address).
+                // A.5.3.1: Trs = 2×Ta (non-scan) or Tsrs = (n+2)×Ta (scan, §A.5.3.1).
+                // n = own scan channel count; Tss (n×Ta) covers the scan period of receivers,
+                // Trs (2×Ta) is the minimum redundant sound appended after it.
+                //
+                // NOTE (2026-07-14, reopened): the spec-correct redundant sound is Trs =
+                // 2×Ta(caller) = 2 conclusion repetitions (784 ms for a 1-word address),
+                // derived via trs_word_count(addr_words)/addr_words == 2.  That change was
+                // reverted because the 784 ms burst did not actually transmit on the live
+                // radio (PTT keyed but no words on-air), while the longer (n+2)-word burst
+                // did.  Root cause of the short-burst failure not yet determined (candidate:
+                // ptt_lead_ms=100 ms default too short for the rig's TX ramp, so the brief
+                // 784 ms audio is eaten before the radio is ready).  Bug #1 (word count)
+                // remains OPEN: do NOT re-introduce reps=2 here until the radio/PTT-lead
+                // issue is understood — verify with a live TX first, not just the SM unit
+                // tests (which use the no-audio offline drain path and do not exercise
+                // real audio→radio TX).  See memory "PC-ALE Sounding Timing Fix".
+                const size_t n    = channel_manager_.channel_count();
+                const size_t reps = (n > 0) ? (n + 2) : 2;
                 const ALESequence conclusion_seq =
                     ALESequenceBuilder::conclusion(address_book.get_self_address(),
                                                    sounding_use_twas_);
                 const auto& cw = conclusion_seq.words();
-                const size_t addr_words = cw.size();
-                const size_t reps = (addr_words > 0)
-                    ? (ALETimingConstants::trs_word_count(static_cast<uint32_t>(addr_words))
-                           / addr_words)  // == 2
-                    : 2;
                 std::vector<ALEWord> tx;
                 tx.reserve(cw.size() * reps);
                 for (size_t i = 0; i < reps; ++i)
