@@ -699,6 +699,11 @@ target_link_libraries(test_word_grid_tracker ale_modem ale_codec ale_protocol al
 target_include_directories(test_word_grid_tracker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME WordGridTracker COMMAND test_word_grid_tracker)
 
+add_executable(test_stage1_detector tests/sync/unit/test_stage1_detector.cpp)
+target_link_libraries(test_stage1_detector ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_stage1_detector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME Stage1Detector COMMAND test_stage1_detector)
+
 add_executable(test_word_sync tests/sync/integration/test_word_sync.cpp)
 target_link_libraries(test_word_sync ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_word_sync PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

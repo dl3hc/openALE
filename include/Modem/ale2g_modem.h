@@ -196,9 +196,15 @@ public:
     // ── §A.5.3.3 stage-1 scanning detection ──────────────────────────────────
 
     /// Call on every channel hop to arm the new-channel guard (§A.5.3.3 stage 1).
-    /// Resets the write-position anchor and one-shot flag so stage-1 can fire
-    /// exactly once on the new channel after WORD_SAMPLES of new audio.
-    void mark_channel_hop() { hop_offset_ = write_pos_; energy_fired_ = false; }
+    /// Resets the write-position anchor and triple-agreement detector so stage-1
+    /// can fire within 28 ms on the new channel without ring-buffer contamination.
+    void mark_channel_hop() {
+        hop_offset_       = write_pos_;
+        energy_fired_     = false;
+        ale_triple_count_ = 0;
+        half_blk_accum_   = 0;
+        std::fill(half_blk_tone_, half_blk_tone_ + 3, uint8_t(0xFF));
+    }
 
     /// Register the §A.5.3.3 stage-1 callback: fired once per channel after
     /// unanimous_votes ≥ ALE_STAGE1_MIN_VOTES is observed and the decode window
@@ -219,11 +225,19 @@ private:
     static constexpr uint32_t BUF_CAP = WORD_SAMPLES + SAMPLES_PER_SYMBOL;  // 3200
 
     // ── §A.5.3.3 stage-1 scanning detection ──────────────────────────────────
-    // Lower vote gate for "detect sounds" — fires before the full Golay+ASCII gate.
-    static constexpr uint8_t ALE_STAGE1_MIN_VOTES = 20;
-    std::function<void()>    ale_energy_cb_;
-    uint32_t                 hop_offset_    = 0;    // write_pos_ at last channel hop / reset
-    bool                     energy_fired_  = false; // one-shot per channel; reset by mark_channel_hop()
+    // ALELite-style triple-agreement detector: every HALF_BLOCK_SAMPLES (32 = 4ms),
+    // compute the dominant ALE FSK tone; 3 consecutive half-blocks with the same tone
+    // = one "triple" (guaranteed by 8ms ALE symbols; noise/SSB won't sustain 12ms).
+    // ALE_FAST_STAGE1_TRIPLES consecutive triples → fire ale_energy_cb_ within 28ms.
+    static constexpr uint32_t HALF_BLOCK_SAMPLES      = SAMPLES_PER_SYMBOL / 2; // 32 = 4ms
+    static constexpr uint8_t  ALE_FAST_STAGE1_TRIPLES = 5;   // 5 × 12ms triples = 28ms min
+    static constexpr uint8_t  ALE_STAGE1_MIN_VOTES    = 20;  // retained for documentation
+    std::function<void()>     ale_energy_cb_;
+    uint32_t                  hop_offset_       = 0;
+    bool                      energy_fired_     = false;
+    uint8_t                   half_blk_tone_[3] = {0xFF, 0xFF, 0xFF};
+    uint8_t                   ale_triple_count_ = 0;
+    uint32_t                  half_blk_accum_   = 0;
 
     // ── Signal-extraction working set ──────────────────────────────────────
     bool                 enabled_       = true;
@@ -251,6 +265,9 @@ private:
     // Produce a DecodedCandidate from the current ring buffer position.
     // Uses tracker_.golay_mode() for the FEC operating point.
     DecodedCandidate try_decode_() const;
+
+    // Dominant ALE FSK tone (0–7) over the last HALF_BLOCK_SAMPLES in the ring.
+    uint8_t dominant_ale_tone_() const;
 
     void check_silence_reset_(int16_t s);
 };

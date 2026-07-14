@@ -119,6 +119,9 @@ void Demodulator::reset()
     silence_count_ = 0;
     hop_offset_    = 0;
     energy_fired_  = false;
+    ale_triple_count_ = 0;
+    half_blk_accum_   = 0;
+    std::fill(half_blk_tone_, half_blk_tone_ + 3, uint8_t(0xFF));
     tracker_.reset();
 }
 
@@ -137,26 +140,40 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
         // Silence-gap grid reset.
         check_silence_reset_(s);
 
+        // §A.5.3.3 stage-1: ALELite-style triple-agreement detector.
+        // Every HALF_BLOCK_SAMPLES (32 = 4ms), record the dominant ALE FSK tone.
+        // Three consecutive half-blocks with the same tone = one "triple"; ALE 8-FSK
+        // symbols are 8ms (2 half-blocks) so ALE traffic guarantees consecutive agreement.
+        // Noise and SSB voice can't sustain one frequency for 12ms → triple rarely fires.
+        // ALE_FAST_STAGE1_TRIPLES consecutive triples → fire within 28ms of channel hop.
+        if (++half_blk_accum_ >= HALF_BLOCK_SAMPLES) {
+            half_blk_accum_ = 0;
+            if ((write_pos_ - hop_offset_) >= (3 * HALF_BLOCK_SAMPLES)) {
+                half_blk_tone_[2] = half_blk_tone_[1];
+                half_blk_tone_[1] = half_blk_tone_[0];
+                half_blk_tone_[0] = dominant_ale_tone_();
+                if (half_blk_tone_[0] == half_blk_tone_[1]
+                    && half_blk_tone_[1] == half_blk_tone_[2]
+                    && half_blk_tone_[0] != 0xFF)
+                {
+                    if (++ale_triple_count_ >= ALE_FAST_STAGE1_TRIPLES
+                        && ale_energy_cb_ && !energy_fired_)
+                    {
+                        energy_fired_ = true;
+                        ale_energy_cb_();
+                    }
+                } else {
+                    ale_triple_count_ = 0;
+                }
+            }
+        }
+
         if (++step_accum_ >= (tracker_.use_fine_step() ? DECODE_STEP_FINE
                                                         : DECODE_STEP_COARSE)) {
             step_accum_ = 0;
             if (write_pos_ < WORD_SAMPLES) continue;
 
             const DecodedCandidate c = try_decode_();
-
-            // §A.5.3.3 stage 1: "detects sounds" — A.5.2.6.3 unanimous-vote criterion.
-            // Fires once per channel after the decode window is entirely new-channel
-            // audio (write_pos_ - hop_offset_ >= WORD_SAMPLES) and the signal shows
-            // ALE-characteristic vote agreement.  energy_fired_ gates to one shot;
-            // mark_channel_hop() resets it on each hop.
-            if (ale_energy_cb_ && !energy_fired_
-                && c.unanimous_votes >= ALE_STAGE1_MIN_VOTES
-                && (write_pos_ - hop_offset_) >= WORD_SAMPLES)
-            {
-                energy_fired_ = true;
-                ale_energy_cb_();
-            }
-
             tracker_.process_candidate(c, write_pos_);
         }
     }
@@ -253,6 +270,21 @@ DecodedCandidate Demodulator::try_decode_() const
     c.decoded_ok    = ALEDecoder::decode(sym, c.word, c.fec, &c.unanimous_votes,
                                          tracker_.golay_mode());
     return c;
+}
+
+uint8_t Demodulator::dominant_ale_tone_() const
+{
+    int16_t blk[HALF_BLOCK_SAMPLES];
+    for (uint32_t i = 0; i < HALF_BLOCK_SAMPLES; ++i)
+        blk[i] = ring_at(write_pos_ - HALF_BLOCK_SAMPLES + i);
+    float   best      = -1.0f;
+    uint8_t best_tone = 0;
+    for (int t = 0; t < NUM_TONES; ++t) {
+        const float p = goertzel_power(blk, static_cast<float>(TONE_FREQS_HZ[t]),
+                                       HALF_BLOCK_SAMPLES);
+        if (p > best) { best = p; best_tone = static_cast<uint8_t>(t); }
+    }
+    return best_tone;
 }
 
 } // namespace ALE2GModem
