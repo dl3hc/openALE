@@ -2630,14 +2630,14 @@ function renderSoundPanel() {
 // Single-channel one-shot sounding on the current channel.
 function soundSingle() {
   closeSoundPanel();
-  if (bridgeConnected) {
-    bridgeSend('SOUND', {}, (r) => {
-      if (r && r.ok) aleLogInfo('TX SOUNDING from ' + primarySelfAddr());
-      else           aleLogInfo('Sounding abgelehnt — nur im Idle/Scan');
-    });
+  if (!bridgeConnected) {
+    aleLogInfo('Sounding abgelehnt — keine Verbindung zur Station');
     return;
   }
-  aleLogInfo('TX SOUNDING from ' + primarySelfAddr());
+  bridgeSend('SOUND', {}, (r) => {
+    if (r && r.ok) aleLogInfo('TX SOUNDING from ' + primarySelfAddr());
+    else           aleLogInfo('Sounding abgelehnt — nur im Idle/Scan');
+  });
 }
 
 // Select a net AND enable periodic multi-channel sounding on it (SOUND_AUTO on).

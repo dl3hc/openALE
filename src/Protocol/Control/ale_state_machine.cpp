@@ -950,8 +950,8 @@ void ALEStateMachine::handle_sounding() {
         }
         if ((current_time_ms - sounding_lbt_start_ms_) >= effective_twt_ms_()) {
             sounding_phase_ = SoundingPhase::TRANSMITTING;
-            if (rx_enabled_callback) rx_enabled_callback(false);
             if (!address_book.get_self_address().empty()) {
+                if (rx_enabled_callback) rx_enabled_callback(false);
                 // A.5.3.1/A.5.3.3: the (scanning) sound is the whole-address conclusion
                 // repeated for Tsrs = Tss + Trs = (n + 2)·Ta, where n is the number of
                 // scan channels the sound must cover (Tss = n·Ta ≥ the receivers' scan
@@ -994,8 +994,11 @@ void ALEStateMachine::handle_sounding() {
                     pending_noise_cmd_set_ = false;
                 }
                 transmit_words(tx);
+            } else {
+                // No callsign → nothing to transmit → don't key PTT, skip channel.
+                SM_TRACE("[TRACE] handle_sounding: no self-address — SOUNDING_COMPLETE\n");
+                process_event(ALEEvent::SOUNDING_COMPLETE);
             }
-            // No-address fallback falls through to TRANSMITTING check below.
         }
         return;
     }

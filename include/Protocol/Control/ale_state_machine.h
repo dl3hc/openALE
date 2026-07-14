@@ -190,6 +190,7 @@ public:
     const ScanConfig& get_scan_config() const { return channel_manager_.config(); }
     void add_scan_channel(const Channel& channel);
     void set_self_address(const std::string& address);
+    std::string get_self_address() const { return address_book.get_self_address(); }
     const Channel* get_current_channel() const;
 
     bool initiate_call(const std::string& to_address);

@@ -5,6 +5,7 @@
 #include "App/ale_controller.h"
 #include "LQA/lqa_metrics.h"
 #include "LQA/solar_position.h"
+#include "PAL/logger.h"
 #include "PAL/radio.h"
 #include "Protocol/Control/ale_freq_select.h"
 #include "Protocol/Message/ale_orderwire_protocols.h"
@@ -874,6 +875,10 @@ bool ALEController::send_sounding()
     // from the active scan net's calling_length_c, falling back to the global
     // assumed_scan_channels.  See resolve_sounding_C() and handle_sounding().
     sm_.set_target_scan_channels(resolve_sounding_C(active_scan_net_));
+    if (sm_.get_self_address().empty()) {
+        emit_status("Manual sounding rejected — no callsign configured");
+        return false;
+    }
     if (!sm_.send_sounding()) {
         emit_status("Manual sounding rejected — only available while IDLE or scanning");
         return false;
@@ -1433,6 +1438,12 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
         // take it from the auto-sounding net's calling_length_c.  See
         // resolve_sounding_C() and handle_sounding().
         sm_.set_target_scan_channels(resolve_sounding_C(auto_sounding_net_));
+        if (sm_.get_self_address().empty()) {
+            pal::log_warn("Ctrl", "Auto-sounding deferred: no callsign configured");
+            emit_status("Auto-sounding deferred — configure a callsign first");
+            auto_sounding_last_ms_ = now_ms_;
+            return;
+        }
         const bool started = !channels.empty() && sm_.send_sounding_sweep(channels);
         if (started) {
             emit_status("Auto-sounding sweep on net '" + auto_sounding_net_
