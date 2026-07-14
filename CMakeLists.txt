@@ -645,6 +645,16 @@ target_link_libraries(test_channel_net_store ale_app_core ale_link ale_modem ale
 target_include_directories(test_channel_net_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ChannelNetStore COMMAND test_channel_net_store)
 
+add_executable(test_test_channel tests/chan/unit/test_test_channel.cpp)
+target_link_libraries(test_test_channel ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_test_channel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME TestChannel COMMAND test_test_channel)
+
+add_executable(test_sounding_timing tests/chan/unit/test_sounding_timing.cpp)
+target_link_libraries(test_sounding_timing ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_sounding_timing PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME SoundingTiming COMMAND test_sounding_timing)
+
 add_executable(test_channel_selector tests/chan/unit/test_channel_selector.cpp)
 target_link_libraries(test_channel_selector ale_channel ale_stores ale_lqa ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_channel_selector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -727,6 +737,29 @@ add_executable(test_sfi_service tests/chan/unit/test_sfi_service.cpp)
 target_link_libraries(test_sfi_service ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_sfi_service PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME SfiService COMMAND test_sfi_service)
+
+# Regression: hamlib lock-probe UB must stay neutralized (HamlibRadio::start()),
+# and the mode re-assert backstop must converge against a Quisk-style server
+# whose band memory reverts the mode asynchronously after a frequency change.
+# Real pal::HamlibRadio over NET_RIGCTL against an in-process mock — needs hamlib.
+if(HAMLIB_FOUND)
+    add_executable(test_mode_reassert tests/radio/unit/test_mode_reassert.cpp)
+    target_link_libraries(test_mode_reassert ale_pal)
+    if(WIN32)
+        target_link_libraries(test_mode_reassert ws2_32)
+    endif()
+    add_test(NAME ModeReassert COMMAND test_mode_reassert)
+endif()
+
+# Temporary repro harness (brief-TX investigation) — not registered as a test.
+add_executable(repro_brief_tx tests/link/integration/repro_brief_tx.cpp)
+target_link_libraries(repro_brief_tx ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(repro_brief_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Temporary probe (brief-TX investigation): real WASAPI completion pacing.
+add_executable(wasapi_pacing_probe tests/link/integration/wasapi_pacing_probe.cpp)
+target_link_libraries(wasapi_pacing_probe ale_audio_device ale_modem ale_fsk_core ale_pal)
+target_include_directories(wasapi_pacing_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # ── Examples ──────────────────────────────────────────────────────────────────
 

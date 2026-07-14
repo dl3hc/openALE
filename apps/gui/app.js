@@ -134,7 +134,6 @@ function syncAllFromBridge(pullOnly = false) {
   syncNetsFromBridge();
   syncActiveNetFromBridge();   // restore the header Network pill selection from core
   syncContactsFromBridge();
-  syncGroupRostersFromBridge();
   syncAllCallAcceptFromBridge();
   syncSelfAddrsFromBridge();
   syncLqaFromBridge();
@@ -143,6 +142,7 @@ function syncAllFromBridge(pullOnly = false) {
   syncRelinkFromBridge();           // pull Auto-Relink state from core
   syncLbtFromBridge();              // pull LBT occupancy state from core (A.5.4.7)
   syncEnhFreqSelectFromBridge();    // pull Enhanced Freq-Select state from core
+  syncVoiceFromBridge();            // pull voice-passthrough arm/mode state from core
   syncLocationFromBridge();         // pull Station Location & Propagation from core
   pollRigStatus();   // establish initial radio-control lock state
   populateRigDropdown();
@@ -347,6 +347,9 @@ function onBridgeEvent(e) {
       if (e.phase === 'warn') showSoundingWarn(e.net, e.remaining_sec);
       else hideSoundingWarn();
       break;
+    case 'test_channel':
+      onTestChannelEvent(e);
+      break;
     case 'word_decoded':  onAleLogWord(e, 'rx'); break;
     case 'word_tx':       onAleLogWord(e, 'tx'); break;
     case 'frame_decoded': onAleLogFrame(e);  break;
@@ -362,8 +365,13 @@ function onBridgeEvent(e) {
       // Push event from the core on every PTT transition (SM-driven TX or
       // manual PTT) — replaces the VFO_GET poll's ptt field for the indicator.
       pttOn = !!e.ptt;
-      { const b = document.getElementById('pttBtn');
-        if (b) { b.classList.toggle('ptt-on', pttOn); b.innerHTML = pttOn ? `${icon('zap',14)} TX` : `${icon('mic',14)} PTT`; } }
+      applyPttUi();
+      break;
+    case 'voice_path':
+      // Bridge switched the VAC owner between ALE-modem and voice passthrough.
+      voicePassthrough = (e.mode === 'voice');
+      if (!voicePassthrough) { Voice.pttMuted = false; voiceMicStop(); }
+      applyVoicePathUi();
       break;
     case 'channel_busy':
       { const chip = document.getElementById('busyChip');
@@ -390,18 +398,219 @@ function onBridgeEvent(e) {
 
 // Binary frames carry a 1-byte stream tag (see apps/ale_bridge.cpp):
 // 0x00 = spectrum FFT (float32 LE), 0x01 = voice PCM (int16 LE, 8 kHz mono).
-// Desktop demuxes spectrum and ignores voice frames for now (full desktop
-// voice passthrough is a follow-up; mobile GUI has the complete path).
 function onBinaryFrame(buf) {
   const u8 = new Uint8Array(buf);
   if (u8.length < 1) return;
   const tag = u8[0];
   if (tag === 0x00) onSpectrumFrame(buf.slice(1));
-  // 0x01 (voice) ignored on desktop in this first cut.
+  else if (tag === BIN_TAG_VOICE) onVoiceRxFrame(buf.slice(1));
 }
 
 function onSpectrumFrame(buf) {
   latestSpectrum = new Float32Array(buf);
+}
+
+/* ━━━ VOICE PASSTHROUGH (browser-mediated operator audio) ━━━━━━━━━━━━━━━━━
+   See docs/VOICE_AUDIO_ROUTING.md. While an ALE link is active and voice is
+   armed, the bridge turns the VAC into a transparent radio↔browser pipe. Mic
+   PCM goes up as binary frames tagged 0x01 (8 kHz mono int16 LE); radio RX
+   comes down the same way. PTT selects direction (half-duplex). The ALE modem
+   is silent while linked. Ported from apps/gui/mobile/app.js for desktop/mobile
+   settings lockstep. */
+const BIN_TAG_VOICE = 0x01;
+let voicePassthrough = false;   // mirror of bridge voice_path mode ("voice")
+let voiceArmed       = false;   // voice capability armed in the bridge
+let voiceMicOn       = false;   // mic streaming active (PTT held)
+let voiceMicTestId   = null;    // mic-test timer
+const SPK_RING_N = 4096;        // ~0.5 s @ 8 kHz
+const Voice = {
+  micCtx: null, micStream: null, micNode: null, micRate: 48000,
+  spkCtx: null, spkNode: null, spkRate: 48000,
+  spkRing: null, spkRead: 0.0, spkAvail: 0,
+  pttMuted: false,
+};
+
+function _audioCtxCtor() {
+  return window.AudioContext || window.webkitAudioContext || null;
+}
+
+// ── Speaker (radio RX → browser) ────────────────────────────────────────────
+function voiceInitSpeaker() {
+  if (Voice.spkCtx) return;
+  const Ctx = _audioCtxCtor();
+  if (!Ctx) return;
+  try {
+    Voice.spkCtx  = new Ctx();
+    Voice.spkRate = Voice.spkCtx.sampleRate;
+    Voice.spkRing = new Float32Array(SPK_RING_N);
+    Voice.spkRead = 0.0;
+    Voice.spkAvail = 0;
+    // 1024-frame output-only ScriptProcessor; input channel count 0.
+    Voice.spkNode = Voice.spkCtx.createScriptProcessor(1024, 0, 1);
+    Voice.spkNode.onaudioprocess = voiceSpkProcess;
+    Voice.spkNode.connect(Voice.spkCtx.destination);
+  } catch (e) { aleLogInfo('Voice speaker init failed: ' + e.message); }
+}
+
+function voiceSpkProcess(e) {
+  const out = e.outputBuffer.getChannelData(0);
+  if (Voice.pttMuted || Voice.spkAvail <= 0 || !Voice.spkRing) { out.fill(0); return; }
+  // Upsample 8 kHz ring → device rate using linear interpolation.
+  // ratio = deviceRate / 8000 (e.g. 6 at 48 kHz). Per output sample the 8 kHz
+  // read position advances by 1/ratio; from spkAvail input samples we can fill
+  // spkAvail * ratio output frames.
+  const ratio    = Voice.spkRate / 8000;
+  const invRatio = 1 / ratio;
+  const nFill = Math.min(out.length, Math.floor(Voice.spkAvail * ratio));
+  let pos = Voice.spkRead;
+  for (let i = 0; i < nFill; ++i) {
+    const i0 = Math.floor(pos);
+    const frac = pos - i0;
+    const a = Voice.spkRing[i0 % SPK_RING_N];
+    const b = Voice.spkRing[(i0 + 1) % SPK_RING_N];
+    out[i] = a + (b - a) * frac;
+    pos += invRatio;
+  }
+  for (let i = nFill; i < out.length; ++i) out[i] = 0;   // underrun → silence
+  const consumed = Math.ceil(nFill / ratio);  // input (8 kHz) samples consumed
+  Voice.spkRead = (Voice.spkRead + consumed) % SPK_RING_N;
+  Voice.spkAvail = Math.max(0, Voice.spkAvail - consumed);
+}
+
+function onVoiceRxFrame(payload) {
+  if (!voicePassthrough) return;
+  voiceInitSpeaker();
+  if (Voice.spkCtx && Voice.spkCtx.state === 'suspended') Voice.spkCtx.resume();
+  if (!Voice.spkRing) return;
+  const i16 = new Int16Array(payload);
+  for (let k = 0; k < i16.length; ++k) {
+    Voice.spkRing[Math.floor(Voice.spkRead + Voice.spkAvail) % SPK_RING_N] = i16[k] / 32768;
+    if (Voice.spkAvail < SPK_RING_N) Voice.spkAvail++;
+    else Voice.spkRead = (Voice.spkRead + 1) % SPK_RING_N;
+  }
+}
+
+// ── Microphone (browser → radio TX) ─────────────────────────────────────────
+async function voiceMicStart() {
+  if (voiceMicOn) return;
+  const Ctx = _audioCtxCtor();
+  if (!Ctx || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  try {
+    const audioCfg = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    if (_voiceMicSel) audioCfg.deviceId = { exact: _voiceMicSel };
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: audioCfg });
+    Voice.micCtx    = new Ctx();
+    Voice.micRate   = Voice.micCtx.sampleRate;
+    Voice.micStream = stream;
+    const src = Voice.micCtx.createMediaStreamSource(stream);
+    Voice.micNode   = Voice.micCtx.createScriptProcessor(2048, 1, 0);
+    Voice.micNode.onaudioprocess = voiceMicProcess;
+    src.connect(Voice.micNode);
+    Voice.micNode.connect(Voice.micCtx.destination);  // required for ScriptProcessor to fire
+    voiceMicOn = true;
+  } catch (e) { aleLogInfo('Voice mic start failed: ' + e.message); }
+}
+
+function voiceMicProcess(e) {
+  if (!voiceMicOn || !bridgeWs || bridgeWs.readyState !== 1) return;
+  const in0 = e.inputBuffer.getChannelData(0);
+  const ratio = Voice.micRate / 8000;
+  const nOut = Math.floor(in0.length / ratio);
+  if (nOut <= 0) return;
+  const i16 = new Int16Array(nOut);
+  for (let i = 0; i < nOut; ++i) {
+    const start = Math.floor(i * ratio), end = Math.floor((i + 1) * ratio);
+    let sum = 0;
+    for (let j = start; j < end; ++j) sum += in0[j];
+    let v = Math.round((sum / Math.max(1, end - start)) * 32767);
+    if (v > 32767) v = 32767; if (v < -32768) v = -32768;
+    i16[i] = v;
+  }
+  const buf = new ArrayBuffer(1 + i16.byteLength);
+  const u8 = new Uint8Array(buf);
+  u8[0] = BIN_TAG_VOICE;
+  new Uint8Array(buf, 1).set(new Uint8Array(i16.buffer));
+  bridgeWs.send(buf);
+}
+
+function voiceMicStop() {
+  if (!voiceMicOn && !Voice.micCtx) return;
+  voiceMicOn = false;
+  try { if (Voice.micNode)   Voice.micNode.disconnect(); } catch (_) {}
+  try { if (Voice.micStream) Voice.micStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+  try { if (Voice.micCtx)    Voice.micCtx.close(); } catch (_) {}
+  Voice.micNode = null; Voice.micStream = null; Voice.micCtx = null;
+}
+
+// ── UI / settings ───────────────────────────────────────────────────────────
+// Single-source PTT indicator: derives label + icon from pttOn + voicePassthrough
+// and writes the hidden anchor #pttBtn (innerHTML + .ptt-on). The mobile pill
+// #pttBtnMob (if present) is updated too — guarded so this is safe on desktop.
+function applyPttUi() {
+  const label = pttOn ? 'TX' : (voicePassthrough ? 'TALK' : 'PTT');
+  const ic    = pttOn ? 'zap' : 'mic';
+  const b = document.getElementById('pttBtn');
+  if (b) { b.classList.toggle('ptt-on', pttOn); b.innerHTML = `${icon(ic,14)} ${label}`; }
+  const m = document.getElementById('pttBtnMob');
+  if (m) {
+    m.classList.toggle('ptt-on', pttOn);
+    const lbl = m.querySelector('.mob-ptt-lbl');
+    if (lbl) lbl.textContent = label;
+  }
+}
+
+function applyVoicePathUi() {
+  const badge = document.getElementById('voiceBadge');
+  if (badge) badge.classList.toggle('hidden', !voicePassthrough);
+  applyPttUi();
+}
+
+function syncVoiceFromBridge() {
+  bridgeSend('VOICE_GET', {}, (r) => {
+    voiceArmed = !!r.armed;
+    const arm = document.getElementById('cfgVoiceArm');
+    if (arm) arm.checked = voiceArmed;
+    voicePassthrough = (r.mode === 'voice');
+    applyVoicePathUi();
+  });
+}
+
+function onVoiceArmChange(on) {
+  voiceArmed = !!on;
+  if (bridgeConnected) bridgeSend('VOICE_ARM', { on });
+}
+
+let _voiceMicSel = '', _voiceSpkSel = '';
+function onVoiceMicChange() {
+  _voiceMicSel = document.getElementById('voiceMic').value;
+  // sinkId for output is set on the speaker side; mic selection is applied on
+  // next voiceMicStart via getUserMedia({deviceId:{exact:_voiceMicSel}}).
+}
+function onVoiceSpkChange() {
+  _voiceSpkSel = document.getElementById('voiceSpk').value;
+}
+
+async function enumVoiceDevices() {
+  const micSel = document.getElementById('voiceMic');
+  const spkSel = document.getElementById('voiceSpk');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    // Request permission once so labels become available.
+    try { await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (_) {}
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const mkOpt = d => `<option value="${d.deviceId}">${d.label || (d.kind + ' ' + d.deviceId.slice(0,6))}</option>`;
+    micSel.innerHTML  = '<option value="">— default —</option>' + devs.filter(d => d.kind === 'audioinput').map(mkOpt).join('');
+    spkSel.innerHTML  = '<option value="">— default —</option>' + devs.filter(d => d.kind === 'audiooutput').map(mkOpt).join('');
+  } catch (e) { aleLogInfo('Voice device enum failed: ' + e.message); }
+}
+
+async function voiceMicTest() {
+  if (voiceMicTestId) { clearInterval(voiceMicTestId); voiceMicTestId = null; aleLogInfo('Mic test stopped'); return; }
+  aleLogInfo('Mic test: speaking for 3s shows input level in the console');
+  // Reuse the level meter: start a short capture and report RMS.
+  // Lightweight — does not require the full voice path.
+  // (Kept minimal; full mic metering is out of scope for this first cut.)
+  voiceMicTestId = setTimeout(() => { voiceMicTestId = null; aleLogInfo('Mic test done'); }, 3000);
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -678,6 +887,11 @@ function upsertHeard(e) {
     ber_to:      e.ber_to,
     mp_to:       e.mp_to,
     ageMin:      e.ageMin,
+    // Raw LQA-DB age in ms — the authoritative "when last heard" signal. The
+    // heard panel sorts on this (ascending = most-recently-heard first), so a
+    // station heard again bubbles back to the top regardless of where it sits
+    // in the array. ageMin (rounded minutes) is too coarse to order by.
+    age_ms:      (typeof e.age_ms === 'number') ? e.age_ms : 0,
   };
   if (idx >= 0) {
     // Refresh metrics but keep the original "first heard" timestamp.
@@ -733,7 +947,12 @@ function renderHeard() {
   // availBadge are hoisted declarations below; cfgLqaAge lives in the settings
   // DOM (always present, just hidden) and drives the age gradient.
   const ageLimit = Math.max(1, Number(document.getElementById('cfgLqaAge')?.value) || 60);
-  const body = heardStations.map(h => {
+  // Sort by recency: most-recently-heard first. age_ms is the LQA-DB age
+  // (smaller = fresher), so ascending puts the latest-heard station on top;
+  // ts (first-heard "HH:MM:SS") is a stable tie-break for equal ages.
+  const rows = [...heardStations].sort((a, b) =>
+    (a.age_ms ?? 0) - (b.age_ms ?? 0) || (b.ts || '').localeCompare(a.ts || ''));
+  const body = rows.map(h => {
     const sinadFromG = (h.sinad_from != null) ? h.sinad_from / 30 : null;
     const sinadToG   = (h.sinad_to   != null) ? h.sinad_to   / 30 : null;
     const berFromG   = (h.ber_from   != null) ? 1 - Math.min(1, h.ber_from / 48) : null;
@@ -1001,6 +1220,122 @@ function interruptSounding() {
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TEST-CHANNEL sweep panel
+   Actively links to a peer on each configured channel, records LQA, terminates,
+   advances. Progress + final ranked summary arrive as `test_channel` events.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+let testChannelActive = false;
+let testChannelRows = [];   // [{id, freq, linked, score, status}]
+
+function testChannelQualLabel(score) {
+  if (score < 0) return '—';
+  if (score >= 25) return 'Excellent';
+  if (score >= 20) return 'Good';
+  if (score >= 15) return 'Fair';
+  if (score >= 10) return 'Poor';
+  return 'Very Poor';
+}
+
+function showTestChannelPanel() {
+  document.getElementById('testChannelModal').classList.remove('hidden');
+}
+function hideTestChannelPanel() {
+  document.getElementById('testChannelModal').classList.add('hidden');
+}
+
+function renderTestChannelRows() {
+  const body = document.getElementById('testChannelBody');
+  if (!body) return;
+  if (!testChannelRows.length) { body.innerHTML = '<tr><td colspan="5">—</td></tr>'; return; }
+  let html = '';
+  for (const r of testChannelRows) {
+    const linked = r.linked ? '✓' : '✗';
+    const score = r.score < 0 ? '—' : String(r.score);
+    html += `<tr>`
+         + `<td>${r.id || '—'}</td>`
+         + `<td>${r.freq ? r.freq.toLocaleString() : '—'}</td>`
+         + `<td class="${r.linked ? 'tc-ok' : 'tc-no'}">${linked}</td>`
+         + `<td>${score}</td>`
+         + `<td>${testChannelQualLabel(r.score)}</td>`
+         + `</tr>`;
+  }
+  body.innerHTML = html;
+}
+
+function onTestChannelEvent(e) {
+  const phase = e.phase || '';
+  if (phase === 'start') {
+    testChannelActive = true;
+    testChannelRows = [];
+    const total = Number(e.total) || 0;
+    for (let i = 0; i < total; ++i)
+      testChannelRows.push({ id: '', freq: 0, linked: false, score: -1, status: 'pending' });
+    const peerEl = document.getElementById('testChannelPeer');
+    if (peerEl) peerEl.textContent = e.peer || '—';
+    const progEl = document.getElementById('testChannelProgress');
+    if (progEl) progEl.textContent = `0 / ${total}`;
+    const sumEl = document.getElementById('testChannelSummary');
+    if (sumEl) sumEl.textContent = '';
+    renderTestChannelRows();
+    showTestChannelPanel();
+    aleLogInfo(`Test-Channel sweep to ${e.peer} started (${total} channels)`);
+    return;
+  }
+  if (phase === 'stop') {
+    testChannelActive = false;
+    aleLogInfo('Test-Channel sweep stopped');
+    const sumEl = document.getElementById('testChannelSummary');
+    if (sumEl) sumEl.textContent = 'Stopped.';
+    return;
+  }
+  if (phase === 'done') {
+    testChannelActive = false;
+    const sumEl = document.getElementById('testChannelSummary');
+    if (sumEl) sumEl.textContent = e.summary || 'Complete';
+    aleLogInfo('Test-Channel sweep complete');
+    return;
+  }
+  // Per-channel progress: tune / linked / failed / terminate
+  const idx = (Number(e.index) || 1) - 1;
+  if (idx >= 0 && idx < testChannelRows.length) {
+    const row = testChannelRows[idx];
+    row.id = e.channel_id || row.id;
+    row.freq = Number(e.freq_hz) || row.freq;
+    if (phase === 'linked') row.linked = true;
+    if (phase === 'failed') row.linked = false;
+    if (phase === 'terminate' && Number(e.score) >= 0) row.score = Number(e.score);
+    row.status = phase;
+  }
+  const progEl = document.getElementById('testChannelProgress');
+  if (progEl) progEl.textContent = `${e.index} / ${e.total}`;
+  renderTestChannelRows();
+}
+
+function startTestChannel() {
+  const addr = (document.getElementById('testChannelAddr') || {}).value || '';
+  if (!addr) return;
+  if (bridgeConnected) bridgeSend('TEST_CHANNEL', { addr: addr.trim() });
+}
+
+function stopTestChannel() {
+  if (bridgeConnected) bridgeSend('TEST_CHANNEL_STOP', {});
+}
+
+function closeTestChannelPanel() {
+  hideTestChannelPanel();
+}
+
+// Contextual entry point: right-click a contact in the address book opens the
+// Test Channel modal with that callsign pre-filled (no typing). Waits for Start.
+function testChannelFromContact(idx) {
+  const c = contacts[idx];
+  if (!c) return;
+  const inp = document.getElementById('testChannelAddr');
+  if (inp) inp.value = c.cs;
+  showTestChannelPanel();
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    STATE HELPERS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 function goIdle() {
@@ -1045,7 +1380,9 @@ function renderContacts() {
   el.innerHTML = list.length ? list.map(c => {
     const idx = contacts.indexOf(c);
     const sel = c === selectedContact ? ' sel' : '';
-    return `<div class="contact-item${sel}" onclick="pickContact(${idx})">
+    return `<div class="contact-item${sel}" onclick="pickContact(${idx})"
+      oncontextmenu="event.preventDefault();testChannelFromContact(${idx})"
+      title="Right-click → Test all channels to this peer">
       <div class="contact-avatar">${icon('user',16)}</div>
       <div class="contact-info">
         <div class="contact-cs">${c.cs}</div>
@@ -1120,84 +1457,6 @@ function deleteContact() {
   closeContactEditor();
   renderContacts();
   if (bridgeConnected && removedCs) bridgeSend('CONTACT_DEL', { callsign: removedCs }, () => syncContactsFromBridge());
-}
-
-// ── Group Call Rosters ────────────────────────────────────────────────────────
-
-let groupRosters = [];  // [{name, members:[]}]
-
-function syncGroupRostersFromBridge() {
-  bridgeSend('GROUP_ROSTERS_LIST', {}, (r) => {
-    if (!r.ok) return;
-    groupRosters = (r.rosters || []).map(rr => ({ name: rr.name, members: rr.members || [] }));
-    renderGroupRosters();
-  });
-}
-
-function renderGroupRosters() {
-  const el = document.getElementById('groupRosterList');
-  if (!el) return;
-  if (groupRosters.length === 0) {
-    el.innerHTML = '<div style="font-size:.72rem;opacity:.5;padding:2px 0">No rosters</div>';
-    return;
-  }
-  el.innerHTML = groupRosters.map((r, i) => `
-    <div style="border:1px solid var(--border);border-radius:4px;padding:5px 7px;margin-bottom:5px;font-size:.78rem">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-        <span style="font-weight:600;flex:1">${r.name}</span>
-        <button class="plabel-btn" onclick="callGroupRoster(${i})" style="padding:1px 7px">${icon('phone',12)}</button>
-        <button class="plabel-btn" onclick="delGroupRoster(${i})" style="padding:1px 7px;opacity:.6">✕</button>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:3px">
-        ${r.members.map((m, mi) => `<span style="background:var(--bg-chip,#333);border-radius:3px;padding:1px 5px">${m}<button onclick="delGroupMember(${i},${mi})" style="background:none;border:none;color:inherit;cursor:pointer;opacity:.5;padding:0 0 0 3px;font-size:.7rem">×</button></span>`).join('')}
-      </div>
-      <div style="display:flex;gap:4px">
-        <input id="grpMemberInput${i}" class="search-input" style="flex:1;font-size:.72rem;padding:2px 5px" placeholder="Add callsign…" onkeydown="if(event.key==='Enter')addGroupMember(${i})">
-        <button class="plabel-btn" onclick="addGroupMember(${i})" style="padding:1px 7px">+</button>
-      </div>
-    </div>`).join('');
-}
-
-function addGroupRoster() {
-  const name = prompt('Roster name:');
-  if (!name || !name.trim()) return;
-  if (bridgeConnected) bridgeSend('GROUP_ROSTER_ADD', { name: name.trim() }, () => syncGroupRostersFromBridge());
-  else { groupRosters.push({ name: name.trim(), members: [] }); renderGroupRosters(); }
-}
-
-function delGroupRoster(i) {
-  const r = groupRosters[i];
-  if (!r) return;
-  if (bridgeConnected) bridgeSend('GROUP_ROSTER_DEL', { name: r.name }, () => syncGroupRostersFromBridge());
-  else { groupRosters.splice(i, 1); renderGroupRosters(); }
-}
-
-function addGroupMember(i) {
-  const r = groupRosters[i];
-  if (!r) return;
-  const inp = document.getElementById(`grpMemberInput${i}`);
-  const cs = (inp?.value || '').toUpperCase().trim();
-  if (!cs) return;
-  if (inp) inp.value = '';
-  if (bridgeConnected) bridgeSend('GROUP_ROSTER_MEMBER_ADD', { name: r.name, callsign: cs }, () => syncGroupRostersFromBridge());
-  else { r.members.push(cs); renderGroupRosters(); }
-}
-
-function delGroupMember(i, mi) {
-  const r = groupRosters[i];
-  if (!r) return;
-  const cs = r.members[mi];
-  if (!cs) return;
-  if (bridgeConnected) bridgeSend('GROUP_ROSTER_MEMBER_DEL', { name: r.name, callsign: cs }, () => syncGroupRostersFromBridge());
-  else { r.members.splice(mi, 1); renderGroupRosters(); }
-}
-
-function callGroupRoster(i) {
-  const r = groupRosters[i];
-  if (!r || r.members.length === 0) return;
-  bridgeSend('GROUP_CALL', { roster: r.name }, (reply) => {
-    if (!reply.ok) aleLogInfo('Group call to roster "' + r.name + '" failed');
-  });
 }
 
 // ── AllCall accept ────────────────────────────────────────────────────────────
@@ -1293,6 +1552,7 @@ function openSettings() {
   document.getElementById('settingsModal').classList.remove('hidden');
   showSec('identity');
   enumDevices();
+  enumVoiceDevices();
   populateRigDropdown();
 }
 
@@ -1320,6 +1580,16 @@ function showSec(sec) {
     el.classList.toggle('active', el.dataset.sec === sec));
   document.querySelectorAll('.ssec').forEach(el =>
     el.classList.toggle('active', el.dataset.sec === sec));
+  // Auto-expand Advanced nav group when navigating to an advanced section
+  const advSecs = ['voice','location','nets','timing','policy','lqa','fec','logging','files','misc'];
+  if (advSecs.includes(sec)) {
+    const items = document.getElementById('advNavItems');
+    if (items && !items.classList.contains('open')) {
+      items.classList.add('open');
+      const caret = document.getElementById('advNavCaret');
+      if (caret) caret.textContent = '▾';
+    }
+  }
 }
 
 // Rig connection-field visibility, driven by the selected Hamlib model's port
@@ -1372,6 +1642,7 @@ function populateRigDropdown() {
       sel.value = '';
     }
     updateRigFields();
+    qsMirrorRig();
   });
 }
 
@@ -1404,6 +1675,7 @@ function enumDevices() {
       document.getElementById('audioIn').innerHTML  = (r.inputs  || []).map(mkOpt).join('')  || '<option value="">— none —</option>';
       document.getElementById('audioOut').innerHTML = (r.outputs || []).map(mkOpt).join('') || '<option value="">— none —</option>';
       restoreAudioSelection();
+      qsMirrorAudio();
     });
     return;
   }
@@ -1830,6 +2102,7 @@ function syncChannelsFromBridge() {
     renderNets();
     renderSoundPanel();   // net channel labels in the sounding dropdown
     updateScanBtn();   // channel count changed → refresh Scan button gating
+    updateSetupBanner();
   });
 }
 
@@ -2824,8 +3097,7 @@ function syncVfoFromBridge() {
     radioMode   = r.mode;
     radioStep   = r.tune_step_hz;
     pttOn       = r.ptt;
-    const b = document.getElementById('pttBtn');
-    if (b) { b.classList.toggle('ptt-on', pttOn); b.innerHTML = pttOn ? `${icon('zap',14)} TX` : `${icon('mic',14)} PTT`; }
+    applyPttUi();
     updateRadioDisplay();
   });
 }
@@ -2855,11 +3127,17 @@ function stepChannel(dir) {
 // The button state resets via the ptt_changed push event from the backend.
 function setPtt(on) {
   if (radioCtrlLocked()) return;
-  if (on && pttOn) { abortTx(); return; }
+  // In ALE mode, pressing PTT while already on TX aborts the transmission.
+  // In voice passthrough, PTT is press-and-hold talk — no abort path.
+  if (!voicePassthrough && on && pttOn) { abortTx(); return; }
   if (bridgeConnected) bridgeSend('SET_PTT', { on });
   pttOn = on;
-  const b = document.getElementById('pttBtn');
-  if (b) { b.classList.toggle('ptt-on', on); b.innerHTML = on ? `${icon('zap',14)} TX` : `${icon('mic',14)} PTT`; }
+  if (voicePassthrough) {
+    // Half-duplex voice: PTT on → mic up + mute speaker; PTT off → reverse.
+    Voice.pttMuted = on;
+    if (on) voiceMicStart(); else voiceMicStop();
+  }
+  applyPttUi();
 }
 
 // Stop any ongoing transmission immediately: SM → IDLE, modulator flushed, PTT → RX.
@@ -3036,6 +3314,8 @@ function syncSelfAddrsFromBridge() {
     renderSelfAddrs();
     updateSelfHeader();
     renderChannels();
+    updateSetupBanner();
+    if (!wizardTriggered) { wizardTriggered = true; maybeShowWizard(); }
   });
 }
 
@@ -3047,6 +3327,295 @@ function delSelfAddr(i) {
   updateSelfHeader();
   renderChannels();
   if (bridgeConnected && addr) bridgeSend('SELF_ADDR_DEL', { addr }, () => syncSelfAddrsFromBridge());
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   FIRST-RUN WIZARD + SETUP BANNER  (mobile/index.html #setupWizard)
+   Fires once per session when the backend has no self addresses.
+   Four steps: Callsign → Audio → Radio (optional, skippable) → Channels.
+   Banner persists on the CALL tab until callsign + channels are both set.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+let wizardTriggered = false;
+let wizardStep = 0;
+
+function updateSetupBanner() {
+  const hasCallsign = selfAddrs.some(a => a.addr && a.status === 'enabled');
+  const hasChannels = channels.length > 0;
+  const card = document.getElementById('quickSetupCard');
+  if (!card) return;
+  const sub = document.getElementById('qsSubtitle');
+  if (hasCallsign && hasChannels) {
+    if (sub) { sub.textContent = primarySelfAddr() + ' · ' + channels.length + ' ch'; sub.className = 'qs-subtitle ok'; }
+  } else {
+    const missing = [];
+    if (!hasCallsign) missing.push('callsign');
+    if (!hasChannels) missing.push('channels');
+    if (sub) { sub.textContent = 'Missing: ' + missing.join(' + '); sub.className = 'qs-subtitle warn'; }
+    // Auto-expand when setup is incomplete and the wizard is not already open
+    const wizardHidden = document.getElementById('setupWizard')?.classList.contains('hidden') ?? true;
+    if (wizardHidden && card.dataset.expanded !== 'true') {
+      card.dataset.expanded = 'true';
+      const icon = document.getElementById('qsToggleIcon');
+      if (icon) icon.textContent = '▾';
+      enumDevices();
+      populateRigDropdown();
+    }
+  }
+  // Pre-fill callsign field from current configured address if blank
+  const qsCs = document.getElementById('qsCallsign');
+  if (qsCs && !qsCs.value) {
+    const p = primarySelfAddr();
+    if (p && p !== '—') qsCs.value = p;
+  }
+}
+
+function maybeShowWizard() {
+  if (!selfAddrs.length) showWizard();
+  else updateSetupBanner();
+}
+
+function showWizard() {
+  const el = document.getElementById('setupWizard');
+  if (!el) return;
+  wizardStep = 0;
+  el.classList.remove('hidden');
+  renderWizardStep();
+  enumDevices();         // populates #audioIn / #audioOut → mirrored to wizard selects
+  populateRigDropdown(); // populates #rigModel → mirrored to wizard selects
+}
+
+function closeWizard() {
+  const el = document.getElementById('setupWizard');
+  if (el) el.classList.add('hidden');
+  updateSetupBanner();
+}
+
+function renderWizardStep() {
+  for (let i = 0; i < 4; i++) {
+    const s = document.getElementById('wzStep' + i);
+    if (s) s.classList.toggle('hidden', i !== wizardStep);
+  }
+  document.querySelectorAll('.wz-pip').forEach((p, i) => {
+    p.classList.toggle('active', i === wizardStep);
+    p.classList.toggle('done',   i < wizardStep);
+  });
+  if (wizardStep === 1) wzMirrorAudio();
+  if (wizardStep === 2) wzMirrorRig();
+}
+
+function wzMirrorAudio() {
+  ['In', 'Out'].forEach(dir => {
+    const src = document.getElementById('audio' + dir);
+    const dst = document.getElementById('wzAudio' + dir);
+    if (src && dst) { dst.innerHTML = src.innerHTML; dst.value = src.value; }
+  });
+}
+
+function wzMirrorRig() {
+  const src = document.getElementById('rigModel');
+  const dst = document.getElementById('wzRigModel');
+  if (src && dst) { dst.innerHTML = src.innerHTML; dst.value = src.value; wzOnRigModelChange(); }
+}
+
+function wzOnRigModelChange() {
+  const sel = document.getElementById('wzRigModel');
+  const ptype = rigPortTypeById[sel?.value ?? ''] || '';
+  const row = document.getElementById('wzRigNetFields');
+  if (row) row.style.display = ptype === 'network' ? '' : 'none';
+}
+
+function wzSetStatus(step, msg, cls) {
+  const el = document.getElementById('wzStep' + step + 'Status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'wz-status' + (cls ? ' ' + cls : '');
+}
+
+function wzNext() {
+  if (wizardStep === 0) {
+    const cs = (document.getElementById('wzCallsign')?.value || '').trim().toUpperCase();
+    if (!cs) { document.getElementById('wzCallsign')?.focus(); return; }
+    if (!bridgeConnected) { wizardStep++; renderWizardStep(); return; }
+    wzSetStatus(0, 'Saving…');
+    bridgeSend('SELF_ADDR_ADD', { addr: cs, status: 'enabled', valid_channels: 'ALL' }, () => {
+      syncSelfAddrsFromBridge();
+      wizardStep++;
+      renderWizardStep();
+    });
+    return;
+  }
+
+  if (wizardStep === 1) {
+    const inName  = document.getElementById('wzAudioIn')?.value  || '';
+    const outName = document.getElementById('wzAudioOut')?.value || '';
+    const ainEl  = document.getElementById('audioIn');
+    const aoutEl = document.getElementById('audioOut');
+    if (ainEl  && inName)  ainEl.value  = inName;
+    if (aoutEl && outName) aoutEl.value = outName;
+    if (!bridgeConnected) { wizardStep++; renderWizardStep(); return; }
+    wzSetStatus(1, 'Connecting audio…');
+    bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (r) => {
+      if (r.ok) {
+        audioOpen = true; audioInSelected = inName; audioOutSelected = outName;
+        const btn = document.getElementById('audioConnectBtn');
+        if (btn) { btn.innerHTML = icon('square', 12) + ' Close Audio'; btn.classList.add('scan-on'); }
+        wzSetStatus(1, '✓ Audio connected', 'ok');
+        setTimeout(() => { wizardStep++; renderWizardStep(); }, 600);
+      } else {
+        wzSetStatus(1, '✗ ' + (r.error || 'Failed — check device selection or Skip'), 'err');
+      }
+    });
+    return;
+  }
+
+  if (wizardStep === 2) {
+    const model = document.getElementById('wzRigModel')?.value || '';
+    const ptype = rigPortTypeById[model] || '';
+    const host  = document.getElementById('wzRigHost')?.value || '127.0.0.1';
+    const port  = document.getElementById('wzRigPort')?.value || '4532';
+    // Sync wizard selection into the settings form so rigArgs() picks it up
+    const rigModelEl = document.getElementById('rigModel');
+    if (rigModelEl) { rigModelEl.value = model; updateRigFields(); }
+    if (ptype === 'network') {
+      const h = document.getElementById('rigHost'); if (h) h.value = host;
+      const p = document.getElementById('rigPort'); if (p) p.value = port;
+    }
+    if (!model || !bridgeConnected) { wizardStep++; renderWizardStep(); return; }
+    wzSetStatus(2, 'Connecting to radio…');
+    bridgeSend('RIG_CONNECT', rigArgs(), (r) => {
+      const ok = !!(r.ok && r.connected);
+      if (ok) applyRigState(true);
+      wzSetStatus(2, ok ? '✓ Radio connected' : '✗ ' + (r.error || r.status || 'Failed — you can Skip'), ok ? 'ok' : 'err');
+      if (ok) setTimeout(() => { wizardStep++; renderWizardStep(); }, 600);
+    });
+    return;
+  }
+
+  if (wizardStep === 3) {
+    const path = (document.getElementById('wzChannelPath')?.value || '').trim() || 'nets/hflink_usa.ale';
+    if (!bridgeConnected) { closeWizard(); return; }
+    wzSetStatus(3, 'Loading channels…');
+    bridgeSend('STATION_LOAD', { path }, (r) => {
+      if (r.ok) {
+        syncAllFromBridge(true);
+        wzSetStatus(3, '✓ Channels loaded', 'ok');
+        setTimeout(closeWizard, 700);
+      } else {
+        wzSetStatus(3, '✗ ' + (r.error || 'File not found — check path or Skip'), 'err');
+      }
+    });
+    return;
+  }
+}
+
+function wzSkip() {
+  wizardStep++;
+  if (wizardStep >= 4) closeWizard();
+  else renderWizardStep();
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   QUICK SETUP CARD  (#quickSetupCard in mobile/index.html)
+   Inline collapsible card at top of CALL tab for fast reconfiguration.
+   Auto-expands when callsign or channels are missing.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+function toggleQuickSetup() {
+  const card = document.getElementById('quickSetupCard');
+  if (!card) return;
+  const expanding = card.dataset.expanded !== 'true';
+  card.dataset.expanded = expanding ? 'true' : 'false';
+  const icon = document.getElementById('qsToggleIcon');
+  if (icon) icon.textContent = expanding ? '▾' : '▸';
+  if (expanding) {
+    enumDevices();
+    populateRigDropdown();
+  }
+}
+
+function qsMirrorAudio() {
+  ['In', 'Out'].forEach(dir => {
+    const src = document.getElementById('audio' + dir);
+    const dst = document.getElementById('qsAudio' + dir);
+    if (!src || !dst) return;
+    if (src.options.length && src.options[0]?.textContent !== 'Loading…') {
+      const prev = dst.value;
+      dst.innerHTML = src.innerHTML;
+      if (prev && [...dst.options].some(o => o.value === prev)) dst.value = prev;
+    }
+  });
+}
+
+function qsMirrorRig() {
+  const src = document.getElementById('rigModel');
+  const dst = document.getElementById('qsRigModel');
+  if (!src || !dst || src.options.length <= 1) return;
+  const prev = dst.value;
+  dst.innerHTML = '<option value="">— None / Offline —</option>' + src.innerHTML;
+  if (prev && [...dst.options].some(o => o.value === prev)) dst.value = prev;
+}
+
+function qsSetStatus(msg, cls) {
+  const el = document.getElementById('qsStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'qs-status' + (cls ? ' ' + cls : '');
+}
+
+function qsApply() {
+  const cs = (document.getElementById('qsCallsign')?.value || '').trim().toUpperCase();
+  const inName   = document.getElementById('qsAudioIn')?.value  || '';
+  const outName  = document.getElementById('qsAudioOut')?.value || '';
+  const rigModel = document.getElementById('qsRigModel')?.value || '';
+
+  if (!cs) { document.getElementById('qsCallsign')?.focus(); qsSetStatus('Enter your callsign first', 'err'); return; }
+  if (!bridgeConnected) { qsSetStatus('Not connected to openALE bridge', 'err'); return; }
+
+  qsSetStatus('Saving callsign…');
+  bridgeSend('SELF_ADDR_ADD', { addr: cs, status: 'enabled', valid_channels: 'ALL' }, () => {
+    syncSelfAddrsFromBridge();
+
+    if (!inName || !outName) { qsSetStatus('✓ Callsign saved', 'ok'); return; }
+    qsSetStatus('Connecting audio…');
+    const ainEl  = document.getElementById('audioIn');  if (ainEl)  ainEl.value  = inName;
+    const aoutEl = document.getElementById('audioOut'); if (aoutEl) aoutEl.value = outName;
+
+    bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (ar) => {
+      if (ar.ok) { audioOpen = true; audioInSelected = inName; audioOutSelected = outName; }
+
+      if (!rigModel) {
+        qsSetStatus(ar.ok ? '✓ Setup applied' : '✓ Callsign saved (audio failed)', ar.ok ? 'ok' : 'err');
+        return;
+      }
+      qsSetStatus('Connecting radio…');
+      const rigModelEl = document.getElementById('rigModel');
+      if (rigModelEl) { rigModelEl.value = rigModel; updateRigFields(); }
+
+      bridgeSend('RIG_CONNECT', rigArgs(), (rr) => {
+        const ok = !!(rr.ok && rr.connected);
+        if (ok) applyRigState(true);
+        qsSetStatus(ok ? '✓ Setup applied' : '✓ Applied (radio connection failed)', ok ? 'ok' : 'err');
+      });
+    });
+  });
+}
+
+function qsLoadChannels() {
+  const path = (document.getElementById('qsChannelPath')?.value || '').trim() || 'nets/hflink_usa.ale';
+  if (!bridgeConnected) { qsSetStatus('Not connected to openALE bridge', 'err'); return; }
+  qsSetStatus('Loading channels…');
+  bridgeSend('STATION_LOAD', { path }, (r) => {
+    if (r.ok) { syncAllFromBridge(true); qsSetStatus('✓ Channels loaded', 'ok'); }
+    else qsSetStatus('✗ ' + (r.error || 'File not found — check path'), 'err');
+  });
+}
+
+// Settings nav Advanced collapse — mobile only (CSS hides toggle on desktop)
+function toggleAdvNav() {
+  const items = document.getElementById('advNavItems');
+  const caret = document.getElementById('advNavCaret');
+  if (!items) return;
+  const open = items.classList.toggle('open');
+  if (caret) caret.textContent = open ? '▾' : '▸';
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3208,11 +3777,14 @@ function availBadge(av) {
 function renderLqa() {
   const tb = document.getElementById('lqaBody');
   if (!tb) return;
-  const sort = document.getElementById('cfgLqaSort')?.value || 'score';
+  const sort = document.getElementById('cfgLqaSort')?.value || 'age';
   // Age limit (min) drives the age gradient — fresher = greener.
   const ageLimit = Math.max(1, Number(document.getElementById('cfgLqaAge')?.value) || 60);
+  // Age sort uses fine-grained age_ms (smaller = heard more recently) so the
+  // latest-heard station lands on top; ageMin (rounded minutes) is too coarse and
+  // leaves same-minute ties unordered. Score-descending tie-break for stability.
   const rows = [...lqaEntries].sort((a, b) =>
-    sort === 'age'  ? a.ageMin - b.ageMin :
+    sort === 'age'  ? (a.age_ms ?? 0) - (b.age_ms ?? 0) || b.score - a.score :
     sort === 'addr' ? a.addr.localeCompare(b.addr) || b.score - a.score :
                       b.score - a.score);
   tb.innerHTML = rows.length ? rows.map(e => {

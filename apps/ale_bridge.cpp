@@ -407,6 +407,13 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(r);
     }
     if (cmd == "SOUND_INTERRUPT") { return pc(msg, ctrl, "CMD:SOUND_INTERRUPT " + msg.get_string("net")); }
+    if (cmd == "TEST_CHANNEL") {
+        // Actively link to a peer on each configured channel, record LQA, terminate,
+        // advance. Net is optional (defaults to active scan net / all callable).
+        return pc(msg, ctrl, "CMD:TEST_CHANNEL " + msg.get_string("addr")
+                       + (msg.get_string("net").empty() ? "" : " " + msg.get_string("net")));
+    }
+    if (cmd == "TEST_CHANNEL_STOP") { return pc(msg, ctrl, "CMD:TEST_CHANNEL_STOP"); }
 
     if (cmd == "CALL") {
         const bool single = msg.get_bool("single_channel", false);
@@ -746,20 +753,22 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("ptt_tail_ms"))            ctrl.set_ptt_tail_ms(static_cast<uint32_t>(msg.get_number("ptt_tail_ms")));
         if (msg.has("assumed_scan_channels"))  ctrl.set_assumed_scan_channels(static_cast<uint32_t>(msg.get_number("assumed_scan_channels")));
         if (msg.has("sounding_use_twas"))          ctrl.set_sounding_use_twas(msg.get_bool("sounding_use_twas"));
-        if (msg.has("sounding_warning_lead_sec"))  ctrl.set_sounding_warning_lead_sec(static_cast<uint32_t>(msg.get_number("sounding_warning_lead_sec")));
+        if (msg.has("sounding_warning_lead_sec"))        ctrl.set_sounding_warning_lead_sec(static_cast<uint32_t>(msg.get_number("sounding_warning_lead_sec")));
+        if (msg.has("test_channel_link_hold_time"))      ctrl.set_test_channel_link_hold_time(static_cast<uint32_t>(msg.get_number("test_channel_link_hold_time")));
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "TIMING_GET") {
         mj::Value r = make_reply(msg, true);
-        r.set("scan_dwell_ms",              mj::Value::number(ctrl.get_scan_dwell_ms()));
-        r.set("sounding_interval_sec",      mj::Value::number(ctrl.get_sounding_interval_sec()));
-        r.set("link_idle_timeout_sec",      mj::Value::number(ctrl.get_link_idle_timeout_sec()));
-        r.set("max_tune_time_ms",           mj::Value::number(ctrl.get_max_tune_time_ms()));
-        r.set("ptt_lead_ms",                mj::Value::number(ctrl.get_ptt_lead_ms()));
-        r.set("ptt_tail_ms",                mj::Value::number(ctrl.get_ptt_tail_ms()));
-        r.set("assumed_scan_channels",      mj::Value::number(ctrl.get_assumed_scan_channels()));
-        r.set("sounding_use_twas",          mj::Value::boolean(ctrl.get_sounding_use_twas()));
-        r.set("sounding_warning_lead_sec",  mj::Value::number(ctrl.get_sounding_warning_lead_sec()));
+        r.set("scan_dwell_ms",                    mj::Value::number(ctrl.get_scan_dwell_ms()));
+        r.set("sounding_interval_sec",            mj::Value::number(ctrl.get_sounding_interval_sec()));
+        r.set("link_idle_timeout_sec",            mj::Value::number(ctrl.get_link_idle_timeout_sec()));
+        r.set("max_tune_time_ms",                 mj::Value::number(ctrl.get_max_tune_time_ms()));
+        r.set("ptt_lead_ms",                      mj::Value::number(ctrl.get_ptt_lead_ms()));
+        r.set("ptt_tail_ms",                      mj::Value::number(ctrl.get_ptt_tail_ms()));
+        r.set("assumed_scan_channels",            mj::Value::number(ctrl.get_assumed_scan_channels()));
+        r.set("sounding_use_twas",                mj::Value::boolean(ctrl.get_sounding_use_twas()));
+        r.set("sounding_warning_lead_sec",        mj::Value::number(ctrl.get_sounding_warning_lead_sec()));
+        r.set("test_channel_link_hold_time",      mj::Value::number(ctrl.get_test_channel_link_hold_time()));
         return mj::dump(r);
     }
 
@@ -1205,6 +1214,21 @@ int main(int argc, char* argv[]) {
             ws.send_text(mj::dump(e));
         });
 
+        bus->on(pal::EventType::ALE_TEST_CHANNEL, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::TestChannelData*>(ev.data);
+            mj::Value e = make_event("test_channel");
+            e.set("peer",       mj::Value::string(d->peer));
+            e.set("phase",      mj::Value::string(d->phase));
+            e.set("channel_id", mj::Value::string(d->channel_id));
+            e.set("freq_hz",    mj::Value::number(d->freq_hz));
+            e.set("index",      mj::Value::number(d->index));
+            e.set("total",      mj::Value::number(d->total));
+            e.set("score",      mj::Value::number(d->score));
+            e.set("linked",     mj::Value::boolean(d->linked));
+            e.set("summary",    mj::Value::string(d->summary));
+            ws.send_text(mj::dump(e));
+        });
+
         bus->on(pal::EventType::ALE_AMD_RECEIVED, [&](const pal::Event& ev) {
             const auto* d = static_cast<const ale::AmdData*>(ev.data);
             mj::Value e = make_event("amd_received");
@@ -1329,26 +1353,27 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        ctrl.update(t);
-
-        // Keep the voice manager and transport bound to the live audio/radio
-        // (cheap no-ops when unchanged) so they track AUDIO_OPEN / RIG_CONNECT
-        // device swaps.
+        // Audio first: words must be delivered to the SM before the dwell check
+        // so a word decoded in the same tick as expiry sets TRAFFIC_PAUSE on the
+        // correct channel rather than the one hopped to (§A.5.3.3 Bug 2 fix).
         voice_mgr.attach(audio.get(), radio.get());
         transport.attach(audio.get());
-        // Capture RX → fan-out to decoder (always) + speaker (when eligible) →
-        // arbitrate TX source on the VAC. No-op when audio is null.
         transport.tick();
-        // Gate occupancy detection off during voice PTT: the VAC loopback of
-        // our own TX would drive the detector BUSY just like ALE TX does.
-        // set_voice_tx_active syncs state into update()'s gate on the next tick.
-        ctrl.set_voice_tx_active(transport.media_tx_active());
 
+        // WS drain BEFORE ctrl.update() so operator commands (SOUND, CALL, etc.)
+        // are visible to the SM in the same tick they arrive — not deferred one
+        // tick, which caused ~50ms brief TX abort on high-latency WS connections.
         std::string raw;
         while (ws.pop_message(raw)) {
             const mj::Value parsed = mj::parse(raw);
             ws.send_text(dispatch_command(ctx, parsed));
         }
+
+        ctrl.update(t);
+        // Gate occupancy detection off during voice PTT: the VAC loopback of
+        // our own TX would drive the detector BUSY just like ALE TX does.
+        // set_voice_tx_active syncs state into update()'s gate on the next tick.
+        ctrl.set_voice_tx_active(transport.media_tx_active());
 
         // Drain voice mic uplink (binary frames, stream tag 0x01) from the
         // browser -> voice manager. Discard when not in passthrough-TX so frames

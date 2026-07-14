@@ -569,6 +569,20 @@ public:
     AddressBook&       get_address_book()       { return address_book; }
     const AddressBook& get_address_book() const { return address_book; }
 
+    /**
+     * §A.5.3.3 stage 1: open TRAFFIC_PAUSE when ALE energy is detected on this
+     * channel before a fully-decoded word arrives.  No-op unless SCANNING/HOPPING.
+     * Stage 2 (react_scanning_() on valid words) refreshes traffic_settle_ms_ so
+     * the Tdrw depart timer counts from the last word, not the stage-1 trigger.
+     */
+    void begin_scan_traffic_pause(uint32_t t) {
+        if (current_state != ALEState::SCANNING) return;
+        if (scanning_phase_ == ScanningPhase::HOPPING) {
+            scanning_phase_    = ScanningPhase::TRAFFIC_PAUSE;
+            traffic_settle_ms_ = t;
+        }
+    }
+
 private:
     // ── State machine ─────────────────────────────────────────────────────
     ALEState current_state;

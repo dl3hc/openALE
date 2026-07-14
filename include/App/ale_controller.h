@@ -434,6 +434,8 @@ public:
      *   -- Call/link control --
      *   CMD:CALL <ADDR>              initiate individual call to ADDR
      *   CMD:SINGLE_CALL <ADDR>       force single-channel call (no scanning)
+     *   CMD:TEST_CHANNEL <ADDR> [net] actively test all channels to a peer (LQA sweep)
+     *   CMD:TEST_CHANNEL_STOP        abort an in-progress test-channel sweep
      *   CMD:GROUP_CALL <ROSTER>      call all members of named roster
      *   CMD:AMD <ADDR> <text>        send AMD orderwire; when LINKED, <ADDR> is
      *                                ignored and text goes to active peer
@@ -820,11 +822,44 @@ public:
     void interrupt_sounding(const std::string& net);
 
     /**
+     * Start an active Test-Channel sweep to @p target: link to the peer on each
+     * configured channel in turn, run the bilateral LQA exchange, record the
+     * resulting metrics into the LQA database, terminate the link, and advance
+     * to the next channel until every channel in the net has been tested.
+     *
+     * Unlike periodic sounding (passive, peer-agnostic), this actively measures
+     * the current per-channel quality to a specific peer, feeding the LQA
+     * channel-selection logic with fresh data rather than relying on possibly
+     * stale database entries.
+     *
+     * @p net selects the channel set (a net's callable channels). Empty @p net
+     *        uses the active scan net; if that is also empty, all callable
+     *        channels are used. Channels that are inhibit-calling or RX-only are
+     *        skipped (they cannot place a call).
+     * @return false if @p target is invalid, no callable channels resolve, or
+     *         the SM is not in IDLE/SCANNING.
+     */
+    bool start_test_channel(const std::string& target, const std::string& net = "");
+
+    /** Abort an in-progress Test-Channel sweep: emergency-stop the current call
+     *  and end the routine. No-op if no sweep is in progress. */
+    void stop_test_channel();
+
+    /** Is a Test-Channel sweep currently in progress? */
+    bool test_channel_active() const { return test_active_; }
+
+    /**
      * Set link-idle timeout in seconds — Twa, ALEStateMachine::set_link_idle_timeout_ms().
      * Governs both LINKED-state inactivity auto-termination and the HANDSHAKE
      * safety-net timeout.
      */
     void set_link_idle_timeout_sec(uint32_t sec);
+
+    /** Set the Test-Channel linked dwell time in seconds.
+     *  The sweep stays LINKED on each channel for at least this long (floor: Tdrw = 784 ms)
+     *  so bilateral LQA metrics commit before the link is terminated and the next
+     *  channel begins. */
+    void set_test_channel_link_hold_time(uint32_t sec) { config_.test_channel_link_hold_time = sec; }
 
     /** Set the blind-tune delay in milliseconds — ALEStateMachine::set_tune_delay_ms(). */
     void set_max_tune_time_ms(uint32_t ms);
@@ -839,6 +874,7 @@ public:
     uint32_t  get_scan_dwell_ms() const          { return config_.scan_dwell_ms; }
     uint32_t  get_sounding_interval_sec() const { return config_.sounding_interval_sec; }
     uint32_t  get_link_idle_timeout_sec() const  { return config_.link_idle_timeout_sec; }
+    uint32_t  get_test_channel_link_hold_time() const { return config_.test_channel_link_hold_time; }
     uint32_t  get_max_tune_time_ms() const       { return config_.max_tune_time_ms; }
     uint32_t  get_ptt_lead_ms() const            { return config_.ptt_lead_ms; }
     uint32_t  get_ptt_tail_ms() const             { return config_.ptt_tail_ms; }
@@ -1132,6 +1168,10 @@ private:
     std::string              auto_sounding_net_;
     std::string              active_scan_net_;        ///< Active net for start_scanning() scoping
     uint32_t                 auto_sounding_last_ms_  = 0;
+    // True while an auto-sounding sweep is in flight (SM in SOUNDING). The timer
+    // is re-armed at cycle END (on_sm_state_change leaving SOUNDING), not at fire
+    // time, so the configured interval is the gap AFTER the sounding cycle.
+    bool                     sounding_cycle_active_  = false;
     // Pre-sounding countdown state (idle→sounding warning popup).
     uint32_t                 sounding_warning_lead_ms_  = 10000; ///< matches config_.sounding_warning_lead_sec * 1000
     bool                     sounding_warning_sent_     = false; ///< one-shot per cycle (prevents re-fire)
@@ -1246,6 +1286,52 @@ private:
     /// doesn't exist or has no enabled member channels.
     std::vector<Channel> resolve_net_sounding_channels(const std::string& net_name) const;
 
+    /// Resolve a net's *callable* channels (by id, from calling_channels_) for a
+    /// Test-Channel sweep — filters inhibit_calling and rx_only (a test call must
+    /// be able to transmit). Empty @p net_name falls back to active_scan_net_,
+    /// then to all callable channels. Empty result if no callable channels.
+    std::vector<Channel> resolve_net_call_channels(const std::string& net_name) const;
+
+    // ── Test-Channel sweep (active per-peer LQA collection) ────────────────
+    // Async driver advanced in tick_test_channel() from update(); reuses
+    // initiate_single_channel_call() / terminate_link() / set_vfo_channel().
+    enum class TestPhase {
+        INACTIVE,
+        TUNE,          ///< Tune radio to the next channel, then place a single-channel call
+        CALLING,       ///< Wait for LINKED (success) or return to IDLE/SCANNING (fail/timeout)
+        LINKED_SETTLE, ///< Link up; dwell one Tdrw so bilateral/FROM metrics settle
+        TERMINATING,   ///< terminate_link() sent; wait for SM to leave LINKED
+        NEXT,          ///< Wait for IDLE/SCANNING, advance index, re-enter TUNE or DONE
+        DONE
+    };
+    bool                 test_active_          = false;
+    TestPhase            test_phase_           = TestPhase::INACTIVE;
+    std::string          test_target_;
+    std::string          test_net_;            ///< Net the sweep is scoped to (for status)
+    std::vector<Channel> test_channels_;
+    size_t               test_idx_             = 0;
+    uint32_t             test_phase_start_ms_  = 0;
+    uint32_t             test_link_deadline_ms_ = 0;  ///< per-channel no-reply timeout
+    bool                 test_was_scanning_    = false; ///< restore scanning on completion
+    uint32_t             test_orig_freq_hz_     = 0;    ///< channel the radio was on at start
+    std::string          test_orig_mode_;               ///< mode at start (for restore)
+    struct TestResult {
+        uint32_t    freq_hz = 0;
+        std::string id;
+        bool        linked = false;
+        int         score  = -1;   ///< LQA score (-1 = no measurement)
+    };
+    std::vector<TestResult> test_results_;
+    std::string test_summary_;      ///< built on DONE for the final event
+
+    void emit_test_event_(const char* phase, const Channel* ch, int score, bool linked);
+    /// Snapshot the LQA entry (freq, peer) score into test_results_[test_idx_].
+    /// No-op if no entry exists (score stays -1). Called after LINKED_SETTLE.
+    void snapshot_test_score_(const Channel& ch);
+    /// Tune the radio back to the channel it was on when the sweep started.
+    /// No-op when no original frequency was recorded (or no radio attached).
+    void restore_test_channel_();
+
     /// Re-read the active sounding net's own sounding_interval_sec into
     /// auto_sounding_interval_ms_. Called when the active net's policy is
     /// updated live so the running timer reflects the new value immediately.
@@ -1258,6 +1344,7 @@ private:
     void tick_frame_settle(uint32_t now_ms);    ///< sounding commit + RX-BER commit (Tdrw)
     void tick_relink(uint32_t now_ms);          ///< EFS evaluate + EFS tick + auto-relink fire
     void tick_sounding_sweep(uint32_t now_ms);  ///< periodic multi-channel sounding sweep
+    void tick_test_channel(uint32_t now_ms);    ///< active per-peer Test-Channel sweep driver
     void tick_offline_completion();             ///< pull symbol frames in offline (no-audio) mode
     void tick_lqa_update(uint32_t now_ms);      ///< throttled LQA DB prune + auto-sounding check
     void tick_mode_verify(uint32_t now_ms);     ///< deferred radio-mode verify after channel activation

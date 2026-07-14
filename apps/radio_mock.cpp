@@ -29,6 +29,8 @@
  *   s / \get_split_vfo  → liefert Split-Status (0 + VFOA) + RPRT 0
  *   T <0|1> / \set_ptt  → schaltet PTT
  *   t / \get_ptt        → liefert PTT-Status
+ *   \get_lock_mode      → "RPRT -4" (Default, QUISK-artig) bzw. "0" + RPRT 0
+ *                         mit --lock-mode ok (rigctld-artig)
  *   Q / q               → Verbindung beenden
  *   alles andere        → RPRT 0  (ignoriert, kein Fehler)
  *
@@ -75,6 +77,12 @@
 // ── Global options ────────────────────────────────────────────────────────────
 
 static bool g_verbose = false;   // --verbose: prints every raw command
+
+// \get_lock_mode reply. Default mimics QUISK ("RPRT -4" = unimplemented),
+// which leaves hamlib's uninitialized lock variable UNWRITTEN and lets
+// rig_set_mode() elide mode commands based on stack garbage (hamlib bug).
+// --lock-mode ok mimics real rigctld ("0\n" data line = unlocked).
+static bool g_lock_mode_ok = false;
 
 // ── Radio state ───────────────────────────────────────────────────────────────
 
@@ -289,6 +297,23 @@ static std::string handle_line(const std::string& raw)
         return "0\nVFOA\nRPRT 0\n";
     }
 
+    // ── Lock mode ─────────────────────────────────────────────────────────
+    // hamlib sends "\get_lock_mode" before EVERY rig_set_mode. The reply shape
+    // decides whether hamlib's (uninitialized) lock variable gets written:
+    //   "0\nRPRT 0\n" (real rigctld)  → lock=0 parsed, set_mode proceeds
+    //   "RPRT -4\n"   (QUISK)         → sscanf matches nothing, lock stays
+    //                                    stack garbage → set_mode may be elided
+    if (cmd == "get_lock_mode") {
+        if (g_verbose) {
+            std::printf("[LOCK] get_lock_mode -> %s\n",
+                        g_lock_mode_ok ? "0 (rigctld-style)" : "RPRT -4 (QUISK-style)");
+            std::fflush(stdout);
+        }
+        return g_lock_mode_ok ? "0\nRPRT 0\n" : "RPRT -4\n";
+    }
+    if (cmd.rfind("set_lock_mode", 0) == 0)
+        return g_lock_mode_ok ? "RPRT 0\n" : "RPRT -4\n";
+
     // ── PTT ───────────────────────────────────────────────────────────────
     // Short: "T 1"   Long: "set_ptt 1"
     if (cmd.rfind("set_ptt", 0) == 0 ||
@@ -366,8 +391,10 @@ static void print_usage(const char* prog)
         "  %s --port N [--verbose]\n"
         "\n"
         "Options:\n"
-        "  --port N    TCP-Port des rigctld-Listeners (Pflichtfeld)\n"
-        "  --verbose   Zeigt jeden Rohbefehl von hamlib\n"
+        "  --port N         TCP-Port des rigctld-Listeners (Pflichtfeld)\n"
+        "  --verbose        Zeigt jeden Rohbefehl von hamlib\n"
+        "  --lock-mode M    Antwort auf \\get_lock_mode: 'enimpl' (Default,\n"
+        "                   QUISK-artig: RPRT -4) oder 'ok' (rigctld-artig: 0)\n"
         "\n"
         "Protokoll-Hinweise:\n"
         "  [WARN] VFO-prefixed … → hamlib sendet rigctld_vfo_mode=1-Befehle\n"
@@ -384,6 +411,8 @@ int main(int argc, char* argv[])
             port = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--verbose") == 0 || std::strcmp(argv[i], "-v") == 0)
             g_verbose = true;
+        else if (std::strcmp(argv[i], "--lock-mode") == 0 && i + 1 < argc)
+            g_lock_mode_ok = (std::strcmp(argv[++i], "ok") == 0);
         else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]); return 0;
         }

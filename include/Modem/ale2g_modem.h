@@ -193,6 +193,20 @@ public:
     void set_adaptive_fec(bool on) { tracker_.set_adaptive_fec(on); }
     bool adaptive_fec() const      { return tracker_.adaptive_fec(); }
 
+    // ── §A.5.3.3 stage-1 scanning detection ──────────────────────────────────
+
+    /// Call on every channel hop to arm the new-channel guard (§A.5.3.3 stage 1).
+    /// Resets the write-position anchor and one-shot flag so stage-1 can fire
+    /// exactly once on the new channel after WORD_SAMPLES of new audio.
+    void mark_channel_hop() { hop_offset_ = write_pos_; energy_fired_ = false; }
+
+    /// Register the §A.5.3.3 stage-1 callback: fired once per channel after
+    /// unanimous_votes ≥ ALE_STAGE1_MIN_VOTES is observed and the decode window
+    /// is entirely new-channel audio.  Pass nullptr to disable.
+    void set_ale_energy_callback(std::function<void()> cb) {
+        ale_energy_cb_ = std::move(cb);
+    }
+
 private:
     static constexpr uint32_t WORD_SAMPLES          = SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL; // 3136
     static constexpr uint32_t DECODE_STEP_COARSE    = SAMPLES_PER_SYMBOL / 4;   // 16 — acquisition
@@ -203,6 +217,13 @@ private:
     // Ring buffer holds exactly the decode window (one word + one symbol of slack
     // for boundary refinement).
     static constexpr uint32_t BUF_CAP = WORD_SAMPLES + SAMPLES_PER_SYMBOL;  // 3200
+
+    // ── §A.5.3.3 stage-1 scanning detection ──────────────────────────────────
+    // Lower vote gate for "detect sounds" — fires before the full Golay+ASCII gate.
+    static constexpr uint8_t ALE_STAGE1_MIN_VOTES = 20;
+    std::function<void()>    ale_energy_cb_;
+    uint32_t                 hop_offset_    = 0;    // write_pos_ at last channel hop / reset
+    bool                     energy_fired_  = false; // one-shot per channel; reset by mark_channel_hop()
 
     // ── Signal-extraction working set ──────────────────────────────────────
     bool                 enabled_       = true;

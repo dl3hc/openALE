@@ -779,31 +779,62 @@
     ══════════════════════════════════════════════════════════════════════ */
     .panel-heard  { height: 190px; flex-shrink: 0; }
     #heardList    { overflow-y: auto; padding: 2px 6px; }
-    .heard-table  { width: 100%; border-collapse: collapse; margin: 0; }
-    .ch-table.heard-table th {
-      font-family: var(--mono); font-size: 8px; font-weight: 700;
-      letter-spacing: 0.06em; text-transform: uppercase;
-      color: var(--tx-dim); text-align: center;
-      padding: 3px 4px; border-bottom: 1px solid var(--border);
-      white-space: nowrap; position: sticky; top: 0; background: var(--bg2);
-    }
-    .ch-table.heard-table th:first-child { text-align: left; }
-    .heard-table .lqa-cell { font-size: 10px; padding: 2px 4px; white-space: nowrap; }
-    .heard-actions { width: 34px; text-align: center; white-space: nowrap; }
-    .heard-add { background: none; border: none; color: var(--tx-dim); cursor: pointer;
-                 font-size: 11px; padding: 0 1px; line-height: 1; vertical-align: middle;
-                 display: inline-flex; align-items: center; }
-    .heard-add:hover { color: var(--s-linked); }
-    .heard-add.heard-added { color: var(--s-linked); opacity: .6; cursor: default; }
     .heard-avail  { font-size: 8px; font-weight: 700; min-width: 34px; text-align: center;
                     padding: 1px 3px; border-radius: 2px; letter-spacing: .5px; }
     .heard-avail.ha-yes { color: var(--s-linked); border: 1px solid var(--s-linked); }
     .heard-avail.ha-no  { color: var(--s-error);  border: 1px solid var(--s-error); }
     .heard-avail.ha-unk { color: var(--tx-dim);   border: 1px solid var(--border); }
-    .heard-del    { background: none; border: none; color: var(--tx-dim); cursor: pointer;
-                    font-size: 11px; padding: 0 2px; line-height: 1; }
-    .heard-del:hover { color: var(--s-error); }
-    .heard-empty  { color: var(--tx-dim); font-family: var(--mono); font-size: 10px; padding: 4px 2px; }
+    .heard-empty  { color: var(--tx-dim); font-family: var(--mono); font-size: 11px; padding: 10px 2px; text-align: center; }
+
+    /* Heard station cards — one station per card. Callsign, an availability
+       badge and a quality label are the visible hierarchy; raw SINAD/BER/MP
+       metrics collapse behind a Details toggle, and a per-card Call button
+       pre-selects the station and jumps to the CALL tab. */
+    .heard-card { background: var(--bg2); border: 1px solid var(--border);
+                  border-radius: var(--r-md); padding: 10px 12px; margin-bottom: 8px; }
+    .heard-card:last-child { margin-bottom: 0; }
+    .hc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .hc-cs { font-family: var(--sans); font-size: 18px; font-weight: 600; color: var(--tx-bright);
+             letter-spacing: 0.02em; line-height: 1.2; word-break: break-word; min-width: 0; }
+    .hc-head-r { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .hc-del { background: none; border: none; color: var(--tx-dim); cursor: pointer;
+              font-size: 16px; line-height: 1; padding: 0 2px; }
+    .hc-del:hover { color: var(--s-error); }
+    /* Sub line: quality label (gradient-coloured) + score + channel + age. */
+    .hc-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px;
+              margin-top: 5px; font-family: var(--mono); font-size: 11px; }
+    .hc-ql { font-family: var(--sans); font-weight: 700; font-size: 13px; letter-spacing: 0.02em; }
+    .hc-qlscore { color: var(--tx-dim); }
+    .hc-dot { color: var(--border-md); }
+    .hc-ch, .hc-age { color: var(--tx-dim); }
+    /* Actions: Add-to-contacts (ghost icon) + Call → (accent, fills width). */
+    .hc-actions { display: flex; align-items: stretch; gap: 8px; margin-top: 10px; }
+    .hc-add { background: none; border: 1px solid var(--border-md); color: var(--tx-dim);
+              border-radius: var(--r-md); cursor: pointer; display: inline-flex;
+              align-items: center; justify-content: center; width: 38px; flex-shrink: 0; }
+    .hc-add:hover { color: var(--s-linked); border-color: var(--s-linked); }
+    .hc-add.hc-added { color: var(--s-linked); border-color: var(--s-linked); opacity: .6; }
+    .hc-call { flex: 1; background: var(--accent); color: #041008; border: none;
+               border-radius: var(--r-md); padding: 9px 14px; font-family: var(--sans);
+               font-weight: 700; font-size: 12px; letter-spacing: 0.04em; cursor: pointer;
+               display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+               transition: background 0.12s; }
+    .hc-call:hover { background: var(--accent-dim); }
+    /* Collapsed raw metrics. Native <details>; the ▸ marker rotates when open. */
+    .hc-details { margin-top: 8px; }
+    .hc-details > summary { list-style: none; cursor: pointer; color: var(--tx-dim);
+              font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+              text-transform: uppercase; display: inline-flex; align-items: center; gap: 5px; }
+    .hc-details > summary::-webkit-details-marker { display: none; }
+    .hc-arrow { display: inline-block; transition: transform 0.15s; font-size: 10px; }
+    .hc-details[open] .hc-arrow { transform: rotate(90deg); }
+    .hc-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px 14px;
+                  margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+    .hc-m { display: flex; justify-content: space-between; gap: 6px;
+            font-family: var(--mono); font-size: 11px; }
+    .hc-m > span { color: var(--tx-dim); }
+    .hc-m > b { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .hc-na { color: var(--tx-dim); font-weight: 400; }
 
     /* ══════════════════════════════════════════════════════════════════════
        ALE LOG
@@ -1046,6 +1077,30 @@
       cursor: pointer;
     }
     .fselect option { background: var(--bg3); color: var(--tx); }
+
+    /* ── Test-Channel panel ─────────────────────────────────────────── */
+    .fro {                      /* read-only value display (peer callsign) */
+      color: var(--accent); font-family: var(--mono);
+      letter-spacing: 0.03em; word-break: break-all;
+    }
+    .tc-list { display: flex; flex-direction: column; gap: 6px; }
+    .tc-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-radius: var(--r-sm);
+      background: var(--bg3); border: 1px solid rgba(255,255,255,0.04);
+      font-family: var(--mono); font-size: 12px;
+    }
+    .tc-id { flex: 1; color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tc-mark { width: 14px; text-align: center; font-weight: 700; }
+    .tc-ok  .tc-mark { color: var(--accent); }
+    .tc-no  .tc-mark { color: var(--s-error); }
+    .tc-score { width: 26px; text-align: right; color: var(--tx-bright); }
+    .tc-qual  { width: 78px; text-align: right; font-size: 10px; color: var(--tx-dim); }
+    .tc-empty { color: var(--tx-dim); font-family: var(--mono); font-size: 11px; padding: 6px 2px; }
+    .tc-summary {
+      margin: 10px 0 0; white-space: pre-wrap; font-family: var(--mono);
+      font-size: 10px; line-height: 1.4; color: var(--tx-dim);
+    }
 
     .ftoggle-row {
       display: flex;
@@ -2263,75 +2318,15 @@
   /* Search */
   .search-input { font-size: 16px; padding: 12px 14px; min-height: 44px; }
 
-  /* Heard table → stacked cards on mobile. No horizontal scroll: each station
-     becomes a card, metrics become labeled rows via td::before { data-label }.
-     The Callsign becomes the card title; the actions row floats to the top-right. */
+  /* Heard cards on mobile: 44px tap floor on Call/Add + larger callsign.
+     #heardList stays non-scrolling horizontally; .heard-avail sizing also
+     feeds the Settings/LQA table badges. */
   #heardList { overflow-x: hidden; -webkit-overflow-scrolling: touch; padding: 4px 0; }
-  .heard-table, .heard-table thead, .heard-table tbody,
-  .heard-table tr, .heard-table td { display: block; width: 100%; box-sizing: border-box; }
-  .heard-table { border-collapse: separate; border-spacing: 0; }
-  .heard-table thead { display: none; }
-  .heard-table tr {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    padding: 8px 12px;
-    margin-bottom: 8px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 2px 14px;
-  }
-  .heard-table td {
-    border: none;
-    padding: 3px 0;
-    font-size: 13px;
-    text-align: left;
-    white-space: normal;
-  }
-  /* First cell (Callsign) = card title, spans both columns. */
-  .heard-table td[data-label="Callsign"] {
-    grid-column: 1 / -1;
-    font-family: var(--sans);
-    font-size: 17px;
-    font-weight: 600;
-    color: var(--tx-bright);
-    letter-spacing: 0.01em;
-    padding-bottom: 6px;
-    margin-bottom: 2px;
-    border-bottom: 1px solid var(--border);
-  }
-  /* Actions row = top-right of the card. */
-  .heard-table td.heard-actions {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
-    align-self: start;
-    width: auto;
-    text-align: right;
-    white-space: nowrap;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 6px;
-    margin-bottom: 2px;
-  }
-  /* Labeled metric rows: label on the line above, value tabular. */
-  .heard-table td[data-label]:not([data-label=""]):not([data-label="Callsign"])::before {
-    content: attr(data-label);
-    display: block;
-    font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--tx-dim);
-    margin-bottom: 1px;
-  }
-  .heard-table .lqa-cell {
-    font-size: 14px;
-    font-variant-numeric: tabular-nums;
-    text-align: left;
-    white-space: nowrap;
-  }
   .heard-avail { font-size: 10px; min-width: 40px; }
-  .heard-add, .heard-del { min-width: 32px; min-height: 32px; }
+  .hc-cs { font-size: 19px; }
+  .hc-call { min-height: 44px; font-size: 13px; }
+  .hc-add { width: 44px; }
+  .hc-details > summary { min-height: 44px; }
 
   /* ══════════════════════════
      FORM GRIDS  — collapse
@@ -2428,6 +2423,22 @@
     top: auto;
     width: auto;
     max-width: none;
+    max-height: 55dvh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    z-index: 200;
+  }
+
+  /* ⋯ More panel: a dropdown centered directly below its trigger button and
+     clamped to the viewport so no item is off-screen. position:fixed; the
+     left/top are set by JS (toggleMorePanel) from #moreBtn's rect — unlike the
+     shared fixed bottom sheet used by Net/Sound/Radio. */
+  #morePanel {
+    position: fixed;
+    top: auto; right: auto; left: auto; bottom: auto;
+    width: 260px;
+    max-width: calc(100vw - 16px);
     max-height: 55dvh;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
@@ -2647,4 +2658,207 @@
   }
   .logo { padding: 5px 12px 4px; }
   .header { padding-top: 0; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FIRST-RUN WIZARD  (#setupWizard)
+══════════════════════════════════════════════════════════════════════ */
+
+    .wz-pips {
+      display: flex;
+      gap: 6px;
+      margin: 0 10px;
+    }
+
+    .wz-pip {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--border-md);
+      transition: background 0.2s, transform 0.2s;
+      flex-shrink: 0;
+    }
+    .wz-pip.active { background: var(--accent); transform: scale(1.25); }
+    .wz-pip.done   { background: var(--accent-dim); }
+
+    .wz-step {
+      display: flex;
+      flex-direction: column;
+      padding: 24px 22px 20px;
+    }
+    .wz-step.hidden { display: none; }
+
+    .wz-step-num {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--tx-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      margin-bottom: 6px;
+    }
+
+    .wz-step-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--tx-bright);
+      margin-bottom: 8px;
+      line-height: 1.2;
+    }
+
+    .wz-step-desc {
+      font-size: 12px;
+      color: var(--tx-muted);
+      line-height: 1.55;
+    }
+
+    .wz-cs-input {
+      margin-top: 18px;
+      font-family: var(--mono);
+      font-size: 26px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      text-align: center;
+      padding: 14px 16px;
+      background: var(--bg3);
+      border: 1px solid var(--border-md);
+      border-radius: var(--r-md);
+      width: 100%;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .wz-cs-input::placeholder { color: var(--tx-dim); font-weight: 400; }
+    .wz-cs-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow-hi);
+    }
+
+    .wz-status {
+      min-height: 18px;
+      font-size: 11px;
+      margin-top: 8px;
+      color: var(--tx-muted);
+      font-family: var(--mono);
+    }
+    .wz-status.ok  { color: var(--s-scanning); }
+    .wz-status.err { color: var(--s-error); }
+
+    .wz-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 12px;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .wz-btn-next {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      padding: 9px 22px;
+      border-radius: var(--r-md);
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.12s;
+      touch-action: manipulation;
+    }
+    .wz-btn-next:hover { background: var(--accent-dim); }
+    .wz-btn-next:active { background: #009b62; }
+
+    .wz-btn-skip {
+      background: transparent;
+      border: none;
+      color: var(--tx-dim);
+      font-family: var(--sans);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 6px 4px;
+      touch-action: manipulation;
+      transition: color 0.12s;
+    }
+    .wz-btn-skip:hover { color: var(--tx-muted); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   SETUP INCOMPLETE BANNER  (#setupBanner)
+   Lives at the top of .right-col on the CALL tab.
+   Dismissed by configuring callsign + channels.
+══════════════════════════════════════════════════════════════════════ */
+
+    .setup-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      background: rgba(255,202,40,0.07);
+      border: 1px solid rgba(255,202,40,0.22);
+      border-radius: var(--r-md);
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .setup-banner:hover { background: rgba(255,202,40,0.12); }
+    .setup-banner.hidden { display: none; }
+
+    .setup-banner-icon { flex-shrink: 0; }
+
+    .setup-banner-body {
+      flex: 1;
+      font-size: 11px;
+      color: var(--tx-muted);
+      line-height: 1.4;
+    }
+    .setup-banner-body strong { color: var(--tx); font-weight: 600; }
+
+    .setup-banner-btn {
+      flex-shrink: 0;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+
+/* ══════════════════════════════════════════════════════════════════════
+   SETTINGS NAV — Advanced collapse (mobile only)
+   On desktop #advNavItems stays block; .snav-adv-toggle stays hidden.
+══════════════════════════════════════════════════════════════════════ */
+
+/* Desktop: always visible, toggle button never shown */
+#advNavItems    { display: block; }
+.snav-adv-toggle { display: none; }
+
+@media (max-width: 767px) {
+    /* Mobile: collapse advanced items behind a toggle */
+    .snav-adv-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding: 6px 10px;
+        margin: 2px 0;
+        background: var(--bg3);
+        border: 1px solid var(--border-sm);
+        border-radius: 6px;
+        color: var(--tx-muted);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .snav-adv-toggle:active { background: var(--border-sm); }
+
+    /* Hidden by default; display:contents makes children join parent flex-wrap */
+    #advNavItems          { display: none; }
+    #advNavItems.open     { display: contents; }
+
+    /* Section headers inside advanced group get full-width treatment in pill row */
+    #advNavItems.open .snav-section-hdr { width: 100%; }
 }

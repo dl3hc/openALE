@@ -124,6 +124,29 @@ public:
         busy_.store(false, std::memory_order_relaxed);
     }
 
+    /** Re-arm the LBT decision for a fresh listen window.  Called by the
+     *  controller when the operator requests a TX (call / sounding) so the
+     *  SM's LBT phase decides from blocks observed *during* the Twt window —
+     *  not from a busy latch that predates the operator's PTT.  Without this,
+     *  a single transient hot block in the last 400 ms of idle dwelling would
+     *  keep `busy` latched true and abort the call/sounding on the very first
+     *  LBT tick, before the listen window has any chance to re-evaluate.
+     *
+     *  Unlike reset(), this KEEPS the tracked noise floor.  The floor was
+     *  built from quiet blocks during the prior dwell and is the correct
+     *  reference for judging the LBT window; dropping it would let the first
+     *  LBT block absorb a genuine continuous signal as the floor and clear a
+     *  busy channel — exactly what LBT must not do.  A real signal during the
+     *  Twt window still re-latches busy within ~3 blocks (300 ms), well inside
+     *  the 784 ms–2 s listen window, so a genuinely occupied channel is still
+     *  caught.  Only the busy verdict, the N-of-M vote, and any half-filled
+     *  block are forgotten. */
+    void clear_busy_latch() {
+        busy_.store(false, std::memory_order_relaxed);
+        hot_ring_ = 0; blocks_seen_ = 0;
+        acc_count_ = 0; sum_ = 0.0f; sum_sq_ = 0.0f;
+    }
+
 private:
     // Floor tracking constants — see file header for the rationale.
     static constexpr float ALPHA_DOWN     = 0.30f;   ///< fast: quiet restores floor

@@ -48,6 +48,7 @@ enum class EventType {
     ALE_WORD_DECODED,     ///< Every decoded RX ALE word; data = WordData*
     ALE_WORD_TX,          ///< Every transmitted ALE word; data = WordData*
     ALE_FRAME_DECODED,    ///< Complete assembled ALE frame; data = FrameData*
+    ALE_TEST_CHANNEL,     ///< Test-channel sweep progress/result; data = TestChannelData*
 
     // Data events
     DATA_RECEIVED,

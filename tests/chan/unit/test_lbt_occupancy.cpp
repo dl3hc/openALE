@@ -174,6 +174,38 @@ static void test_floor_relearned_after_inactive()
     check(d.is_busy(), "signal above the re-learned floor is still busy");
 }
 
+// clear_busy_latch() (regression for "LBT immediately fires on menu Call /
+// Sounding"): the SM's LBT phase polls is_busy() from the very first tick, and
+// RX is still open during LBT, so a busy latch left over from a transient hot
+// block in the last ~400 ms of idle dwelling would abort the call/sounding on
+// tick 0 — before the Twt window can re-evaluate.  The controller calls
+// clear_busy_latch() when the operator requests a TX so the LBT window measures
+// fresh.  Unlike reset(), it KEEPS the tracked floor: a genuine continuous
+// signal during the LBT window must still re-latch busy (clear_busy_latch must
+// not become a way to talk over an occupied channel).
+static void test_clear_busy_latch_keeps_floor()
+{
+    std::printf("[LBT-1e] clear_busy_latch: drops verdict, keeps floor\n");
+
+    ChannelOccupancyDetector d;
+    d.set_active(true);
+    feed_noise(d, 10, 50);                          // quiet dwell: floor ≈ 50-amp
+    feed_tone(d, 3, 8000);                          // a passing signal latches busy
+    check(d.is_busy(), "busy from a transient signal during dwelling");
+
+    d.clear_busy_latch();                           // operator hits "Call"
+    check(!d.is_busy(), "stale busy latch cleared at TX request (no tick-0 abort)");
+
+    // Quiet LBT window: floor retained → blocks not hot → stays clear → TX proceeds.
+    feed_noise(d, 4, 50);
+    check(!d.is_busy(), "quiet LBT window stays clear (floor retained, not re-learned)");
+
+    // A genuine signal during the LBT window must re-latch busy within the
+    // N-of-M vote — clear_busy_latch must NOT let a real signal through.
+    feed_tone(d, 3, 8000);
+    check(d.is_busy(), "genuine signal during LBT re-latches busy (floor kept)");
+}
+
 // ── Part 2: SM LBT windows ───────────────────────────────────────────────────
 
 struct SmHarness {
@@ -282,6 +314,7 @@ int main()
     test_active_gating();
     test_reset_clears_state();
     test_floor_relearned_after_inactive();
+    test_clear_busy_latch_keeps_floor();
     test_sm_calling_busy_blocks();
     test_sm_calling_clear_transmits();
     test_sm_override_bypasses_busy();

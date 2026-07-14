@@ -128,6 +128,20 @@ bool HamlibRadio::start() {
         // front-end (Quisk) may override the mode on a band change. A cached read
         // would just echo the value we set and defeat the verification.
         rig_set_cache_timeout_ms(rig_, HAMLIB_CACHE_MODE, 0);
+
+        // hamlib's rig_set_mode() begins with an UNINITIALIZED `int locked_mode`,
+        // fills it via rig_get_lock_mode() (return code ignored) and silently
+        // returns RIG_OK WITHOUT transmitting when it is nonzero. Over netrigctl
+        // the \get_lock_mode transaction fails against servers that don't
+        // implement it (Quisk: "RPRT -4"; sscanf on that buffer writes nothing),
+        // so whether ANY mode command reaches the radio depends on stack garbage
+        // (hamlib 4.5 rig.c:2218; still present in upstream master rig.c:2812).
+        // Nulling the backend hook makes rig_get_lock_mode() fall back to
+        // rig->state.lock_mode — a real, zero-initialized field — so the elision
+        // path is deterministically dead and every rig_set_mode() transmits.
+        // Bonus: removes one wire round-trip per mode set (scan path gets faster).
+        rig_->caps->get_lock_mode = nullptr;
+        rig_->state.lock_mode = 0;
     }
 
     // Serielle Schnittstelle: DTR/RTS-Leitungszustand nach Open setzen,
@@ -163,10 +177,12 @@ bool HamlibRadio::set_channel(const Channel& channel) {
     // Order: frequency FIRST, mode LAST. Some SDR front-ends (Quisk) restore a
     // per-band saved mode on a frequency change; sending mode last — then having
     // assert_mode() verify via live readback and re-send on mismatch — makes
-    // openALE's channel mode authoritative. assert_mode()'s diagnostic prints
-    // (level >= Info) provide the natural I/O latency (~5 ms on Windows stderr)
-    // that lets the SDR's async band restore complete before the retry fires.
-    // No explicit sleep; no scan-rate impact.
+    // openALE's channel mode authoritative. If the SDR's band restore lands
+    // asynchronously AFTER assert_mode() returned, the deferred sync backstop
+    // (ALEController::tick_mode_verify -> sync_from_radio) corrects it — no
+    // sleeps here, no scan-rate impact. Both mechanisms only work because
+    // start() neutralized hamlib's get_lock_mode probe: otherwise re-sent mode
+    // commands may be silently elided inside rig_set_mode() (see start()).
     // Mode is sent on EVERY hop (no mode_changed guard): the rig may have been
     // retuned externally between sync_from_radio() polls. VFO = RIG_VFO_CURR;
     // passband = RIG_PASSBAND_NORMAL.
@@ -251,8 +267,14 @@ bool HamlibRadio::set_mode(RadioMode mode) {
 // an SDR front-end (Quisk) may restore a per-band saved mode after a frequency
 // change, silently reverting our mode. Because HAMLIB_CACHE_MODE is 0 (see
 // start()), rig_get_mode() is a live query and actually observes that override.
+// The re-sends only reach the wire because start() nulled the backend's
+// get_lock_mode hook — hamlib's rig_set_mode() otherwise consults an
+// uninitialized lock flag and may elide the command while returning RIG_OK.
 // A band-memory restore fires once per frequency change, so re-sending the mode
-// wins; the attempt cap only bounds a persistently-rejecting backend.
+// wins; the attempt cap only bounds a persistently-rejecting backend. If the
+// restore lands after this loop already returned, the loop legitimately reports
+// success on the pre-revert mode — the deferred tick_mode_verify checks
+// (+300/700/1500 ms -> sync_from_radio) catch and correct that case.
 int HamlibRadio::assert_mode(RadioMode mode) {
     const rmode_t target = to_hamlib_mode(mode);
     const char* mname = rig_strrmode(target);
@@ -264,7 +286,7 @@ int HamlibRadio::assert_mode(RadioMode mode) {
         pal::log_error("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> FAILED: %s",
                        mname ? mname : "?", rigerror(mode_ret));
     else
-        pal::log_info("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> sent",
+        pal::log_debug("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> sent",
                       mname ? mname : "?");
 
     bool verified = false;
@@ -276,7 +298,7 @@ int HamlibRadio::assert_mode(RadioMode mode) {
         }
         if (actual == target) {
             verified = true;
-            pal::log_info("HamlibRadio", "  assert_mode: %s confirmed (readback #%d)",
+            pal::log_debug("HamlibRadio", "  assert_mode: %s confirmed (readback #%d)",
                           mname ? mname : "?", attempt + 1);
             return mode_ret;
         }

@@ -1,11 +1,19 @@
 /**
  * test_hamlib_mock.cpp
  * Connects to the radio_mock via hamlib NET_RIGCTL (model 2) and replicates the
- * exact HamlibRadio usage (cache TTLs, freq-then-mode, repeated re-asserts).
- * Run alongside radio_mock --verbose and count the M commands on the wire:
- * hamlib 4.x elides a rig_set_mode whose target equals its cached mode value —
- * it returns RIG_OK without transmitting. That elision silently defeats every
- * re-assert of a mode an SDR front-end reverted behind our back.
+ * exact HamlibRadio usage (freq-then-mode, repeated re-asserts).
+ * Run alongside radio_mock --verbose and count the M commands on the wire.
+ *
+ * FINDING (2026-07-13): hamlib elides rig_set_mode calls — RIG_OK returned,
+ * nothing transmitted — via its \get_lock_mode probe, NOT via the cache:
+ * rig_set_mode() branches on an UNINITIALIZED `int locked_mode` that
+ * netrigctl_get_lock_mode() fails to write when the server's reply carries no
+ * parseable integer ("RPRT -4" from Quisk, bare "RPRT 0" from a catch-all).
+ * A/B proof with this probe: radio_mock --lock-mode ok (rigctld-style "0")
+ * -> 6/6 M commands transmitted; default (QUISK-style "RPRT -4") -> only 4/6,
+ * elision pattern deterministic per preceding call path (stack garbage).
+ * HamlibRadio::start() neutralizes the probe (caps->get_lock_mode = nullptr);
+ * regression guard: tests/radio/unit/test_mode_reassert.cpp.
  */
 #include <cstdio>
 #include <cstring>
@@ -39,9 +47,9 @@ int main(int argc, char* argv[])
     }
     fprintf(stderr, "\n=== OPEN OK ===\n\n");
 
-    // Candidate fix: disable the hamlib cache entirely over TCP. The set-side
-    // elision (rig_set_mode skipped + RIG_OK when target == cached mode) must
-    // die too, or re-asserting a reverted mode is impossible.
+    // Cache fully live over TCP (mirrors HamlibRadio's HAMLIB_CACHE_MODE=0).
+    // NOTE: proven NOT to influence the elision — that is the \get_lock_mode
+    // probe (see file header); kept so the probe matches production reads.
     rig_set_cache_timeout_ms(rig, HAMLIB_CACHE_ALL, 0);
 
     ret = rig_set_freq(rig, RIG_VFO_CURR, 14109000.0);

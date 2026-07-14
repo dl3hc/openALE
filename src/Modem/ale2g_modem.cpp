@@ -117,6 +117,8 @@ void Demodulator::reset()
     write_pos_     = 0;
     step_accum_    = 0;
     silence_count_ = 0;
+    hop_offset_    = 0;
+    energy_fired_  = false;
     tracker_.reset();
 }
 
@@ -140,7 +142,22 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
             step_accum_ = 0;
             if (write_pos_ < WORD_SAMPLES) continue;
 
-            tracker_.process_candidate(try_decode_(), write_pos_);
+            const DecodedCandidate c = try_decode_();
+
+            // §A.5.3.3 stage 1: "detects sounds" — A.5.2.6.3 unanimous-vote criterion.
+            // Fires once per channel after the decode window is entirely new-channel
+            // audio (write_pos_ - hop_offset_ >= WORD_SAMPLES) and the signal shows
+            // ALE-characteristic vote agreement.  energy_fired_ gates to one shot;
+            // mark_channel_hop() resets it on each hop.
+            if (ale_energy_cb_ && !energy_fired_
+                && c.unanimous_votes >= ALE_STAGE1_MIN_VOTES
+                && (write_pos_ - hop_offset_) >= WORD_SAMPLES)
+            {
+                energy_fired_ = true;
+                ale_energy_cb_();
+            }
+
+            tracker_.process_candidate(c, write_pos_);
         }
     }
 }

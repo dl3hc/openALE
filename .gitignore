@@ -44,3 +44,6 @@ ALE_standard_188_141B_extracted.json
 
 # Transient bridge debug log
 tools/bridge_dbg.log
+
+# Scratch / local duplicate of the repo (never commit)
+temp/

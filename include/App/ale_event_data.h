@@ -56,4 +56,22 @@ struct FrameData {
     const std::vector<std::string>* to_addrs; ///< to_addresses — valid during callback only
 };
 
+/// Payload for EventType::ALE_TEST_CHANNEL
+///
+/// Carries per-channel progress and the final ranked summary of a Test-Channel
+/// sweep (actively link to a peer on each configured channel, record LQA,
+/// terminate, advance). Pointers are valid only for the synchronous callback
+/// duration — copy any data you need to retain.
+struct TestChannelData {
+    const char* peer;         ///< Target peer address
+    const char* phase;        ///< "start"|"tune"|"linked"|"failed"|"terminate"|"done"|"stop"
+    const char* channel_id;   ///< Current channel id ("" on start/done/stop)
+    uint32_t    freq_hz;      ///< Current channel RX frequency (0 on start/done/stop)
+    uint32_t    index;        ///< 1-based current channel index (0 on start/done/stop)
+    uint32_t    total;        ///< Total channels in the sweep
+    int         score;        ///< LQA score for this channel, -1 = not available
+    bool        linked;       ///< Did this channel establish a link?
+    const char* summary;      ///< Multiline ranked result table on "done"; "" otherwise
+};
+
 } // namespace ale

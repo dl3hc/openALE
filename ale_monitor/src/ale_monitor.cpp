@@ -832,14 +832,15 @@ int main(int argc, char* argv[]) {
     while (g_running) {
         const uint32_t t = static_cast<uint32_t>(timer->get_time_ms());
 
-        ctrl.update(t);
-
+        // Audio first: words delivered before dwell check (§A.5.3.3 Bug 2 fix).
         if (audio) {
             rx_buf.clear();
             audio->tick(rx_buf);
             if (!rx_buf.empty())
                 ctrl.feed_audio(rx_buf.data(), static_cast<uint32_t>(rx_buf.size()));
         }
+
+        ctrl.update(t);
 
         std::string raw;
         while (ws.pop_message(raw)) {

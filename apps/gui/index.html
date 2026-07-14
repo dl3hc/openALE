@@ -153,6 +153,7 @@
       </div>
 
       <button class="hdr-btn" onclick="openSettings()"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Settings</button>
+      <button class="hdr-btn" onclick="showTestChannelPanel()" title="Test all channels to a peer (active LQA sweep)"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Test Ch</button>
       <button class="hdr-btn"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Help</button>
       <div class="status-chip">
         <div class="dot scanning" id="statusDot"></div>
@@ -238,11 +239,6 @@
         </div>
         <div class="pbody" style="padding:0 8px 8px">
           <div class="contact-list" id="contactList"></div>
-        </div>
-        <div class="pbody" style="padding:0 8px 8px;border-top:1px solid var(--border)">
-          <div class="plabel" style="padding:6px 0 4px;font-size:.72rem;opacity:.7;letter-spacing:.04em">GROUP ROSTERS</div>
-          <div id="groupRosterList"></div>
-          <button class="plabel-btn" style="margin-top:4px" onclick="addGroupRoster()">+ Add Roster</button>
         </div>
         <div class="call-zone" id="callZone">
           <div class="call-mode-panel hidden" id="callModePanel">
@@ -343,8 +339,8 @@
         <div class="snav-item active" data-sec="identity" onclick="showSec('identity')">
           <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><span class="snav-label">Identity</span>
         </div>
-        <div class="snav-item" data-sec="audio" onclick="showSec('audio')">
-          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg></span><span class="snav-label">Audio</span>
+        <div class="snav-item" data-sec="voice" onclick="showSec('voice')">
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg></span><span class="snav-label">Voice</span>
         </div>
         <div class="snav-item" data-sec="radio" onclick="showSec('radio')">
           <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg></span><span class="snav-label">Radio / CAT</span>
@@ -369,13 +365,23 @@
         <div class="snav-item" data-sec="lqa" onclick="showSec('lqa')">
           <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="snav-label">LQA</span>
         </div>
-
-        <div class="snav-section-hdr">RX / Modem</div>
+        <div class="snav-section-hdr">Modem</div>
+        <div class="snav-item" data-sec="audio" onclick="showSec('audio')">
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg></span><span class="snav-label">Audio</span>
+        </div>
         <div class="snav-item" data-sec="fec" onclick="showSec('fec')">
           <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span class="snav-label">FEC / Sync</span>
         </div>
-        <div class="snav-item" data-sec="advanced" onclick="showSec('advanced')">
-          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span><span class="snav-label">Advanced</span>
+
+        <div class="snav-section-hdr">Advanced</div>
+        <div class="snav-item" data-sec="logging" onclick="showSec('logging')">
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span><span class="snav-label">Logging</span>
+        </div>
+        <div class="snav-item" data-sec="files" onclick="showSec('files')">
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="snav-label">Files</span>
+        </div>
+        <div class="snav-item" data-sec="misc" onclick="showSec('misc')">
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span><span class="snav-label">Misc / Sounding</span>
         </div>
       </nav>
 
@@ -404,6 +410,46 @@
           </div>
 
         </div><!-- /identity -->
+
+        <!-- ── Voice ── -->
+        <div class="ssec" data-sec="voice">
+          <div class="ssec-title">Operator Voice (Passthrough)</div>
+          <div class="fhint" style="margin-bottom:10px">
+            When armed, an active ALE link hands the radio audio path to a transparent
+            voice pipe between the radio and this device's mic/speaker. PTT selects
+            direction. The ALE modem stays silent while linked. See
+            <em>docs/VOICE_AUDIO_ROUTING.md</em>.
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Microphone (this device)</label>
+            <select class="fselect" id="voiceMic" onchange="onVoiceMicChange()">
+              <option value="">— default —</option>
+            </select>
+            <div class="fhint">Browser input device used for transmit (PTT held).</div>
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Speaker (this device)</label>
+            <select class="fselect" id="voiceSpk" onchange="onVoiceSpkChange()">
+              <option value="">— default —</option>
+            </select>
+            <div class="fhint">Browser output device for received radio audio.</div>
+          </div>
+
+          <div class="fg-row col2" style="align-items:center;margin-top:4px">
+            <label class="flabel" style="margin:0">Voice Passthrough</label>
+            <label class="fradio-opt" style="margin-left:auto">
+              <input type="checkbox" id="cfgVoiceArm" onchange="onVoiceArmChange(this.checked)">
+              <span style="margin-left:6px">Armed</span>
+            </label>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn-sm" onclick="enumVoiceDevices()">↺ Refresh Devices</button>
+            <button class="btn-sm" onclick="voiceMicTest()">🎤 Mic Test</button>
+          </div>
+        </div><!-- /voice -->
 
         <!-- ── Audio ── -->
         <div class="ssec" data-sec="audio">
@@ -681,11 +727,10 @@
 
           <div class="ch-add-row">
             <button class="btn-sm accent" onclick="addCh()">+ Add Channel</button>
-            <button class="btn-sm" onclick="loadAleFile()">↑ Load .ale</button>
-            <button class="btn-sm" onclick="saveAleFile()">↓ Save .ale</button>
           </div>
           <div class="fhint" style="margin-top:10px">
             Per channel: ID · frequencies · mode · usage flags (voice/data) · direction (RX/TX/both) · inhibit flags (calling / sounding / reporting) · ALE-only (short LBT).
+            Load / Save the channel list to a <em style="font-style:normal;color:var(--accent)">.ale</em> file from the Advanced ▸ Files section.
           </div>
         </div><!-- /channels -->
 
@@ -829,15 +874,6 @@
           <div class="fhint" style="margin-top:6px">
             Governs which inbound frames the controller answers or displays. Calls from disabled or unlisted addresses are dropped unless <em style="font-style:normal;color:var(--accent)">Accept Any Call</em> is on.
           </div>
-
-          <hr class="fsep">
-
-          <div class="ssec-subtitle">Calling Policy</div>
-          <div class="fg">
-            <div class="fhint">
-              Scanning-Call Length (C) is configured per net in the <strong>Nets</strong> section.
-            </div>
-          </div>
         </div><!-- /policy -->
 
         <!-- ── LQA ── -->
@@ -872,26 +908,6 @@
             <label class="ftoggle"><input type="checkbox" id="cfgEnhFreqSelect" onchange="applyEnhFreqSelectToBridge()"><span class="ftrack"></span></label>
           </div>
 
-          <div class="ftoggle-row">
-            <div class="ftoggle-info">
-              <div class="ftoggle-name">LBT Busy Detection</div>
-              <div class="ftoggle-desc">Listen-before-transmit occupancy check (A.5.4.7.2): blocks TX when broadband energy (voice, data, carrier — not just ALE) exceeds the tracked noise floor by the margin. Raise the margin at noisy locations so local QRM never blocks transmissions; the noise floor itself adapts to steady local noise automatically.</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;margin-left:12px">
-              <label class="ftoggle"><input type="checkbox" id="cfgLbtOccupancy" checked onchange="applyLbtToBridge()"><span class="ftrack"></span></label>
-              <input class="finput" id="cfgLbtMargin" type="number" value="6" min="0" max="40" step="1" style="width:64px" title="Busy threshold in dB above the tracked noise floor (default 6)" onchange="applyLbtToBridge()">
-              <span style="font-size:11px;opacity:0.6">dB</span>
-            </div>
-          </div>
-
-          <div class="ftoggle-row">
-            <div class="ftoggle-info">
-              <div class="ftoggle-name">LBT Override</div>
-              <div class="ftoggle-desc">Operator override (A.5.4.7.3, emergency use): ignore busy-channel results — transmit even when the channel appears occupied. The LBT pause itself still runs.</div>
-            </div>
-            <label class="ftoggle"><input type="checkbox" id="cfgLbtOverride" onchange="applyLbtToBridge()"><span class="ftrack"></span></label>
-          </div>
-
           <div class="fg-row col3">
             <div style="display:flex;flex-direction:column;justify-content:flex-end">
               <div class="ftoggle-row" style="border:none;padding:0">
@@ -911,7 +927,7 @@
               <label class="flabel">Sort By</label>
               <select class="fselect" id="cfgLqaSort" onchange="renderLqa()">
                 <option value="score">Score (best first)</option>
-                <option value="age">Age (newest first)</option>
+                <option value="age" selected>Age (newest first)</option>
                 <option value="addr">Address</option>
               </select>
             </div>
@@ -938,6 +954,7 @@
           <button class="btn-sm" style="margin-top:10px;margin-left:6px" onclick="clearLqa()">⌫ Clear LQA</button>
         </div><!-- /lqa -->
 
+        <!-- ── Groups ── -->
         <!-- ── FEC / Sync ── -->
         <div class="ssec" data-sec="fec">
           <div class="ssec-title">FEC &amp; Sync (MIL-STD-188-141B A.5.2.6.3)</div>
@@ -984,27 +1001,11 @@
               </div>
             </div>
           </div>
-
-          <hr class="fsep">
-
-          <div class="fg">
-            <label class="flabel">Debug / Diagnostics</label>
-            <div class="ftoggle-row">
-              <div class="ftoggle-info">
-                <div class="ftoggle-name">RX Debug Output</div>
-                <div class="ftoggle-desc">Logs peak level + every decoded word (type / addr / votes / FEC) to the status stream</div>
-              </div>
-              <label class="ftoggle">
-                <input type="checkbox" id="cfgDebugRx">
-                <span class="ftrack"></span>
-              </label>
-            </div>
-          </div>
         </div><!-- /fec -->
 
-        <!-- ── Advanced ── -->
-        <div class="ssec" data-sec="advanced">
-          <div class="ssec-title">Advanced</div>
+        <!-- ── Logging ── -->
+        <div class="ssec" data-sec="logging">
+          <div class="ssec-title">Logging</div>
 
           <div class="fg-row col2">
             <div>
@@ -1028,31 +1029,21 @@
 
           <hr class="fsep">
 
-          <div class="fg">
-            <label class="flabel">Miscellaneous</label>
-            <div class="ftoggle-row">
-              <div class="ftoggle-info">
-                <div class="ftoggle-name">Auto-save LQA on Exit</div>
-                <div class="ftoggle-desc">Save LQA history to disk when the bridge shuts down.</div>
-              </div>
-              <label class="ftoggle">
-                <input type="checkbox" id="cfgAutoLqa" checked>
-                <span class="ftrack"></span>
-              </label>
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">RX Debug Output</div>
+              <div class="ftoggle-desc">Logs peak level + every decoded word (type / addr / votes / FEC) to the status stream</div>
             </div>
-            <div class="ftoggle-row">
-              <div class="ftoggle-info">
-                <div class="ftoggle-name">Automatic Sounding</div>
-                <div class="ftoggle-desc">Enable periodic multi-channel sounding on the active net (interval configured per net in the Nets panel).</div>
-              </div>
-              <label class="ftoggle">
-                <input type="checkbox" id="cfgAutoSound" onchange="applySoundAuto()">
-                <span class="ftrack"></span>
-              </label>
-            </div>
+            <label class="ftoggle">
+              <input type="checkbox" id="cfgDebugRx">
+              <span class="ftrack"></span>
+            </label>
           </div>
+        </div><!-- /logging -->
 
-          <hr class="fsep">
+        <!-- ── Files ── -->
+        <div class="ssec" data-sec="files">
+          <div class="ssec-title">Files</div>
 
           <div class="fg">
             <label class="flabel">Configuration File</label>
@@ -1071,7 +1062,7 @@
               <button class="btn-sm" onclick="loadAleFile()">↑ Load</button>
               <button class="btn-sm" onclick="saveAleFile()">↓ Save</button>
             </div>
-            <div class="fhint">Channel list loaded at startup and used by the Load / Save buttons in Channels.</div>
+            <div class="fhint">Channel list loaded at startup; Load / Save operate on this path.</div>
           </div>
 
           <div class="fg">
@@ -1082,7 +1073,56 @@
             </div>
             <div class="fhint">Channel quality history — restored on startup, saved on exit.</div>
           </div>
-        </div><!-- /advanced -->
+        </div><!-- /files -->
+
+        <!-- ── Misc / Sounding ── -->
+        <div class="ssec" data-sec="misc">
+          <div class="ssec-title">Misc / Sounding</div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Auto-save LQA on Exit</div>
+              <div class="ftoggle-desc">Save LQA history to disk when the bridge shuts down.</div>
+            </div>
+            <label class="ftoggle">
+              <input type="checkbox" id="cfgAutoLqa" checked>
+              <span class="ftrack"></span>
+            </label>
+          </div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Automatic Sounding</div>
+              <div class="ftoggle-desc">Enable periodic multi-channel sounding on the active net (interval configured per net in the Nets panel).</div>
+            </div>
+            <label class="ftoggle">
+              <input type="checkbox" id="cfgAutoSound" onchange="applySoundAuto()">
+              <span class="ftrack"></span>
+            </label>
+          </div>
+
+          <hr class="fsep">
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">LBT Busy Detection</div>
+              <div class="ftoggle-desc">Listen-before-transmit occupancy check (A.5.4.7.2): blocks TX when broadband energy (voice, data, carrier — not just ALE) exceeds the tracked noise floor by the margin. Raise the margin at noisy locations so local QRM never blocks transmissions; the noise floor itself adapts to steady local noise automatically.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-left:12px">
+              <label class="ftoggle"><input type="checkbox" id="cfgLbtOccupancy" checked onchange="applyLbtToBridge()"><span class="ftrack"></span></label>
+              <input class="finput" id="cfgLbtMargin" type="number" value="6" min="0" max="40" step="1" style="width:64px" title="Busy threshold in dB above the tracked noise floor (default 6)" onchange="applyLbtToBridge()">
+              <span style="font-size:11px;opacity:0.6">dB</span>
+            </div>
+          </div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">LBT Override</div>
+              <div class="ftoggle-desc">Operator override (A.5.4.7.3, emergency use): ignore busy-channel results — transmit even when the channel appears occupied. The LBT pause itself still runs.</div>
+            </div>
+            <label class="ftoggle"><input type="checkbox" id="cfgLbtOverride" onchange="applyLbtToBridge()"><span class="ftrack"></span></label>
+          </div>
+        </div><!-- /misc -->
 
       </div><!-- /scontent -->
     </div><!-- /modal-body -->
@@ -1142,6 +1182,43 @@
     </div>
   </div><!-- /modal -->
 </div><!-- /sounding-warning modal -->
+
+<!-- ══════ TEST-CHANNEL MODAL ══════ -->
+<div class="modal-overlay hidden" id="testChannelModal" onclick="if(event.target===this)closeTestChannelPanel()">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-hdr">
+      <span class="modal-title">Test Channel — active LQA sweep</span>
+      <button class="modal-close" onclick="closeTestChannelPanel()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px">
+        <label style="flex:1">
+          <div style="font-size:11px;opacity:.7;margin-bottom:4px">Peer address</div>
+          <input id="testChannelAddr" type="text" placeholder="e.g. KA1ABC"
+                 style="width:100%;box-sizing:border-box" />
+        </label>
+        <button class="btn-save" onclick="startTestChannel()">Start sweep</button>
+        <button class="btn-cancel" onclick="stopTestChannel()">Stop</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
+        <span>Peer: <strong id="testChannelPeer">—</strong></span>
+        <span>Progress: <strong id="testChannelProgress">0 / 0</strong></span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="text-align:left;opacity:.7">
+            <th>Channel</th><th>Freq Hz</th><th>Linked</th><th>Score</th><th>Quality</th>
+          </tr>
+        </thead>
+        <tbody id="testChannelBody"><tr><td colspan="5">—</td></tr></tbody>
+      </table>
+      <pre id="testChannelSummary" style="margin-top:8px;white-space:pre-wrap;font-size:11px;opacity:.85"></pre>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeTestChannelPanel()">Close</button>
+    </div>
+  </div><!-- /modal -->
+</div><!-- /test-channel modal -->
 
 <!-- ══════ CONTACT EDITOR MODAL ══════ -->
 <div class="modal-overlay hidden" id="contactModal" onclick="if(event.target===this)closeContactEditor()">

@@ -58,6 +58,10 @@ struct ALEStationConfig {
     /// (entspricht PCALE TWA=360000 ms). Der SM-Spec-Default bleibt 30 s
     /// (ale_timing.h Twa_ms, AC-LINK-003-001); dies ist nur der Stations-Default.
     uint32_t  link_idle_timeout_sec  = 360;
+    /// Test-Channel sweep: time to stay LINKED on each channel before terminating
+    /// and advancing. Tdrw (784 ms) is always enforced as a floor so bilateral
+    /// LQA metrics can commit before snapshot. Default 1 s.
+    uint32_t  test_channel_link_hold_time = 1;
     /// Maximale Tuning-Zeit Tt (ms); Standard = 1045 ms (Blindabstimmung).
     uint32_t  max_tune_time_ms       = 1045;
 

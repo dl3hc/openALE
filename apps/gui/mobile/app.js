@@ -135,7 +135,6 @@ function syncAllFromBridge(pullOnly = false) {
   syncNetsFromBridge();
   syncActiveNetFromBridge();   // restore the header Network pill selection from core
   syncContactsFromBridge();
-  syncGroupRostersFromBridge();
   syncAllCallAcceptFromBridge();
   syncSelfAddrsFromBridge();
   syncLqaFromBridge();
@@ -360,6 +359,11 @@ function onBridgeEvent(e) {
     case 'sounding_warning':
       if (e.phase === 'warn') showSoundingWarn(e.net, e.remaining_sec);
       else hideSoundingWarn();
+      break;
+    case 'test_channel':
+      // Active per-peer LQA sweep. Drives the Test Channel panel (opened by
+      // long-pressing a contact) and also logs progress lines.
+      onTestChannelEvent(e);
       break;
     case 'word_decoded':  onAleLogWord(e, 'rx'); break;
     case 'word_tx':       onAleLogWord(e, 'tx'); break;
@@ -940,6 +944,11 @@ function upsertHeard(e) {
     ber_to:      e.ber_to,
     mp_to:       e.mp_to,
     ageMin:      e.ageMin,
+    // Raw LQA-DB age in ms — the authoritative "when last heard" signal. The
+    // heard panel sorts on this (ascending = most-recently-heard first), so a
+    // station heard again bubbles back to the top regardless of array order.
+    // ageMin (rounded minutes) is too coarse to order by.
+    age_ms:      (typeof e.age_ms === 'number') ? e.age_ms : 0,
   };
   if (idx >= 0) {
     // Refresh metrics but keep the original "first heard" timestamp.
@@ -983,6 +992,43 @@ function addHeardToContacts(addr) {
   aleLogInfo(`Added ${cs} to the address book`);
 }
 
+// Card-friendly availability badge (1 = TIS available, 0 = TWAS not, -1 = unknown).
+// Uses TIS/TWAS labels; availBadge() (the <td> variant) is still used by the
+// Settings/LQA table.
+function availSpan(av) {
+  const cls = av === 1 ? 'ha-yes' : av === 0 ? 'ha-no' : 'ha-unk';
+  const txt = av === 1 ? 'TIS' : av === 0 ? 'TWAS' : '—';
+  const tip = av === 1 ? 'TIS — available for link'
+            : av === 0 ? 'TWAS — not available' : 'no sounding heard';
+  return `<span class="heard-avail ${cls}" title="${tip}">${txt}</span>`;
+}
+
+// One-tap "call this heard station" from a Heard-card Call button. Ensures the
+// callsign is a contact (adding it to the address book if needed, mirroring
+// addHeardToContacts), selects it as the single 1:1 target, tells the bridge,
+// and jumps to the CALL tab so the operator can fire the call immediately.
+function callHeard(addr) {
+  if (!addr || addr === '(sounding)') return;
+  const cs = addr.toUpperCase();
+  let c = contacts.find(x => x.cs.toUpperCase() === cs);
+  if (!c) {
+    c = { cs, name: '', fav: false };
+    contacts.push(c);
+    if (bridgeConnected)
+      bridgeSend('CONTACT_ADD', { callsign: c.cs, name: c.name }, () => syncContactsFromBridge());
+    aleLogInfo(`Added ${cs} to the address book`);
+  }
+  selectedContacts = [c];
+  renderContacts();
+  renderHeard();
+  if (bridgeConnected) bridgeSend('CONTACT_SELECT', { callsign: c.cs });
+  mobSetTab('call');
+}
+
+// Heard tab — one station per card. Callsign, an availability badge and a
+// quality label (qualityLabel, A.5.4.1 buckets) are the visible hierarchy; the
+// raw SINAD/BER/MP metrics collapse behind a Details toggle, and each card
+// carries a Call button that pre-selects the station and jumps to CALL.
 function renderHeard() {
   const el = document.getElementById('heardList');
   if (!el) return;
@@ -990,51 +1036,66 @@ function renderHeard() {
     el.innerHTML = '<div class="heard-empty">No stations heard yet — scanning will list them here</div>';
     return;
   }
-  // Same column layout and gradient math as renderLqa() (Settings/LQA), so the
-  // main-window heard panel reads identically to the Settings table. qCell/
-  // availBadge are hoisted declarations below; cfgLqaAge lives in the settings
-  // DOM (always present, just hidden) and drives the age gradient.
-  const ageLimit = Math.max(1, Number(document.getElementById('cfgLqaAge')?.value) || 60);
-  const body = heardStations.map(h => {
+  // Sort by recency: most-recently-heard first. age_ms is the LQA-DB age
+  // (smaller = fresher), so ascending puts the latest-heard station on top;
+  // ts (first-heard "HH:MM:SS") is a stable tie-break for equal ages.
+  const rows = [...heardStations].sort((a, b) =>
+    (a.age_ms ?? 0) - (b.age_ms ?? 0) || (b.ts || '').localeCompare(a.ts || ''));
+  el.innerHTML = rows.map(h => {
+    const scoreG     = Math.min(1, Math.max(0, (h.score || 0) / 30));
     const sinadFromG = (h.sinad_from != null) ? h.sinad_from / 30 : null;
     const sinadToG   = (h.sinad_to   != null) ? h.sinad_to   / 30 : null;
     const berFromG   = (h.ber_from   != null) ? 1 - Math.min(1, h.ber_from / 48) : null;
     const berToCode  = (h.ber_to_code != null && h.ber_to_code <= 30) ? h.ber_to_code : null;
     const berToG     = (berToCode != null) ? 1 - berToCode / 30 : null;
     const mpG        = (h.mp_to != null) ? 1 - Math.min(1, h.mp_to / 6) : null;
-    const scoreG     = Math.min(1, Math.max(0, h.score / 30));
-    const ageG       = 1 - Math.min(1, h.ageMin / ageLimit);
-    // Add-to-address-book button: only for rows that carry a real callsign.
-    // Shows ✓/disabled once the callsign is already a contact.
+    const ageTxt     = h.ageMin >= 60 ? '>60m' : h.ageMin + 'm';
+
+    // Only rows with a real callsign can be called or added to the address book.
     const canAdd = h.addr && h.addr !== '(sounding)';
     const inBook = canAdd && contacts.some(c => c.cs.toUpperCase() === h.addr.toUpperCase());
     const addBtn = !canAdd ? '' : inBook
-      ? `<span class="heard-add heard-added" title="Already in address book">${icon('user',11)}</span>`
-      : `<button class="heard-add" onclick='addHeardToContacts(${JSON.stringify(h.addr)})' title="Add to address book">${icon('userPlus',11)}</button>`;
-    return `<tr>` +
-      `<td class="lqa-cell" data-label="Callsign" style="text-align:left">${escapeHtml(h.addr)}</td>` +
-      `<td class="lqa-cell" data-label="Channel">${fmtChFreqExact(h.freq_hz)}</td>` +
-      availBadge(h.available, 'Avail') +
-      qCell(h.score, scoreG, 'Score') +
-      qCell(h.sinad_from != null ? `+${Math.round(h.sinad_from)}` : null, sinadFromG, 'SINAD↘') +
-      qCell(h.sinad_to   != null ? `+${Math.round(h.sinad_to)}`   : null, sinadToG, 'SINAD↗') +
-      qCell(h.ber_from   != null ? h.ber_from.toFixed(1)          : null, berFromG, 'BER↘') +
-      qCell(berToCode    != null ? h.ber_to                       : null, berToG, 'BER↗') +
-      qCell(h.mp_to      != null ? h.mp_to.toFixed(0) + 'ms'      : null, mpG, 'MP') +
-      qCell(h.ageMin >= 60 ? '>60m' : h.ageMin + 'm', ageG, 'Age') +
-      `<td class="lqa-cell heard-actions" data-label="">${addBtn}<button class="heard-del" onclick='deleteHeard(${JSON.stringify(h.addr)},${h.freq_hz})' title="Remove">×</button></td>` +
-      `</tr>`;
+      ? `<span class="hc-add hc-added" title="Already in address book">${icon('user',15)}</span>`
+      : `<button class="hc-add" onclick='addHeardToContacts(${JSON.stringify(h.addr)})' title="Add to address book">${icon('userPlus',15)}</button>`;
+    const callBtn = canAdd
+      ? `<button class="hc-call" onclick='callHeard(${JSON.stringify(h.addr)})'>Call →</button>`
+      : '';
+
+    // One labeled metric row for the Details section; value gradient-coloured
+    // by goodness (1 = best), dim "—" when there is no measurement.
+    const metric = (label, text, g) => {
+      const val = (g == null || text == null || text === '—')
+        ? `<b class="hc-na">—</b>`
+        : `<b style="color:${qColor(g)}">${text}</b>`;
+      return `<div class="hc-m"><span>${label}</span>${val}</div>`;
+    };
+
+    return `<div class="heard-card">` +
+      `<div class="hc-head">` +
+        `<div class="hc-cs">${escapeHtml(h.addr)}</div>` +
+        `<div class="hc-head-r">${availSpan(h.available)}<button class="hc-del" onclick='deleteHeard(${JSON.stringify(h.addr)},${h.freq_hz})' title="Remove">×</button></div>` +
+      `</div>` +
+      `<div class="hc-sub">` +
+        `<span class="hc-ql" style="color:${qColor(scoreG)}">${qualityLabel(h.score || 0)}</span>` +
+        `<span class="hc-qlscore">${h.score || 0}/30</span>` +
+        `<span class="hc-dot">·</span>` +
+        `<span class="hc-ch">${fmtChFreqExact(h.freq_hz)}</span>` +
+        `<span class="hc-dot">·</span>` +
+        `<span class="hc-age">${ageTxt}</span>` +
+      `</div>` +
+      (canAdd ? `<div class="hc-actions">${addBtn}${callBtn}</div>` : '') +
+      `<details class="hc-details">` +
+        `<summary><span class="hc-arrow">▸</span> Details</summary>` +
+        `<div class="hc-metrics">` +
+          metric('SINAD ↘', h.sinad_from != null ? `+${Math.round(h.sinad_from)}` : null, sinadFromG) +
+          metric('SINAD ↗', h.sinad_to   != null ? `+${Math.round(h.sinad_to)}`   : null, sinadToG) +
+          metric('BER ↘',   h.ber_from   != null ? h.ber_from.toFixed(1)          : null, berFromG) +
+          metric('BER ↗',   berToCode    != null ? h.ber_to                       : null, berToG) +
+          metric('MP',      h.mp_to      != null ? h.mp_to.toFixed(0) + 'ms'      : null, mpG) +
+        `</div>` +
+      `</details>` +
+    `</div>`;
   }).join('');
-  el.innerHTML =
-    `<table class="ch-table heard-table">` +
-      `<thead><tr>` +
-        `<th>Callsign</th><th>Ch</th><th>Avail</th><th>Score</th>` +
-        `<th>SINAD<br>FROM</th><th>SINAD<br>TO</th>` +
-        `<th>BER<br>FROM</th><th>BER<br>TO</th><th>MP</th><th>Age</th>` +
-        `<th></th>` +
-      `</tr></thead>` +
-      `<tbody>${body}</tbody>` +
-    `</table>`;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1266,6 +1327,116 @@ function interruptSounding() {
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TEST-CHANNEL sweep (active per-peer LQA collection)
+   Opened by long-pressing a contact in the address book. The peer comes from
+   the contact (no typing); Start/Stop drive the sweep via the bridge.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+let tcPeer = '';                  // peer callsign, set by testChannelFromContact
+let tcRows = [];                  // [{id, linked, score}]
+let contactLongPressTimer = null;
+let contactLongPressFired = false;
+
+function startContactLongPress(idx) {
+  contactLongPressFired = false;
+  if (contactLongPressTimer) clearTimeout(contactLongPressTimer);
+  contactLongPressTimer = setTimeout(() => {
+    contactLongPressFired = true;
+    testChannelFromContact(idx);
+  }, 500);
+}
+function cancelContactLongPress() {
+  if (contactLongPressTimer) { clearTimeout(contactLongPressTimer); contactLongPressTimer = null; }
+}
+// Wraps toggleContact(): a tap toggles the contact; a long-press that fired is
+// consumed here so the imminent click does NOT also toggle the selection.
+function contactClick(idx) {
+  if (contactLongPressFired) { contactLongPressFired = false; return; }
+  toggleContact(idx);
+}
+
+function testChannelFromContact(idx) {
+  const c = contacts[idx];
+  if (!c) return;
+  tcPeer = c.cs;
+  showTestChannelPanel();
+}
+function showTestChannelPanel() {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('tcPeer', tcPeer || '—');
+  set('tcProgress', '0 / 0');
+  set('tcSummary', '');
+  const list = document.getElementById('tcList');
+  if (list) list.innerHTML = '<div class="tc-empty">—</div>';
+  document.getElementById('testChannelModal').classList.remove('hidden');
+}
+function hideTestChannelPanel() {
+  document.getElementById('testChannelModal').classList.add('hidden');
+}
+function closeTestChannelPanel() { hideTestChannelPanel(); }
+function startTestChannel() {
+  if (!tcPeer || !bridgeConnected) return;
+  bridgeSend('TEST_CHANNEL', { addr: tcPeer });
+}
+function stopTestChannel() {
+  if (bridgeConnected) bridgeSend('TEST_CHANNEL_STOP', {});
+}
+
+function tcQualLabel(s) {
+  if (s < 0) return '—';
+  if (s >= 25) return 'Excellent';
+  if (s >= 20) return 'Good';
+  if (s >= 15) return 'Fair';
+  if (s >= 10) return 'Poor';
+  return 'Very Poor';
+}
+function renderTestChannelRows() {
+  const el = document.getElementById('tcList');
+  if (!el) return;
+  if (!tcRows.length) { el.innerHTML = '<div class="tc-empty">—</div>'; return; }
+  el.innerHTML = tcRows.map(r => {
+    const cls = r.linked ? 'tc-ok' : 'tc-no';
+    const mark = r.linked ? '✓' : '✗';
+    const sc = r.score < 0 ? '—' : String(r.score);
+    return `<div class="tc-row ${cls}"><span class="tc-id">${r.id || '—'}</span>`
+         + `<span class="tc-mark">${mark}</span>`
+         + `<span class="tc-score">${sc}</span>`
+         + `<span class="tc-qual">${tcQualLabel(r.score)}</span></div>`;
+  }).join('');
+}
+
+// Drives the panel from `test_channel` events (also logs progress lines).
+function onTestChannelEvent(e) {
+  const phase = e.phase || '';
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  if (phase === 'start') {
+    tcRows = [];
+    const total = Number(e.total) || 0;
+    for (let i = 0; i < total; ++i) tcRows.push({ id: '', linked: false, score: -1 });
+    set('tcPeer', e.peer || '—');
+    set('tcProgress', `0 / ${total}`);
+    set('tcSummary', '');
+    renderTestChannelRows();
+    showTestChannelPanel();
+    aleLogInfo(`Test-Channel sweep to ${e.peer} started (${total} ch)`);
+    return;
+  }
+  if (phase === 'stop') { aleLogInfo('Test-Channel sweep stopped'); set('tcSummary', 'Stopped.'); return; }
+  if (phase === 'done') { aleLogInfo(`Test-Channel sweep complete — ${e.peer}`); set('tcSummary', e.summary || 'Complete'); return; }
+  const idx = (Number(e.index) || 1) - 1;
+  if (idx >= 0 && idx < tcRows.length) {
+    const row = tcRows[idx];
+    row.id = e.channel_id || row.id;
+    if (phase === 'linked') row.linked = true;
+    if (phase === 'failed') row.linked = false;
+    if (phase === 'terminate' && Number(e.score) >= 0) row.score = Number(e.score);
+  }
+  set('tcProgress', `${e.index} / ${e.total}`);
+  renderTestChannelRows();
+  if (phase === 'linked') aleLogInfo(`Test-Channel: linked ${e.channel_id} (${e.index}/${e.total})`);
+  else if (phase === 'failed') aleLogInfo(`Test-Channel: no link ${e.channel_id} (${e.index}/${e.total})`);
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    STATE HELPERS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 function goIdle() {
@@ -1326,7 +1497,13 @@ function renderContacts() {
   el.innerHTML = list.length ? list.map(c => {
     const idx = contacts.indexOf(c);
     const sel = selectedContacts.includes(c) ? ' sel' : '';
-    return `<div class="contact-item${sel}" onclick="toggleContact(${idx})">
+    return `<div class="contact-item${sel}"
+      onclick="contactClick(${idx})"
+      ontouchstart="startContactLongPress(${idx})"
+      ontouchend="cancelContactLongPress()"
+      ontouchmove="cancelContactLongPress()"
+      ontouchcancel="cancelContactLongPress()"
+      title="Long-press → Test all channels to this peer">
       <div class="contact-avatar">${sel ? icon('check',16) : icon('user',16)}</div>
       <div class="contact-info">
         <div class="contact-cs">${c.cs}</div>
@@ -1409,84 +1586,6 @@ function deleteContact() {
   closeContactEditor();
   renderContacts();
   if (bridgeConnected && removedCs) bridgeSend('CONTACT_DEL', { callsign: removedCs }, () => syncContactsFromBridge());
-}
-
-// ── Group Call Rosters ────────────────────────────────────────────────────────
-
-let groupRosters = [];  // [{name, members:[]}]
-
-function syncGroupRostersFromBridge() {
-  bridgeSend('GROUP_ROSTERS_LIST', {}, (r) => {
-    if (!r.ok) return;
-    groupRosters = (r.rosters || []).map(rr => ({ name: rr.name, members: rr.members || [] }));
-    renderGroupRosters();
-  });
-}
-
-function renderGroupRosters() {
-  const el = document.getElementById('groupRosterList');
-  if (!el) return;
-  if (groupRosters.length === 0) {
-    el.innerHTML = '<div class="rosters-empty">No rosters yet</div>';
-    return;
-  }
-  el.innerHTML = groupRosters.map((r, i) => `
-    <div style="border:1px solid var(--border);border-radius:4px;padding:5px 7px;margin-bottom:5px;font-size:.78rem">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-        <span style="font-weight:600;flex:1">${r.name}</span>
-        <button class="plabel-btn" onclick="callGroupRoster(${i})" style="padding:1px 7px">${icon('phone',12)}</button>
-        <button class="plabel-btn" onclick="delGroupRoster(${i})" style="padding:1px 7px;opacity:.6">✕</button>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:3px">
-        ${r.members.map((m, mi) => `<span style="background:var(--bg-chip,#333);border-radius:3px;padding:1px 5px">${m}<button onclick="delGroupMember(${i},${mi})" style="background:none;border:none;color:inherit;cursor:pointer;opacity:.5;padding:0 0 0 3px;font-size:.7rem">×</button></span>`).join('')}
-      </div>
-      <div style="display:flex;gap:4px">
-        <input id="grpMemberInput${i}" class="search-input" style="flex:1;font-size:.72rem;padding:2px 5px" placeholder="Add callsign…" onkeydown="if(event.key==='Enter')addGroupMember(${i})">
-        <button class="plabel-btn" onclick="addGroupMember(${i})" style="padding:1px 7px">+</button>
-      </div>
-    </div>`).join('');
-}
-
-function addGroupRoster() {
-  const name = prompt('Roster name:');
-  if (!name || !name.trim()) return;
-  if (bridgeConnected) bridgeSend('GROUP_ROSTER_ADD', { name: name.trim() }, () => syncGroupRostersFromBridge());
-  else { groupRosters.push({ name: name.trim(), members: [] }); renderGroupRosters(); }
-}
-
-function delGroupRoster(i) {
-  const r = groupRosters[i];
-  if (!r) return;
-  if (bridgeConnected) bridgeSend('GROUP_ROSTER_DEL', { name: r.name }, () => syncGroupRostersFromBridge());
-  else { groupRosters.splice(i, 1); renderGroupRosters(); }
-}
-
-function addGroupMember(i) {
-  const r = groupRosters[i];
-  if (!r) return;
-  const inp = document.getElementById(`grpMemberInput${i}`);
-  const cs = (inp?.value || '').toUpperCase().trim();
-  if (!cs) return;
-  if (inp) inp.value = '';
-  if (bridgeConnected) bridgeSend('GROUP_ROSTER_MEMBER_ADD', { name: r.name, callsign: cs }, () => syncGroupRostersFromBridge());
-  else { r.members.push(cs); renderGroupRosters(); }
-}
-
-function delGroupMember(i, mi) {
-  const r = groupRosters[i];
-  if (!r) return;
-  const cs = r.members[mi];
-  if (!cs) return;
-  if (bridgeConnected) bridgeSend('GROUP_ROSTER_MEMBER_DEL', { name: r.name, callsign: cs }, () => syncGroupRostersFromBridge());
-  else { r.members.splice(mi, 1); renderGroupRosters(); }
-}
-
-function callGroupRoster(i) {
-  const r = groupRosters[i];
-  if (!r || r.members.length === 0) return;
-  bridgeSend('GROUP_CALL', { roster: r.name }, (reply) => {
-    if (!reply.ok) aleLogInfo('Group call to roster "' + r.name + '" failed');
-  });
 }
 
 // ── AllCall accept ────────────────────────────────────────────────────────────
@@ -1627,6 +1726,17 @@ function showSec(sec) {
     el.classList.toggle('active', el.dataset.sec === sec));
   document.querySelectorAll('.ssec').forEach(el =>
     el.classList.toggle('active', el.dataset.sec === sec));
+}
+
+// Mobile Settings nav: toggle the Advanced group (#advNavItems) open/closed.
+// On desktop the items are always visible (CSS) and the toggle button is hidden,
+// so this only has an effect at ≤767 px where #advNavItems starts display:none.
+function toggleAdvNav() {
+  const items = document.getElementById('advNavItems');
+  if (!items) return;
+  const open = items.classList.toggle('open');
+  const caret = document.getElementById('advNavCaret');
+  if (caret) caret.textContent = open ? '▾' : '▸';
 }
 
 // Rig connection-field visibility, driven by the selected Hamlib model's port
@@ -2715,6 +2825,7 @@ function applyTimingToBridge() {
   const sl = numZ('cfgSoundingLead'); if (sl !== null) args.sounding_warning_lead_sec = sl;
   const concSel = document.getElementById('cfgSoundingConclusion');
   if (concSel) args.sounding_use_twas = concSel.value === 'twas';
+  const th = num('cfgTestChannelHold'); if (th) args.test_channel_link_hold_time = th;
   bridgeSend('TIMING_SET', args);
 }
 
@@ -2978,8 +3089,9 @@ function syncTimingFromBridge() {
     setNum('cfgSoundingLead',   r.sounding_warning_lead_sec);
     setNum('cfgLinkIdle',       r.link_idle_timeout_sec);
     setNum('cfgMaxTune',        r.max_tune_time_ms);
-    setNum('cfgPttLead',        r.ptt_lead_ms);
-    setNum('cfgPttTail',        r.ptt_tail_ms);
+    setNum('cfgPttLead',             r.ptt_lead_ms);
+    setNum('cfgPttTail',             r.ptt_tail_ms);
+    setNum('cfgTestChannelHold',     r.test_channel_link_hold_time);
     const conc = document.getElementById('cfgSoundingConclusion');
     if (conc && typeof r.sounding_use_twas === 'boolean')
       conc.value = r.sounding_use_twas ? 'twas' : 'tis';
@@ -3096,12 +3208,22 @@ function toggleRadioPanel() {
 // listener below exactly like the other panels.
 function toggleMorePanel() {
   const panel = document.getElementById('morePanel');
+  const btn = document.getElementById('moreBtn');
   panel.classList.toggle('open');
   const open = panel.classList.contains('open');
   const caret = document.getElementById('moreCaret');
   if (caret) caret.textContent = open ? '▾' : '▸';
-  const btn = document.getElementById('moreBtn');
   if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (!open || !btn) return;
+  // Center the panel directly below the button, clamped to the viewport so no
+  // item is rendered off-screen. position:fixed (CSS override) → viewport coords.
+  const r = btn.getBoundingClientRect();
+  const w = panel.offsetWidth;        // display:block via .open → measurable
+  const left = Math.max(8, Math.min(
+    r.left + r.width / 2 - w / 2,     // centered on the button's midpoint
+    window.innerWidth - w - 8));      // clamped to the right edge
+  panel.style.left = left + 'px';
+  panel.style.top = (r.bottom + 6) + 'px';
 }
 // Close the More sheet when one of its items is tapped (the item's own onclick
 // then opens the targeted panel / modal). Delegated so each item only needs to
@@ -3550,11 +3672,14 @@ function availBadge(av, label) {
 function renderLqa() {
   const tb = document.getElementById('lqaBody');
   if (!tb) return;
-  const sort = document.getElementById('cfgLqaSort')?.value || 'score';
+  const sort = document.getElementById('cfgLqaSort')?.value || 'age';
   // Age limit (min) drives the age gradient — fresher = greener.
   const ageLimit = Math.max(1, Number(document.getElementById('cfgLqaAge')?.value) || 60);
+  // Age sort uses fine-grained age_ms (smaller = heard more recently) so the
+  // latest-heard station lands on top; ageMin (rounded minutes) is too coarse and
+  // leaves same-minute ties unordered. Score-descending tie-break for stability.
   const rows = [...lqaEntries].sort((a, b) =>
-    sort === 'age'  ? a.ageMin - b.ageMin :
+    sort === 'age'  ? (a.age_ms ?? 0) - (b.age_ms ?? 0) || b.score - a.score :
     sort === 'addr' ? a.addr.localeCompare(b.addr) || b.score - a.score :
                       b.score - a.score);
   tb.innerHTML = rows.length ? rows.map(e => {

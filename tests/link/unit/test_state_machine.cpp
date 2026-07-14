@@ -683,14 +683,27 @@ bool test_sounding_trs_timing() {
         tracker.record(word);
     });
 
+    // Configure scan channels BEFORE the sound.  The previous reps logic used
+    // (channel_count + 2), which inflated the word count whenever scan channels
+    // were configured — but no test configured channels, so the bug was masked.
+    // With scan channels present the sound must STILL be exactly 2 conclusion
+    // words (Trs = 2×Ta, AC-SOUND-003-002); the scanning-sound (n+2) formula is
+    // a separate mode not applied to a single sound.
+    sm.add_scan_channel(Channel(7073000,  "USB"));
+    sm.add_scan_channel(Channel(14109000, "USB"));
+    sm.add_scan_channel(Channel(21096000, "USB"));
     sm.process_event(ALEEvent::START_SCAN);
     sm.send_sounding();
     sm.update(ALETimingConstants::Twt_ms + 10);  // advance past LBT → TX begins
 
     const uint32_t tx_count = static_cast<uint32_t>(tracker.count());
     const bool count_ge_2 = (tx_count >= 2u);
+    const bool count_eq_2 = (tx_count == 2u);
     std::cout << "  >= 2 Conclusion-Wörter gesendet (sound_repeat_count >= 2): "
               << (count_ge_2 ? "PASS" : "FAIL")
+              << " (count=" << tx_count << ")\n";
+    std::cout << "  genau 2 Wörter trotz konfigurierter Scan-Kanäle (kein n+2): "
+              << (count_eq_2 ? "PASS" : "FAIL")
               << " (count=" << tx_count << ")\n";
 
     bool all_tis = true;
@@ -711,7 +724,8 @@ bool test_sounding_trs_timing() {
               << (trs_ge_min ? "PASS" : "FAIL")
               << " (Trs=" << trs_ms << " ms)\n";
 
-    return trs_const_ok && wc_ok && count_ge_2 && all_tis && all_addr_correct && trs_ge_min;
+    return trs_const_ok && wc_ok && count_ge_2 && count_eq_2
+        && all_tis && all_addr_correct && trs_ge_min;
 }
 
 // ============================================================================
@@ -2018,7 +2032,82 @@ bool test_scan_traffic_pause() {
     const bool pass_B = run_sub("B(TIS-sounding)", PreambleType::TIS, "SND");
     const bool pass_C = run_sub("C(TWAS-not-avail)", PreambleType::TWAS, "SND");
 
-    return pass_A && pass_B && pass_C;
+    // Sub-test D: begin_scan_traffic_pause() (§A.5.3.3 stage-1) freezes dwell
+    // before any valid word arrives — simulates unanimous-vote energy callback.
+    const bool pass_D = [&]() -> bool {
+        std::cout << "  D(stage-1 energy before word):\n";
+        ALEStateMachine sm;
+        sm.set_self_address("SAM");
+        ChannelTracker tracker;
+        sm.set_channel_callback([&tracker](const Channel& ch) { tracker.record(ch); });
+
+        ScanConfig cfg;
+        cfg.scan_list.push_back(Channel(7100000,  "USB"));
+        cfg.scan_list.push_back(Channel(14100000, "USB"));
+        cfg.dwell_time_ms = DWELL_MS;
+        sm.configure_scan(cfg);
+        sm.process_event(ALEEvent::START_SCAN);
+        tracker.clear();
+
+        // t=10: stage-1 fires (unanimous votes detected — no valid word yet)
+        sm.update(10);
+        sm.begin_scan_traffic_pause(10);
+
+        // Dwell would normally expire at t=DWELL_MS — must NOT hop
+        sm.update(DWELL_MS);
+        const bool no_hop_at_dwell = (tracker.count() == 0);
+        std::cout << "    no hop at dwell expiry: " << (no_hop_at_dwell ? "PASS" : "FAIL") << "\n";
+
+        // Tdrw after stage-1 anchor — hop fires
+        sm.update(10 + TDRW);
+        const bool hopped = (tracker.count() == 1);
+        std::cout << "    hop after Tdrw silence: " << (hopped ? "PASS" : "FAIL") << "\n";
+
+        return no_hop_at_dwell && hopped;
+    }();
+
+    // Sub-test E: stage-2 valid words refresh traffic_settle_ms_ (multi-word chain)
+    const bool pass_E = [&]() -> bool {
+        std::cout << "  E(stage-2 multi-word settle refresh):\n";
+        ALEStateMachine sm;
+        sm.set_self_address("SAM");
+        ChannelTracker tracker;
+        sm.set_channel_callback([&tracker](const Channel& ch) { tracker.record(ch); });
+
+        ScanConfig cfg;
+        cfg.scan_list.push_back(Channel(7100000,  "USB"));
+        cfg.scan_list.push_back(Channel(14100000, "USB"));
+        cfg.dwell_time_ms = DWELL_MS;
+        sm.configure_scan(cfg);
+        sm.process_event(ALEEvent::START_SCAN);
+        tracker.clear();
+
+        // t=100: first valid word → settle = 100
+        sm.update(100);
+        sm.process_received_word(make_word(PreambleType::TIS, "SND"));
+
+        // Tdrw-1 ms after first word — still in window
+        sm.update(100 + TDRW - 1);
+        const bool no_hop_1 = (tracker.count() == 0);
+        std::cout << "    no hop Tdrw-1 after word 1: " << (no_hop_1 ? "PASS" : "FAIL") << "\n";
+
+        // Second word refreshes settle timer
+        sm.process_received_word(make_word(PreambleType::TIS, "SND"));
+
+        // Tdrw-1 ms after second word — still in new window
+        sm.update(100 + TDRW - 1 + TDRW - 1);
+        const bool no_hop_2 = (tracker.count() == 0);
+        std::cout << "    no hop Tdrw-1 after word 2: " << (no_hop_2 ? "PASS" : "FAIL") << "\n";
+
+        // Tdrw after second word — hop fires
+        sm.update(100 + TDRW - 1 + TDRW);
+        const bool hopped = (tracker.count() == 1);
+        std::cout << "    hop Tdrw after word 2: " << (hopped ? "PASS" : "FAIL") << "\n";
+
+        return no_hop_1 && no_hop_2 && hopped;
+    }();
+
+    return pass_A && pass_B && pass_C && pass_D && pass_E;
 }
 
 // ============================================================================

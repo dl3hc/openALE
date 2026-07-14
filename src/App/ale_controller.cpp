@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <numeric>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -373,6 +374,7 @@ void ALEController::notify_channel_changed_(const Channel& ch)
         occupancy_.reset();
         last_lbt_rx_hz_ = ch.rx_frequency_hz;
     }
+    demodulator_.mark_channel_hop();  // §A.5.3.3 stage-1: arm new-channel guard
     dispatch(pal::EventType::CHANNEL_CHANGED, ch.id, 0, &ch, sizeof(ch));
 }
 
@@ -502,6 +504,13 @@ void ALEController::wire_callbacks()
     // the bridge can push an `idle_warning` event to the GUI popup.
     sm_.set_idle_warning_callback([this](uint32_t remaining_sec) {
         dispatch(pal::EventType::ALE_IDLE_WARNING, "", static_cast<int32_t>(remaining_sec));
+    });
+
+    // §A.5.3.3 stage 1: ALE energy on the current channel → open TRAFFIC_PAUSE
+    // before a fully-decoded word arrives.  Completely separate from LBT — this is
+    // the RX-scan detection path; lbt_channel_busy_() / set_channel_busy_query() are untouched.
+    demodulator_.set_ale_energy_callback([this]() {
+        sm_.begin_scan_traffic_pause(now_ms_);
     });
 
     // Channel hops (scan / calling) → radio frequency/mode change
@@ -753,6 +762,7 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     set_sounding_use_twas(cfg.sounding_use_twas);
     set_sounding_warning_lead_sec(cfg.sounding_warning_lead_sec);
     set_link_idle_timeout_sec(cfg.link_idle_timeout_sec);
+    set_test_channel_link_hold_time(cfg.test_channel_link_hold_time);
     set_max_tune_time_ms(cfg.max_tune_time_ms);
     set_ptt_lead_ms(cfg.ptt_lead_ms);
     set_ptt_tail_ms(cfg.ptt_tail_ms);
@@ -857,6 +867,9 @@ bool ALEController::send_sounding()
     // (unknown channel → shared → >= 2 s, spec-safe).
     const Channel* cc = find_channel_by_freq(get_current_frequency());
     apply_lbt_policy_(cc ? std::vector<Channel>{ *cc } : std::vector<Channel>{});
+    // Re-arm LBT (see initiate_call): drop a stale busy latch from the last
+    // 400 ms of dwelling so SoundingPhase::LBT measures fresh; keep the floor.
+    occupancy_.clear_busy_latch();
     if (!sm_.send_sounding()) {
         emit_status("Manual sounding rejected — only available while IDLE or scanning");
         return false;
@@ -868,6 +881,9 @@ bool ALEController::send_sounding()
 bool ALEController::send_sounding_sweep(const std::vector<Channel>& channels)
 {
     apply_lbt_policy_(channels);   // A.5.4.7.1: short Twt only if ALL are ale_only
+    // Re-arm LBT (see initiate_call): drop a stale busy latch before the sweep's
+    // LBT window; keep the tracked floor so a real signal re-latches in Twt.
+    occupancy_.clear_busy_latch();
     if (!sm_.send_sounding_sweep(channels)) {
         emit_status("Sounding sweep rejected — only available while IDLE or scanning");
         return false;
@@ -976,6 +992,13 @@ bool ALEController::initiate_call(const std::string& target_addr)
     // this call is marked ALE-only; any shared channel → >= 2 s pause.
     apply_lbt_policy_(callable);
 
+    // Re-arm the LBT decision: drop a busy latch left over from the last ~400 ms
+    // of idle dwelling so the SM's LBT window measures fresh (a transient hot
+    // block before PTT must not abort the call on tick 0).  The tracked noise
+    // floor is kept — a genuinely busy channel re-latches within Twt.  See
+    // ChannelOccupancyDetector::clear_busy_latch().
+    occupancy_.clear_busy_latch();
+
     emit_status("Initiating call to " + target_addr);
     if (sm_.initiate_call(target_addr)) {
         dispatch(pal::EventType::ALE_CALL_SENT, target_addr);
@@ -1006,6 +1029,10 @@ bool ALEController::initiate_single_channel_call(const std::string& target_addr)
     // for the A.5.4.7.1 ale_only policy (unresolved → shared → >= 2 s LBT).
     const Channel* cfg_ch = find_channel_by_freq(cur.rx_frequency_hz);
     apply_lbt_policy_(cfg_ch ? std::vector<Channel>{ *cfg_ch } : std::vector<Channel>{});
+    // Re-arm LBT (see initiate_call): drop a stale busy latch before the SM's
+    // LBT window, keep the floor.  Also covers the operator-override path that
+    // tick_test_channel() does NOT pre-clear via set_vfo_channel().
+    occupancy_.clear_busy_latch();
     uint32_t C = config_.assumed_scan_channels;
     if (const Contact* ct = contact_store_.find(target_addr))
         for (const auto& nm : ct->net_members)
@@ -1065,6 +1092,9 @@ bool ALEController::initiate_group_call(const std::vector<std::string>& members)
     }
 
     emit_status("Initiating group call (" + std::to_string(members.size()) + " members)");
+    // Re-arm LBT (see initiate_call): drop a stale busy latch before the SM's
+    // LBT window; keep the tracked floor so a real signal re-latches in Twt.
+    occupancy_.clear_busy_latch();
     return sm_.initiate_group_call(members);
 }
 
@@ -1236,6 +1266,7 @@ void ALEController::update(uint32_t now_ms)
     tick_frame_settle(now_ms);
     tick_relink(now_ms);
     tick_sounding_sweep(now_ms);
+    tick_test_channel(now_ms);
     tick_offline_completion();
     tick_lqa_update(now_ms);
     tick_mode_verify(now_ms);
@@ -1394,13 +1425,19 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
     // Fire when due — from IDLE or SCANNING.
     if (remaining_ms <= 0 && (st == ALEState::IDLE || st == ALEState::SCANNING)) {
         auto channels = resolve_net_sounding_channels(auto_sounding_net_);
-        if (!channels.empty()) {
-            sm_.send_sounding_sweep(channels);
+        const bool started = !channels.empty() && sm_.send_sounding_sweep(channels);
+        if (started) {
             emit_status("Auto-sounding sweep on net '" + auto_sounding_net_
                         + "' (" + std::to_string(channels.size()) + " channels)");
+            // Defer the timer re-arm to cycle END (on_sm_state_change leaving
+            // SOUNDING) so the next interval is the gap AFTER the sounding cycle,
+            // not after it started.  Do NOT stamp auto_sounding_last_ms_ here.
+            sounding_cycle_active_ = true;
+        } else {
+            // No soundable channels / sweep rejected — re-arm now to avoid
+            // busy-looping on an empty net (no SOUNDING cycle will ever complete).
+            auto_sounding_last_ms_ = now_ms_;
         }
-        // Re-arm whether or not channels resolved (avoid busy-looping on empty net).
-        auto_sounding_last_ms_ = now_ms_;
         sounding_warning_sent_ = false;
         if (sounding_warning_active_) {
             sounding_warning_active_ = false;
@@ -1412,6 +1449,294 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
     // When remaining_ms <= 0 but SM is CALLING/HANDSHAKE/LINKED, leave
     // auto_sounding_last_ms_ unchanged so the sweep fires the moment the SM
     // returns to IDLE/SCANNING.
+}
+
+// ── Test-Channel sweep (active per-peer LQA collection) ──────────────────────
+// Per-channel no-reply backstop. The SM's own calling timeout
+// (compute_calling_timeout_ms) normally aborts a no-reply call first; this is a
+// safety net for a stuck SM.
+static constexpr uint32_t TEST_CHANNEL_LINK_TIMEOUT_MS = 30000;
+
+std::vector<Channel> ALEController::resolve_net_call_channels(const std::string& net_name) const
+{
+    std::vector<Channel> out;
+    // Callable = enabled && may call (not inhibit_calling) && may TX (not rx_only).
+    // A test channel must be able to place a call, so sounding-only filters do not apply.
+    auto collect_net = [&](const Net& net) {
+        for (const auto& ch_id : net.channel_ids)
+            for (const auto& ch : calling_channels_)
+                if (ch.id == ch_id && ch.enabled && !ch.inhibit_calling && !ch.rx_only) {
+                    out.push_back(ch);
+                    break;
+                }
+    };
+
+    if (!net_name.empty()) {
+        if (const Net* net = net_store_.find(net_name)) { collect_net(*net); return out; }
+        // named net not found → fall through to active net / all
+    }
+    if (!active_scan_net_.empty()) {
+        if (const Net* net = net_store_.find(active_scan_net_)) { collect_net(*net); return out; }
+    }
+    for (const auto& ch : calling_channels_)
+        if (ch.enabled && !ch.inhibit_calling && !ch.rx_only) out.push_back(ch);
+    return out;
+}
+
+bool ALEController::start_test_channel(const std::string& target, const std::string& net)
+{
+    if (test_active_) {
+        emit_status("Test-Channel already in progress — stop it first (CMD:TEST_CHANNEL_STOP)");
+        return false;
+    }
+    if (!is_valid_ale_address(target)) {
+        emit_status("ERROR: test-channel target '" + target
+                    + "' invalid — must be 3–15 Basic-38 characters");
+        return false;
+    }
+    const ALEState st = sm_.get_state();
+    if (st != ALEState::IDLE && st != ALEState::SCANNING) {
+        emit_status("Test-Channel rejected — only available while IDLE or scanning");
+        return false;
+    }
+    auto chans = resolve_net_call_channels(net);
+    if (chans.empty()) {
+        emit_status("Test-Channel rejected — no callable channels for net '"
+                    + (net.empty() ? active_scan_net_ : net) + "'");
+        return false;
+    }
+
+    test_target_    = target;
+    test_net_       = net;
+    test_channels_  = std::move(chans);
+    test_idx_       = 0;
+    test_results_.assign(test_channels_.size(), TestResult{});
+    test_summary_.clear();
+    test_was_scanning_ = (st == ALEState::SCANNING);
+    // Remember the channel the radio was on at start so DONE/STOP can return to
+    // it — without this the radio ends up on the last tested channel.
+    {   const Channel orig = get_current_channel();
+        test_orig_freq_hz_ = orig.rx_frequency_hz;
+        test_orig_mode_    = orig.rx_mode;
+    }
+    test_active_ = true;
+    test_phase_  = TestPhase::TUNE;
+    test_phase_start_ms_ = now_ms_;
+
+    emit_status("Test-Channel sweep to " + target + " over "
+                + std::to_string(test_channels_.size()) + " channel(s)");
+    emit_test_event_("start", nullptr, -1, false);
+    return true;
+}
+
+void ALEController::stop_test_channel()
+{
+    if (!test_active_) return;
+    // Abort any in-flight call/handshake/link so the SM returns to a quiescent state.
+    const ALEState st = sm_.get_state();
+    if (st == ALEState::CALLING || st == ALEState::HANDSHAKE || st == ALEState::LINKED)
+        sm_.emergency_manual_control();
+    test_active_ = false;
+    test_phase_  = TestPhase::INACTIVE;
+    // Return the radio to the channel it was on when the sweep started, then
+    // resume scanning if that was the pre-sweep state.
+    restore_test_channel_();
+    if (test_was_scanning_) sm_.process_event(ALEEvent::START_SCAN);
+    emit_status("Test-Channel sweep stopped");
+    emit_test_event_("stop", nullptr, -1, false);
+}
+
+void ALEController::emit_test_event_(const char* phase, const Channel* ch,
+                                     int score, bool linked)
+{
+    ale::TestChannelData d{};
+    d.peer       = test_target_.c_str();
+    d.phase      = phase;
+    d.channel_id = ch ? ch->id.c_str() : "";
+    d.freq_hz    = ch ? ch->rx_frequency_hz : 0u;
+    d.index      = ch ? static_cast<uint32_t>(test_idx_ + 1) : 0u;
+    d.total      = static_cast<uint32_t>(test_channels_.size());
+    d.score      = score;
+    d.linked     = linked;
+    d.summary    = (std::string(phase) == "done") ? test_summary_.c_str() : "";
+    dispatch(pal::EventType::ALE_TEST_CHANNEL, "", 0, &d, sizeof(d));
+}
+
+void ALEController::tick_test_channel(uint32_t now_ms)
+{
+    if (!test_active_) return;
+    const ALEState st = sm_.get_state();
+
+    switch (test_phase_) {
+    case TestPhase::TUNE: {
+        // Only place a call from a quiescent SM (IDLE/SCANNING). Right after start
+        // or a terminate this holds; if not, retry next tick.
+        if (st != ALEState::IDLE && st != ALEState::SCANNING) return;
+        if (test_idx_ >= test_channels_.size()) { test_phase_ = TestPhase::DONE; return; }
+        const Channel& ch = test_channels_[test_idx_];
+        // Defensive: resolve_net_call_channels() already filtered these, but a live
+        // config change between start and now could have flipped a flag.
+        if (ch.inhibit_calling || ch.rx_only) {
+            test_results_[test_idx_] = { ch.rx_frequency_hz, ch.id, false, -1 };
+            emit_status("Test-Channel: skip " + ch.id + " (not callable)");
+            emit_test_event_("failed", &ch, -1, false);
+            test_phase_ = TestPhase::NEXT;
+            return;
+        }
+        emit_status("Test-Channel: tuning " + ch.id + " ("
+                    + std::to_string(ch.rx_frequency_hz) + " Hz) — calling " + test_target_);
+        set_vfo_channel(ch.rx_frequency_hz, ch.rx_mode);
+        // initiate_single_channel_call() reads the now-tuned channel and auto-queues
+        // the bilateral LQA CMD 'a' when lqa_exchange_enabled && !reporting_inhibited.
+        if (!initiate_single_channel_call(test_target_)) {
+            test_results_[test_idx_] = { ch.rx_frequency_hz, ch.id, false, -1 };
+            emit_test_event_("failed", &ch, -1, false);
+            test_phase_ = TestPhase::NEXT;
+            return;
+        }
+        emit_test_event_("tune", &ch, -1, false);
+        test_phase_ = TestPhase::CALLING;
+        test_phase_start_ms_   = now_ms;
+        test_link_deadline_ms_ = now_ms + TEST_CHANNEL_LINK_TIMEOUT_MS;
+        return;
+    }
+    case TestPhase::CALLING: {
+        if (st == ALEState::LINKED) {
+            // Link up — bilateral/FROM metrics are written by on_operator_event.
+            const Channel& ch = test_channels_[test_idx_];
+            test_results_[test_idx_] = { ch.rx_frequency_hz, ch.id, true, -1 };
+            emit_status("Test-Channel: linked on " + ch.id);
+            emit_test_event_("linked", &ch, -1, true);
+            test_phase_ = TestPhase::LINKED_SETTLE;
+            test_phase_start_ms_ = now_ms;
+            return;
+        }
+        // SM returned to quiescent without linking → no reply / rejected.
+        if (st == ALEState::IDLE || st == ALEState::SCANNING) {
+            const Channel& ch = test_channels_[test_idx_];
+            test_results_[test_idx_] = { ch.rx_frequency_hz, ch.id, false, -1 };
+            emit_status("Test-Channel: no link on " + ch.id);
+            emit_test_event_("failed", &ch, -1, false);
+            test_phase_ = TestPhase::NEXT;
+            return;
+        }
+        // Backstop: a stuck SM. Force-abort and move on.
+        if (now_ms >= test_link_deadline_ms_) {
+            const Channel& ch = test_channels_[test_idx_];
+            emit_status("Test-Channel: timeout on " + ch.id);
+            sm_.emergency_manual_control();
+            test_results_[test_idx_] = { ch.rx_frequency_hz, ch.id, false, -1 };
+            emit_test_event_("failed", &ch, -1, false);
+            test_phase_ = TestPhase::NEXT;
+            return;
+        }
+        return;
+    }
+    case TestPhase::LINKED_SETTLE: {
+        const Channel& ch = test_channels_[test_idx_];
+        // If the link dropped early, record what we have and advance.
+        if (st != ALEState::LINKED) {
+            snapshot_test_score_(ch);
+            test_phase_ = TestPhase::NEXT;
+            return;
+        }
+        // Hold for the configured dwell (floor: Tdrw = 784 ms so bilateral LQA
+        // metrics always have time to commit via tick_frame_settle before snapshot).
+        const uint32_t dwell_ms = std::max(
+            ALETimingConstants::Tdrw_ms,
+            config_.test_channel_link_hold_time * 1000u
+        );
+        if (now_ms - test_phase_start_ms_ < dwell_ms) return;
+        snapshot_test_score_(ch);
+        terminate_link();
+        emit_test_event_("terminate", &ch, test_results_[test_idx_].score, true);
+        test_phase_ = TestPhase::TERMINATING;
+        test_phase_start_ms_ = now_ms;
+        return;
+    }
+    case TestPhase::TERMINATING: {
+        // TWAS frame drains → SM leaves LINKED (on_sm_state_change fires
+        // ALE_LINK_TERMINATED). Once it does, stamp start_ms so NEXT can gate
+        // on Tdrw: the peer needs up to one Tdrw after the last TWAS word to
+        // detect termination and return to SCANNING. Without the gap the next
+        // channel's scanning call starts before the peer is ready to receive it.
+        if (st != ALEState::LINKED) {
+            test_phase_start_ms_ = now_ms;
+            test_phase_ = TestPhase::NEXT;
+            return;
+        }
+        if (now_ms - test_phase_start_ms_ > TEST_CHANNEL_LINK_TIMEOUT_MS) {
+            sm_.emergency_manual_control();
+            test_phase_start_ms_ = now_ms;
+            test_phase_ = TestPhase::NEXT;
+            return;
+        }
+        return;
+    }
+    case TestPhase::NEXT: {
+        if (st != ALEState::IDLE && st != ALEState::SCANNING) return;
+        // Inter-channel settle: give the peer Tdrw to detect our TWAS and
+        // return to scanning before we place the next call. test_phase_start_ms_
+        // is stamped by TERMINATING on exit; for failure paths (CALLING→NEXT,
+        // TUNE→NEXT) the elapsed time already exceeds Tdrw so there is no delay.
+        if (now_ms - test_phase_start_ms_ < ALETimingConstants::Tdrw_ms) return;
+        ++test_idx_;
+        if (test_idx_ >= test_channels_.size()) { test_phase_ = TestPhase::DONE; return; }
+        test_phase_ = TestPhase::TUNE;
+        return;
+    }
+    case TestPhase::DONE: {
+        // Build a ranked summary: linked channels by score desc, then failed.
+        std::vector<size_t> order(test_results_.size());
+        std::iota(order.begin(), order.end(), size_t{0});
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            const bool la = test_results_[a].linked, lb = test_results_[b].linked;
+            if (la != lb) return la;                 // linked before failed
+            if (la) return test_results_[a].score > test_results_[b].score;
+            return false;                            // failed: keep input order
+        });
+        std::string s = "Test-Channel results for " + test_target_ + ":\n";
+        s += "  channel      freq_hz    linked  score\n";
+        for (size_t i : order) {
+            const auto& r = test_results_[i];
+            char line[112];
+            std::snprintf(line, sizeof(line), "  %-12s %-11u %-7s %d\n",
+                          r.id.c_str(), r.freq_hz, r.linked ? "yes" : "no", r.score);
+            s += line;
+        }
+        test_summary_ = std::move(s);
+
+        emit_status("Test-Channel sweep complete — " + test_target_);
+        emit_test_event_("done", nullptr, -1, false);
+
+        test_active_ = false;
+        test_phase_  = TestPhase::INACTIVE;
+        // Return the radio to the channel it was on when the sweep started, then
+        // resume scanning if that was the pre-sweep state.
+        restore_test_channel_();
+        if (test_was_scanning_) sm_.process_event(ALEEvent::START_SCAN);
+        return;
+    }
+    case TestPhase::INACTIVE: return;
+    }
+}
+
+void ALEController::snapshot_test_score_(const Channel& ch)
+{
+    test_results_[test_idx_].freq_hz = ch.rx_frequency_hz;
+    test_results_[test_idx_].id     = ch.id;
+    if (auto e = lqa_database_.get_entry(ch.rx_frequency_hz, test_target_))
+        test_results_[test_idx_].score = static_cast<int>(e->score + 0.5f);
+    else
+        test_results_[test_idx_].score = -1;
+}
+
+void ALEController::restore_test_channel_()
+{
+    if (test_orig_freq_hz_ == 0) return;
+    const Channel* cfg = find_channel_by_freq(test_orig_freq_hz_);
+    const std::string& mode = cfg ? cfg->rx_mode : test_orig_mode_;
+    set_vfo_channel(test_orig_freq_hz_, mode);
 }
 
 void ALEController::tick_offline_completion()
@@ -1733,6 +2058,20 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
                 }
             }
         }
+    }
+
+    // Auto-sounding timer re-arm at cycle END.  The SM stays in SOUNDING between
+    // sweep channels (it re-arms LBT directly, no transition_to) and only leaves
+    // SOUNDING once — at sweep exhaustion (→ IDLE/SCANNING) or on CALL_DETECTED/
+    // ERROR — so this fires exactly once per auto-sounding cycle.  Stamping here
+    // (not at fire time in tick_sounding_sweep) makes the configured interval the
+    // gap AFTER the cycle, matching the spec's "reset to sound-interval when a
+    // sound is sent" read as when the sound completes.
+    if (from == ALEState::SOUNDING && to != ALEState::SOUNDING
+        && sounding_cycle_active_) {
+        auto_sounding_last_ms_  = now_ms_;
+        sounding_cycle_active_  = false;
+        sounding_warning_sent_  = false;
     }
 
     // Link exited (except via HANDSHAKE_COMPLETE → LINKED)
@@ -3487,6 +3826,30 @@ std::string ALEController::process_command(const std::string& raw)
                    + ALEStateMachine::state_name(state());
         return "OK: single-channel call to " + target;
     }
+    if (cmd.rfind("CMD:TEST_CHANNEL", 0) == 0) {
+        // CMD:TEST_CHANNEL_STOP has no args; CMD:TEST_CHANNEL takes <ADDR> [net].
+        if (cmd == "CMD:TEST_CHANNEL_STOP") {
+            if (!test_channel_active())
+                return "ERROR: no test-channel sweep in progress";
+            stop_test_channel();
+            return "OK: test-channel stopped";
+        }
+        if (cmd.size() > 16 && cmd[16] == ' ') {
+            std::istringstream iss(cmd.substr(17));
+            std::string target, net;
+            iss >> target;
+            std::getline(iss, net);
+            net = cmd_trim(net);
+            if (target.empty())
+                return "ERROR: CMD:TEST_CHANNEL <ADDR> [net]";
+            if (!start_test_channel(target, net))
+                return std::string("ERROR: cannot start test-channel in state ")
+                       + ALEStateMachine::state_name(state());
+            return "OK: testing " + target + " over "
+                   + std::to_string(test_channels_.size()) + " channel(s)";
+        }
+        return "ERROR: CMD:TEST_CHANNEL <ADDR> [net]  |  CMD:TEST_CHANNEL_STOP";
+    }
     if (cmd.rfind("CMD:GROUP_CALL ", 0) == 0) {
         const std::string roster = cmd_trim(cmd.substr(15));
         if (roster.empty())
@@ -3606,6 +3969,8 @@ std::string ALEController::process_command(const std::string& raw)
             "  -- Call/link control --\n"
             "  CMD:CALL <ADDR>                          initiate individual call\n"
             "  CMD:SINGLE_CALL <ADDR>                   force single-channel call (no scanning)\n"
+            "  CMD:TEST_CHANNEL <ADDR> [net]             actively test all channels to a peer (LQA sweep)\n"
+            "  CMD:TEST_CHANNEL_STOP                    abort an in-progress test-channel sweep\n"
             "  CMD:GROUP_CALL <ROSTER>                  call all members of named roster\n"
             "  CMD:AMD <ADDR> <text>                    send AMD orderwire (to peer if LINKED)\n"
             "  CMD:TERMINATE                            terminate current link\n"
