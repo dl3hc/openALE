@@ -26,7 +26,7 @@ static RadioMode      from_hamlib_mode(rmode_t m);
 // Maps the GUI log-level integer (0=Off 1=Error 2=Info 3=Debug 4=Trace) to the
 // PAL logger level and forwards it.  Info shows channel/freq transitions +
 // assert_mode readback detail; Debug adds sync detail.
-void pal::hamlib_set_log_level(int level) {
+void hamlib_set_log_level(int level) {
     auto* logger = pal::get_logger();
     if (!logger) return;
     static const pal::LogLevel kMap[] = {

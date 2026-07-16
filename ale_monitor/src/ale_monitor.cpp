@@ -29,6 +29,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>   // readlink — exe_dir() via /proc/self/exe
 #endif
 
 #include <algorithm>
@@ -72,7 +74,19 @@ static std::string exe_dir() {
     return slash == std::string::npos ? "" : s.substr(0, slash);
 }
 #else
-static std::string exe_dir() { return ""; }
+// Linux: resolve the running executable's directory from /proc/self/exe so the
+// GUI web-root walk works regardless of CWD (launched from build/ or installed).
+// macOS would use _NSGetExecutablePath / dladdr; this branch is Linux-only.
+static std::string exe_dir() {
+    char buf[4096];
+    const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return "";
+    buf[n] = '\0';
+    std::string s(buf);
+    for (char& c : s) if (c == '\\') c = '/';
+    const size_t slash = s.find_last_of('/');
+    return slash == std::string::npos ? "" : s.substr(0, slash);
+}
 #endif
 
 // Resolve a repo-relative FILE path (e.g. "nets/USA.ale", "ale_monitor.conf")

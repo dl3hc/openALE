@@ -288,7 +288,7 @@ uint8_t Demodulator::symbol_from_block(const int16_t* block, float& sinad_db_out
     constexpr float kEps = 1e-3f;
     const float nd     = std::max(total_avg - s_avg, kEps);
     const float ratio  = (total_avg > 0.0f) ? (total_avg / nd) : 0.0f;
-    sinad_db_out = (ratio > 1.0f) ? 10.0f * std::log10f(ratio) : 0.0f;
+    sinad_db_out = (ratio > 1.0f) ? 10.0f * std::log10(ratio) : 0.0f;
     if (sinad_db_out > 30.0f) sinad_db_out = 30.0f;
     if (sinad_db_out < 0.0f)  sinad_db_out = 0.0f;
     return FREQ_TO_SYMBOL[rank];
