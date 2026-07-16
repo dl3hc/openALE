@@ -90,7 +90,9 @@ struct MockState {
     double             freq_hz = 14000000.0;
     std::string        mode    = "USB";
     int                bw      = 2400;
-    std::atomic<int>   f_delay_ms{0};        // injected settle latency on F (tune)
+    std::atomic<int>   f_delay_ms{0};        // injected round-trip latency on F (tune)
+    std::atomic<int>   m_delay_ms{0};        // injected round-trip latency on M (mode) — models 2nd RT
+    std::atomic<int>   mode_sets{0};         // count of M (set_mode) commands
     std::vector<uint32_t> f_times;           // elapsed-ms of each F (freq set) = hop issue times
 };
 MockState         g_state;
@@ -154,8 +156,13 @@ std::string handle_line(const std::string& raw) {
     if (cmd.size() >= 2 && cmd[0] == 'M' && cmd[1] == ' ') {
         const std::string args = trim(cmd.substr(2));
         const auto sp = args.find(' ');
-        std::lock_guard<std::mutex> lk(g_state.mtx);
-        g_state.mode = (sp == std::string::npos) ? args : args.substr(0, sp);
+        {
+            std::lock_guard<std::mutex> lk(g_state.mtx);
+            g_state.mode = (sp == std::string::npos) ? args : args.substr(0, sp);
+        }
+        ++g_state.mode_sets;
+        const int d = g_state.m_delay_ms.load();   // model the 2nd CAT round-trip
+        if (d > 0) std::this_thread::sleep_for(milliseconds(d));
         return "RPRT 0\n";
     }
     return "RPRT 0\n";
@@ -239,6 +246,8 @@ static void test_dwell_met(int port, uint32_t dwell_ms, uint32_t settle_ms)
     std::printf("\n[dwell] dwell=%ums, injected settle=%ums — settled window must == dwell\n",
                 dwell_ms, settle_ms);
     g_state.f_delay_ms.store(static_cast<int>(settle_ms));
+    g_state.m_delay_ms.store(static_cast<int>(settle_ms));   // M is a 2nd round-trip when sent
+    g_state.mode_sets.store(0);
     { std::lock_guard<std::mutex> lk(g_state.mtx); g_state.f_times.clear(); }
 
     ALEController ctrl;
@@ -279,6 +288,12 @@ static void test_dwell_met(int port, uint32_t dwell_ms, uint32_t settle_ms)
     // The tolerance is tight enough that the pre-fix collapse fails this assertion.
     const double tol = 0.15 * dwell_ms + 25.0;
     check(std::fabs(avg_settled - dwell_ms) <= tol, "settled window ≈ configured dwell");
+
+    // 2R→1R: all scan channels share a mode, so mode is forced only on the first hop;
+    // every steady-state hop must be freq-only (F every hop, M ~once).
+    const int m = g_state.mode_sets.load();
+    std::printf("  mode_sets over the whole scan = %d (want ≤ 2; steady-state hops are freq-only)\n", m);
+    check(m <= 2, "same-mode scan hops are freq-only (1 CAT round-trip/hop)");
 
     radio.stop(); radio.shutdown();
 }

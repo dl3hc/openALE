@@ -350,9 +350,16 @@ bool HamlibRadio::impl_set_channel(const Channel& ch) {
     // sleeps here, no readback on the hop path. Both mechanisms only work
     // because start() neutralized hamlib's get_lock_mode probe: otherwise the
     // mode command may be silently elided inside rig_set_mode() (see start()).
-    // Mode is sent on EVERY hop (no mode_changed guard): the rig may have been
-    // retuned externally between sync_from_radio() polls. VFO = RIG_VFO_CURR;
-    // passband = RIG_PASSBAND_NORMAL.
+    // Mode is sent only when it CHANGES (or on the first hop). Over netrigctl each
+    // rig_set_mode is a full TCP round-trip; forcing it every hop made a same-mode scan
+    // 2 round-trips/hop (~2R), which with the settle-anchored dwell doubled the per-channel
+    // period. A same-mode hop is now freq-only (1R). Correctness of the skip: if the rig
+    // drifts off the intended mode (Quisk's ASYNC per-band restore — which the per-hop force
+    // could never catch anyway since it lands after this returns — or an external operator
+    // change), the background verify (ALEController::tick_mode_verify -> sync_from_radio,
+    // ~400 ms while SCANNING) reads the live mode and re-asserts. We still refresh
+    // last_mode_cmd_ on the skip so that verify's 5 s re-assert window stays armed through a
+    // long same-mode scan. VFO = RIG_VFO_CURR; passband = RIG_PASSBAND_NORMAL.
     int freq_ret = RIG_OK;
     if (freq_changed) {
         freq_ret = rig_set_freq(rig_, RIG_VFO_CURR,
@@ -365,7 +372,12 @@ bool HamlibRadio::impl_set_channel(const Channel& ch) {
                           ch.tx_frequency);
     }
 
-    const int mode_ret = assert_mode(ch.tx_mode);
+    int mode_ret = RIG_OK;
+    if (!mode_ever_sent_ || ch.tx_mode != last_sent_mode_) {
+        mode_ret = assert_mode(ch.tx_mode);            // first hop or mode change → force it (2R)
+    } else {
+        last_mode_cmd_ = std::chrono::steady_clock::now();  // same mode → skip CAT (1R), keep
+    }                                                       // the reassert window armed
 
     // Always track the intended state regardless of return codes. Over TCP,
     // hamlib can report failure even when rigctld applied the command (e.g. a
@@ -532,7 +544,9 @@ int HamlibRadio::assert_mode(RadioMode mode) {
     const rmode_t target = to_hamlib_mode(mode);
     const char* mname = rig_strrmode(target);
 
-    last_mode_cmd_ = std::chrono::steady_clock::now();
+    last_mode_cmd_  = std::chrono::steady_clock::now();
+    last_sent_mode_ = mode;   // track the mode on the wire so set_channel can skip unchanged hops
+    mode_ever_sent_ = true;
 
     const int mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
     if (mode_ret != RIG_OK)

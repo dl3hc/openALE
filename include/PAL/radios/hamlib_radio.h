@@ -182,6 +182,11 @@ private:
     // gelesen und geschrieben; kein Mutex erforderlich.
     std::chrono::steady_clock::time_point last_mode_cmd_{};
     Channel current_channel_;  ///< zuletzt tatsächlich gesendeter Kanal (Worker-Zustand)
+    // §A.5.3.3 scan-hop latency: mode last actually sent to the rig. impl_set_channel
+    // skips rig_set_mode when the channel mode is unchanged (1 CAT round-trip/hop instead
+    // of 2 over netrigctl); drift is still corrected by the background sync_from_radio verify.
+    RadioMode last_sent_mode_{};
+    bool      mode_ever_sent_ = false;
 
     // ── Async Worker ──────────────────────────────────────────────────────────
     std::thread              worker_;
