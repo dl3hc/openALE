@@ -23,12 +23,6 @@ namespace pal {
 static rmode_t        to_hamlib_mode(RadioMode mode);
 static RadioMode      from_hamlib_mode(rmode_t m);
 
-// assert_mode() re-sends the mode at most this many times when the live readback
-// still disagrees. BandFromFreq-style band-memory restores fire once per frequency
-// change, so one or two passes converge; the cap only guards a persistently
-// rejecting backend from spinning forever.
-static constexpr int MODE_ASSERT_MAX_ATTEMPTS = 3;
-
 // Maps the GUI log-level integer (0=Off 1=Error 2=Info 3=Debug 4=Trace) to the
 // PAL logger level and forwards it.  Info shows channel/freq transitions +
 // assert_mode readback detail; Debug adds sync detail.
@@ -70,7 +64,7 @@ HamlibRadio::~HamlibRadio() {
 }
 
 bool HamlibRadio::initialize() {
-    if (ready_) return true;
+    if (ready_.load()) return true;
 
     rig_set_debug(RIG_DEBUG_ERR);
 
@@ -94,15 +88,31 @@ bool HamlibRadio::initialize() {
     return true;
 }
 
+void HamlibRadio::stop_worker_() {
+    if (!worker_running_.exchange(false)) return;  // already stopped
+    queue_cv_.notify_all();
+    if (worker_.joinable()) worker_.join();
+    // Drain any commands that remain in the queue after the worker exited.
+    // Complete pending CmdFlush promises so callers of flush() don't block forever.
+    std::lock_guard<std::mutex> lk(queue_mtx_);
+    while (!cmd_queue_.empty()) {
+        auto& cmd = cmd_queue_.front();
+        if (std::holds_alternative<CmdFlush>(cmd))
+            std::get<CmdFlush>(cmd).done->set_value();
+        cmd_queue_.pop();
+    }
+}
+
 void HamlibRadio::shutdown() {
+    stop_worker_();  // safety net if stop() was not called first
     pal::log_info("HamlibRadio", "shutdown: model=%s port=%s", model_.c_str(), port_.c_str());
     if (rig_) {
-        if (ready_) rig_close(rig_);  // only send "q" when rig_open() succeeded
+        if (ready_.load()) rig_close(rig_);  // only send "q" when rig_open() succeeded
         rig_cleanup(rig_);
         rig_ = nullptr;
     }
-    transmitting_ = false;
-    ready_ = false;
+    transmitting_.store(false);
+    ready_.store(false);
 }
 
 bool HamlibRadio::start() {
@@ -123,10 +133,13 @@ bool HamlibRadio::start() {
     // TTL (no override needed — cache churn on serial CAT is undesirable).
     if (!is_serial_port()) {
         rig_set_cache_timeout_ms(rig_, HAMLIB_CACHE_ALL, 500);
-        // Mode reads must be LIVE (no cache). assert_mode() sets the mode, then
-        // reads it straight back to verify the rig actually applied it — an SDR
-        // front-end (Quisk) may override the mode on a band change. A cached read
-        // would just echo the value we set and defeat the verification.
+        // Mode reads must be LIVE (no cache). The deferred background verify
+        // (sync_from_radio) reads the mode back to detect an SDR front-end's
+        // (Quisk's) asynchronous band-memory restore and re-assert openALE's
+        // intended mode. A cached read would just echo the value we set and
+        // defeat that detection. (assert_mode() itself no longer reads back —
+        // it is a single force — but sync_from_radio does, so the live TTL still
+        // matters.)
         rig_set_cache_timeout_ms(rig_, HAMLIB_CACHE_MODE, 0);
 
         // hamlib's rig_set_mode() begins with an UNINITIALIZED `int locked_mode`,
@@ -153,178 +166,103 @@ bool HamlibRadio::start() {
                 std::chrono::milliseconds(policy_.stabilization_ms));
     }
 
-    ready_ = true;
-    pal::log_info("HamlibRadio", "model=%s port=%s opened", model_.c_str(), port_.c_str());
+    // Initialise both caches to an empty channel before the worker starts,
+    // so get_channel() never returns stale data from a previous connection.
+    current_channel_ = Channel{};
+    {
+        std::lock_guard<std::mutex> lk(channel_mtx_);
+        cached_channel_ = Channel{};
+    }
+    tunes_in_flight_.store(0);  // no tune outstanding on a fresh connection
+
+    ready_.store(true);
+    worker_running_.store(true);
+    worker_ = std::thread(&HamlibRadio::worker_main, this);
+
+    pal::log_info("HamlibRadio", "model=%s port=%s opened; async I/O worker started",
+                  model_.c_str(), port_.c_str());
     return true;
 }
 
 void HamlibRadio::stop() {
+    // Worker must be joined before rig_close() — the worker may be mid-call.
+    stop_worker_();
     pal::log_info("HamlibRadio", "model=%s port=%s closed", model_.c_str(), port_.c_str());
-    if (rig_ && ready_) rig_close(rig_);  // only send "q" when rig_open() succeeded
-    transmitting_ = false;
-    ready_ = false;
+    if (rig_ && ready_.load()) rig_close(rig_);  // only send "q" when rig_open() succeeded
+    transmitting_.store(false);
+    ready_.store(false);
 }
 
+// ── Non-blocking public interface ────────────────────────────────────────────
+//
+// Each method performs an optimistic cache update (visible immediately to
+// get_channel() / is_transmitting() callers on the main thread) and then
+// enqueues the actual Hamlib command for the worker thread.
+
 bool HamlibRadio::set_channel(const Channel& channel) {
-    if (!rig_) return false;
-
-    const bool freq_changed = channel.tx_frequency != current_channel_.tx_frequency;
-    const char* mname = rig_strrmode(to_hamlib_mode(channel.tx_mode));
-    pal::log_info("HamlibRadio", "set_channel: %u Hz  mode=%s  [freq: %s]",
-                  channel.tx_frequency, mname ? mname : "?",
-                  freq_changed ? "set" : "skipped");
-
-    // Order: frequency FIRST, mode LAST. Some SDR front-ends (Quisk) restore a
-    // per-band saved mode on a frequency change; sending mode last — then having
-    // assert_mode() verify via live readback and re-send on mismatch — makes
-    // openALE's channel mode authoritative. If the SDR's band restore lands
-    // asynchronously AFTER assert_mode() returned, the deferred sync backstop
-    // (ALEController::tick_mode_verify -> sync_from_radio) corrects it — no
-    // sleeps here, no scan-rate impact. Both mechanisms only work because
-    // start() neutralized hamlib's get_lock_mode probe: otherwise re-sent mode
-    // commands may be silently elided inside rig_set_mode() (see start()).
-    // Mode is sent on EVERY hop (no mode_changed guard): the rig may have been
-    // retuned externally between sync_from_radio() polls. VFO = RIG_VFO_CURR;
-    // passband = RIG_PASSBAND_NORMAL.
-    int freq_ret = RIG_OK;
-    if (freq_changed) {
-        freq_ret = rig_set_freq(rig_, RIG_VFO_CURR,
-                                static_cast<freq_t>(channel.tx_frequency));
-        if (freq_ret != RIG_OK)
-            pal::log_error("HamlibRadio", "  rig_set_freq(%u) -> FAILED: %s",
-                           channel.tx_frequency, rigerror(freq_ret));
-        else
-            pal::log_info("HamlibRadio", "  rig_set_freq: %u Hz -> OK",
-                          channel.tx_frequency);
+    {
+        std::lock_guard<std::mutex> lk(channel_mtx_);
+        cached_channel_ = channel;
     }
-
-    const int mode_ret = assert_mode(channel.tx_mode);
-
-    // Always track the intended state regardless of return codes. Over TCP,
-    // hamlib can report failure even when rigctld applied the command (e.g. a
-    // slow rig makes the RPRT read time out after rigctld already set it).
-    // Leaving current_channel_ stale causes callers that read get_channel()
-    // (set_frequency, step_channel) to send the wrong mode on their next call,
-    // overriding what the channel hop correctly set on the radio.
-    current_channel_ = channel;
-    if (mode_ret != RIG_OK)
-        pal::log_error("HamlibRadio", "  assert_mode(%s) -> FAILED: %s",
-                       mname ? mname : "?", rigerror(mode_ret));
-    return freq_ret == RIG_OK && mode_ret == RIG_OK;
+    tunes_in_flight_.fetch_add(1, std::memory_order_acq_rel);  // outstanding until worker settles
+    enqueue(CmdSetChannel{channel});
+    return true;
 }
 
 Channel HamlibRadio::get_channel() const {
-    return current_channel_;
+    std::lock_guard<std::mutex> lk(channel_mtx_);
+    return cached_channel_;
 }
 
 bool HamlibRadio::set_frequency(uint32_t hz) {
-    if (!rig_ || hz == 0) return false;
-
-    // Store intended mode to re-assert after frequency change.
-    // An SDR front-end (Quisk) restores a per-band saved mode on freq change;
-    // openALE's mode must be authoritative — always assert it.
-    const RadioMode saved_mode = current_channel_.tx_mode;
-
-    // One CAT command, no read-modify-write: a manual frequency change must not
-    // re-send the mode (and must not depend on current_channel_ being accurate
-    // for the mode). See set_channel() for the netrigctl-flush rationale.
-    const int ret = rig_set_freq(rig_, RIG_VFO_CURR, static_cast<freq_t>(hz));
-    if (ret != RIG_OK)
-        pal::log_error("HamlibRadio", "rig_set_freq(%u) failed: %s", hz, rigerror(ret));
-    else
-        pal::log_info("HamlibRadio", "freq=%u Hz (simplex)", hz);
-
-    current_channel_.rx_frequency = hz;
-    current_channel_.tx_frequency = hz;  // simplex
-
-    const char* saved_mname = rig_strrmode(to_hamlib_mode(saved_mode));
-    pal::log_debug("HamlibRadio", "  set_frequency: re-asserting mode %s after freq change",
-                   saved_mname ? saved_mname : "?");
-    const int mode_ret = assert_mode(saved_mode);
-    
-    return ret == RIG_OK && mode_ret == RIG_OK;
+    if (hz == 0) return false;
+    {
+        std::lock_guard<std::mutex> lk(channel_mtx_);
+        cached_channel_.rx_frequency = hz;
+        cached_channel_.tx_frequency = hz;
+    }
+    tunes_in_flight_.fetch_add(1, std::memory_order_acq_rel);  // outstanding until worker settles
+    enqueue(CmdSetFrequency{hz});
+    return true;
 }
 
 bool HamlibRadio::set_mode(RadioMode mode) {
-    if (!rig_) {
-        pal::log_error("HamlibRadio", "set_mode: rig_ is null — not connected");
-        return false;
+    {
+        std::lock_guard<std::mutex> lk(channel_mtx_);
+        cached_channel_.rx_mode = mode;
+        cached_channel_.tx_mode = mode;
     }
-
-    const char* mname = rig_strrmode(to_hamlib_mode(mode));
-    pal::log_debug("HamlibRadio", "set_mode: requesting %s", mname ? mname : "?");
-    const int ret = assert_mode(mode);
-    current_channel_.rx_mode = mode;
-    current_channel_.tx_mode = mode;
-    if (ret != RIG_OK)
-        pal::log_error("HamlibRadio", "set_mode: %s -> FAILED: %s",
-                       mname ? mname : "?", rigerror(ret));
-    return ret == RIG_OK;
+    tunes_in_flight_.fetch_add(1, std::memory_order_acq_rel);  // outstanding until worker settles
+    enqueue(CmdSetMode{mode});
+    return true;
 }
 
-// Set the mode, then read it back LIVE and re-assert until the rig reports the
-// intended mode (bounded, NO delay). This is the authoritative-mode mechanism:
-// an SDR front-end (Quisk) may restore a per-band saved mode after a frequency
-// change, silently reverting our mode. Because HAMLIB_CACHE_MODE is 0 (see
-// start()), rig_get_mode() is a live query and actually observes that override.
-// The re-sends only reach the wire because start() nulled the backend's
-// get_lock_mode hook — hamlib's rig_set_mode() otherwise consults an
-// uninitialized lock flag and may elide the command while returning RIG_OK.
-// A band-memory restore fires once per frequency change, so re-sending the mode
-// wins; the attempt cap only bounds a persistently-rejecting backend. If the
-// restore lands after this loop already returned, the loop legitimately reports
-// success on the pre-revert mode — the deferred tick_mode_verify checks
-// (+300/700/1500 ms -> sync_from_radio) catch and correct that case.
-int HamlibRadio::assert_mode(RadioMode mode) {
-    const rmode_t target = to_hamlib_mode(mode);
-    const char* mname = rig_strrmode(target);
+bool HamlibRadio::sync_from_radio() {
+    // Fire-and-forget: actual sync happens on the worker thread, cache is updated
+    // there.  All callers (tick_mode_verify, VFO_GET) ignore the return value.
+    enqueue(CmdSync{});
+    return false;
+}
 
-    last_mode_cmd_ = std::chrono::steady_clock::now();
-
-    int mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
-    if (mode_ret != RIG_OK)
-        pal::log_error("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> FAILED: %s",
-                       mname ? mname : "?", rigerror(mode_ret));
-    else
-        pal::log_debug("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> sent",
-                      mname ? mname : "?");
-
-    bool verified = false;
-    for (int attempt = 0; attempt < MODE_ASSERT_MAX_ATTEMPTS; ++attempt) {
-        rmode_t actual = RIG_MODE_NONE; pbwidth_t bw = 0;
-        if (rig_get_mode(rig_, RIG_VFO_CURR, &actual, &bw) != RIG_OK) {
-            pal::log_error("HamlibRadio", "  assert_mode: rig_get_mode() failed — cannot verify");
-            break;
-        }
-        if (actual == target) {
-            verified = true;
-            pal::log_debug("HamlibRadio", "  assert_mode: %s confirmed (readback #%d)",
-                          mname ? mname : "?", attempt + 1);
-            return mode_ret;
-        }
-        pal::log_info("HamlibRadio", "  assert_mode: readback #%d: %s != intended %s — re-asserting",
-                      attempt + 1,
-                      rig_strrmode(actual) ? rig_strrmode(actual) : "?", mname ? mname : "?");
-        mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
-    }
-    if (!verified)
-        pal::log_warn("HamlibRadio", "  assert_mode: %s — readback loop exhausted/failed, mode unverified",
-                      mname ? mname : "?");
-    return mode_ret;
+void HamlibRadio::flush() {
+    if (!worker_running_.load()) return;
+    auto p = std::make_shared<std::promise<void>>();
+    auto f = p->get_future();
+    enqueue(CmdFlush{std::move(p)});
+    f.wait();
 }
 
 void HamlibRadio::set_ptt(bool transmit) {
-    if (!rig_) { transmitting_ = false; return; }
-
-    const ptt_t ptt_mode = transmit ? RIG_PTT_ON : RIG_PTT_OFF;
-    if (rig_set_ptt(rig_, RIG_VFO_CURR, ptt_mode) == RIG_OK) {
-        transmitting_ = transmit;
-        pal::log_info("HamlibRadio", transmit ? "PTT ON (transmitting)" : "PTT OFF (receiving)");
-    }
+    transmitting_.store(transmit);  // optimistic; impl_set_ptt() corrects on Hamlib failure
+    enqueue(CmdSetPtt{transmit});
 }
 
-bool HamlibRadio::is_transmitting() const { return transmitting_; }
-bool HamlibRadio::is_ready()        const { return ready_; }
+bool HamlibRadio::is_transmitting() const { return transmitting_.load(); }
+bool HamlibRadio::is_ready()        const { return ready_.load(); }
+
+bool HamlibRadio::is_tune_settled() const {
+    return tunes_in_flight_.load(std::memory_order_acquire) == 0;
+}
 
 std::string HamlibRadio::get_port_config() const { return port_; }
 
@@ -337,6 +275,274 @@ void HamlibRadio::register_ack_callback(AckCallback callback) {
 }
 
 void HamlibRadio::process_response(const uint8_t*, size_t) {}
+
+// ── Async worker ─────────────────────────────────────────────────────────────
+
+void HamlibRadio::enqueue(RadioCommand cmd) {
+    if (!worker_running_.load()) return;
+    {
+        std::lock_guard<std::mutex> lk(queue_mtx_);
+        cmd_queue_.push(std::move(cmd));
+    }
+    queue_cv_.notify_one();
+}
+
+void HamlibRadio::worker_main() {
+#ifdef _WIN32
+    SetThreadDescription(GetCurrentThread(), L"HamlibRadio-IO");
+#endif
+    while (true) {
+        RadioCommand cmd;
+        {
+            std::unique_lock<std::mutex> lk(queue_mtx_);
+            queue_cv_.wait(lk, [this]{
+                return !cmd_queue_.empty() || !worker_running_.load();
+            });
+            if (!worker_running_.load()) break;  // exit; stop_worker_() drains the queue
+            cmd = std::move(cmd_queue_.front());
+            cmd_queue_.pop();
+        }
+        // Lock released before dispatch so the main thread can enqueue new
+        // commands while Hamlib is blocking on the current one.
+        worker_dispatch(cmd);
+    }
+}
+
+void HamlibRadio::worker_dispatch(const RadioCommand& cmd) {
+    if (std::holds_alternative<CmdSetChannel>(cmd)) {
+        impl_set_channel(std::get<CmdSetChannel>(cmd).ch);
+        tunes_in_flight_.fetch_sub(1, std::memory_order_acq_rel);  // tune settled
+    } else if (std::holds_alternative<CmdSetFrequency>(cmd)) {
+        impl_set_frequency(std::get<CmdSetFrequency>(cmd).hz);
+        tunes_in_flight_.fetch_sub(1, std::memory_order_acq_rel);  // tune settled
+    } else if (std::holds_alternative<CmdSetMode>(cmd)) {
+        impl_set_mode(std::get<CmdSetMode>(cmd).mode);
+        tunes_in_flight_.fetch_sub(1, std::memory_order_acq_rel);  // tune settled
+    } else if (std::holds_alternative<CmdSetPtt>(cmd)) {
+        impl_set_ptt(std::get<CmdSetPtt>(cmd).on);
+    } else if (std::holds_alternative<CmdSync>(cmd)) {
+        impl_sync_from_radio();
+    } else if (std::holds_alternative<CmdFlush>(cmd)) {
+        std::get<CmdFlush>(cmd).done->set_value();
+    }
+}
+
+// ── Blocking Hamlib implementations (worker-only) ────────────────────────────
+
+bool HamlibRadio::impl_set_channel(const Channel& ch) {
+    if (!rig_) return false;
+
+    const bool freq_changed = ch.tx_frequency != current_channel_.tx_frequency;
+    const char* mname = rig_strrmode(to_hamlib_mode(ch.tx_mode));
+    pal::log_info("HamlibRadio", "set_channel: %u Hz  mode=%s  [freq: %s]",
+                  ch.tx_frequency, mname ? mname : "?",
+                  freq_changed ? "set" : "skipped");
+
+    // Order: frequency FIRST, mode LAST. Some SDR front-ends (Quisk) restore a
+    // per-band saved mode on a frequency change; sending mode last makes
+    // openALE's channel mode authoritative for the synchronous case. The single
+    // rig_set_mode in assert_mode() is the per-hop force — NO synchronous
+    // readback loop (that loop was 3-8 TCP round-trips per hop and is what made
+    // netrigctl scanning take 500-1000 ms instead of the configured dwell). If
+    // the SDR's band restore lands asynchronously AFTER assert_mode() returned,
+    // the deferred background verify (ALEController::tick_mode_verify while
+    // SCANNING -> sync_from_radio, fixed ~400 ms cadence) corrects it — no
+    // sleeps here, no readback on the hop path. Both mechanisms only work
+    // because start() neutralized hamlib's get_lock_mode probe: otherwise the
+    // mode command may be silently elided inside rig_set_mode() (see start()).
+    // Mode is sent on EVERY hop (no mode_changed guard): the rig may have been
+    // retuned externally between sync_from_radio() polls. VFO = RIG_VFO_CURR;
+    // passband = RIG_PASSBAND_NORMAL.
+    int freq_ret = RIG_OK;
+    if (freq_changed) {
+        freq_ret = rig_set_freq(rig_, RIG_VFO_CURR,
+                                static_cast<freq_t>(ch.tx_frequency));
+        if (freq_ret != RIG_OK)
+            pal::log_error("HamlibRadio", "  rig_set_freq(%u) -> FAILED: %s",
+                           ch.tx_frequency, rigerror(freq_ret));
+        else
+            pal::log_info("HamlibRadio", "  rig_set_freq: %u Hz -> OK",
+                          ch.tx_frequency);
+    }
+
+    const int mode_ret = assert_mode(ch.tx_mode);
+
+    // Always track the intended state regardless of return codes. Over TCP,
+    // hamlib can report failure even when rigctld applied the command (e.g. a
+    // slow rig makes the RPRT read time out after rigctld already set it).
+    current_channel_ = ch;
+
+    // Update the main-thread-readable cache with the confirmed post-call state.
+    {
+        std::lock_guard<std::mutex> lk(channel_mtx_);
+        cached_channel_ = ch;
+    }
+
+    if (mode_ret != RIG_OK)
+        pal::log_error("HamlibRadio", "  assert_mode(%s) -> FAILED: %s",
+                       mname ? mname : "?", rigerror(mode_ret));
+    return freq_ret == RIG_OK && mode_ret == RIG_OK;
+}
+
+bool HamlibRadio::impl_set_frequency(uint32_t hz) {
+    if (!rig_ || hz == 0) return false;
+
+    // Store intended mode to re-assert after frequency change.
+    // An SDR front-end (Quisk) restores a per-band saved mode on freq change;
+    // openALE's mode must be authoritative — always assert it.
+    const RadioMode saved_mode = current_channel_.tx_mode;
+
+    const int ret = rig_set_freq(rig_, RIG_VFO_CURR, static_cast<freq_t>(hz));
+    if (ret != RIG_OK)
+        pal::log_error("HamlibRadio", "rig_set_freq(%u) failed: %s", hz, rigerror(ret));
+    else
+        pal::log_info("HamlibRadio", "freq=%u Hz (simplex)", hz);
+
+    current_channel_.rx_frequency = hz;
+    current_channel_.tx_frequency = hz;
+
+    const char* saved_mname = rig_strrmode(to_hamlib_mode(saved_mode));
+    pal::log_debug("HamlibRadio", "  set_frequency: re-asserting mode %s after freq change",
+                   saved_mname ? saved_mname : "?");
+    const int mode_ret = assert_mode(saved_mode);
+
+    {
+        std::lock_guard<std::mutex> lk(channel_mtx_);
+        cached_channel_.rx_frequency = hz;
+        cached_channel_.tx_frequency = hz;
+    }
+
+    return ret == RIG_OK && mode_ret == RIG_OK;
+}
+
+bool HamlibRadio::impl_set_mode(RadioMode mode) {
+    if (!rig_) {
+        pal::log_error("HamlibRadio", "set_mode: rig_ is null — not connected");
+        return false;
+    }
+
+    const char* mname = rig_strrmode(to_hamlib_mode(mode));
+    pal::log_debug("HamlibRadio", "set_mode: requesting %s", mname ? mname : "?");
+    const int ret = assert_mode(mode);
+    current_channel_.rx_mode = mode;
+    current_channel_.tx_mode = mode;
+    {
+        std::lock_guard<std::mutex> lk(channel_mtx_);
+        cached_channel_.rx_mode = mode;
+        cached_channel_.tx_mode = mode;
+    }
+    if (ret != RIG_OK)
+        pal::log_error("HamlibRadio", "set_mode: %s -> FAILED: %s",
+                       mname ? mname : "?", rigerror(ret));
+    return ret == RIG_OK;
+}
+
+void HamlibRadio::impl_set_ptt(bool on) {
+    if (!rig_) { transmitting_.store(false); return; }
+
+    const ptt_t ptt_mode = on ? RIG_PTT_ON : RIG_PTT_OFF;
+    if (rig_set_ptt(rig_, RIG_VFO_CURR, ptt_mode) == RIG_OK) {
+        transmitting_.store(on);  // confirm optimistic value
+        pal::log_info("HamlibRadio", on ? "PTT ON (transmitting)" : "PTT OFF (receiving)");
+    } else {
+        transmitting_.store(false);  // revert optimistic store — Hamlib call failed
+        pal::log_error("HamlibRadio", "rig_set_ptt(%s) failed", on ? "ON" : "OFF");
+    }
+}
+
+bool HamlibRadio::impl_sync_from_radio() {
+    if (!rig_ || !ready_.load()) return false;
+
+    freq_t freq = 0;
+    if (rig_get_freq(rig_, RIG_VFO_CURR, &freq) != RIG_OK) return false;
+
+    rmode_t mode = RIG_MODE_NONE;
+    pbwidth_t bw  = 0;
+    if (rig_get_mode(rig_, RIG_VFO_CURR, &mode, &bw) != RIG_OK) return false;
+
+    const auto new_freq = static_cast<uint32_t>(freq);
+    bool changed = false;
+    if (new_freq != current_channel_.tx_frequency) {
+        pal::log_info("HamlibRadio", "sync_from_radio: external retune %u->%u Hz",
+                      current_channel_.tx_frequency, new_freq);
+        current_channel_.rx_frequency = current_channel_.tx_frequency = new_freq;
+        {
+            std::lock_guard<std::mutex> lk(channel_mtx_);
+            cached_channel_.rx_frequency = cached_channel_.tx_frequency = new_freq;
+        }
+        changed = true;
+    }
+
+    // NOTE: Do NOT update current_channel_.tx_mode/rx_mode with the radio's actual mode.
+    // The current_channel_ represents openALE's intended state, not what the radio reports.
+    const RadioMode new_mode = from_hamlib_mode(mode);
+    if (new_mode != current_channel_.tx_mode) {
+        const char* actual_mname = rig_strrmode(mode);
+        const char* intend_mname = rig_strrmode(to_hamlib_mode(current_channel_.tx_mode));
+        pal::log_debug("HamlibRadio", "sync_from_radio: mode mismatch — radio=%s  intended=%s",
+                       actual_mname ? actual_mname : "?", intend_mname ? intend_mname : "?");
+        // Backstop correction: Quisk's per-band saved-mode restore fires
+        // ASYNCHRONOUSLY after a frequency change and can land after both
+        // assert_mode()'s readback loop AND the immediate set_mode() re-assertion
+        // in step_channel()/set_vfo_channel() have already returned. Re-send the
+        // intended mode here, but only when:
+        //  (a) the radio is still on the intended frequency (`!changed` — an
+        //      external retune means the operator took over; don't fight), and
+        //  (b) we commanded a mode recently (window) — a mode the operator
+        //      deliberately changes on the rig later stays untouched.
+        // Single fire-and-forget send, no readback loop: the next sync tick
+        // (2 s) re-checks, and the window bounds any pathological ping-pong.
+        // last_mode_cmd_ is deliberately NOT re-stamped here, so the window
+        // cannot be extended indefinitely by our own corrections.
+        if (!changed &&
+            std::chrono::steady_clock::now() - last_mode_cmd_ < MODE_REASSERT_WINDOW) {
+            const rmode_t target = to_hamlib_mode(current_channel_.tx_mode);
+            const int ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
+            pal::log_debug("HamlibRadio", "sync_from_radio: re-asserting %s -> %s",
+                           intend_mname ? intend_mname : "?",
+                           ret == RIG_OK ? "OK" : rigerror(ret));
+        } else {
+            pal::log_debug("HamlibRadio", changed
+                ? "sync_from_radio: freq also changed — not fighting external retune"
+                : "sync_from_radio: window expired — not re-asserting");
+        }
+    }
+    return changed;
+}
+
+// Send the channel mode exactly ONCE — the authoritative per-hop force. This is
+// deliberately a single rig_set_mode with NO synchronous readback loop: over
+// netrigctl each rig_get_mode is a full TCP round-trip (~80-150 ms), so a 3-pass
+// readback/re-send loop added 3-8 round-trips per scan hop and blew the 200 ms
+// dwell up to 500-1000 ms. The readback loop was only ever compensating for two
+// things that are now fixed elsewhere:
+//   - hamlib's get_lock_mode elision bug — neutralized in start() (caps hook
+//     nulled), so the single M reliably reaches the wire;
+//   - Quisk's asynchronous per-band mode restore — lands AFTER any synchronous
+//     readback would have returned anyway, so the loop could not catch it. The
+//     deferred background verify (ALEController::tick_mode_verify while SCANNING
+//     -> sync_from_radio, throttled to a fixed ~400 ms cadence) re-asserts the
+//     intended mode if a revert slipped in, without touching the hop hot path.
+// Freq-first/mode-last ordering means this single M also overrides Quisk's
+// on-freq-change restore for the synchronous case.
+//
+// Worker-only: last_mode_cmd_ is accessed here without a mutex because it is
+// always read and written exclusively by the worker thread.
+int HamlibRadio::assert_mode(RadioMode mode) {
+    const rmode_t target = to_hamlib_mode(mode);
+    const char* mname = rig_strrmode(target);
+
+    last_mode_cmd_ = std::chrono::steady_clock::now();
+
+    const int mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
+    if (mode_ret != RIG_OK)
+        pal::log_error("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> FAILED: %s",
+                       mname ? mname : "?", rigerror(mode_ret));
+    else
+        pal::log_debug("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> sent",
+                       mname ? mname : "?");
+    return mode_ret;
+}
 
 // ── File-static helpers (hamlib types stay out of the header) ─────────────────
 
@@ -380,61 +586,6 @@ static pal::RadioMode from_hamlib_mode(rmode_t m) {
 bool HamlibRadio::is_serial_port() const {
     // TCP/network Specs beginnen mit "tcp://" oder "rigctld://"
     return port_.rfind("tcp://", 0) != 0 && port_.rfind("rigctld://", 0) != 0;
-}
-
-bool HamlibRadio::sync_from_radio() {
-    if (!rig_ || !ready_) return false;
-
-    freq_t freq = 0;
-    if (rig_get_freq(rig_, RIG_VFO_CURR, &freq) != RIG_OK) return false;
-
-    rmode_t mode = RIG_MODE_NONE;
-    pbwidth_t bw  = 0;
-    if (rig_get_mode(rig_, RIG_VFO_CURR, &mode, &bw) != RIG_OK) return false;
-
-    const auto new_freq = static_cast<uint32_t>(freq);
-    bool changed = false;
-    if (new_freq != current_channel_.tx_frequency) {
-        pal::log_info("HamlibRadio", "sync_from_radio: external retune %u->%u Hz",
-                      current_channel_.tx_frequency, new_freq);
-        current_channel_.rx_frequency = current_channel_.tx_frequency = new_freq;
-        changed = true;
-    }
-    // NOTE: Do NOT update current_channel_.tx_mode/rx_mode with the radio's actual mode.
-    // The current_channel_ represents openALE's intended state, not what the radio reports.
-    const RadioMode new_mode = from_hamlib_mode(mode);
-    if (new_mode != current_channel_.tx_mode) {
-        const char* actual_mname = rig_strrmode(mode);
-        const char* intend_mname = rig_strrmode(to_hamlib_mode(current_channel_.tx_mode));
-        pal::log_debug("HamlibRadio", "sync_from_radio: mode mismatch — radio=%s  intended=%s",
-                       actual_mname ? actual_mname : "?", intend_mname ? intend_mname : "?");
-        // Backstop correction: Quisk's per-band saved-mode restore fires
-        // ASYNCHRONOUSLY after a frequency change and can land after both
-        // assert_mode()'s readback loop AND the immediate set_mode() re-assertion
-        // in step_channel()/set_vfo_channel() have already returned. Re-send the
-        // intended mode here, but only when:
-        //  (a) the radio is still on the intended frequency (`!changed` — an
-        //      external retune means the operator took over; don't fight), and
-        //  (b) we commanded a mode recently (window) — a mode the operator
-        //      deliberately changes on the rig later stays untouched.
-        // Single fire-and-forget send, no readback loop: the next sync tick
-        // (2 s) re-checks, and the window bounds any pathological ping-pong.
-        // last_mode_cmd_ is deliberately NOT re-stamped here, so the window
-        // cannot be extended indefinitely by our own corrections.
-        if (!changed &&
-            std::chrono::steady_clock::now() - last_mode_cmd_ < MODE_REASSERT_WINDOW) {
-            const rmode_t target = to_hamlib_mode(current_channel_.tx_mode);
-            const int ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
-            pal::log_debug("HamlibRadio", "sync_from_radio: re-asserting %s -> %s",
-                           intend_mname ? intend_mname : "?",
-                           ret == RIG_OK ? "OK" : rigerror(ret));
-        } else {
-            pal::log_debug("HamlibRadio", changed
-                ? "sync_from_radio: freq also changed — not fighting external retune"
-                : "sync_from_radio: window expired — not re-asserting");
-        }
-    }
-    return changed;
 }
 
 bool HamlibRadio::configure_port() {

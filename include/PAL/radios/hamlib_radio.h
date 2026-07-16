@@ -1,9 +1,17 @@
 #pragma once
 
 #include "PAL/radio.h"
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <queue>
 #include <string>
+#include <thread>
+#include <variant>
 #include <vector>
 
 
@@ -37,8 +45,15 @@ struct SerialLinePolicy {
  * Unterstützt direkte Geräteansteuerung über serielle Schnittstellen
  * sowie TCP-Anbindung an einen rigctld-Server.
  *
- * Der Verbindungsstring kann je nach Anwendungskonvention entweder
- * eine serielle Schnittstelle oder ein Netzwerkziel beschreiben.
+ * Alle zeitkritischen Methoden (set_channel, set_ptt, sync_from_radio, …)
+ * sind nicht-blockierend: sie geben Kommandos in eine interne Warteschlange und
+ * kehren sofort zurück. Ein dedizierter Worker-Thread führt die eigentlichen
+ * Hamlib-Aufrufe seriell aus, damit der ALE-Protokollkern (1 ms Tick-Schleife)
+ * nie durch CAT-Latenz blockiert wird.
+ *
+ * Lifecycle (synchron, wie bisher):
+ *   initialize() → start() → [Betrieb] → stop() → shutdown()
+ * start() startet den Worker-Thread; stop() beendet ihn vor rig_close().
  */
 class HamlibRadio : public IRadio {
 public:
@@ -51,126 +66,110 @@ public:
     HamlibRadio(const std::string& model, const std::string& port, int baud = 0,
                 SerialLinePolicy policy = {});
 
-    /**
-     * @brief Gibt Ressourcen frei und schließt die Verbindung.
-     */
     ~HamlibRadio() override;
 
-    /**
-     * @brief Initialisiert den Hamlib-Handle und konfiguriert das Ziel.
-     * @return true bei Erfolg
-     */
     bool initialize() override;
+    void shutdown()   override;
+    bool start()      override;   ///< rig_open() + startet den Worker-Thread
+    void stop()       override;   ///< beendet Worker-Thread, dann rig_close()
+
+    // --- Nicht-blockierende Echtzeit-Methoden (Kommando → Warteschlange) ---
 
     /**
-     * @brief Trennt Verbindung und setzt den Adapter zurück.
+     * @brief Setzt Frequenz und Modus; kehrt sofort zurück.
+     *
+     * Der optimistische Rückgabewert ist immer true.  Der eigentliche
+     * Hamlib-Aufruf erfolgt asynchron im Worker-Thread.
      */
-    void shutdown() override;
+    bool    set_channel(const Channel& channel) override;
 
     /**
-     * @brief Öffnet die Verbindung zum Gerät oder rigctld.
-     * @return true bei Erfolg
+     * @brief Gibt den zuletzt angeforderten Kanal zurück (thread-sicher, gecacht).
      */
-    bool start() override;
+    Channel get_channel()                       const override;
 
     /**
-     * @brief Schließt die aktive Verbindung.
+     * @brief Setzt nur die Frequenz; kehrt sofort zurück.
      */
-    void stop() override;
+    bool    set_frequency(uint32_t hz)          override;
 
     /**
-     * @brief Setzt Frequenz und Modus auf den übergebenen Kanal.
-     * @param channel Zielkanal
-     * @return true bei Erfolg
+     * @brief Setzt nur den Modus; kehrt sofort zurück.
      */
-    bool set_channel(const Channel& channel) override;
+    bool    set_mode(RadioMode mode)            override;
 
     /**
-     * @brief Liefert den zuletzt gesetzten Kanal.
-     * @return Aktueller Kanalzustand
+     * @brief Stellt eine Synchronisation vom Radio in die Warteschlange.
+     *
+     * Gibt immer false zurück; das Ergebnis wird asynchron im Worker-Thread
+     * angewendet.  Alle Aufrufer ignorieren den Rückgabewert.
      */
-    Channel get_channel() const override;
-
-    // Direct single-attribute setters — over TCP these send exactly one CAT
-    // command (rig_set_freq / rig_set_mode) without the read-modify-write that
-    // set_channel() does, so a manual mode set never re-sends the frequency and
-    // vice versa. See set_channel() for the VFO/passband/order rationale.
-    bool set_frequency(uint32_t hz) override;
-    bool set_mode(RadioMode mode) override;
-
-    // Query the radio for its live frequency and mode and update current_channel_.
-    // Returns true if either changed (caller may push a channel_changed event).
-    // Over TCP/netrigctl this goes to the wire when the hamlib cache has expired
-    // (500 ms timeout set in start()).
-    bool sync_from_radio() override;
+    bool    sync_from_radio()                   override;
 
     /**
-     * @brief Schaltet PTT auf Senden oder Empfang.
-     * @param transmit true für TX, false für RX
+     * @brief Blockiert, bis alle bisher eingereihten Kommandos abgearbeitet sind.
+     *
+     * Nützlich in Tests, um nach set_channel() / sync_from_radio() auf das
+     * tatsächliche Senden zu warten, bevor Seiteneffekte geprüft werden.
+     * Ist Worker nicht aktiv, kehrt sofort zurück.
+     */
+    void    flush()                             override;
+
+    /**
+     * @brief Schaltet PTT; kehrt sofort zurück.
+     *
+     * transmitting() gibt optimistisch den gesetzten Wert zurück; der Worker
+     * korrigiert bei Hamlib-Fehler.
      */
     void set_ptt(bool transmit) override;
 
-    /**
-     * @brief Prüft, ob aktuell gesendet wird.
-     * @return true bei TX
-     */
-    bool is_transmitting() const override;
-
-    /**
-     * @brief Prüft, ob der Adapter initialisiert ist.
-     * @return true wenn bereit
-     */
-    bool is_ready() const override;
-
-    /**
-     * @brief Gibt die konfigurierte Portbeschreibung zurück.
-     * @return Port-Konfiguration als String
-     */
+    bool        is_transmitting() const override;  ///< atomarer Lesezugriff
+    bool        is_ready()        const override;  ///< atomarer Lesezugriff
     std::string get_port_config() const override;
 
-    /**
-     * @brief Registriert einen Send-Callback.
-     * @param callback Callback für ausgehende Kommandos
-     */
+    // Async tune-settle tracking (see IRadio). All tune commands run on the I/O
+    // worker; tunes_in_flight_ tracks how many are still outstanding, so the ALE
+    // controller can relay "radio settled?" to the scanner as a bool hop gate.
+    bool is_tune_settled() const override;
+
     void register_send_callback(SendCommandCallback callback) override;
-
-    /**
-     * @brief Registriert einen ACK-Callback.
-     * @param callback Callback für Bestätigungen
-     */
-    void register_ack_callback(AckCallback callback) override;
-
-    /**
-     * @brief Verarbeitet eine eingehende Antwort.
-     *
-     * Hamlib kapselt die physische Transportebene; dieser Adapter
-     * verarbeitet daher typischerweise keine Rohantworten.
-     *
-     * @param data Eingabepuffer
-     * @param length Anzahl Bytes
-     */
+    void register_ack_callback(AckCallback callback)          override;
     void process_response(const uint8_t* data, size_t length) override;
 
 private:
-    /**
-     * @brief Wendet die Portkonfiguration auf den Hamlib-Handle an.
-     * @return true bei Erfolg
-     */
     bool configure_port();
-
-    // Setzt DTR/RTS nach erfolgreichem rig_open() gemäß policy_.
-    // Versucht erst hamlib-Token-API, dann direkten Windows-HANDLE-Fallback.
     void apply_line_policy();
-
     bool is_serial_port() const;
 
-    // Sends `mode`, then reads it back LIVE and re-sends until the rig reports the
-    // intended mode (bounded, NO delay — must not perturb ALE core timing). Defeats
-    // an SDR front-end (e.g. Quisk) that overrides mode on a band/frequency change.
-    // Returns the last rig_set_mode() return code. Requires the mode cache be live
-    // (HAMLIB_CACHE_MODE = 0, set in start()) or the readback just echoes the set.
-    int assert_mode(RadioMode mode);
+    // Sendet `mode` genau einmal als autoritativen Per-Hop-Force (kein Readback-
+    // Loop, kein sleep). Asynchrone Band-Mode-Reverts fängt der verzögerte
+    // Hintergrund-Verify (tick_mode_verify -> sync_from_radio). Nur vom Worker.
+    int  assert_mode(RadioMode mode);
 
+    // ── Async-Worker-Kommandotypen ────────────────────────────────────────────
+    struct CmdSetChannel   { Channel ch; };
+    struct CmdSetFrequency { uint32_t hz; };
+    struct CmdSetMode      { RadioMode mode; };
+    struct CmdSetPtt       { bool on; };
+    struct CmdSync         {};
+    struct CmdFlush        { std::shared_ptr<std::promise<void>> done; };
+
+    using RadioCommand = std::variant<
+        CmdSetChannel, CmdSetFrequency, CmdSetMode, CmdSetPtt, CmdSync, CmdFlush>;
+
+    void enqueue(RadioCommand cmd);    ///< thread-sicher; no-op wenn Worker nicht läuft
+    void worker_main();
+    void worker_dispatch(const RadioCommand& cmd);
+    void stop_worker_();               ///< signalisiert Exit, joined, leert Queue
+
+    // Blockierende Hamlib-Implementierungen — ausschließlich vom Worker-Thread:
+    bool impl_set_channel(const Channel& ch);
+    bool impl_set_frequency(uint32_t hz);
+    bool impl_set_mode(RadioMode mode);
+    void impl_set_ptt(bool on);
+    bool impl_sync_from_radio();
+
+    // ── Konfiguration (unveränderlich nach Konstruktion) ─────────────────────
     std::string      model_;
     std::string      port_;
     int              baud_;
@@ -178,18 +177,40 @@ private:
 
     RIG* rig_ = nullptr;
 
-    // When openALE last commanded a mode (assert_mode). sync_from_radio() only
-    // re-asserts the intended mode within a short window after this, so a
-    // deliberate external mode change (operator on the rig/SDR) is respected
-    // once the dust from our own command has settled.
+    // ── Worker-only State (nach start() kein konkurrierender Zugriff nötig) ──
+    // last_mode_cmd_ und current_channel_ werden ausschließlich vom Worker-Thread
+    // gelesen und geschrieben; kein Mutex erforderlich.
     std::chrono::steady_clock::time_point last_mode_cmd_{};
+    Channel current_channel_;  ///< zuletzt tatsächlich gesendeter Kanal (Worker-Zustand)
 
-    Channel current_channel_;
-    bool transmitting_ = false;
-    bool ready_ = false;
+    // ── Async Worker ──────────────────────────────────────────────────────────
+    std::thread              worker_;
+    std::queue<RadioCommand> cmd_queue_;
+    std::mutex               queue_mtx_;
+    std::condition_variable  queue_cv_;
+    std::atomic<bool>        worker_running_{false};
+
+    // ── Haupt-Thread-lesbarer Kanal-Cache (mutex-geschützt) ──────────────────
+    mutable std::mutex channel_mtx_;
+    Channel            cached_channel_;  ///< optimistisch + nach jedem Worker-Dispatch aktualisiert
+
+    // ── Atomare Statusindikatoren (thread-sicher lesbar) ─────────────────────
+    std::atomic<bool>   transmitting_{false};
+    std::atomic<bool>   ready_{false};
+
+    // ── Tune-in-flight counter (main thread ++, worker --) ──────────────────
+    // Incremented on the main thread when a tune command (set_channel /
+    // set_frequency / set_mode) is enqueued, decremented by the worker after the
+    // tune completes. is_tune_settled() == (tunes_in_flight_ == 0), a
+    // level-triggered signal with no sequence/edge to mis-read. CmdSync /
+    // CmdSetPtt / CmdFlush never touch it, so a sync poll or PTT toggle can never
+    // fake a settle. Reset to 0 in start(). The scanner (via the controller's
+    // hop-ready gate) only issues the next hop once this reaches 0, which upholds
+    // "at most one tune in flight".
+    std::atomic<int> tunes_in_flight_{0};
 
     SendCommandCallback send_callback_;
-    AckCallback ack_callback_;
+    AckCallback         ack_callback_;
 };
 
 // Set HamlibRadio log verbosity. Mirrors the GUI cfgLogLevel values:

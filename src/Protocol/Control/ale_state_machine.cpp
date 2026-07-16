@@ -92,8 +92,7 @@ ALEStateMachine::ALEStateMachine()
       slot_number_(0),
       tswt_ms_(0),
       slot_wait_start_ms_(0),
-      scanning_phase_(ScanningPhase::HOPPING),
-      allcall_pause_start_ms_(0)
+      scanning_phase_(ScanningPhase::HOPPING)
 {}
 
 // ============================================================================
@@ -274,8 +273,8 @@ void ALEStateMachine::enter_state(ALEState new_state) {
 
         case ALEState::SCANNING:
             scanning_phase_          = ScanningPhase::HOPPING;
-            allcall_pause_start_ms_  = 0;
-            traffic_settle_ms_       = 0;
+            scan_pause_settle_ms_       = 0;
+            prev_hop_ready_          = true;    // first settle edge re-anchors the dwell
             channel_manager_.clear_override();  // end any sounding-sweep pin
             channel_manager_.start(current_time_ms);
             allcall_silent_ = false;             // leave any AllCall handshake
@@ -400,23 +399,35 @@ void ALEStateMachine::exit_state(ALEState old_state) {
 // ============================================================================
 
 void ALEStateMachine::handle_scanning() {
-    if (scanning_phase_ == ScanningPhase::ALLCALL_PAUSE) {
-        // T-10: Tcc_max Timeout (A.5.5.4.4) — named constant aus ale_timing.h
-        if ((current_time_ms - allcall_pause_start_ms_) > ALETimingConstants::Tcc_max_ms)
-            scanning_phase_ = ScanningPhase::HOPPING;
-        return;  // kein Hop während AllCall-Pause
-    }
-    if (scanning_phase_ == ScanningPhase::TRAFFIC_PAUSE) {
+    if (scanning_phase_ == ScanningPhase::SCAN_PAUSE) {
         // A.5.3.1: stay on channel until Tdrw (2×Trw = 784 ms) silence after
         // the last word — ensures the full frame (including TIS/TWAS conclusion
         // and DATA address words) has been received before moving on.
-        if ((current_time_ms - traffic_settle_ms_) >= ALETimingConstants::Tdrw_ms) {
-            scanning_phase_ = ScanningPhase::HOPPING;
+        if ((current_time_ms - scan_pause_settle_ms_) >= ALETimingConstants::Tdrw_ms) {
             channel_manager_.hop_next(current_time_ms);
+            scanning_phase_ = ScanningPhase::HOPPING;
         }
         return;
     }
-    if (channel_manager_.check_dwell_timeout(current_time_ms))
+    // HOPPING. §A.5.3.3: anchor the dwell at the SETTLE edge, not at tune-issue.
+    // With an async radio the tune completes some time after the hop; if the dwell
+    // were measured from tune-issue, the on-channel observation window would be only
+    // (dwell − settle_latency) — a 200 ms dwell with ~150 ms TCP settle leaves ~50 ms
+    // to detect traffic (and 0 when settle ≥ dwell), so the scanner hops over signals.
+    // Re-anchoring when hop_ready_() first goes false→true after a hop gives the full
+    // configured dwell of settled listening. The per-channel period becomes
+    // settle_latency + dwell (slower cadence, deliberately traded for reliable
+    // detection). For sync backends hop_ready_() is always true → no edge → the dwell
+    // is anchored at the hop exactly as before (behaviour unchanged for tests/mocks).
+    const bool ready = hop_ready_();
+    if (ready && !prev_hop_ready_)
+        channel_manager_.anchor_dwell(current_time_ms);   // settle edge → restart dwell
+    prev_hop_ready_ = ready;
+
+    // Hop once the (settle-anchored) dwell has elapsed AND the radio is hop-ready.
+    // At most one tune is ever in flight, so a Stop or scan pause halts the radio
+    // within one physical tune.
+    if (channel_manager_.check_dwell_timeout(current_time_ms) && ready)
         channel_manager_.hop_next(current_time_ms);
 }
 

@@ -319,7 +319,8 @@ public:
     /**
      * Stub: initiate a broadcast AllCall. Builds TO address @?@ (global wildcard)
      * or @<selector>@ (selective). TX path not yet wired — logs a warning and
-     * returns false. RX side (is_allcall_address / ALLCALL_PAUSE) already works.
+     * returns false. RX side (is_allcall_address → CALL_DETECTED → HANDSHAKE
+     * silent link) already works.
      */
     bool initiate_all_call(char selector = '?');
 
@@ -987,6 +988,18 @@ public:
     float lbt_margin_db() const;
     void  set_lbt_occupancy_enabled(bool on)     { lbt_occupancy_enabled_ = on; }
     bool  lbt_occupancy_enabled() const          { return lbt_occupancy_enabled_; }
+
+    // §A.5.3.3 stage-1 operator squelch (PR2): calibrated, audio-path-independent
+    // sensitivity control for the scan-stop detector (default OFF ⇒ level-invariant
+    // detector unchanged). margin_db = how far a signal must sit above the learned
+    // global noise floor before scanning stops on it. See ALE2GModem::Demodulator.
+    void  set_scan_squelch_enabled(bool on);
+    bool  scan_squelch_enabled() const;
+    void  set_scan_detect_margin_db(float db);
+    float scan_detect_margin_db() const;
+    float scan_floor_db() const;                  ///< live learned in-band noise floor (dB)
+    float scan_floor_baseline_db() const;         ///< last operator-calibrated snapshot (dB)
+    float calibrate_scan_detector();              ///< snapshot the live floor; returns it (dB)
     /// Gate occupancy detection off during voice PTT. While voice PTT is active
     /// the radio is transmitting and the VAC loopback would drive the occupancy
     /// detector to BUSY — identical to the ALE-TX case where the demodulator is
@@ -1196,8 +1209,17 @@ private:
     // set_channel() returns; these checks call radio_->sync_from_radio() a few
     // hundred ms later so the intended mode is re-asserted promptly (the radio
     // backend guards the actual re-send: freq-still-matches + recency window).
-    uint32_t                 mode_verify_deadline_ms_ = 0; // next check when now_ms_ >= this; 0 = inactive
-    int                      mode_verify_checks_left_ = 0; // remaining checks for the current activation
+    //
+    // Two modes: while SCANNING, a fixed-cadence BACKGROUND verify runs
+    // decoupled from the per-hop re-arm (a 200 ms dwell would otherwise supersede
+    // the +300 ms one-shot deadline before it ever fires, so the backstop never
+    // ran while scanning). sync_from_radio is a CmdSync — it never touches
+    // tunes_in_flight_, so it never gates hop_ready / the hop rate. Non-scanning
+    // one-shot ops (manual step, net select, set_mode) keep the multi-check path.
+    uint32_t                 mode_verify_deadline_ms_ = 0;      // one-shot: next check when now_ms_ >= this; 0 = inactive
+    int                      mode_verify_checks_left_ = 0;      // one-shot: remaining checks for this activation
+    uint32_t                 mode_verify_scan_deadline_ms_ = 0; // SCANNING bg cadence: next verify; 0 = arm on first scan tick
+    bool                     scan_was_settled_     = false; // §A.5.3.3: last is_tune_settled() while SCANNING — arm stage-1 on the settle edge
     bool                     sm_rx_enabled_        = true; // mirrors SM's last rx_enabled_callback value
     bool                     manual_ptt_           = false;
     bool                     abort_tx_pending_     = false; // rx_only: abort SM TX on next update() tick (avoids re-entering SM inside set_rx_enabled_callback)
@@ -1358,10 +1380,11 @@ private:
     void tick_lqa_update(uint32_t now_ms);      ///< throttled LQA DB prune + auto-sounding check
     void tick_mode_verify(uint32_t now_ms);     ///< deferred radio-mode verify after channel activation
 
-    /// Arm the deferred mode-verify checks after any radio channel/mode command.
-    /// Re-arming on every command means checks only fire once activity pauses —
-    /// a fast scan (dwell < first check delay) keeps superseding them, which is
-    /// correct: each hop re-sends the mode anyway.
+    /// Arm the deferred mode-verify checks after any non-scanning radio
+    /// channel/mode command. Re-arming on every command means checks only fire
+    /// once activity pauses — a fast scan (dwell < first check delay) keeps
+    /// superseding them, so while SCANNING this is a no-op and tick_mode_verify
+    /// instead runs a fixed-cadence background verify decoupled from the hops.
     void schedule_mode_verify();
 
     // ── on_received_word() concern handlers ──────────────────────────────────

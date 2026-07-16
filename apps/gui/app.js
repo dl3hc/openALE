@@ -141,6 +141,7 @@ function syncAllFromBridge(pullOnly = false) {
   syncFecFromBridge();              // pull FEC (Golay/votes/adaptive) state from core
   syncRelinkFromBridge();           // pull Auto-Relink state from core
   syncLbtFromBridge();              // pull LBT occupancy state from core (A.5.4.7)
+  syncScanDetectFromBridge();       // pull scan-stop squelch state + noise floor (A.5.3.3)
   syncEnhFreqSelectFromBridge();    // pull Enhanced Freq-Select state from core
   syncVoiceFromBridge();            // pull voice-passthrough arm/mode state from core
   syncLocationFromBridge();         // pull Station Location & Propagation from core
@@ -2385,6 +2386,7 @@ function saveSettings() {
   applyLqaToBridge();           // Record-LQA toggle → core (A.5.4.1.1)
   applyRelinkToBridge();        // Auto-Relink toggle + threshold → core (A.5.4.5)
   applyLbtToBridge();           // LBT occupancy margin/enable/override → core (A.5.4.7)
+  applyScanDetectToBridge();    // scan-stop squelch enable + margin → core (A.5.3.3)
   applyEnhFreqSelectToBridge(); // Enhanced Freq-Select → core (A.5.6.3.2)
   applyLogLevelToBridge();      // HamlibRadio debug logging → core
   applySoundAuto();             // interval may have changed → re-assert periodic mode
@@ -2744,6 +2746,42 @@ function syncLbtFromBridge() {
         ? `Channel occupied — level ${Math.round(r.level_db)} dB, floor ${Math.round(r.floor_db)} dB (A.5.4.7.2)`
         : 'Channel clear (A.5.4.7.2)';
     }
+  });
+}
+
+// Push §A.5.3.3 scan-stop squelch settings to the core: opt-in enable + dB margin
+// above the auto-calibrated noise floor. Fired on change and from saveSettings().
+function applyScanDetectToBridge() {
+  if (!bridgeConnected) return;
+  const margin = parseFloat(document.getElementById('cfgScanMargin')?.value ?? '3');
+  bridgeSend('SCAN_DETECT_SET', {
+    enabled:   document.getElementById('cfgScanSquelch')?.checked ?? false,
+    margin_db: Number.isFinite(margin) ? margin : 3,
+  });
+}
+
+// Sync scan-stop squelch state (incl. live noise floor) from the core into the GUI.
+function syncScanDetectFromBridge() {
+  bridgeSend('SCAN_DETECT_GET', {}, (r) => {
+    if (!r.ok) return;
+    const elE = document.getElementById('cfgScanSquelch');
+    const elM = document.getElementById('cfgScanMargin');
+    if (elE && typeof r.enabled   === 'boolean') elE.checked = r.enabled;
+    if (elM && typeof r.margin_db === 'number')  elM.value   = Math.round(r.margin_db);
+    const ro = document.getElementById('scanFloorReadout');
+    if (ro && typeof r.floor_db === 'number') {
+      const base = (typeof r.baseline_db === 'number' && r.baseline_db > 0)
+        ? `, cal ${Math.round(r.baseline_db)}` : '';
+      ro.textContent = `floor ${Math.round(r.floor_db)} dB${base}`;
+    }
+  });
+}
+
+// Operator "Calibrate": snapshot the current live noise floor as the baseline.
+function calibrateScanDetector() {
+  if (!bridgeConnected) return;
+  bridgeSend('SCAN_DETECT_CALIBRATE', {}, (r) => {
+    if (r && r.ok) syncScanDetectFromBridge();
   });
 }
 

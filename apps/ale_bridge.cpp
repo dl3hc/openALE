@@ -680,6 +680,30 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("floor_db",          mj::Value::number(ctrl.lbt_floor_db()));
         return mj::dump(r);
     }
+    // §A.5.3.3 stage-1 operator squelch: calibrated sensitivity for the scan-stop
+    // detector. enabled: opt-in (OFF ⇒ level-invariant detector, default). margin_db:
+    // how far a signal must sit above the learned noise floor to stop scanning.
+    if (cmd == "SCAN_DETECT_SET") {
+        if (msg.has("enabled"))
+            ctrl.set_scan_squelch_enabled(msg.get_bool("enabled"));
+        if (msg.has("margin_db"))
+            ctrl.set_scan_detect_margin_db(static_cast<float>(msg.get_number("margin_db")));
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "SCAN_DETECT_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("enabled",      mj::Value::boolean(ctrl.scan_squelch_enabled()));
+        r.set("margin_db",    mj::Value::number(ctrl.scan_detect_margin_db()));
+        r.set("floor_db",     mj::Value::number(ctrl.scan_floor_db()));
+        r.set("baseline_db",  mj::Value::number(ctrl.scan_floor_baseline_db()));
+        return mj::dump(r);
+    }
+    if (cmd == "SCAN_DETECT_CALIBRATE") {
+        const float snap = ctrl.calibrate_scan_detector();
+        mj::Value r = make_reply(msg, true);
+        r.set("baseline_db", mj::Value::number(snap));
+        return mj::dump(r);
+    }
     if (cmd == "RELINK_SET") {
         // relink_enabled: auto-renegotiate channel via TWAS + re-call when a
         // better channel is known post-LINKED (A.5.4.5 bilateral selection).
@@ -1354,7 +1378,7 @@ int main(int argc, char* argv[]) {
         }
 
         // Audio first: words must be delivered to the SM before the dwell check
-        // so a word decoded in the same tick as expiry sets TRAFFIC_PAUSE on the
+        // so a word decoded in the same tick as expiry sets SCAN_PAUSE on the
         // correct channel rather than the one hopped to (§A.5.3.3 Bug 2 fix).
         voice_mgr.attach(audio.get(), radio.get());
         transport.attach(audio.get());

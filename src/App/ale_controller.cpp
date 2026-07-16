@@ -346,6 +346,15 @@ ALEController::ALEController()
 
 void  ALEController::set_lbt_margin_db(float db) { occupancy_.set_margin_db(db); }
 float ALEController::lbt_margin_db() const       { return occupancy_.margin_db(); }
+
+// §A.5.3.3 stage-1 operator squelch — pass-through to the demodulator's detector.
+void  ALEController::set_scan_squelch_enabled(bool on)   { demodulator_.set_scan_squelch_enabled(on); }
+bool  ALEController::scan_squelch_enabled() const        { return demodulator_.scan_squelch_enabled(); }
+void  ALEController::set_scan_detect_margin_db(float db) { demodulator_.set_scan_detect_margin_db(db); }
+float ALEController::scan_detect_margin_db() const       { return demodulator_.scan_detect_margin_db(); }
+float ALEController::scan_floor_db() const               { return demodulator_.scan_floor_db(); }
+float ALEController::scan_floor_baseline_db() const      { return demodulator_.scan_floor_baseline_db(); }
+float ALEController::calibrate_scan_detector()           { return demodulator_.calibrate_scan_detector(); }
 void  ALEController::set_lbt_override(bool on)   { sm_.set_lbt_override(on); }
 bool  ALEController::lbt_override() const        { return sm_.lbt_override(); }
 bool  ALEController::lbt_busy() const            { return occupancy_.is_busy(); }
@@ -507,11 +516,16 @@ void ALEController::wire_callbacks()
         dispatch(pal::EventType::ALE_IDLE_WARNING, "", static_cast<int32_t>(remaining_sec));
     });
 
-    // §A.5.3.3 stage 1: ALE energy on the current channel → open TRAFFIC_PAUSE
+    // §A.5.3.3 stage 1: ALE energy on the current channel → open SCAN_PAUSE
     // before a fully-decoded word arrives.  Completely separate from LBT — this is
     // the RX-scan detection path; lbt_channel_busy_() / set_channel_busy_query() are untouched.
     demodulator_.set_ale_energy_callback([this]() {
-        sm_.begin_scan_traffic_pause(now_ms_);
+        // Ignore energy while a tune is still in flight: mid-tune audio is from
+        // the previous channel, so a detection then would pause on the wrong
+        // channel.  (The modem's 80 ms HOP_GUARD covers the common case; this
+        // makes it robust when settle latency exceeds that guard.)
+        if (radio_ && !radio_->is_tune_settled()) return;
+        sm_.begin_scan_pause(now_ms_);
     });
 
     // Channel hops (scan / calling) → radio frequency/mode change
@@ -535,6 +549,17 @@ void ALEController::wire_callbacks()
 void ALEController::set_radio(pal::IRadio* r)
 {
     radio_ = r;
+    // Gate the scanner's hop on the radio actually having settled on the channel.
+    // is_tune_settled() is true for sync backends (mocks, blocking serial radios)
+    // so the gate is a no-op there; async backends (HamlibRadio) return false
+    // while a tune is in flight.  This withholds the next hop until the current
+    // tune settled — which keeps "at most one tune in flight" (a Stop or ALE-
+    // scan pause halts the radio within one physical tune) and restores the
+    // spec dwell cadence, since the dwell is measured from the hop and the tune
+    // latency overlaps it instead of being added on top.
+    sm_.set_hop_ready_query([this]() {
+        return !radio_ || radio_->is_tune_settled();
+    });
 }
 
 // ── Radio / VFO control (manual tuning) ────────────────────────────────────────
@@ -1270,6 +1295,25 @@ void ALEController::update(uint32_t now_ms)
     // would poison the floor — same treatment as ALE TX).
     occupancy_.set_active(lbt_occupancy_enabled_ && demodulator_.enabled() && !voice_tx_active_);
 
+    // §A.5.3.3 stage-1: arm the ALE-energy detector on the settle EDGE, not at the
+    // hop.  With an async radio the audio right after a hop is still the previous
+    // channel until the tune completes; the stage-1 detector is level-invariant and
+    // fires ~30 ms into any 8-FSK, so if it ran on that pre-settle audio it would fire,
+    // get dropped by the is_tune_settled() gate on the energy callback, and its one-shot
+    // latch would then block detection of the real (settled) signal for the rest of the
+    // dwell — the channel would be hopped over.  Re-arming (mark_channel_hop resets the
+    // detector + latch) when is_tune_settled() goes false→true guarantees detection
+    // accumulates only on the channel we are actually listening to.  For sync backends
+    // is_tune_settled() is always true, so there is no edge and behaviour is unchanged.
+    if (sm_.get_state() == ALEState::SCANNING) {
+        const bool settled = !radio_ || radio_->is_tune_settled();
+        if (settled && !scan_was_settled_)
+            demodulator_.mark_channel_hop();
+        scan_was_settled_ = settled;
+    } else {
+        scan_was_settled_ = false;
+    }
+
     tick_ptt_timing(now_ms);
     tick_sm(now_ms);
     tick_frame_settle(now_ms);
@@ -1281,24 +1325,53 @@ void ALEController::update(uint32_t now_ms)
     tick_mode_verify(now_ms);
 }
 
-// Check delays after a channel/mode command: first check catches an SDR
-// front-end's asynchronous band-mode revert (~1-2 GUI timer ticks after the
-// freq change), the later ones cover stragglers. All lie inside the radio
+// Check delays after a (non-scanning) channel/mode command: first check catches
+// an SDR front-end's asynchronous band-mode revert (~1-2 GUI timer ticks after
+// the freq change), the later ones cover stragglers. All lie inside the radio
 // backend's re-assert recency window, and each check is a single non-blocking
 // CAT read (sync_from_radio) — no sleeps, nothing on the hop path itself.
 static constexpr uint32_t MODE_VERIFY_DELAYS_MS[] = { 300, 700, 1500 };
 static constexpr int      MODE_VERIFY_CHECKS =
     static_cast<int>(sizeof(MODE_VERIFY_DELAYS_MS) / sizeof(MODE_VERIFY_DELAYS_MS[0]));
 
+// While SCANNING, the per-hop schedule_mode_verify() re-arm is suppressed (a
+// 200 ms dwell would supersede the +300 ms one-shot deadline before it ever
+// fired). Instead a background verify runs on this fixed bounded cadence,
+// decoupled from the hops: one sync_from_radio() every ~400 ms re-asserts the
+// intended mode if an async band revert pulled it away, catching residual
+// reverts within a few hops. sync_from_radio is a CmdSync — it never touches
+// tunes_in_flight_, so it never gates hop_ready / the hop rate. Quisk's per-band
+// memory trains after the first scan pass, so reverts — and thus these
+// corrections — taper off.
+static constexpr uint32_t MODE_VERIFY_SCAN_CADENCE_MS = 400;
+
 void ALEController::schedule_mode_verify()
 {
     if (!radio_) return;
+    // While SCANNING the background cadence in tick_mode_verify handles verify;
+    // arming the one-shot here would just be superseded by the next 200 ms hop.
+    if (sm_.get_state() == ALEState::SCANNING) return;
     mode_verify_checks_left_ = MODE_VERIFY_CHECKS;
     mode_verify_deadline_ms_ = now_ms_ + MODE_VERIFY_DELAYS_MS[0];
 }
 
 void ALEController::tick_mode_verify(uint32_t now_ms)
 {
+    if (sm_.get_state() == ALEState::SCANNING) {
+        // Fixed-cadence background verify, decoupled from the per-hop re-arm.
+        // Lazily arm on the first scanning tick so the cadence is measured from
+        // the start of scanning, not from whatever value was left behind.
+        if (mode_verify_scan_deadline_ms_ == 0)
+            mode_verify_scan_deadline_ms_ = now_ms + MODE_VERIFY_SCAN_CADENCE_MS;
+        if (now_ms >= mode_verify_scan_deadline_ms_) {
+            if (radio_) radio_->sync_from_radio();  // backend re-asserts intended mode if reverted
+            mode_verify_scan_deadline_ms_ = now_ms + MODE_VERIFY_SCAN_CADENCE_MS;
+        }
+        return;
+    }
+
+    // Non-scanning one-shot ops: deferred multi-check path.
+    mode_verify_scan_deadline_ms_ = 0;  // leaving scanning — re-arm cadence on next scan
     if (mode_verify_checks_left_ <= 0 || now_ms < mode_verify_deadline_ms_) return;
     if (radio_) radio_->sync_from_radio();  // backend re-asserts intended mode if reverted
     --mode_verify_checks_left_;
@@ -3070,6 +3143,8 @@ bool ALEController::export_settings(const std::string& path)
     f << "manual_accept_mode=" << (config_.manual_accept_mode ? 1 : 0) << "\n";
     f << "manual_accept_timeout_ms=" << config_.accept_timeout_ms << "\n";
     f << "scan_dwell_ms=" << config_.scan_dwell_ms << "\n";
+    f << "scan_squelch_enabled=" << (scan_squelch_enabled() ? 1 : 0) << "\n";
+    f << "scan_detect_margin_db=" << scan_detect_margin_db() << "\n";
     f << "sounding_interval_sec=" << config_.sounding_interval_sec << "\n";
     f << "sounding_use_twas=" << (config_.sounding_use_twas ? "1" : "0") << "\n";
     f << "sounding_warning_lead_sec=" << config_.sounding_warning_lead_sec << "\n";
@@ -3165,6 +3240,10 @@ bool ALEController::import_settings(const std::string& path)
         } else if (key == "lqa_enabled") {
             lqa_enabled_val = (val == "1");
             has_lqa_enabled = true;
+        } else if (key == "scan_squelch_enabled") {
+            set_scan_squelch_enabled(val == "1");   // detector member, not in cfg
+        } else if (key == "scan_detect_margin_db") {
+            set_scan_detect_margin_db(std::stof(val));
         } else if (key == "relink_enabled") {
             cfg.relink_enabled = (val == "1");
         } else if (key == "relink_improvement_threshold") {

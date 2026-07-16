@@ -330,9 +330,6 @@ namespace ALETimingConstants {
     // Trc_min: minimum receiving-call window (Annex B: 2×Tc + Tx = 3×Trw for 1-word addr).
     // Also used as the LISTENING / WAIT_ACK base window for this SW-decoder implementation.
     constexpr uint32_t Trc_min_ms = 3u  * Trw_ms;  // 1176 ms
-    // Tcc_max: Tsc(C=10,1-word) + Tlc(1-word) = 20+2 = 22×Trw.
-    // Used as the AllCall-Pause timeout in SCANNING (T-10).
-    constexpr uint32_t Tcc_max_ms = 22u * Trw_ms;  // 8624 ms
 
     // ── Scanning sounding timing (A.5.3.3 / AC-SOUND-002-001) ───────────
     // Ts_max: maximum scan period across all receivers = 50 000 ms.

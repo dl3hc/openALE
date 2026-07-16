@@ -110,6 +110,25 @@ public:
     // independent radio state to read back (e.g. software modems, mocks).
     virtual bool sync_from_radio() { return false; }
 
+    // Block until all previously enqueued commands have been dispatched to the
+    // hardware.  The default is a no-op for synchronous backends; asynchronous
+    // backends (e.g. HamlibRadio) override this to drain the command queue.
+    // Primarily useful in tests that need to verify hardware-side effects of
+    // set_channel() / sync_from_radio() without introducing arbitrary sleeps.
+    virtual void flush() {}
+
+    // True when the radio has finished ("settled on") every tune command
+    // (set_channel / set_frequency / set_mode) issued so far — i.e. no tune is
+    // still outstanding on the hardware. Synchronous backends (mocks, software
+    // modems, blocking serial radios) settle inside the setter itself, so the
+    // default is always true and any settle gate becomes a no-op for them.
+    // Asynchronous backends (HamlibRadio) return false while a tune is in flight
+    // on the I/O worker. The ALE controller relays this to the scanner as its
+    // hop-ready predicate: the SM only issues the next hop once the current tune
+    // has settled, which both restores the 200 ms dwell cadence (tune latency
+    // overlaps the dwell) and upholds "at most one tune in flight".
+    virtual bool is_tune_settled() const { return true; }
+
     // PTT control (part of radio, not separate)
     virtual void set_ptt(bool transmit) = 0;
     virtual bool is_transmitting() const = 0;

@@ -84,12 +84,14 @@
 #include "Word/ale_word.h"
 #include "Word/ale_sequence.h"
 #include <array>
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <queue>
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 
 namespace ale {
 namespace ALE2GModem {
@@ -196,21 +198,52 @@ public:
     // ── §A.5.3.3 stage-1 scanning detection ──────────────────────────────────
 
     /// Call on every channel hop to arm the new-channel guard (§A.5.3.3 stage 1).
-    /// Resets the write-position anchor and triple-agreement detector so stage-1
-    /// can fire within 28 ms on the new channel without ring-buffer contamination.
+    ///
+    /// Only sets hop_pending_ (atomic).  push_samples() — which always runs on the
+    /// audio thread — applies the actual tracker reset and ring zero when it observes
+    /// the flag.  This avoids a data race: all mutable demodulator state (tracker_,
+    /// ring_, hop_offset_, etc.) is exclusively owned by the audio thread; the
+    /// controller thread only signals intent via this atomic flag.
     void mark_channel_hop() {
-        hop_offset_       = write_pos_;
-        energy_fired_     = false;
-        ale_triple_count_ = 0;
-        half_blk_accum_   = 0;
-        std::fill(half_blk_tone_, half_blk_tone_ + 3, uint8_t(0xFF));
+        hop_pending_.store(true, std::memory_order_release);
     }
 
-    /// Register the §A.5.3.3 stage-1 callback: fired once per channel after
-    /// unanimous_votes ≥ ALE_STAGE1_MIN_VOTES is observed and the decode window
-    /// is entirely new-channel audio.  Pass nullptr to disable.
+    /// Register the §A.5.3.3 stage-1 callback: fired once per channel when the
+    /// tone-diversity detector confirms ALE traffic (≥ MIN_DISTINCT_TONES distinct
+    /// tones each seen as a per-symbol triple within DIVERSITY_WINDOW).  nullptr disables.
     void set_ale_energy_callback(std::function<void()> cb) {
         ale_energy_cb_ = std::move(cb);
+    }
+
+    // ── §A.5.3.3 stage-1 operator squelch (optional, default OFF) ─────────────
+    // The detector above is level-invariant, so it works untouched on any audio
+    // path.  This is a SEPARATE operator control: a global, audio-path-calibrated
+    // noise floor + a dB margin that lets the operator require a signal to be at
+    // least `margin_db` above the measured noise before scanning stops on it (i.e.
+    // "ignore weak traffic").  Default OFF → detector behaviour is unchanged.
+    void  set_scan_squelch_enabled(bool on) { scan_squelch_enabled_ = on; }
+    bool  scan_squelch_enabled() const      { return scan_squelch_enabled_; }
+    /// Minimum signal-above-floor to trigger. 3 dB ≈ 0 dB SINAD, 6 dB ≈ 4 dB, 10 dB ≈ 8 dB.
+    void  set_scan_detect_margin_db(float db) {
+        scan_detect_margin_lin_ = std::pow(10.0f, (db < 0.0f ? 0.0f : db) / 10.0f);
+    }
+    float scan_detect_margin_db() const {
+        return 10.0f * std::log10(scan_detect_margin_lin_);
+    }
+    /// Learned global in-band noise floor, in dB (10·log10 of the tracked tonal power);
+    /// 0 until the first non-tonal sub-block trains it.  For GUI display / calibration.
+    float scan_floor_db() const {
+        return scan_floor_valid_ ? 10.0f * std::log10(scan_floor_ + 1.0f) : 0.0f;
+    }
+    /// Operator "calibrate" — snapshot the current live floor as the persisted baseline.
+    /// Returns the snapshotted floor in dB (0 if not yet trained).
+    float calibrate_scan_detector() {
+        scan_floor_baseline_ = scan_floor_;
+        return scan_floor_db();
+    }
+    /// Last operator-calibrated floor snapshot, in dB (0 until calibrate is run).
+    float scan_floor_baseline_db() const {
+        return scan_floor_baseline_ > 0.0f ? 10.0f * std::log10(scan_floor_baseline_ + 1.0f) : 0.0f;
     }
 
 private:
@@ -225,19 +258,58 @@ private:
     static constexpr uint32_t BUF_CAP = WORD_SAMPLES + SAMPLES_PER_SYMBOL;  // 3200
 
     // ── §A.5.3.3 stage-1 scanning detection ──────────────────────────────────
-    // ALELite-style triple-agreement detector: every HALF_BLOCK_SAMPLES (32 = 4ms),
-    // compute the dominant ALE FSK tone; 3 consecutive half-blocks with the same tone
-    // = one "triple" (guaranteed by 8ms ALE symbols; noise/SSB won't sustain 12ms).
-    // ALE_FAST_STAGE1_TRIPLES consecutive triples → fire ale_energy_cb_ within 28ms.
-    static constexpr uint32_t HALF_BLOCK_SAMPLES      = SAMPLES_PER_SYMBOL / 2; // 32 = 4ms
-    static constexpr uint8_t  ALE_FAST_STAGE1_TRIPLES = 5;   // 5 × 12ms triples = 28ms min
-    static constexpr uint8_t  ALE_STAGE1_MIN_VOTES    = 20;  // retained for documentation
+    // Level-invariant per-symbol-triple + tone-diversity detector (sim-locked
+    // 2026-07-16).  Faithful to ALELite's per-symbol confidence, with a gr-ale
+    // "> 2 distinct tones" guard added to reject a steady carrier that ALELite
+    // would false-stop on.
+    //
+    // Every SUBBLOCK_STEP (16 = 2ms, OVERLAPPED) we take an 8-tone Goertzel over the
+    // most recent ANALYSIS_SAMPLES (32 = 4ms).  A sub-block's winning tone counts only
+    // if the block is *tonal*:
+    //   peakiness = 2*(best + strongest_neighbour_bin)/ANA² / block_mean_square ≥ STAGE1_PEAKINESS
+    // The +neighbour term absorbs 125 Hz scalloping (worst-case mistuning = half the
+    // 250 Hz tone spacing); the ratio is level-invariant, so no absolute audio-path
+    // calibration is needed here (that is a separate operator-facing squelch, not this
+    // path).  A per-symbol TRIPLE = TRIPLE_LEN consecutive same-winner sub-blocks
+    // (3×2ms = 6ms < the 8ms symbol, so it provably fits inside one symbol — unlike the
+    // previous 4ms non-overlapped blocks whose 12ms "triple" exceeded a symbol and only
+    // fired on lucky adjacent same-tone symbols).  On each triple we timestamp that
+    // tone; ale_energy_cb_ fires once when ≥ MIN_DISTINCT_TONES tones have a triple within
+    // DIVERSITY_WINDOW.  This fires on any 8-FSK data (~30ms) yet rejects noise/voice
+    // (few triples) and a steady carrier (only one active tone).
+    //
+    // HOP_GUARD_SAMPLES: stage-1 is suppressed for this many samples after a hop, only
+    // long enough to refill the ring after mark_channel_hop() zeroes it.  Async-tune
+    // latency is handled upstream by the controller, which drops the callback while
+    // !radio_->is_tune_settled(); the old 640-sample (80ms) guard duplicated that and
+    // ate most of the 200ms dwell.  64 samples (8ms = one symbol) is enough here.
+    static constexpr uint32_t ANALYSIS_SAMPLES   = SAMPLES_PER_SYMBOL / 2;  // 32 = 4ms Goertzel window
+    static constexpr uint32_t SUBBLOCK_STEP      = SAMPLES_PER_SYMBOL / 4;  // 16 = 2ms overlap step
+    static constexpr uint32_t TRIPLE_LEN         = 3;                       // per-symbol triple (6ms < 8ms)
+    static constexpr float    STAGE1_PEAKINESS   = 0.50f;                   // tonality gate (sim-locked)
+    static constexpr uint32_t DIVERSITY_WINDOW   = 800;                     // 100ms freshness window
+    static constexpr uint32_t MIN_DISTINCT_TONES = 3;                       // gr-ale "> 2 tones" carrier guard
+    static constexpr uint32_t HOP_GUARD_SAMPLES  = SAMPLES_PER_SYMBOL;      // 64 = 8ms ring-refill guard
     std::function<void()>     ale_energy_cb_;
-    uint32_t                  hop_offset_       = 0;
-    bool                      energy_fired_     = false;
-    uint8_t                   half_blk_tone_[3] = {0xFF, 0xFF, 0xFF};
-    uint8_t                   ale_triple_count_ = 0;
-    uint32_t                  half_blk_accum_   = 0;
+    std::atomic<bool>         hop_pending_ {false};  // controller signals hop; audio thread applies it
+    uint32_t                  hop_offset_    = 0;
+    bool                      energy_fired_  = false;
+    uint32_t                  subblk_accum_  = 0;
+    uint8_t                   subblk_tone_[TRIPLE_LEN] = {0xFF, 0xFF, 0xFF};   // last TRIPLE_LEN sub-block winners
+    int64_t                   last_triple_pos_[NUM_TONES];                     // write_pos_ of each tone's last triple
+
+    // ── §A.5.3.3 stage-1 operator squelch state (default OFF) ─────────────────
+    // Global in-band noise floor: asymmetric EWMA of the winner+neighbour tonal
+    // power over NON-tonal sub-blocks.  Learned across every empty channel a scan
+    // visits and NOT reset by mark_channel_hop() — it is the audio-path floor, not a
+    // per-channel value, so it is never poisoned by landing mid-transmission.
+    static constexpr float SCAN_FLOOR_ALPHA_UP   = 0.05f;  // slow: noise blocks pull floor up
+    static constexpr float SCAN_FLOOR_ALPHA_DOWN  = 0.30f;  // fast: quiet restores the floor
+    bool   scan_squelch_enabled_   = false;                 // operator opt-in; OFF ⇒ pure level-invariant
+    float  scan_detect_margin_lin_ = 1.9953f;               // 3 dB default (10^0.3); min ≈ 0 dB SINAD
+    float  scan_floor_            = 0.0f;                    // tracked global in-band noise floor (tonal power)
+    float  scan_floor_baseline_   = 0.0f;                    // last operator-calibrated snapshot
+    bool   scan_floor_valid_      = false;
 
     // ── Signal-extraction working set ──────────────────────────────────────
     bool                 enabled_       = true;
@@ -266,8 +338,12 @@ private:
     // Uses tracker_.golay_mode() for the FEC operating point.
     DecodedCandidate try_decode_() const;
 
-    // Dominant ALE FSK tone (0–7) over the last HALF_BLOCK_SAMPLES in the ring.
-    uint8_t dominant_ale_tone_() const;
+    // Stage-1 sub-block tonality test over the last ANALYSIS_SAMPLES in the ring.
+    // Returns true when the block is tonal (peakiness ≥ STAGE1_PEAKINESS) and sets
+    // winner to the winning ALE tone rank (0–7); returns false otherwise.  Always sets
+    // tonal_pow to the winner+neighbour mean-square power (used by the operator squelch
+    // floor, whether or not the block is tonal).
+    bool subblock_tonal_(uint8_t& winner, float& tonal_pow) const;
 
     void check_silence_reset_(int16_t s);
 };

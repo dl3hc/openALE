@@ -1122,6 +1122,22 @@
             </div>
             <label class="ftoggle"><input type="checkbox" id="cfgLbtOverride" onchange="applyLbtToBridge()"><span class="ftrack"></span></label>
           </div>
+
+          <hr class="fsep">
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Scan Stop Squelch</div>
+              <div class="ftoggle-desc">Optional sensitivity control for the scan-stop detector (§A.5.3.3). Off (default): stop on any ALE signal. On: only stop when a signal sits at least the margin above the auto-calibrated audio-path noise floor — so scanning ignores weak traffic. Calibrate snapshots the current floor. Higher margin ≈ stronger signal required (3 dB ≈ any decodable signal, 6 dB ≈ fair, 10 dB ≈ solid).</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-left:12px">
+              <label class="ftoggle"><input type="checkbox" id="cfgScanSquelch" onchange="applyScanDetectToBridge()"><span class="ftrack"></span></label>
+              <input class="finput" id="cfgScanMargin" type="number" value="3" min="0" max="40" step="1" style="width:64px" title="Signal must exceed the noise floor by this many dB to stop scanning" onchange="applyScanDetectToBridge()">
+              <span style="font-size:11px;opacity:0.6">dB</span>
+              <button class="btn-sm" id="btnScanCalibrate" type="button" onclick="calibrateScanDetector()" title="Snapshot the current noise floor as the calibration baseline">Calibrate</button>
+              <span id="scanFloorReadout" style="font-size:11px;opacity:0.6;min-width:120px">floor —</span>
+            </div>
+          </div>
         </div><!-- /misc -->
 
       </div><!-- /scontent -->

@@ -754,6 +754,18 @@ if(HAMLIB_FOUND)
         target_link_libraries(test_mode_reassert ws2_32)
     endif()
     add_test(NAME ModeReassert COMMAND test_mode_reassert)
+
+    # Scan dwell timing + stop-on-detection over the REAL async netrigctl TCP path.
+    # Real pal::HamlibRadio (NET_RIGCTL) + ALEController scanning against a
+    # latency-injecting in-process rigctld mock.
+    add_executable(test_scan_dwell_tcp tests/radio/integration/test_scan_dwell_tcp.cpp)
+    target_link_libraries(test_scan_dwell_tcp
+        ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec ale_pal)
+    target_include_directories(test_scan_dwell_tcp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    if(WIN32)
+        target_link_libraries(test_scan_dwell_tcp ws2_32)
+    endif()
+    add_test(NAME ScanDwellTcp COMMAND test_scan_dwell_tcp)
 endif()
 
 # Temporary repro harness (brief-TX investigation) — not registered as a test.

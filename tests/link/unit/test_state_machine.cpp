@@ -1966,18 +1966,18 @@ bool test_link_idle_timeout_and_warning() {
 }
 
 // ============================================================================
-// TEST: Scan traffic-pause — foreign ALE traffic freezes dwell (A.5.3.1)
+// TEST: Scan scan-pause — foreign ALE traffic freezes dwell (A.5.3.1)
 //
 // Verifies that when a valid ALE word addressed to another station arrives
-// while scanning, the dwell timer is frozen (TRAFFIC_PAUSE) until Tdrw of
+// while scanning, the dwell timer is frozen (SCAN_PAUSE) until Tdrw of
 // silence elapses, then the scanner hops. Covers three word types:
 //   A. Foreign TO word        → WordEvent::NONE
 //   B. Foreign TIS conclusion → WordEvent::TIS_CALLER  (individual sounding)
 //   C. Foreign TWAS word      → WordEvent::TWAS_REJECTION (net sounding /
 //                                station present but NOT available for calls)
 // ============================================================================
-bool test_scan_traffic_pause() {
-    std::cout << "\n[TEST] Scan traffic-pause — foreign ALE traffic freezes dwell (A.5.3.1)\n";
+bool test_scan_pause() {
+    std::cout << "\n[TEST] Scan scan-pause — foreign ALE traffic freezes dwell (A.5.3.1)\n";
     std::cout << "=========================================================================\n";
 
     constexpr uint32_t DWELL_MS = 200u;
@@ -2009,7 +2009,7 @@ bool test_scan_traffic_pause() {
         sm.update(100);
         sm.process_received_word(make_word(wtype, addr));
 
-        // dwell would normally expire at t=200 — must NOT hop (TRAFFIC_PAUSE active)
+        // dwell would normally expire at t=200 — must NOT hop (SCAN_PAUSE active)
         sm.update(DWELL_MS);
         const bool no_hop_at_dwell = (tracker.count() == 0);
         std::cout << "  " << label << ": no hop at dwell expiry: "
@@ -2037,7 +2037,7 @@ bool test_scan_traffic_pause() {
     const bool pass_B = run_sub("B(TIS-sounding)", PreambleType::TIS, "SND");
     const bool pass_C = run_sub("C(TWAS-not-avail)", PreambleType::TWAS, "SND");
 
-    // Sub-test D: begin_scan_traffic_pause() (§A.5.3.3 stage-1) freezes dwell
+    // Sub-test D: begin_scan_pause() (§A.5.3.3 stage-1) freezes dwell
     // before any valid word arrives — simulates unanimous-vote energy callback.
     const bool pass_D = [&]() -> bool {
         std::cout << "  D(stage-1 energy before word):\n";
@@ -2056,7 +2056,7 @@ bool test_scan_traffic_pause() {
 
         // t=10: stage-1 fires (unanimous votes detected — no valid word yet)
         sm.update(10);
-        sm.begin_scan_traffic_pause(10);
+        sm.begin_scan_pause(10);
 
         // Dwell would normally expire at t=DWELL_MS — must NOT hop
         sm.update(DWELL_MS);
@@ -2071,7 +2071,7 @@ bool test_scan_traffic_pause() {
         return no_hop_at_dwell && hopped;
     }();
 
-    // Sub-test E: stage-2 valid words refresh traffic_settle_ms_ (multi-word chain)
+    // Sub-test E: stage-2 valid words refresh scan_pause_settle_ms_ (multi-word chain)
     const bool pass_E = [&]() -> bool {
         std::cout << "  E(stage-2 multi-word settle refresh):\n";
         ALEStateMachine sm;
@@ -2113,6 +2113,134 @@ bool test_scan_traffic_pause() {
     }();
 
     return pass_A && pass_B && pass_C && pass_D && pass_E;
+}
+
+// ============================================================================
+// TEST 23: hop-ready gate governs scan hops (dwell ANCHORED AT SETTLE + at-most-one)
+//
+// §A.5.3.3: the on-channel observation window must equal the configured dwell of
+// SETTLED listening, so the scanner has the full dwell to detect ALE traffic.  With
+// an async radio the tune completes some time after the hop; the dwell is therefore
+// anchored at the settle edge (hop_ready false→true), NOT at tune-issue.  Two
+// properties are pinned:
+//   • the settled window == dwell: a channel that settles at time S hops at S+dwell,
+//     regardless of how long the tune took (this REVERSES the earlier tune-issue
+//     anchoring, which collapsed the window to dwell−settle_latency — a 200 ms dwell
+//     with 150 ms TCP settle left only ~50 ms to detect, so signals were hopped over.
+//     The deliberate trade-off is a slower per-channel period = settle_latency+dwell);
+//   • the next hop is withheld while not-ready, even far past the dwell — at most one
+//     tune is ever in flight (the scan-stop guarantee).
+// A test-controlled bool stands in for the radio's is_tune_settled().
+// ============================================================================
+bool test_scan_async_tune_settle() {
+    std::cout << "\n[TEST 23] Hop-ready gate governs scan hops (settle-anchored dwell)\n";
+    std::cout << "===================================================================\n";
+
+    constexpr uint32_t DWELL_MS = 200u;
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    bool ready = false;  // radio hop-ready (settled) — test controls it
+    ALEStateMachine sm;
+    ChannelTracker tracker;
+    sm.set_channel_callback([&tracker](const Channel& ch) { tracker.record(ch); });
+    sm.set_hop_ready_query([&]() { return ready; });
+
+    ScanConfig cfg;
+    cfg.scan_list.push_back(Channel(7100000,  "USB"));
+    cfg.scan_list.push_back(Channel(14100000, "USB"));
+    cfg.scan_list.push_back(Channel(21000000, "USB"));
+    cfg.dwell_time_ms = DWELL_MS;
+    sm.configure_scan(cfg);
+    sm.process_event(ALEEvent::START_SCAN);   // ch0 issued at t=0
+    tracker.clear();                          // discard ch0 tune callback
+
+    // ── ch0: slow tune — not ready → no hop even far past the dwell (at-most-one).
+    sm.update(500);
+    check(sm.get_scanning_phase() == ScanningPhase::HOPPING, "stays HOPPING");
+    check(tracker.count() == 0, "no hop while not-ready, even 300ms past dwell");
+
+    // ── ch0 settles at t=500. The dwell RE-ANCHORS at the settle edge, so the full
+    //    dwell of settled listening starts now — NOT a prompt hop (old behaviour).
+    ready = true;
+    sm.update(500);
+    check(tracker.count() == 0, "settle re-anchors dwell → no prompt hop (window starts at settle)");
+    sm.update(699);   // 699 - 500 = 199 < 200
+    check(tracker.count() == 0, "no hop before settle+dwell (settled window still open)");
+    sm.update(700);   // 700 - 500 = 200 → settled window == dwell
+    check(tracker.count() == 1, "hop at settle+dwell → on-channel window == dwell");
+    // ch1 issued at t=700. Simulate its tune: not-ready until it settles.
+
+    // ── ch1: re-tuning (not ready) → no hop even past the dwell.
+    ready = false;
+    sm.update(950);   // 250 since issue, but not ready
+    check(tracker.count() == 1, "ch1 tune in flight → no hop past dwell (at-most-one)");
+
+    // ── ch1 settles at t=950 → full dwell from here → hop at 1150.
+    ready = true;
+    sm.update(950);
+    check(tracker.count() == 1, "ch1 settle re-anchors → no prompt hop");
+    sm.update(1149); // 199 < 200
+    check(tracker.count() == 1, "ch1 no hop before settle+dwell");
+    sm.update(1150); // 200
+    check(tracker.count() == 2, "ch1 hop at settle+dwell");
+
+    if (all_pass) std::cout << "PASS: hop-ready gate governs hops (settle-anchored)\n";
+    return all_pass;
+}
+
+// ============================================================================
+// TEST 24: STOP_SCAN while tuning → immediate stop, no phantom hops
+//
+// The other half of the scan-stop bug: when the operator presses Stop while a
+// tune is in flight (not hop-ready), the SM must stop issuing hops immediately.
+// The single in-flight tune drains on the hardware, but NO further hop may fire
+// after STOP — STOP_SCAN→IDLE stops running handle_scanning, so no new hop is
+// ever issued and the radio backend can hold at most the one in-flight tune.
+// ============================================================================
+bool test_scan_stop_while_tuning() {
+    std::cout << "\n[TEST 24] STOP_SCAN while tuning → immediate stop, no phantom hops\n";
+    std::cout << "===================================================================\n";
+
+    constexpr uint32_t DWELL_MS = 200u;
+
+    bool all_pass = true;
+    auto check = [&](bool cond, const char* label) {
+        std::cout << "  " << label << ": " << (cond ? "PASS" : "FAIL") << "\n";
+        all_pass = all_pass && cond;
+    };
+
+    bool ready = false;  // never settles — radio "stuck tuning" on ch0
+    ALEStateMachine sm;
+    ChannelTracker tracker;
+    sm.set_channel_callback([&tracker](const Channel& ch) { tracker.record(ch); });
+    sm.set_hop_ready_query([&]() { return ready; });
+
+    ScanConfig cfg;
+    cfg.scan_list.push_back(Channel(7100000,  "USB"));
+    cfg.scan_list.push_back(Channel(14100000, "USB"));
+    cfg.scan_list.push_back(Channel(21000000, "USB"));
+    cfg.dwell_time_ms = DWELL_MS;
+    sm.configure_scan(cfg);
+    sm.process_event(ALEEvent::START_SCAN);
+    tracker.clear();
+
+    // Mid-tune (HOPPING, not hop-ready).  Press Stop.
+    sm.update(5);
+    check(sm.get_scanning_phase() == ScanningPhase::HOPPING, "hopping before stop");
+    sm.process_event(ALEEvent::STOP_SCAN);
+    check(sm.get_state() == ALEState::IDLE, "STOP_SCAN → IDLE");
+
+    // Drive well past dwell many times — must never hop again (no phantom hops).
+    for (uint32_t t = 100; t <= 5000; t += 100) sm.update(t);
+    check(tracker.count() == 0, "no hop after STOP even past dwell/many ticks");
+
+    if (all_pass) std::cout << "PASS: stop while tuning is immediate\n";
+    return all_pass;
 }
 
 // ============================================================================
@@ -2159,7 +2287,9 @@ int run_all_tests() {
     if (test_thread_contract_check()) { pass_count++; } else { fail_count++; }
     if (test_sending_response_drain_timeout()) { pass_count++; } else { fail_count++; }
     if (test_link_idle_timeout_and_warning()) { pass_count++; } else { fail_count++; }
-    if (test_scan_traffic_pause())            { pass_count++; } else { fail_count++; }
+    if (test_scan_pause())            { pass_count++; } else { fail_count++; }
+    if (test_scan_async_tune_settle())        { pass_count++; } else { fail_count++; }
+    if (test_scan_stop_while_tuning())        { pass_count++; } else { fail_count++; }
 
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";

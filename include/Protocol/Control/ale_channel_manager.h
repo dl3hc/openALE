@@ -63,6 +63,18 @@ public:
     /** Returns true when dwell time has elapsed since the last hop. */
     bool check_dwell_timeout(uint32_t current_time_ms) const;
 
+    /** Wall-clock timestamp of the last hop (set by start()/hop_next()). Exposed
+     *  so the SM can anchor the synchronous-backend dwell to the tune-issue
+     *  time rather than the first update tick (preserves pre-async behavior). */
+    uint32_t last_hop_ms() const { return last_hop_ms_; }
+
+    /** Restart the dwell window from `current_time_ms` WITHOUT changing channel.
+     *  The SM calls this on the settle edge so the on-channel observation window
+     *  equals the full configured dwell, instead of (dwell − async tune latency).
+     *  §A.5.3.3: with an async radio the tune completes some time after the hop, so
+     *  anchoring at tune-issue would collapse a 200 ms dwell to ~(200 − settle) ms. */
+    void anchor_dwell(uint32_t current_time_ms) { last_hop_ms_ = current_time_ms; }
+
     // ── LQA score update ───────────────────────────────────────────────────
     /** Write a heuristic LQA score for channel at \p idx. */
     void update_lqa_score(uint32_t idx, float score);

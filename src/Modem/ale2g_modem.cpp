@@ -119,15 +119,35 @@ void Demodulator::reset()
     silence_count_ = 0;
     hop_offset_    = 0;
     energy_fired_  = false;
-    ale_triple_count_ = 0;
-    half_blk_accum_   = 0;
-    std::fill(half_blk_tone_, half_blk_tone_ + 3, uint8_t(0xFF));
+    subblk_accum_  = 0;
+    std::fill(subblk_tone_, subblk_tone_ + TRIPLE_LEN, uint8_t(0xFF));
+    for (uint32_t t = 0; t < NUM_TONES; ++t)
+        last_triple_pos_[t] = -static_cast<int64_t>(DIVERSITY_WINDOW) - 1;
+    // Full re-init clears the global squelch floor; a per-channel hop does NOT (the
+    // floor is the audio-path noise level, learned across channels).
+    scan_floor_       = 0.0f;
+    scan_floor_valid_ = false;
     tracker_.reset();
 }
 
 void Demodulator::push_samples(const int16_t* samples, uint32_t count)
 {
     if (!enabled_) return;
+
+    // Apply a pending channel hop atomically at batch boundary (audio-thread only).
+    // mark_channel_hop() (controller thread) only sets hop_pending_; all mutable
+    // demodulator state is reset here so there is no cross-thread data race.
+    if (hop_pending_.exchange(false, std::memory_order_acquire)) {
+        hop_offset_    = write_pos_;
+        energy_fired_  = false;
+        subblk_accum_  = 0;
+        std::fill(subblk_tone_, subblk_tone_ + TRIPLE_LEN, uint8_t(0xFF));
+        for (uint32_t t = 0; t < NUM_TONES; ++t)
+            last_triple_pos_[t] = static_cast<int64_t>(write_pos_)
+                                  - static_cast<int64_t>(DIVERSITY_WINDOW) - 1;
+        tracker_.reset();
+        std::fill(ring_.begin(), ring_.end(), int16_t(0));
+    }
 
     for (uint32_t i = 0; i < count; ++i) {
         const int16_t s = samples[i];
@@ -140,30 +160,56 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
         // Silence-gap grid reset.
         check_silence_reset_(s);
 
-        // §A.5.3.3 stage-1: ALELite-style triple-agreement detector.
-        // Every HALF_BLOCK_SAMPLES (32 = 4ms), record the dominant ALE FSK tone.
-        // Three consecutive half-blocks with the same tone = one "triple"; ALE 8-FSK
-        // symbols are 8ms (2 half-blocks) so ALE traffic guarantees consecutive agreement.
-        // Noise and SSB voice can't sustain one frequency for 12ms → triple rarely fires.
-        // ALE_FAST_STAGE1_TRIPLES consecutive triples → fire within 28ms of channel hop.
-        if (++half_blk_accum_ >= HALF_BLOCK_SAMPLES) {
-            half_blk_accum_ = 0;
-            if ((write_pos_ - hop_offset_) >= (3 * HALF_BLOCK_SAMPLES)) {
-                half_blk_tone_[2] = half_blk_tone_[1];
-                half_blk_tone_[1] = half_blk_tone_[0];
-                half_blk_tone_[0] = dominant_ale_tone_();
-                if (half_blk_tone_[0] == half_blk_tone_[1]
-                    && half_blk_tone_[1] == half_blk_tone_[2]
-                    && half_blk_tone_[0] != 0xFF)
-                {
-                    if (++ale_triple_count_ >= ALE_FAST_STAGE1_TRIPLES
-                        && ale_energy_cb_ && !energy_fired_)
-                    {
-                        energy_fired_ = true;
-                        ale_energy_cb_();
-                    }
+        // §A.5.3.3 stage-1: level-invariant per-symbol-triple + tone-diversity detector.
+        // Every SUBBLOCK_STEP (16 = 2ms, overlapped), test the last ANALYSIS_SAMPLES for
+        // a tonal winner; TRIPLE_LEN consecutive same-winner sub-blocks = a per-symbol
+        // triple (6ms < 8ms symbol).  Fire once ≥ MIN_DISTINCT_TONES tones have a triple
+        // within DIVERSITY_WINDOW — the 8-FSK signature that rejects noise, voice, and a
+        // steady carrier.  See ale2g_modem.h for the design + sim-locked constants.
+        if (++subblk_accum_ >= SUBBLOCK_STEP) {
+            subblk_accum_ = 0;
+            if ((write_pos_ - hop_offset_) >= HOP_GUARD_SAMPLES) {
+                subblk_tone_[2] = subblk_tone_[1];
+                subblk_tone_[1] = subblk_tone_[0];
+
+                uint8_t winner;
+                float   tonal_pow = 0.0f;
+                const bool tonal = subblock_tonal_(winner, tonal_pow);
+
+                if (!tonal) {
+                    // Non-tonal (noise) block → train the GLOBAL in-band floor.  This is
+                    // the audio-path noise floor, learned across every empty channel a
+                    // scan visits; it is never reset per hop (see mark_channel_hop).
+                    if (!scan_floor_valid_) { scan_floor_ = tonal_pow; scan_floor_valid_ = true; }
+                    else scan_floor_ += (tonal_pow < scan_floor_ ? SCAN_FLOOR_ALPHA_DOWN
+                                                                 : SCAN_FLOOR_ALPHA_UP)
+                                        * (tonal_pow - scan_floor_);
+                    subblk_tone_[0] = 0xFF;
                 } else {
-                    ale_triple_count_ = 0;
+                    // Tonal block → optional operator squelch: require the tone to stand
+                    // margin_db above the calibrated floor.  Default OFF ⇒ pass through.
+                    const bool pass = !scan_squelch_enabled_ || !scan_floor_valid_
+                                      || tonal_pow >= scan_floor_ * scan_detect_margin_lin_;
+                    subblk_tone_[0] = pass ? winner : uint8_t(0xFF);
+                }
+
+                if (subblk_tone_[0] != 0xFF
+                    && subblk_tone_[0] == subblk_tone_[1]
+                    && subblk_tone_[1] == subblk_tone_[2])
+                {
+                    last_triple_pos_[subblk_tone_[0]] = static_cast<int64_t>(write_pos_);
+
+                    if (ale_energy_cb_ && !energy_fired_) {
+                        uint32_t distinct = 0;
+                        for (uint32_t t = 0; t < NUM_TONES; ++t)
+                            if (static_cast<int64_t>(write_pos_) - last_triple_pos_[t]
+                                    <= static_cast<int64_t>(DIVERSITY_WINDOW))
+                                ++distinct;
+                        if (distinct >= MIN_DISTINCT_TONES) {
+                            energy_fired_ = true;
+                            ale_energy_cb_();
+                        }
+                    }
                 }
             }
         }
@@ -272,19 +318,41 @@ DecodedCandidate Demodulator::try_decode_() const
     return c;
 }
 
-uint8_t Demodulator::dominant_ale_tone_() const
+bool Demodulator::subblock_tonal_(uint8_t& winner, float& tonal_pow) const
 {
-    int16_t blk[HALF_BLOCK_SAMPLES];
-    for (uint32_t i = 0; i < HALF_BLOCK_SAMPLES; ++i)
-        blk[i] = ring_at(write_pos_ - HALF_BLOCK_SAMPLES + i);
-    float   best      = -1.0f;
-    uint8_t best_tone = 0;
-    for (int t = 0; t < NUM_TONES; ++t) {
-        const float p = goertzel_power(blk, static_cast<float>(TONE_FREQS_HZ[t]),
-                                       HALF_BLOCK_SAMPLES);
-        if (p > best) { best = p; best_tone = static_cast<uint8_t>(t); }
+    int16_t blk[ANALYSIS_SAMPLES];
+    for (uint32_t i = 0; i < ANALYSIS_SAMPLES; ++i)
+        blk[i] = ring_at(write_pos_ - ANALYSIS_SAMPLES + i);
+
+    // 8-tone Goertzel powers; find the winning bin and its strongest neighbour.
+    float   p[NUM_TONES];
+    float   best = -1.0f;
+    uint8_t best_rank = 0;
+    for (uint32_t t = 0; t < NUM_TONES; ++t) {
+        p[t] = goertzel_power(blk, static_cast<float>(TONE_FREQS_HZ[t]), ANALYSIS_SAMPLES);
+        if (p[t] > best) { best = p[t]; best_rank = static_cast<uint8_t>(t); }
     }
-    return best_tone;
+    float neighbour = 0.0f;
+    if (best_rank > 0)             neighbour = std::max(neighbour, p[best_rank - 1]);
+    if (best_rank < NUM_TONES - 1) neighbour = std::max(neighbour, p[best_rank + 1]);
+
+    // Peakiness = tonal power (winner + strongest neighbour) / total block energy.
+    // 2*goertzel/M² recovers the tone's mean-square power (== amp²/2 for a pure tone);
+    // the +neighbour term absorbs 125 Hz scalloping.  Level-invariant, so no absolute
+    // audio-path calibration is needed on this path (that is a separate operator squelch).
+    tonal_pow =
+        2.0f * (best + neighbour) / static_cast<float>(ANALYSIS_SAMPLES * ANALYSIS_SAMPLES);
+    float energy = 0.0f;
+    for (uint32_t i = 0; i < ANALYSIS_SAMPLES; ++i) {
+        const float x = static_cast<float>(blk[i]);
+        energy += x * x;
+    }
+    energy /= static_cast<float>(ANALYSIS_SAMPLES);
+
+    if (energy <= 0.0f) return false;
+    if (tonal_pow < STAGE1_PEAKINESS * energy) return false;
+    winner = best_rank;
+    return true;
 }
 
 } // namespace ALE2GModem

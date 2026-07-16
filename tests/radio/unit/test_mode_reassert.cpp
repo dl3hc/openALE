@@ -1,26 +1,37 @@
 /**
  * @file test_mode_reassert.cpp
- * @brief Regression guard: mode re-assertion must survive hamlib's lock-probe UB.
+ * @brief Regression guard: mode authority + scan-hot-path CAT-op count.
  *
- * hamlib's rig_set_mode() begins with an UNINITIALIZED `int locked_mode`,
- * fills it via rig_get_lock_mode() (return code ignored) and silently returns
- * RIG_OK WITHOUT transmitting when it is nonzero. Over netrigctl the
- * \get_lock_mode transaction fails against servers that don't implement it
- * (Quisk replies "RPRT -4"; sscanf on that buffer writes nothing), so whether
- * ANY mode command reaches the radio depends on stack garbage (hamlib 4.5
- * rig.c:2218, still in upstream master). HamlibRadio::start() neutralizes the
- * probe by nulling rig->caps->get_lock_mode, making rig_get_lock_mode() fall
- * back to the zero-initialized rig->state.lock_mode.
+ * Two things this test pins down:
  *
- * This test drives the REAL pal::HamlibRadio (NET_RIGCTL, model 2) against an
+ * 1) Mode re-assertion must survive hamlib's lock-probe UB. hamlib's
+ *    rig_set_mode() begins with an UNINITIALIZED `int locked_mode`, fills it
+ *    via rig_get_lock_mode() (return code ignored) and silently returns
+ *    RIG_OK WITHOUT transmitting when it is nonzero. Over netrigctl the
+ *    \get_lock_mode transaction fails against servers that don't implement it
+ *    (Quisk replies "RPRT -4"; sscanf on that buffer writes nothing), so
+ *    whether ANY mode command reaches the radio depends on stack garbage
+ *    (hamlib 4.5 rig.c:2218, still in upstream master). HamlibRadio::start()
+ *    neutralizes the probe by nulling rig->caps->get_lock_mode, making
+ *    rig_get_lock_mode() fall back to the zero-initialized rig->state.lock_mode.
+ *
+ * 2) The scan hot path must take the synchronous mode readback OFF the hot
+ *    path. assert_mode() used to do a 3-pass rig_get_mode/rig_set_mode loop
+ *    (1-3 extra "m" reads per hop); over netrigctl (~80-150 ms/rt) that blew
+ *    the 200 ms dwell to 500-1000 ms. It now sends exactly ONE rig_set_mode
+ *    and returns — the deferred background verify (sync_from_radio) catches
+ *    async reverts. This test counts CAT ops per hop to lock that in.
+ *
+ * It drives the REAL pal::HamlibRadio (NET_RIGCTL, model 2) against an
  * in-process rigctld-protocol server that emulates Quisk:
  *   - "\get_lock_mode" -> "RPRT -4" (counted)
  *   - a frequency change schedules an ASYNC band-memory mode revert to LSB
  *     ~80 ms later (Quisk's BandFromFreq behaviour)
  * and asserts:
- *   A) the intended USB mode converges despite the async revert (the
- *      sync_from_radio() backstop re-assert actually reaches the wire), and
- *   B) the client never sent "\get_lock_mode" — the deterministic detector:
+ *   A) a hop emits exactly one F + one M and ZERO per-hop mode readbacks;
+ *   B) the intended USB mode converges despite the async revert (the
+ *      sync_from_radio() background verify re-assert actually reaches the wire); and
+ *   C) the client never sent "\get_lock_mode" — the deterministic detector:
  *      pre-fix this fails regardless of what the stack garbage happens to be.
  */
 
@@ -85,6 +96,9 @@ struct MockState {
 
     std::atomic<int> lock_probes{0};   // "\get_lock_mode" received
     std::atomic<int> mode_sets{0};     // "M <mode> <bw>" received
+    std::atomic<int> mode_reads{0};    // "m"/"get_mode" received (per-hop readback detector)
+    std::atomic<int> freq_sets{0};     // "F <hz>" received
+    std::atomic<int> freq_reads{0};    // "f"/"get_freq" received
 };
 
 MockState        g_state;
@@ -153,6 +167,7 @@ std::string handle_line(const std::string& raw)
     if (cmd.rfind("set_lock_mode", 0) == 0) return "RPRT -4\n";
 
     if (cmd == "get_freq" || cmd == "f") {
+        ++g_state.freq_reads;
         std::lock_guard<std::mutex> lk(g_state.mtx);
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%.0f\nRPRT 0\n", g_state.freq_hz);
@@ -166,9 +181,11 @@ std::string handle_line(const std::string& raw)
             g_state.revert_pending = true;
             g_state.revert_at = steady_clock::now() + milliseconds(80);
         }
+        ++g_state.freq_sets;
         return "RPRT 0\n";
     }
     if (cmd == "get_mode" || cmd == "m") {
+        ++g_state.mode_reads;
         std::lock_guard<std::mutex> lk(g_state.mtx);
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%s\n%d\nRPRT 0\n",
@@ -252,12 +269,33 @@ static void test_mode_survives_async_band_restore(int port)
     check(radio.initialize(), "HamlibRadio::initialize()");
     check(radio.start(),      "HamlibRadio::start() (rig_open over TCP)");
 
+    // rig_open()'s cache-init handshake issues its own m/f reads; reset the
+    // counters so the post-hop counts reflect ONLY the set_channel hot path.
+    g_state.mode_sets.store(0);
+    g_state.mode_reads.store(0);
+    g_state.freq_sets.store(0);
+    g_state.freq_reads.store(0);
+    g_state.lock_probes.store(0);
+
     pal::Channel ch;
     ch.tx_frequency = ch.rx_frequency = 7050000;   // freq change -> schedules revert
     ch.tx_mode      = ch.rx_mode      = pal::RadioMode::USB;
     radio.set_channel(ch);
+    radio.flush();  // wait for async worker to complete impl_set_channel()
 
-    check(g_state.mode_sets > 0, "at least one M command reached the wire");
+    // ── Per-hop CAT-op count: the scan hot path must be exactly ONE F + ONE M
+    //    with ZERO synchronous mode readbacks. Pre-fix, assert_mode() did a
+    //    3-pass rig_get_mode/rig_set_mode loop — 1-3 extra "m" reads per hop —
+    //    which over netrigctl (~80-150 ms/rt) blew the 200 ms dwell to 500-
+    //    1000 ms. With the readback loop removed, a hop is freq-set + mode-
+    //    force = 2 round-trips, no readback.
+    check(g_state.freq_sets.load() == 1, "one F (freq set) per hop");
+    check(g_state.mode_sets.load() == 1, "one M (mode force) per hop");
+    check(g_state.mode_reads.load() == 0,
+          "ZERO per-hop mode readbacks (synchronous readback loop removed from hot path)");
+    check(g_state.lock_probes.load() == 0,
+          "no \\get_lock_mode on the hop (lock-probe neutralized in start())");
+    check(g_state.mode_sets.load() > 0, "at least one M command reached the wire");
 
     // Emulates ALEController::tick_mode_verify: deferred sync_from_radio()
     // polls after the channel command. Converged = the one-shot revert fired
@@ -266,6 +304,7 @@ static void test_mode_survives_async_band_restore(int port)
     for (int i = 0; i < 30 && !converged; ++i) {
         std::this_thread::sleep_for(milliseconds(100));
         radio.sync_from_radio();
+        radio.flush();  // wait for async worker to complete impl_sync_from_radio()
         std::lock_guard<std::mutex> lk(g_state.mtx);
         converged = g_state.revert_fired && g_state.mode == "USB";
     }

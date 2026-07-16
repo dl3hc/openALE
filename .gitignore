@@ -47,3 +47,10 @@ tools/bridge_dbg.log
 
 # Scratch / local duplicate of the repo (never commit)
 temp/
+
+# Transient local debug logs + playwright-mcp browser-session artifacts
+/*.log
+.playwright-mcp/
+
+# Root-level screenshots (local UI capture artifacts, never commit)
+/*.png

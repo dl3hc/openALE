@@ -154,21 +154,19 @@ void ALECallProcessor::react_scanning_(ALEStateMachine& sm, const WordRole& r)
 {
     detect_incoming_call_(sm, r);
     if (sm.current_state != ALEState::SCANNING) return;   // transitioned to HANDSHAKE
-
-    // TWAS conclusion → end AllCall pause (A.5.5.4.4)
-    if (sm.scanning_phase_ == ScanningPhase::ALLCALL_PAUSE
-        && r.type == WordRole::TWAS_WORD) {
-        sm.scanning_phase_ = ScanningPhase::HOPPING;
-        return;
-    }
+    // NOTE: AllCall reception is NOT a scanning sub-state.  An AllCall word triggers
+    // CALL_DETECTED above → SCANNING exits to HANDSHAKE (allcall_silent_), which
+    // receives the broadcast and its TIS/TWAS conclusion and returns to SCANNING.
+    // The scanner therefore has zero AllCall coupling — any non-call word below is
+    // just foreign traffic handled by the generic A.5.3.1 dwell freeze.
 
     // A.5.3.1: any valid word on this channel means ALE traffic is in progress.
     // Freeze the dwell timer so the scanner stays long enough to receive the full
     // frame (including TIS/TWAS conclusion and DATA address extension words)
-    // before deciding the traffic is not for us.  traffic_settle_ms_ is refreshed
+    // before deciding the traffic is not for us.  scan_pause_settle_ms_ is refreshed
     // on every word; handle_scanning() hops once Tdrw silence elapses.
-    sm.scanning_phase_    = ScanningPhase::TRAFFIC_PAUSE;
-    sm.traffic_settle_ms_ = sm.current_time_ms;
+    sm.scanning_phase_    = ScanningPhase::SCAN_PAUSE;
+    sm.scan_pause_settle_ms_ = sm.current_time_ms;
 }
 
 void ALECallProcessor::react_calling_(ALEStateMachine& sm, const WordRole& r)

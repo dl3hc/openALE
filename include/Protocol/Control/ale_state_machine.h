@@ -107,15 +107,22 @@ enum class CallingPhase {
 /**
  * \enum ScanningPhase
  * Sub-states within SCANNING per A.5.5.4.4/5 (T-10).
- *   HOPPING        — normales Channel-Hopping
- *   ALLCALL_PAUSE  — Channel-Hopping eingefroren; warte auf Message/Conclusion
- *   TRAFFIC_PAUSE  — valid ALE word received; dwell frozen until Tdrw silence,
+ *   HOPPING        — normal channel-hopping: hop once the dwell has elapsed AND
+ *                    the radio is hop-ready (settled). Dwell is measured from the
+ *                    hop, so the per-channel period is the spec dwell with tune
+ *                    latency overlapping it; the hop-ready gate (an injected
+ *                    predicate, see set_hop_ready_query) keeps at most one tune
+ *                    in flight without the FSM knowing anything about the radio.
+ *   SCAN_PAUSE  — valid ALE word received; dwell frozen until Tdrw silence,
  *                    then hop (allows full frame capture and TO_SELF detection)
+ *
+ * AllCall reception is deliberately NOT a scanning sub-state: an AllCall word
+ * fires CALL_DETECTED and the SM leaves SCANNING for HANDSHAKE (allcall_silent_),
+ * which handles the one-way broadcast and its conclusion, then returns here.
  */
 enum class ScanningPhase {
     HOPPING,
-    ALLCALL_PAUSE,
-    TRAFFIC_PAUSE,
+    SCAN_PAUSE,
 };
 
 /**
@@ -571,18 +578,38 @@ public:
     const AddressBook& get_address_book() const { return address_book; }
 
     /**
-     * §A.5.3.3 stage 1: open TRAFFIC_PAUSE when ALE energy is detected on this
-     * channel before a fully-decoded word arrives.  No-op unless SCANNING/HOPPING.
-     * Stage 2 (react_scanning_() on valid words) refreshes traffic_settle_ms_ so
+     * §A.5.3.3 stage 1: open SCAN_PAUSE when ALE energy is detected on this
+     * channel before a fully-decoded word arrives.  No-op unless SCANNING and
+     * currently HOPPING.  Traffic is only decodable once the radio has settled on
+     * the channel, so the controller suppresses the energy callback while a tune
+     * is in flight (see is_tune_settled()) — the FSM itself stays radio-agnostic.
+     * Stage 2 (react_scanning_() on valid words) refreshes scan_pause_settle_ms_ so
      * the Tdrw depart timer counts from the last word, not the stage-1 trigger.
      */
-    void begin_scan_traffic_pause(uint32_t t) {
+    void begin_scan_pause(uint32_t t) {
         if (current_state != ALEState::SCANNING) return;
         if (scanning_phase_ == ScanningPhase::HOPPING) {
-            scanning_phase_    = ScanningPhase::TRAFFIC_PAUSE;
-            traffic_settle_ms_ = t;
+            scanning_phase_    = ScanningPhase::SCAN_PAUSE;
+            scan_pause_settle_ms_ = t;
         }
     }
+
+    /**
+     * Hop-ready gate: an injected predicate answering "may the scanner hop now?"
+     * The scanner hops only when the dwell has elapsed AND this returns true.
+     * The controller wires it to the radio's is_tune_settled() so the next hop is
+     * withheld until the current tune has settled — which restores the spec dwell
+     * cadence (tune latency overlaps the dwell) and keeps at most one tune in
+     * flight, all without the FSM knowing the radio is asynchronous.  Mirrors the
+     * LBT set_channel_busy_query() pattern.  Unset (default) → always ready, i.e.
+     * the pure wall-clock dwell behavior for synchronous backends and tests.
+     */
+    void set_hop_ready_query(std::function<bool()> q) {
+        hop_ready_query_ = std::move(q);
+    }
+
+    /** Current scanning sub-phase (controller + tests). */
+    ScanningPhase get_scanning_phase() const { return scanning_phase_; }
 
 private:
     // ── State machine ─────────────────────────────────────────────────────
@@ -714,10 +741,15 @@ private:
     bool                 orderwire_transmitting_ = false;
     bool                 orderwire_double_burst_ = true;  ///< EFS=true; AMD=false (single)
 
-    // ── Scanning sub-state (T-10) ────────────────────────────────────────
+    // ── Scanning sub-state ───────────────────────────────────────────────
     ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING
-    uint32_t      allcall_pause_start_ms_;   ///< Startzeit der AllCall-Pause (T-10)
-    uint32_t      traffic_settle_ms_ = 0;   ///< Last-word time during TRAFFIC_PAUSE (A.5.3.1)
+    uint32_t      scan_pause_settle_ms_ = 0;   ///< Last-word time during SCAN_PAUSE (A.5.3.1)
+    bool          prev_hop_ready_ = true;      ///< last hop_ready_() while scanning — detect the settle edge to re-anchor the dwell
+
+    // Hop-ready gate (see set_hop_ready_query). Unset → always ready (pure
+    // wall-clock dwell); the controller wires it to radio is_tune_settled().
+    std::function<bool()> hop_ready_query_;
+    bool hop_ready_() const { return !hop_ready_query_ || hop_ready_query_(); }
 
     // ── Sounding sub-state (T-08) ─────────────────────────────────────────
     SoundingPhase sounding_phase_;        ///< Aktuelle Phase innerhalb SOUNDING
