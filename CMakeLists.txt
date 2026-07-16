@@ -201,7 +201,9 @@ target_link_libraries(ale_channel ale_stores ale_lqa ale_protocol ale_fsk_core a
 #   bash scripts/build_hamlib.sh
 #
 # Danach erkennt CMake die installierte Lib automatisch.
-# CAT/PTT deaktivieren: cmake -DHAMLIB_BUILD=OFF
+# Hamlib ist verpflichtend: fehlt es, schlägt das CMake-Configure mit
+# FATAL_ERROR fehl (ein Build ohne Hamlib linkt eine Binary, die beim ersten
+# GUI-Connect segfaultet). HAMLIB_BUILD=OFF wird nicht unterstützt.
 
 option(HAMLIB_BUILD "Hamlib-Support einbauen (Radio CAT/PTT)" ON)
 
@@ -249,11 +251,24 @@ if(HAMLIB_BUILD)
         endif()
     endif()
 
-    if(NOT HAMLIB_FOUND)
-        message(STATUS "Hamlib nicht gefunden — Radio CAT/PTT deaktiviert")
-        message(STATUS "  Einmalig bauen (MSYS2 MinGW64-Shell):")
-        message(STATUS "    bash scripts/build_hamlib.sh")
-    endif()
+endif()
+
+# Hamlib is mandatory: the bridge (apps/ale_bridge.cpp) unconditionally calls
+# pal::list_rigs() / pal::rig_port_type() / pal::hamlib_set_log_level(), which
+# are only defined when hamlib_radio.cpp is compiled (HAVE_HAMLIB). A "found
+# headers but missing runtime backends" build links but segfaults on the first
+# WS client connect (RIG_LIST barrage -> rig_load_all_backends). Fail configure
+# here whenever Hamlib was not detected -- including HAMLIB_BUILD=OFF, which
+# skips the search and would otherwise link a broken binary.
+if(NOT HAMLIB_FOUND)
+    message(FATAL_ERROR
+        "Hamlib NOT found. openALE hard-requires Hamlib -- a build without it "
+        "links a binary that segfaults on the first GUI connect. Install Hamlib "
+        "and re-run cmake:\n"
+        "  Linux:   sudo apt install libhamlib-dev   (then pkg-config finds it)\n"
+        "           or build from source: bash scripts/build_hamlib.sh\n"
+        "  Windows: bash scripts/build_hamlib.sh  (MSYS2 MinGW64) -> libs/hamlib-built/\n"
+        "HAMLIB_BUILD=OFF (no-radio build) is not currently supported.")
 endif()
 
 add_library(ale_pal
