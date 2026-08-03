@@ -18,8 +18,8 @@ for attribution.
 
 - **2G ALE protocol stack** — 8-FSK modem, Golay(24,12) FEC, word/preamble parsing, link state
   machine (IDLE → SCANNING → CALLING → HANDSHAKE → LINKED → SOUNDING)
-- **AQC-ALE extensions** — Data Elements, traffic classes, slotted response
-- **FED-STD-1052 ARQ** — selective-repeat ARQ, CRC-32, configurable data rates
+- **AQC-ALE extensions** — Data Elements, traffic classes, slotted response --> TBD
+- **FED-STD-1052 ARQ** — selective-repeat ARQ, CRC-32, configurable data rates --> TBD
 - **LQA** — bilateral BER/SINAD-led channel scoring, auto-sounding, auto-relink, and an optional
   solar-elevation/SFI propagation-aware ranking factor
 - **Radio control** — Hamlib CAT/PTT (required at build time; see [Build](#build))
