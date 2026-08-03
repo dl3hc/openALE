@@ -3,7 +3,7 @@
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue)]() [![License](https://img.shields.io/badge/license-MIT-blue)]() [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)]()
 
 **Repository:** https://github.com/dl3hc/openALE
-**Maintainer:** dl3hc
+**Maintainer:** DL3HC
 **License:** MIT
 
 openALE is a C++17 implementation of **MIL-STD-188-141B Automatic Link Establishment (ALE)**
