@@ -18,14 +18,14 @@ for attribution.
 
 - **2G ALE protocol stack** — 8-FSK modem, Golay(24,12) FEC, word/preamble parsing, link state
   machine (IDLE → SCANNING → CALLING → HANDSHAKE → LINKED → SOUNDING)
-- **AQC-ALE extensions** — Data Elements, traffic classes, slotted response
-- **FED-STD-1052 ARQ** — selective-repeat ARQ, CRC-32, configurable data rates
+- **AQC-ALE extensions** — Data Elements, traffic classes, slotted response --> TBD
+- **FED-STD-1052 ARQ** — selective-repeat ARQ, CRC-32, configurable data rates --> TBD
 - **LQA** — bilateral BER/SINAD-led channel scoring, auto-sounding, auto-relink, and an optional
   solar-elevation/SFI propagation-aware ranking factor
 - **Radio control** — Hamlib CAT/PTT (required at build time; see [Build](#build))
 - **WebSocket bridge + Web GUI** — the `openALE` binary serves a browser-based desktop and
   mobile UI directly, no separate web server needed
-- **ale_monitor** — passive RX-only traffic/LQA monitor, no TX capability
+- **ale_monitor** — passive RX-only traffic/LQA monitor
 - **Channel/Net model** — per-net channel files (`.ale`), per-net scanning/sounding policy
 
 Full protocol/architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
