@@ -25,6 +25,9 @@ libs/hamlib-built/
 .agents/
 .claude/
 
+# Python bytecode cache
+__pycache__/
+
 # Temporary / local files
 memory-bank/
 prompts/
