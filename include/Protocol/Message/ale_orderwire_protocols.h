@@ -1,0 +1,132 @@
+/**
+ * \file Protocol/Message/ale_orderwire_protocols.h
+ * \brief ALE orderwire message protocols (MIL-STD-188-141B A.5.7)
+ *
+ * Encoding for Basic Orderwire message types transmitted in the
+ * Message section of an ALE ACK frame (A.5.7.2.2)
+ * or in the ORDERWIRE sub-phase of an established link (LinkedPhase::ORDERWIRE).
+ *
+ *   AMD — Automatic Message Display (A.5.7.2)
+ *   DTM — Data Text Message        (A.5.7.3)
+ *   DBM — Data Block Message       (A.5.7.4)
+ */
+
+#pragma once
+#include "Word/ale_word.h"
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace ale {
+
+/**
+ * \enum LinkedPhase
+ * Sub-states within the LINKED state (A.5.5.3.5).
+ *
+ *   IDLE       — Link established, no active orderwire session.
+ *   ORDERWIRE  — Orderwire message exchange in progress (A.5.7).
+ *                AMD/DTM/DBM may only be initiated from this sub-state
+ *                (AMD in the ACK frame is an exception per A.5.7.2.2).
+ */
+enum class LinkedPhase {
+    IDLE,       ///< No active orderwire session
+    ORDERWIRE,  ///< Orderwire exchange active (A.5.7)
+};
+
+/**
+ * Encode an AMD text message into ALE words (A.5.7.2.2).
+ *
+ * Frame layout:
+ *   Word 0 : CMD AMD  — preamble=CMD, Expanded-64 payload (first 3 chars)
+ *   Word 1 : DATA     — chars 4–6
+ *   Word 2 : REP      — chars 7–9
+ *   Word 3 : DATA     — chars 10–12  (alternating DATA/REP)
+ *   …
+ *
+ * Rules:
+ * - Characters outside Expanded-64 (0x20–0x5F) are replaced with '?'.
+ * - The last triplet is padded with SP (0x20) if 1 or 2 chars are missing
+ *   (A.5.7.2.2 — no operator intervention required).
+ * - Maximum 30 words / 90 characters (A.5.7.2.3); excess is silently truncated.
+ * - Returns an empty vector if \p text is empty.
+ *
+ * This function is the single authoritative AMD encoder for the stack.
+ * ALEStateMachine::build_ack_words() delegates to it exclusively so that
+ * AMD words are guaranteed to be placed only in the ACK frame (A.5.7.2.2) —
+ * never in the calling frame's scanning, leading, or conclusion sections.
+ *
+ * \param text  ASCII text to encode (up to 90 characters).
+ * \return      Ordered list of ALEWords for the Message section.
+ */
+std::vector<ALEWord> encode_amd(const std::string& text);
+
+// ── DTM — Data Text Message (A.5.7.3) ────────────────────────────────────────
+
+/**
+ * DTM block: structured input for DTM encoding (A.5.7.3).
+ */
+struct DtmBlock {
+    std::string text;               ///< ASCII text payload (up to 90 characters)
+    bool        crc_enabled   = false; ///< Append CRC-16 word (A.5.7.3)
+    bool        arq_requested = false; ///< ARQ exchange requested (reserved)
+};
+
+/**
+ * Encode a DTM message into ALE words (A.5.7.3).
+ *
+ * Frame layout:
+ *   Word 0   : CMD DTM  — CMD preamble, Basic-38 identifier "DTM"
+ *   Word 1   : DATA     — first 3 chars of data (Expanded-64)
+ *   Word 2   : REP      — next 3 chars (Expanded-64)
+ *   …        — alternating DATA/REP
+ *   [Last]   : DATA/REP — CRC-16/CCITT encoded in 3 Expanded-64 chars (if crc_enabled)
+ *
+ * Rules:
+ * - Characters outside Expanded-64 (0x20–0x5F) are replaced with '?'.
+ * - Partial last data triplet is padded with SP (0x20).
+ * - Maximum 30 data words (90 data chars); excess is silently truncated.
+ * - Always produces at least one word (CMD DTM) even for empty text.
+ * - CRC word uses DATA or REP preamble (whichever avoids a consecutive duplicate).
+ *
+ * \param text         ASCII text to encode (up to 90 characters).
+ * \param crc_enabled  Append CRC-16 word if true.
+ * \return             Ordered list of ALEWords.
+ */
+std::vector<ALEWord> encode_dtm(const std::string& text, bool crc_enabled = false);
+
+// ── DBM — Data Block Message (A.5.7.4) ────────────────────────────────────────
+
+/**
+ * DBM block: structured input for DBM encoding (A.5.7.4).
+ *
+ * DBM supports transparent binary data — any byte value 0x00–0xFF is valid,
+ * unlike AMD/DTM which are restricted to Expanded-64 (0x20–0x5F).
+ * CRC-16/CCITT over the payload is appended when crc_enabled is true.
+ */
+struct DbmBlock {
+    std::vector<uint8_t> payload;        ///< Raw binary payload (transparent, any byte value)
+    uint16_t             crc16    = 0;   ///< CRC-16/CCITT result (filled by encode_dbm)
+    bool                 buffered = true; ///< Block is fully buffered before transmission (A.5.7.4)
+};
+
+/**
+ * Encode a DBM message into ALE words (A.5.7.4).
+ *
+ * Frame layout:
+ *   Word 0   : CMD DBM  — CMD preamble, Basic-38 identifier "DBM"
+ *   Word 1   : DATA     — first 3 bytes of binary payload
+ *   Word 2   : REP      — next 3 bytes
+ *   …        — alternating DATA/REP
+ *   [Last]   : DATA/REP — CRC-16 high byte, low byte, 0x00 padding (if crc_enabled)
+ *
+ * Binary transparency: each payload byte is stored in a 7-bit ALE character slot.
+ * The MSB of bytes > 0x7F is masked off (& 0x7F); partial last triplets are
+ * zero-padded.  Returns exactly one word (CMD DBM) for an empty payload.
+ *
+ * \param payload      Raw binary data (any byte values 0x00–0xFF).
+ * \param crc_enabled  Append CRC-16/CCITT word after data (default true; mandatory per A.5.7.4).
+ * \return             Ordered list of ALEWords for the Message section.
+ */
+std::vector<ALEWord> encode_dbm(const std::vector<uint8_t>& payload, bool crc_enabled = true);
+
+} // namespace ale

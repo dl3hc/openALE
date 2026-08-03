@@ -1,0 +1,59 @@
+# Build output
+build/
+build_*/
+
+# CTest scratch + diagnostic WAV dumps (tools/tx_wav_dump)
+Testing/
+diag_wav/
+
+# Root-level test-capture binary artifacts
+/*.raw
+/*.wav
+/*.pdb
+/*.bin
+
+# Hamlib Build-Artefakte (via scripts/build_hamlib.sh erstellt)
+libs/hamlib-src/
+libs/hamlib-build/
+libs/hamlib-built/
+
+
+# IDE / editor metadata
+.obsidian/
+.clinerules/
+.clineignore
+.agents/
+.claude/
+
+# Python bytecode cache
+__pycache__/
+
+# Temporary / local files
+memory-bank/
+prompts/
+python/
+graphify-out/
+ALELite/
+LinuxALE/
+docs/standards
+progress.md
+issues_preview/
+issues_preview.zip
+REQUIREMENTS.md
+pc_ale_overview.md
+feat_checklist.json
+FEATURES_DESIGN.md
+ALE_standard_188_141B_extracted.json
+
+# Transient bridge debug log
+tools/bridge_dbg.log
+
+# Scratch / local duplicate of the repo (never commit)
+temp/
+
+# Transient local debug logs + playwright-mcp browser-session artifacts
+/*.log
+.playwright-mcp/
+
+# Root-level screenshots (local UI capture artifacts, never commit)
+/*.png

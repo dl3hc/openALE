@@ -1,0 +1,96 @@
+/**
+ * \file ale_channel_manager.cpp
+ * \brief ALEChannelManager implementation
+ */
+
+#include "Protocol/Control/ale_channel_manager.h"
+#include <algorithm>
+
+namespace ale {
+
+void ALEChannelManager::configure(const ScanConfig& config) {
+    scan_ = config;
+    scan_started_ = false;  // next start() goes to ch0
+}
+
+void ALEChannelManager::add_channel(const Channel& ch) {
+    scan_.scan_list.push_back(ch);
+}
+
+const Channel* ALEChannelManager::current() const {
+    // Sounding-sweep override takes precedence over the scan-list current channel
+    // (see set_override()).
+    if (override_active_) return &override_ch_;
+    if (scan_.scan_list.empty()) return nullptr;
+    if (scan_.channel_index >= scan_.scan_list.size()) return nullptr;
+    return &scan_.scan_list[scan_.channel_index];
+}
+
+void ALEChannelManager::set_override(const Channel& ch) {
+    override_active_ = true;
+    override_ch_     = ch;
+    if (on_change_) on_change_(ch);  // tune the radio to the sweep channel
+}
+
+const Channel* ALEChannelManager::select_best() const {
+    if (scan_.scan_list.empty()) return nullptr;
+    const Channel* best = &scan_.scan_list[0];
+    for (const auto& ch : scan_.scan_list)
+        if (ch.lqa_score > best->lqa_score)
+            best = &ch;
+    return best;
+}
+
+void ALEChannelManager::start(uint32_t current_time_ms) {
+    if (scan_.scan_list.empty()) {
+        scan_.channel_index = 0;
+        last_hop_ms_ = current_time_ms;
+        return;
+    }
+    if (!scan_started_) {
+        // Fresh scan list (after configure()): always start at ch0.
+        scan_started_ = true;
+        last_hop_ms_ = current_time_ms;
+        apply(0, current_time_ms);
+    } else {
+        // Re-entry (returning from SOUNDING, failed CALLING, HANDSHAKE, etc.):
+        // resume from the next channel so ch0 doesn't accumulate extra dwells.
+        hop_next(current_time_ms);
+    }
+}
+
+bool ALEChannelManager::hop_next(uint32_t current_time_ms) {
+    if (scan_.scan_list.empty()) return false;
+    const uint32_t next = (scan_.channel_index + 1) % scan_.scan_list.size();
+    apply(next, current_time_ms);
+    last_hop_ms_ = current_time_ms;
+    return true;
+}
+
+bool ALEChannelManager::check_dwell_timeout(uint32_t current_time_ms) const {
+    return (current_time_ms - last_hop_ms_) >= scan_.dwell_time_ms;
+}
+
+void ALEChannelManager::update_lqa_score(uint32_t idx, float score) {
+    if (idx < scan_.scan_list.size())
+        scan_.scan_list[idx].lqa_score = score;
+}
+
+void ALEChannelManager::hop_calling(const Channel& ch) {
+    if (on_change_)
+        on_change_(ch);
+}
+
+void ALEChannelManager::set_channel_callback(std::function<void(const Channel&)> cb) {
+    on_change_ = std::move(cb);
+}
+
+void ALEChannelManager::apply(uint32_t index, uint32_t current_time_ms) {
+    if (index >= scan_.scan_list.size()) return;
+    scan_.channel_index = index;
+    scan_.scan_list[index].last_scan_time_ms = current_time_ms;
+    if (on_change_)
+        on_change_(scan_.scan_list[index]);
+}
+
+} // namespace ale

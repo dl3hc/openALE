@@ -1,0 +1,2864 @@
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+    /* ══════════════════════════════════════════════════════════════════════
+       DESIGN TOKENS
+       Background: Concept 2 blue-dark  |  Accent: Concept 1 green
+    ══════════════════════════════════════════════════════════════════════ */
+    :root {
+      --bg:         #0a0e14;
+      --bg2:        #111720;
+      --bg3:        #1a2230;
+      --bg-hover:   #1e2a3a;
+      --border:     #1e2d40;
+      --border-md:  #2a3d54;
+      --border-hi:  #3a5070;
+
+      --tx:         #c8d8e8;
+      --tx-muted:   #7a9ab8;
+      --tx-dim:     #3e5870;
+      --tx-bright:  #e8f4ff;
+
+      --accent:     #00dc8c;
+      --accent-dim: #00b872;
+      --accent-glow:    rgba(0,220,140,0.09);
+      --accent-glow-hi: rgba(0,220,140,0.20);
+
+      --s-idle:     #3e5870;
+      --s-scanning: #00dc8c;
+      --s-calling:  #ffca28;
+      --s-handshake:#29b6f6;
+      --s-linked:   #00e676;
+      --s-incoming: #ff8a65;
+      --s-error:    #ff5252;
+
+      --mono: 'JetBrains Mono', 'Cascadia Code', monospace;
+      --sans: 'Space Grotesk', system-ui, sans-serif;
+
+      --r-sm: 3px;
+      --r-md: 6px;
+      --r-lg: 10px;
+
+      --sp-1: 4px;  --sp-2: 6px;  --sp-3: 8px;
+      --sp-4: 12px; --sp-5: 16px; --sp-6: 24px;
+
+      --shadow-sm: 0 2px 8px rgba(0,0,0,0.35);
+      --shadow-md: 0 8px 28px rgba(0,0,0,0.45);
+      --shadow-lg: 0 16px 42px rgba(0,0,0,0.55);
+      --shadow-xl: 0 32px 80px rgba(0,0,0,0.70);
+
+      --t: 0.13s ease;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--tx);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       APP SHELL
+    ══════════════════════════════════════════════════════════════════════ */
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      padding: 10px;
+      gap: 8px;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       HEADER
+    ══════════════════════════════════════════════════════════════════════ */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      height: 52px;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      flex-shrink: 0;
+    }
+
+    .logo { display: flex; align-items: center; gap: 16px; }
+
+    .logo-mark {
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--tx-bright);
+      letter-spacing: 0.12em;
+    }
+    .logo-mark em { font-style: normal; color: var(--accent); }
+
+    .logo-divider {
+      width: 1px; height: 28px;
+      background: var(--border-md);
+    }
+
+    .logo-meta { display: flex; flex-direction: column; gap: 1px; }
+
+    .logo-std {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--tx-bright);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    .logo-self {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.1em;
+    }
+
+    .hdr-right { display: flex; align-items: center; gap: 10px; }
+
+    .hdr-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--tx-muted);
+      padding: 6px 14px;
+      border-radius: var(--r-md);
+      font-family: var(--sans);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.12s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .hdr-btn:hover {
+      background: var(--bg3);
+      border-color: var(--border-md);
+      color: var(--tx);
+    }
+
+    .status-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      background: var(--accent-glow);
+      border: 1px solid rgba(0,220,140,0.22);
+      border-radius: var(--r-md);
+    }
+
+    .busy-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      background: var(--accent-glow);
+      border: 1px solid rgba(0,220,140,.25);
+      border-radius: var(--r-md);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      cursor: default;
+    }
+    .busy-chip.busy {
+      background: rgba(255,167,38,.12);
+      border-color: rgba(255,167,38,.30);
+      color: #ffa726;
+    }
+    .busy-dot { background: var(--accent); }
+    .busy-chip.busy .busy-dot { background: #ffa726; animation: blink 0.9s infinite; }
+
+    /* Cross-tab busy indicator — lives in the header on mobile only (see the
+       mobile @media block). Hidden on desktop, where #busyChip in the signal
+       strip is the single indicator. */
+    .hdr-busy { display: none; }
+
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot.idle     { background: var(--s-idle); }
+    .dot.scanning { background: var(--s-scanning); animation: blink 2s infinite; }
+    .dot.calling  { background: var(--s-calling); animation: blink 0.65s infinite; }
+    .dot.handshake{ background: var(--s-handshake); animation: blink 0.5s infinite; }
+    .dot.linked   { background: var(--s-linked); }
+    .dot.incoming { background: var(--s-incoming); animation: blink 0.38s infinite; }
+
+    @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }
+    @keyframes pulse-red {
+      0%,100% { background: rgba(100,100,110,0.25); }
+      50%     { background: rgba(220,50,50,0.85); }
+    }
+
+    .status-text {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       MAIN GRID  (left col | right col)
+       Row 1: panels, Row 2: ALE Log, Row 3: Signal Strip
+       Right column spans all 3 rows so Contacts can grow to full height.
+    ══════════════════════════════════════════════════════════════════════ */
+    .main {
+      display: grid;
+      grid-template-columns: 1fr 290px;
+      grid-template-rows: 1fr auto auto;
+      gap: 8px;
+      flex: 1;
+      min-height: 0;
+    }
+    .left-col  { grid-column: 1; grid-row: 1; min-height: 0;
+                 display: flex; flex-direction: column; gap: 8px; }
+    .right-col { grid-column: 2; grid-row: 1 / 4; min-height: 0;
+                 display: flex; flex-direction: column; gap: 8px; }
+    .ale-log   { grid-column: 1; grid-row: 2; }
+    .strip     { grid-column: 1; grid-row: 3; }
+
+    /* ── Panel base ── */
+    .panel {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* K2-style section label — 9 px mono caps */
+    .plabel {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--tx-bright);
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .plabel span { font-weight: 400; opacity: 0.7; }
+
+    .pbody {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+    }
+
+    /* ── Incoming ── */
+    .panel-incoming { flex-shrink: 0; }
+
+    .inc-empty {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 4px;
+      color: var(--tx-bright);
+      font-size: 12px;
+    }
+    .inc-empty-icon { font-size: 20px; opacity: 0.35; }
+
+    .inc-alert {
+      border-radius: var(--r-md);
+      border: 1px solid rgba(255,138,101,0.30);
+      background: rgba(255,138,101,0.06);
+      padding: 14px;
+      animation: alertGlow 1.8s infinite;
+    }
+    @keyframes alertGlow {
+      0%,100%{ box-shadow: 0 0 0 0 rgba(255,138,101,0); }
+      50%     { box-shadow: 0 0 20px 2px rgba(255,138,101,0.10); }
+    }
+
+    .inc-row { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+
+    .ring-icon {
+      width: 42px; height: 42px;
+      border-radius: 50%;
+      background: rgba(255,138,101,0.12);
+      border: 1px solid rgba(255,138,101,0.28);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 19px;
+      animation: ring 0.5s infinite;
+    }
+    @keyframes ring { 0%,100%{transform:rotate(-7deg)}50%{transform:rotate(7deg)} }
+
+    .inc-callsign {
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--tx-bright);
+      letter-spacing: 0.06em;
+    }
+    .inc-sub { font-size: 12px; color: var(--tx-muted); }
+
+    .inc-btns { display: flex; gap: 8px; }
+
+    .btn {
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      border-radius: var(--r-md);
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.14s;
+    }
+    .btn-answer {
+      background: linear-gradient(135deg, #00e676, #00c066);
+      color: #041008;
+    }
+    .btn-answer:hover { filter: brightness(1.08); transform: translateY(-1px); }
+    .btn-decline {
+      background: var(--bg3);
+      border: 1px solid var(--border-md);
+      color: var(--tx-muted);
+    }
+    .btn-decline:hover {
+      background: rgba(255,82,82,0.10);
+      border-color: rgba(255,82,82,0.30);
+      color: var(--s-error);
+    }
+
+    /* ── Messages ── */
+    .panel-messages { flex: 1; min-height: 0; }
+
+    .msg-list { display: flex; flex-direction: column; gap: 5px; }
+
+    .msg-item {
+      position: relative;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      padding: 9px 12px;
+      transition: border-color 0.12s;
+    }
+    .msg-item:hover { border-color: var(--border-md); }
+
+    .msg-hdr {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .msg-from {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .msg-time {
+      display: block;
+      text-align: right;
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--tx-bright);
+      margin-top: 4px;
+    }
+    .msg-text {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--tx);
+      line-height: 1.4;
+      letter-spacing: 0.02em;
+    }
+
+    .msg-compose {
+      padding: 8px 10px;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+      flex-shrink: 0;
+      display: flex;
+      gap: 8px;
+    }
+    .msg-input {
+      flex: 1;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      padding: 8px 12px;
+      color: var(--tx);
+      font-family: var(--mono);
+      font-size: 11px;
+      outline: none;
+      resize: none;
+      overflow-y: auto;
+      transition: border-color 0.14s, box-shadow 0.14s;
+    }
+    .msg-input::placeholder { color: var(--tx-dim); }
+    .msg-input:focus {
+      border-color: rgba(0,220,140,0.35);
+      box-shadow: 0 0 0 2px rgba(0,220,140,0.07);
+    }
+    .btn-send {
+      background: var(--accent);
+      color: #041008;
+      border: none;
+      border-radius: var(--r-md);
+      padding: 8px 16px;
+      font-family: var(--sans);
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      transition: all 0.12s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-send:hover { background: var(--accent-dim); }
+    .msg-count {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--tx-dim);
+      align-self: center;
+      white-space: nowrap;
+      min-width: 34px;
+      text-align: right;
+    }
+    .msg-count.msg-count-full { color: #ff8a65; }
+
+    /* ── Contacts ── */
+    .panel-contacts { flex: 1; min-height: 0; }
+
+    .search-wrap { padding: 8px 10px 6px; }
+    .search-input {
+      width: 100%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      padding: 7px 12px;
+      color: var(--tx);
+      font-family: var(--sans);
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.14s;
+    }
+    .search-input::placeholder { color: var(--tx-dim); }
+    .search-input:focus { border-color: var(--border-md); }
+
+    .contact-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 0 8px;
+    }
+    .contact-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: var(--r-md);
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.12s;
+    }
+    .contact-item:hover { background: var(--bg3); border-color: var(--border); }
+    .contact-item.sel {
+      background: var(--accent-glow);
+      border-color: rgba(0,220,140,0.22);
+    }
+
+    .contact-avatar {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px;
+      color: var(--tx-dim);
+      flex-shrink: 0;
+    }
+    .contact-item.sel .contact-avatar {
+      background: var(--accent-glow-hi);
+      border-color: rgba(0,220,140,0.28);
+    }
+
+    .contact-info { flex: 1; min-width: 0; }
+    .contact-cs {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--tx);
+    }
+    .contact-item.sel .contact-cs { color: var(--accent); }
+    .contact-name { font-size: 11px; color: var(--tx-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .contact-star { color: var(--s-calling); font-size: 11px; }
+
+    .call-zone {
+      position: relative;
+      padding: 8px 10px;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+      flex-shrink: 0;
+    }
+    .call-mode-panel {
+      position: absolute; bottom: calc(100% + 6px); left: 10px; right: 10px; z-index: 50;
+      background: var(--bg2); border: 1px solid var(--border-md);
+      border-radius: var(--r-lg); box-shadow: var(--shadow-md);
+      display: flex; flex-direction: column; gap: 4px; padding: 6px;
+    }
+    .call-mode-panel.hidden { display: none; }
+    .call-mode-btn {
+      width: 100%; padding: 10px 12px; text-align: left;
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: var(--r-md); cursor: pointer; color: var(--tx);
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .call-mode-btn:hover { background: var(--accent-dim); border-color: var(--accent); }
+    .cmo-title { font-size: 13px; font-weight: 600; }
+    .cmo-desc  { font-size: 10px; color: var(--tx-dim); }
+    .btn-call {
+      width: 100%;
+      padding: 13px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      border: none;
+      border-radius: var(--r-md);
+      color: #041008;
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.14s;
+    }
+    .btn-call:hover { transform: translateY(-1px); box-shadow: 0 6px 22px rgba(0,220,140,0.22); }
+    .btn-call:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    /* ── Active Call ── */
+    .panel-call {
+      background: linear-gradient(155deg, rgba(0,230,118,0.05), var(--bg2));
+      border-color: rgba(0,230,118,0.18);
+      flex-shrink: 0;
+    }
+    .panel-call .plabel { color: var(--s-linked); }
+
+    .call-body { padding: 14px 14px 10px; text-align: center; }
+    .call-to-lbl {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--tx-dim);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .call-cs {
+      font-family: var(--mono);
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--tx-bright);
+      letter-spacing: 0.06em;
+      margin-bottom: 4px;
+    }
+    .call-timer {
+      font-family: var(--mono);
+      font-size: 18px;
+      color: var(--s-linked);
+      margin-bottom: 12px;
+    }
+    .voice-badge {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--bg);
+      background: var(--s-linked);
+      padding: 2px 8px;
+      border-radius: var(--r-sm, 4px);
+      margin-bottom: 12px;
+    }
+    .voice-badge.hidden { display: none; }
+    .quality {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .qbars { display: flex; gap: 3px; align-items: flex-end; }
+    .qbar { width: 5px; border-radius: 2px; background: var(--s-linked); }
+    .qbar:nth-child(1){height:7px} .qbar:nth-child(2){height:11px}
+    .qbar:nth-child(3){height:15px} .qbar:nth-child(4){height:20px}
+    .qbar:nth-child(5){height:24px}
+    .qbar.inactive { opacity: 0.15; }
+    .qlabel { font-family: var(--mono); font-size: 11px; color: var(--s-linked); }
+
+    .btn-end {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      width: calc(100% - 20px);
+      margin: 0 10px 12px;
+      padding: 10px;
+      background: rgba(255,82,82,0.10);
+      border: 1px solid rgba(255,82,82,0.28);
+      border-radius: var(--r-md);
+      color: var(--s-error);
+      font-family: var(--sans);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .btn-end:hover { background: rgba(255,82,82,0.18); border-color: rgba(255,82,82,0.45); }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       SIGNAL STRIP  (bottom — spans full width)
+    ══════════════════════════════════════════════════════════════════════ */
+    .strip {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      overflow: hidden;
+      height: 78px;
+      flex-shrink: 0;
+    }
+
+    /* Clock + sync-lock column, left of the waterfall */
+    .strip-stats {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 9px;
+      padding: 0 18px;
+      border-right: 1px solid var(--border);
+    }
+
+    /* Waterfall */
+    .strip-wf {
+      position: relative;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .wf-label {
+      position: absolute;
+      top: 3px; left: 0; right: 0;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 8px;
+      color: rgba(255,255,255,0.92);
+      letter-spacing: 0.1em;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.85), 0 0 3px rgba(0,0,0,0.55);
+      pointer-events: none;
+      z-index: 2;
+    }
+    /* ALE tone marker: each tone number is absolutely positioned at its TRUE
+       frequency (left set in JS from the same constants as the scale), with
+       en-dash separators in the gap midpoints. All transparent. */
+    .wf-band {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 9px;
+    }
+    .wf-band-tone, .wf-band-sep {
+      position: absolute;
+      top: 0;
+      transform: translateX(-50%);
+      white-space: nowrap;
+    }
+    .wf-band-sep { opacity: 0.5; }
+    /* "ALE 8-FSK" caption pinned to the bottom edge of the band frame
+       (left set in JS = band centre); subtly lifted off the waterfall. */
+    .wf-band-cap {
+      position: absolute;
+      bottom: 16px;
+      transform: translateX(-50%);
+      font-family: var(--mono);
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: #eaf4ff;
+      background: rgba(5,9,15,0.55);
+      border-radius: 3px;
+      padding: 1px 5px;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+      pointer-events: none;
+      z-index: 2;
+      white-space: nowrap;
+    }
+    /* Shaded sub-band region marking where ALE lives inside the FFT window */
+    .wf-band-region {
+      position: absolute;
+      top: 0; bottom: 14px;   /* leave the tick strip clear */
+      background: rgba(255,255,255,0.04);
+      border-left:  1px dashed rgba(255,255,255,0.20);
+      border-right: 1px dashed rgba(255,255,255,0.20);
+      pointer-events: none;
+      z-index: 1;
+    }
+    #waterfallCanvas { width: 100%; height: 100%; display: block; }
+
+    /* Tone tick marks */
+    .wf-ticks {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 14px;
+      pointer-events: none;
+      z-index: 2;
+    }
+    .wf-tick {
+      position: absolute;
+      bottom: 3px;
+      width: 1px; height: 5px;
+      background: rgba(255,255,255,0.6);
+      box-shadow: 0 0 1px rgba(0,0,0,0.7);
+    }
+    .wf-tick.minor { height: 3px; background: rgba(255,255,255,0.35); box-shadow: 0 0 1px rgba(0,0,0,0.6); }
+    .wf-tick-lbl {
+      position: absolute;
+      bottom: 0;
+      font-family: var(--mono);
+      font-size: 7px;
+      color: rgba(255,255,255,0.92);
+      text-shadow: 0 1px 2px rgba(0,0,0,0.85), 0 0 3px rgba(0,0,0,0.55);
+      transform: translateX(-50%);
+    }
+
+    /* ── ALE word pill badges ─── */
+    .pill {
+      display: inline-block;
+      border-radius: 2px;
+      padding: 1px 5px;
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 600;
+    }
+    .pill-to   { background:rgba(0,180,255,.11);  color:#4dc8ff; border:1px solid rgba(0,180,255,.22); }
+    .pill-tis  { background:rgba(206,147,216,.11); color:#ce93d8; border:1px solid rgba(206,147,216,.22); }
+    .pill-data { background:rgba(0,220,140,.09);   color:#00dc8c; border:1px solid rgba(0,220,140,.20); }
+    .pill-rep  { background:rgba(255,202,40,.10);  color:#ffca28; border:1px solid rgba(255,202,40,.20); }
+    .pill-twas { background:rgba(255,82,82,.10);   color:#ff5252; border:1px solid rgba(255,82,82,.20); }
+    .pill-thru { background:rgba(77,208,225,.10);  color:#4dd0e1; border:1px solid rgba(77,208,225,.20); }
+
+    .mon-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      color: var(--tx-muted);
+      font-size: 9px;
+      padding: 1px 8px;
+      cursor: pointer;
+      font-family: var(--mono);
+    }
+    .mon-btn:hover { border-color: var(--border-hi); color: var(--tx); }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       HEARD STATIONS  (10-column table, same layout as Settings/LQA)
+    ══════════════════════════════════════════════════════════════════════ */
+    .panel-heard  { height: 190px; flex-shrink: 0; }
+    #heardList    { overflow-y: auto; padding: 2px 6px; }
+    .heard-avail  { font-size: 8px; font-weight: 700; min-width: 34px; text-align: center;
+                    padding: 1px 3px; border-radius: 2px; letter-spacing: .5px; }
+    .heard-avail.ha-yes { color: var(--s-linked); border: 1px solid var(--s-linked); }
+    .heard-avail.ha-no  { color: var(--s-error);  border: 1px solid var(--s-error); }
+    .heard-avail.ha-unk { color: var(--tx-dim);   border: 1px solid var(--border); }
+    .heard-empty  { color: var(--tx-dim); font-family: var(--mono); font-size: 11px; padding: 10px 2px; text-align: center; }
+
+    /* Heard station cards — one station per card. Callsign, an availability
+       badge and a quality label are the visible hierarchy; raw SINAD/BER/MP
+       metrics collapse behind a Details toggle, and a per-card Call button
+       pre-selects the station and jumps to the CALL tab. */
+    .heard-card { background: var(--bg2); border: 1px solid var(--border);
+                  border-radius: var(--r-md); padding: 10px 12px; margin-bottom: 8px; }
+    .heard-card:last-child { margin-bottom: 0; }
+    .hc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .hc-cs { font-family: var(--sans); font-size: 18px; font-weight: 600; color: var(--tx-bright);
+             letter-spacing: 0.02em; line-height: 1.2; word-break: break-word; min-width: 0; }
+    .hc-head-r { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .hc-del { background: none; border: none; color: var(--tx-dim); cursor: pointer;
+              font-size: 16px; line-height: 1; padding: 0 2px; }
+    .hc-del:hover { color: var(--s-error); }
+    /* Sub line: quality label (gradient-coloured) + score + channel + age. */
+    .hc-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px;
+              margin-top: 5px; font-family: var(--mono); font-size: 11px; }
+    .hc-ql { font-family: var(--sans); font-weight: 700; font-size: 13px; letter-spacing: 0.02em; }
+    .hc-qlscore { color: var(--tx-dim); }
+    .hc-dot { color: var(--border-md); }
+    .hc-ch, .hc-age { color: var(--tx-dim); }
+    /* Actions: Add-to-contacts (ghost icon) + Call → (accent, fills width). */
+    .hc-actions { display: flex; align-items: stretch; gap: 8px; margin-top: 10px; }
+    .hc-add { background: none; border: 1px solid var(--border-md); color: var(--tx-dim);
+              border-radius: var(--r-md); cursor: pointer; display: inline-flex;
+              align-items: center; justify-content: center; width: 38px; flex-shrink: 0; }
+    .hc-add:hover { color: var(--s-linked); border-color: var(--s-linked); }
+    .hc-add.hc-added { color: var(--s-linked); border-color: var(--s-linked); opacity: .6; }
+    .hc-call { flex: 1; background: var(--accent); color: #041008; border: none;
+               border-radius: var(--r-md); padding: 9px 14px; font-family: var(--sans);
+               font-weight: 700; font-size: 12px; letter-spacing: 0.04em; cursor: pointer;
+               display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+               transition: background 0.12s; }
+    .hc-call:hover { background: var(--accent-dim); }
+    /* Collapsed raw metrics. Native <details>; the ▸ marker rotates when open. */
+    .hc-details { margin-top: 8px; }
+    .hc-details > summary { list-style: none; cursor: pointer; color: var(--tx-dim);
+              font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+              text-transform: uppercase; display: inline-flex; align-items: center; gap: 5px; }
+    .hc-details > summary::-webkit-details-marker { display: none; }
+    .hc-arrow { display: inline-block; transition: transform 0.15s; font-size: 10px; }
+    .hc-details[open] .hc-arrow { transform: rotate(90deg); }
+    .hc-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px 14px;
+                  margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+    .hc-m { display: flex; justify-content: space-between; gap: 6px;
+            font-family: var(--mono); font-size: 11px; }
+    .hc-m > span { color: var(--tx-dim); }
+    .hc-m > b { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .hc-na { color: var(--tx-dim); font-weight: 400; }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       ALE LOG
+    ══════════════════════════════════════════════════════════════════════ */
+    .ale-log {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      height: 160px;
+    }
+    .ale-log-hdr {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      height: 28px;
+      min-height: 28px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .ale-log-title {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--tx-dim);
+    }
+    .ale-log-count { font-family: var(--mono); font-size: 10px; color: var(--tx-muted); }
+    .ale-log-body  { flex: 1; overflow-y: auto; padding: 3px 8px;
+                     display: flex; flex-direction: column; gap: 1px; }
+    .ale-entry     { display: flex; align-items: center; gap: 6px;
+                     font-family: var(--mono); font-size: 10px; padding: 1px 2px;
+                     white-space: nowrap; line-height: 1.4; }
+    .ale-entry-ts   { color: var(--tx-dim);   flex-shrink: 0; width: 62px; }
+    .ale-entry-ch   { color: var(--tx-muted); flex-shrink: 0; width: 72px; font-size: 9px; }
+    .ale-entry-mode { color: var(--accent);   flex-shrink: 0; width: 34px; font-size: 9px; }
+    .ale-entry-word { flex-shrink: 0; }
+    .ale-entry-addr { color: var(--tx);       flex-shrink: 0; min-width: 36px; }
+    .ale-entry-dir  { flex-shrink: 0; width: 10px; font-size: 11px; text-align: center; }
+    .dir-rx         { color: var(--s-linked); }   /* ◀ received */
+    .dir-tx         { color: var(--s-calling); } /* ▶ sent */
+    .ale-entry-tx   { background: rgba(255,202,40,.045); } /* subtle tint for sent rows */
+    .ale-entry-ber  { color: var(--tx-muted); font-size: 9px; }
+    .ale-entry.ale-info .ale-entry-mode { color: var(--accent); }
+    .ale-entry.ale-info .ale-entry-addr { color: var(--tx-muted); flex: 1; white-space: normal; }
+    .ale-ber-ok    { color: var(--s-linked); }
+    .ale-ber-warn  { color: var(--s-calling); }
+    .ale-ber-bad   { color: var(--s-error); }
+    .ale-frame-sep { height: 1px; background: var(--border); margin: 2px 0; flex-shrink: 0; }
+    .ale-log-empty { color: var(--tx-dim); font-family: var(--mono); font-size: 10px; padding: 4px 2px; }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       SETTINGS MODAL
+    ══════════════════════════════════════════════════════════════════════ */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(5,9,15,0.82);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      z-index: 1000;   /* above sheets(200) · below bridge overlay(9000) */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .modal {
+      width: 100%;
+      max-width: 860px;
+      max-height: 88vh;
+      background: var(--bg2);
+      border: 1px solid var(--border-md);
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: var(--shadow-xl);
+    }
+
+    .modal-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 22px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+      flex-shrink: 0;
+    }
+    .modal-title {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--tx);
+    }
+    .modal-title em { font-style: normal; color: var(--accent); }
+    .modal-close {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--tx-muted);
+      width: 28px; height: 28px;
+      border-radius: var(--r-md);
+      cursor: pointer;
+      font-size: 14px;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.12s;
+    }
+    .modal-close:hover { background: var(--bg3); color: var(--tx); }
+
+    .modal-body {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* Left nav */
+    .snav {
+      width: 178px;
+      flex-shrink: 0;
+      border-right: 1px solid var(--border);
+      background: var(--bg);
+      padding: 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      overflow-y: auto;
+    }
+
+    .snav-section-hdr {
+      font-family: var(--mono);
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--tx-dim);
+      padding: 8px 10px 4px;
+    }
+    .snav-section-hdr:first-child { padding-top: 0; }
+
+    .snav-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      border-radius: var(--r-md);
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.10s;
+      font-size: 13px;
+      color: var(--tx-muted);
+    }
+    .snav-item:hover { background: var(--bg3); color: var(--tx); }
+    .snav-item.active {
+      background: var(--accent-glow);
+      border-color: rgba(0,220,140,0.20);
+      color: var(--accent);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .snav-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+    .snav-label { font-family: var(--sans); font-size: 13px; font-weight: 500; }
+
+    /* Settings content */
+    .scontent {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 28px;
+    }
+
+    .ssec { display: none; }
+    .ssec.active { display: block; }
+
+    .ssec-title {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Form controls */
+    .fg { margin-bottom: 18px; }
+    .fg-row { display: grid; gap: 14px; margin-bottom: 18px; }
+    .fg-row.col2 { grid-template-columns: 1fr 1fr; }
+    .fg-row.col3 { grid-template-columns: 1fr 1fr 1fr; }
+
+    .flabel {
+      display: block;
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--tx-dim);
+      margin-bottom: 6px;
+    }
+    .fhint {
+      font-family: var(--sans);
+      font-size: 11px;
+      color: var(--tx-dim);
+      margin-top: 5px;
+      line-height: 1.4;
+    }
+
+    .finput, .fselect {
+      width: 100%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      padding: 9px 12px;
+      color: var(--tx);
+      font-family: var(--mono);
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.14s, box-shadow 0.14s;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .finput::placeholder { color: var(--tx-dim); }
+    .finput:focus, .fselect:focus {
+      border-color: rgba(0,220,140,0.38);
+      box-shadow: 0 0 0 2px rgba(0,220,140,0.07);
+    }
+    .fselect {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%233e5870'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+      cursor: pointer;
+    }
+    .fselect option { background: var(--bg3); color: var(--tx); }
+
+    /* ── Test-Channel panel ─────────────────────────────────────────── */
+    .fro {                      /* read-only value display (peer callsign) */
+      color: var(--accent); font-family: var(--mono);
+      letter-spacing: 0.03em; word-break: break-all;
+    }
+    .tc-list { display: flex; flex-direction: column; gap: 6px; }
+    .tc-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-radius: var(--r-sm);
+      background: var(--bg3); border: 1px solid rgba(255,255,255,0.04);
+      font-family: var(--mono); font-size: 12px;
+    }
+    .tc-id { flex: 1; color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tc-mark { width: 14px; text-align: center; font-weight: 700; }
+    .tc-ok  .tc-mark { color: var(--accent); }
+    .tc-no  .tc-mark { color: var(--s-error); }
+    .tc-score { width: 26px; text-align: right; color: var(--tx-bright); }
+    .tc-qual  { width: 78px; text-align: right; font-size: 10px; color: var(--tx-dim); }
+    .tc-empty { color: var(--tx-dim); font-family: var(--mono); font-size: 11px; padding: 6px 2px; }
+    .tc-summary {
+      margin: 10px 0 0; white-space: pre-wrap; font-family: var(--mono);
+      font-size: 10px; line-height: 1.4; color: var(--tx-dim);
+    }
+
+    .ftoggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .ftoggle-row:last-child { border-bottom: none; }
+    .ftoggle-info { flex: 1; }
+    .ftoggle-name {
+      font-family: var(--sans);
+      font-size: 13px;
+      color: var(--tx);
+      font-weight: 500;
+    }
+    .ftoggle-desc { font-size: 11px; color: var(--tx-dim); margin-top: 2px; }
+
+    .ftoggle {
+      position: relative;
+      width: 38px; height: 20px;
+      flex-shrink: 0;
+    }
+    .ftoggle input { opacity: 0; width: 0; height: 0; }
+    .ftrack {
+      position: absolute;
+      inset: 0;
+      border-radius: 10px;
+      background: var(--bg3);
+      border: 1px solid var(--border-md);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .ftrack::after {
+      content: '';
+      position: absolute;
+      left: 3px; top: 3px;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: var(--tx-dim);
+      transition: all 0.2s;
+    }
+    .ftoggle input:checked + .ftrack {
+      background: var(--accent-glow-hi);
+      border-color: rgba(0,220,140,0.35);
+    }
+    .ftoggle input:checked + .ftrack::after {
+      background: var(--accent);
+      transform: translateX(18px);
+    }
+
+    .fradio-group { display: flex; flex-wrap: wrap; gap: 6px; }
+    .fradio-opt {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 12px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      cursor: pointer;
+      transition: all 0.12s;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--tx-muted);
+    }
+    .fradio-opt input { display: none; }
+    .fradio-opt:has(input:checked) {
+      background: var(--accent-glow);
+      border-color: rgba(0,220,140,0.28);
+      color: var(--accent);
+    }
+    .fradio-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      border: 1px solid currentColor;
+      flex-shrink: 0;
+    }
+    .fradio-opt:has(input:checked) .fradio-dot {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* Level meter */
+    .level-meter {
+      width: 100%;
+      height: 8px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .level-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), #00e676);
+      border-radius: 4px;
+      transition: width 0.06s;
+    }
+
+    /* Channel table */
+    .ch-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+    .ch-table th {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--tx-dim);
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .ch-table td {
+      padding: 5px 6px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .ch-table tr:last-child td { border-bottom: none; }
+    .ch-table tr:hover td { background: var(--bg3); }
+    .ch-inp {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--r-sm);
+      padding: 4px 6px;
+      color: var(--tx);
+      font-family: var(--mono);
+      font-size: 11px;
+      width: 100%;
+      outline: none;
+      transition: all 0.10s;
+    }
+    .ch-inp:focus {
+      background: var(--bg3);
+      border-color: rgba(0,220,140,0.28);
+    }
+    .ch-del {
+      background: transparent;
+      border: none;
+      color: var(--tx-dim);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 2px 6px;
+      border-radius: var(--r-sm);
+      transition: all 0.10s;
+    }
+    .ch-del:hover { color: var(--s-error); background: rgba(255,82,82,0.10); }
+
+    /* Channel cards — per-channel: ID, RX/TX Hz, mode, usage, direction,
+       self-address, label, and inhibit-calling / inhibit-sounding flags. */
+    .ch-card {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--r-md); padding: 10px 12px; margin-bottom: 8px;
+      transition: border-color 0.12s;
+    }
+    .ch-card:hover { border-color: var(--border-md); }
+    .ch-card-top { display: flex; align-items: flex-end; gap: 8px; }
+    .ch-card-row { display: flex; gap: 8px; margin-top: 9px; }
+    .ch-card-inh { display: flex; gap: 20px; margin-top: 11px; }
+    .ch-field { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+    .ch-field > label {
+      font-family: var(--mono); font-size: 8px; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--tx-dim); padding-left: 2px;
+    }
+    .ch-field .ch-inp { border: 1px solid var(--border); background: var(--bg2); }
+    .ch-id-field { flex: 0 0 60px; }
+    .ch-id-inp {
+      color: var(--accent); font-weight: 700; text-align: center;
+      font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    }
+    .ch-grow { flex: 2; }
+    .ch-card-top .ch-del { align-self: center; }
+    .ch-sel {
+      border: 1px solid var(--border); background: var(--bg2);
+      border-radius: var(--r-sm); padding: 5px 6px; width: 100%;
+      color: var(--tx); font-family: var(--mono); font-size: 11px;
+      outline: none; cursor: pointer; transition: all 0.10s;
+    }
+    .ch-sel:focus, .ch-sel:hover { border-color: rgba(0,220,140,0.28); background: var(--bg3); }
+    .ch-sel option { background: var(--bg2); color: var(--tx); }
+    .ch-check {
+      display: flex; align-items: center; gap: 7px; cursor: pointer;
+      font-family: var(--mono); font-size: 11px; color: var(--tx-muted);
+    }
+    .ch-check input { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
+
+    .ch-add-row {
+      display: flex; gap: 8px; align-items: center;
+    }
+    .btn-sm {
+      background: var(--bg3);
+      border: 1px solid var(--border-md);
+      color: var(--tx-muted);
+      border-radius: var(--r-md);
+      padding: 7px 12px;
+      font-family: var(--sans);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.12s;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .btn-sm:hover { background: var(--bg-hover); color: var(--tx); border-color: var(--border-hi); }
+    .btn-sm.accent {
+      background: var(--accent-glow);
+      border-color: rgba(0,220,140,0.25);
+      color: var(--accent);
+    }
+    .btn-sm.accent:hover { background: var(--accent-glow-hi); }
+
+    /* Badge */
+    .fbadge {
+      display: inline-block;
+      background: var(--accent-glow);
+      border: 1px solid rgba(0,220,140,0.22);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      border-radius: 2px;
+      padding: 1px 6px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    /* Separator */
+    .fsep { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+    /* Conn status */
+    .conn-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: var(--r-md);
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 11px;
+      margin-top: 10px;
+    }
+    .conn-status.ok   { border-color: rgba(0,230,118,0.25); background: rgba(0,230,118,0.06); color: var(--s-linked); }
+    .conn-status.err  { border-color: rgba(255,82,82,0.25); background: rgba(255,82,82,0.06); color: var(--s-error); }
+
+    /* Read-only status display — used in Location tab for GPS / SFI status */
+    .loc-status {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--tx-muted);
+      padding: 8px 12px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+    }
+    .loc-status.ok  { color: var(--s-linked);  border-color: rgba(0,230,118,0.25); background: rgba(0,230,118,0.06); }
+    .loc-status.err { color: var(--s-error);   border-color: rgba(255,82,82,0.25);  background: rgba(255,82,82,0.06); }
+    .loc-status.warn{ color: var(--s-calling); border-color: rgba(255,202,40,0.25); background: rgba(255,202,40,0.05); }
+
+    /* Modal footer */
+    .modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 14px 22px;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+      flex-shrink: 0;
+    }
+    .btn-cancel {
+      background: transparent;
+      border: 1px solid var(--border-md);
+      color: var(--tx-muted);
+      padding: 9px 20px;
+      border-radius: var(--r-md);
+      font-family: var(--sans);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .btn-cancel:hover { background: var(--bg3); color: var(--tx); }
+    .btn-save {
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      border: none;
+      color: #041008;
+      padding: 9px 24px;
+      border-radius: var(--r-md);
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      transition: all 0.12s;
+    }
+    .btn-save:hover { filter: brightness(1.08); }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       POLISH — clock, scan, message/contact actions, LQA
+    ══════════════════════════════════════════════════════════════════════ */
+    /* Clock — now sits in the signal strip, beside the waterfall.
+       Time + UTC/LOCAL label are centered within the pill (column flex,
+       align-items: center). */
+    .hdr-clock {
+      display: flex; flex-direction: column; align-items: center;
+      font-family: var(--mono); cursor: pointer; user-select: none;
+      padding: 4px 11px; border: 1px solid var(--border); border-radius: var(--r-md);
+      transition: border-color 0.12s;
+    }
+    .hdr-clock:hover { border-color: var(--border-md); }
+    .hdr-clock-time { font-size: 14px; font-weight: 600; color: var(--tx-bright); letter-spacing: 0.06em; line-height: 1.15; text-align: center; }
+    .hdr-clock-zone { font-size: 8px; color: var(--tx-dim); letter-spacing: 0.16em; text-transform: uppercase; text-align: center; }
+
+    /* Header scan toggle (active state) */
+    .hdr-btn.scan-on { background: var(--accent-glow); border-color: rgba(0,220,140,0.3); color: var(--accent); }
+
+    /* Header freq/SNR readout, beside the Scan controls. Fixed-width slots so
+       the cluster never shifts with the number of frequency digits. */
+    .hdr-stats {
+      display: flex; align-items: stretch;
+      border: 1px solid var(--border); border-radius: var(--r-md);
+      background: var(--bg); overflow: hidden;
+    }
+    .hdr-stat {
+      display: flex; flex-direction: column; justify-content: center;
+      padding: 3px 10px; text-align: center;
+    }
+    .hdr-stat + .hdr-stat { border-left: 1px solid var(--border); }
+    .hdr-stat.freq { width: 130px; }
+    .hdr-stat-val {
+      font-family: var(--mono); font-size: 14px; font-weight: 600;
+      color: var(--accent); line-height: 1.2; letter-spacing: 0.03em; white-space: nowrap;
+    }
+    .hdr-stat-suf { font-size: 9px; margin-left: 3px; }   /* "MHz" — green, smaller */
+    .hdr-stat-sub {
+      font-family: var(--mono); font-size: 8px; color: var(--tx-bright);
+      text-transform: uppercase; letter-spacing: 0.13em; line-height: 1.2; white-space: nowrap;
+    }
+
+    /* ── Header Network pill (active-net selector; replaces the old SINAD pill).
+       Sits in .hdr-right as its own bordered control, kept visually separate from
+       .hdr-stats by the flex gap (10px) — no shared border, no overlap. The panel
+       drops below the button via .radio-panel, so it never intersects the freq pill. */
+    .net-btn { min-width: 96px; justify-content: space-between; gap: 6px; }
+    .net-btn #netBtnLbl { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+    .net-btn .caret { font-size: 9px; color: var(--tx-muted); margin-left: 2px; }
+    #netWrap .radio-panel { width: 220px; }
+    #netPillList { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+
+    /* ── Header radio cluster: channel steppers + PTT + VFO dropdown ── */
+    .hdr-group { display: flex; align-items: center; gap: 4px; }
+    .hdr-icon {
+      background: transparent; border: 1px solid var(--border); color: var(--tx-muted);
+      width: 30px; height: 30px; border-radius: var(--r-md); cursor: pointer;
+      font-size: 10px; display: flex; align-items: center; justify-content: center;
+      transition: all 0.12s;
+    }
+    .hdr-icon:hover { background: var(--bg3); border-color: var(--border-md); color: var(--tx); }
+
+    /* Locked radio controls (no live CAT link — see setRadioCtrlEnabled) */
+    .hdr-btn:disabled, .hdr-icon:disabled, .radio-panel button:disabled {
+      opacity: 0.4; cursor: not-allowed; box-shadow: none;
+    }
+    .hdr-btn:disabled:hover, .hdr-icon:disabled:hover { background: transparent; border-color: var(--border); }
+
+    /* PTT armed (transmitting) */
+    #pttBtn.ptt-on {
+      background: rgba(255,82,82,0.14); border-color: rgba(255,82,82,0.45);
+      color: var(--s-error); font-weight: 700; box-shadow: 0 0 10px rgba(255,82,82,0.25);
+    }
+
+    /* Manual VFO control panel — drops down beneath its toggle */
+    .radio-wrap { position: relative; }
+    .radio-panel {
+      position: absolute; top: calc(100% + 9px); right: 0; z-index: 60;
+      width: 320px; padding: 12px;
+      background: var(--bg2); border: 1px solid var(--border-md);
+      border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
+      display: none;
+    }
+    .radio-panel.open { display: block; }
+    .radio-head {
+      display: flex; justify-content: space-between; margin-bottom: 9px;
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.16em;
+      text-transform: uppercase; color: var(--tx-muted);
+    }
+    .radio-head span { color: var(--tx-dim); }
+
+    .radio-display {
+      display: flex; align-items: baseline; gap: 8px; margin-bottom: 11px;
+      padding: 9px 12px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--r-md);
+    }
+    .radio-freq {
+      flex: 1; font-family: var(--mono); font-size: 22px; font-weight: 700;
+      color: var(--accent); letter-spacing: 0.04em; line-height: 1;
+      text-shadow: 0 0 12px rgba(0,220,140,0.3);
+    }
+    .radio-freq.entry { color: var(--s-calling); text-shadow: 0 0 12px rgba(255,202,40,0.3); }
+    .radio-unit { font-family: var(--mono); font-size: 10px; color: var(--tx-dim); letter-spacing: 0.1em; }
+    .radio-modechip {
+      font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--tx-bright);
+      background: var(--bg3); border: 1px solid var(--border-md);
+      border-radius: var(--r-sm); padding: 2px 8px;
+    }
+
+    .radio-body { display: flex; gap: 11px; }
+    .radio-keypad { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+    .radio-side { width: 94px; display: flex; flex-direction: column; gap: 5px; }
+    .radio-sub {
+      font-family: var(--mono); font-size: 8px; letter-spacing: 0.16em;
+      text-transform: uppercase; color: var(--tx-dim); margin-top: 2px;
+    }
+    .radio-modes, .radio-tune { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+
+    .rk {
+      background: var(--bg3); border: 1px solid var(--border); color: var(--tx);
+      border-radius: var(--r-sm); font-family: var(--mono); font-size: 13px; font-weight: 600;
+      padding: 9px 0; text-align: center; cursor: pointer; transition: all 0.10s;
+    }
+    .rk:hover  { background: var(--bg-hover); border-color: var(--border-md); }
+    .rk:active { transform: translateY(1px); }
+    .rk-fn   { font-size: 10px; color: var(--tx-muted); }
+    .rk-unit { font-size: 10px; color: var(--accent); border-color: rgba(0,220,140,0.25); }
+    .rk-enter {
+      font-size: 10px; font-weight: 700; color: var(--accent);
+      background: var(--accent-glow); border-color: rgba(0,220,140,0.3);
+    }
+    .rk-enter:hover { background: var(--accent-glow-hi); }
+    .rk-mode, .rk-step { font-size: 10px; padding: 7px 0; }
+    .rk-tune { font-size: 14px; padding: 8px 0; }
+    .rk-mode.active, .rk-step.active {
+      background: var(--accent); color: #041008; border-color: var(--accent); font-weight: 700;
+    }
+
+    .radio-steps {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 5px;
+      margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--border);
+    }
+    .radio-steps .rk-step { flex: 1; min-width: 34px; padding: 6px 0; }
+
+    /* Sounding dropdown (mirrors .radio-panel) */
+    #soundPanel { width: 260px; }
+    .sound-body { display: flex; flex-direction: column; gap: 5px; }
+    .sound-opt {
+      background: var(--bg); border: 1px solid var(--border); color: var(--tx);
+      border-radius: var(--r-md); font-family: var(--mono); font-size: 11px;
+      padding: 8px 10px; cursor: pointer; text-align: left; transition: all 0.12s;
+    }
+    .sound-opt:hover { background: var(--bg-hover); border-color: var(--border-md); }
+    .sound-opt.active { background: var(--accent-glow-hi); border-color: var(--accent); color: var(--accent); }
+    .sound-opt.sound-off { color: var(--tx-muted); }
+    .sound-sel {
+      font-family: var(--mono); font-size: 11px; background: var(--bg3);
+      color: var(--tx); border: 1px solid var(--border); border-radius: 3px;
+      padding: 3px 5px; width: 100%; cursor: pointer;
+    }
+    .sound-sel:hover { border-color: var(--border-md); }
+    .sound-sep {
+      font-family: var(--mono); font-size: 8px; letter-spacing: 0.16em;
+      text-transform: uppercase; color: var(--tx-dim); margin: 4px 0 2px;
+    }
+    .sound-net-item {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 6px 10px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--r-md); cursor: pointer; transition: all 0.12s;
+    }
+    .sound-net-item:hover { background: var(--bg-hover); border-color: var(--border-md); }
+    .sound-net-item.active { border-color: var(--accent); background: var(--accent-glow-hi); }
+    .sound-net-name { font-family: var(--mono); font-size: 11px; color: var(--tx); }
+    .sound-net-item.active .sound-net-name { color: var(--accent); }
+    .sound-net-chans { font-family: var(--mono); font-size: 9px; color: var(--tx-dim); }
+
+    /* Small label-bar action button (Clear All / + Add) */
+    .plabel-btn {
+      background: transparent; border: 1px solid var(--border); color: var(--tx-muted);
+      border-radius: var(--r-sm); font-family: var(--mono); font-size: 9px;
+      padding: 2px 8px; cursor: pointer; letter-spacing: 0.08em; transition: all 0.12s;
+    }
+    .plabel-btn:hover { background: var(--bg3); color: var(--tx); border-color: var(--border-md); }
+
+    /* Message delete */
+    .msg-del {
+      position: absolute; top: 6px; right: 8px;
+      background: transparent; border: none; color: var(--tx-dim);
+      cursor: pointer; font-size: 11px; opacity: 0; transition: all 0.12s;
+      border-radius: var(--r-sm); width: 18px; height: 18px; line-height: 1;
+    }
+    .msg-item:hover .msg-del { opacity: 1; }
+    .msg-del:hover { color: var(--s-error); background: rgba(255,82,82,0.1); }
+    .msg-own .msg-from { color: var(--tx-muted); }
+    .msg-empty { color: var(--tx-dim); font-size: 12px; padding: 14px 4px; text-align: center; }
+
+    /* Contacts edit / actions */
+    .contact-actions { display: flex; gap: 5px; align-items: center; }
+    .contact-edit {
+      background: transparent; border: none; color: var(--tx-dim); cursor: pointer;
+      font-size: 12px; opacity: 0; transition: opacity 0.12s; padding: 2px 4px;
+    }
+    .contact-item:hover .contact-edit { opacity: 1; }
+    .contact-edit:hover { color: var(--accent); }
+
+    /* LQA matrix cells */
+    .lqa-cell { font-family: var(--mono); font-size: 11px; text-align: center; }
+    .lqa-hi   { color: var(--s-linked); }
+    .lqa-mid  { color: var(--s-calling); }
+    .lqa-lo   { color: var(--s-error); }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       BRIDGE OFFLINE OVERLAY
+    ══════════════════════════════════════════════════════════════════════ */
+    .bridge-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(8, 12, 18, 0.82);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    .bridge-overlay.hidden { display: none; }
+    .bridge-overlay-box {
+      background: var(--bg2);
+      border: 1px solid var(--border-md);
+      border-radius: var(--r-lg);
+      padding: 40px 48px;
+      text-align: center;
+      max-width: 400px;
+      width: 90vw;
+    }
+    .bridge-overlay-icon {
+      width: 36px; height: 36px;
+      border: 2px solid rgba(255,255,255,0.15);
+      border-radius: 50%;
+      margin: 0 auto 20px;
+      position: relative;
+    }
+    .bridge-overlay-icon::after {
+      content: '';
+      position: absolute;
+      inset: 7px;
+      border-radius: 50%;
+      animation: pulse-red 2s ease-in-out infinite;
+    }
+    .bridge-overlay-title {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--tx);
+      margin-bottom: 12px;
+    }
+    .bridge-overlay-msg {
+      font-size: 12px;
+      color: var(--tx-muted);
+      line-height: 1.6;
+      margin-bottom: 18px;
+    }
+    .bridge-overlay-msg code {
+      font-family: var(--mono);
+      color: var(--tx);
+      background: var(--bg3);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .bridge-overlay-cmd {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--accent);
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      padding: 7px 16px;
+      display: inline-block;
+      margin-bottom: 22px;
+      letter-spacing: 0.04em;
+      user-select: all;
+    }
+    @keyframes pulse-fade {
+      0%, 100% { opacity: 0.35; }
+      50%      { opacity: 1; }
+    }
+    .bridge-overlay-status {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--tx-dim);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      animation: pulse-fade 2s ease-in-out infinite;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       ICON  — inline SVG sizing + vertical alignment
+    ══════════════════════════════════════════════════════════════════════ */
+    .icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      vertical-align: middle;
+      pointer-events: none;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       MISSING RULES  — caught during audit
+    ══════════════════════════════════════════════════════════════════════ */
+    .ssec-subtitle {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--tx-muted);
+      margin: 16px 0 10px;
+    }
+
+    /* plabel em = secondary subtitle inside a panel label */
+    .plabel em {
+      font-style: normal;
+      font-weight: 400;
+      opacity: 0.55;
+      font-size: 8px;
+      letter-spacing: 0.12em;
+    }
+
+    /* Active-link panel label colour variant */
+    .plabel-linked { color: var(--s-linked); }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       UTILITY CLASSES  — covers repeated inline-style patterns
+    ══════════════════════════════════════════════════════════════════════ */
+    .u-flex-row   { display: flex; gap: 8px; align-items: center; }
+    .u-flex-col   { display: flex; flex-direction: column; gap: 6px; }
+    .u-flex-end   { justify-content: flex-end; }
+    .u-flex-1     { flex: 1; }
+    .u-mt-sm      { margin-top: var(--sp-1); }
+    .u-mt-md      { margin-top: var(--sp-3); }
+    .u-mt-lg      { margin-top: var(--sp-4); }
+    .u-mb-md      { margin-bottom: var(--sp-3); }
+    .u-w-auto     { width: auto; }
+
+    /* ── Net cards (Settings › Nets) ── */
+    .net-card { border: 1px solid var(--border); border-radius: var(--r-md); margin-bottom: 10px; overflow: hidden; transition: border-color var(--t); }
+    .net-card.active { border-color: rgba(0,220,140,0.35); background: rgba(0,220,140,0.025); }
+    .net-card-hdr { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--bg3); border-bottom: 1px solid var(--border); }
+    .net-name-inp {
+      flex: 1; min-width: 0;
+      font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--tx-bright);
+      background: transparent; border: 1px solid transparent; border-radius: var(--r-sm);
+      padding: 2px 5px; transition: border-color var(--t), background var(--t);
+    }
+    .net-name-inp:hover { border-color: var(--border-md); }
+    .net-name-inp:focus { border-color: var(--accent); background: var(--bg2); outline: none; }
+    .net-active-badge {
+      font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+      color: var(--accent); background: var(--accent-glow); border: 1px solid rgba(0,220,140,0.3);
+      border-radius: 2px; padding: 1px 6px; flex-shrink: 0;
+    }
+    .net-count-badge {
+      font-family: var(--mono); font-size: 10px; color: var(--tx-muted);
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 2px; padding: 1px 6px; flex-shrink: 0;
+    }
+    .net-del-btn {
+      background: none; border: none; color: var(--tx-dim); cursor: pointer;
+      padding: 3px 5px; border-radius: var(--r-sm); display: flex; align-items: center;
+      transition: color var(--t), background var(--t); flex-shrink: 0;
+    }
+    .net-del-btn:hover { color: var(--s-error); background: rgba(255,82,82,0.10); }
+    .net-card-policy {
+      display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+      padding: 7px 10px; border-bottom: 1px solid var(--border);
+    }
+    .net-policy-grp { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--tx-muted); }
+    .net-policy-grp input[type=number] {
+      width: 58px; font-size: 11px; font-family: var(--mono);
+      background: var(--bg2); border: 1px solid var(--border-md);
+      border-radius: var(--r-sm); color: var(--tx); padding: 2px 5px; text-align: right;
+    }
+    .net-policy-grp input[type=number]:disabled { opacity: 0.32; cursor: not-allowed; }
+    .net-policy-sep { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; }
+    .net-ch-summary {
+      display: flex; align-items: center; gap: 7px; padding: 6px 10px;
+      font-size: 11px; color: var(--tx-muted); cursor: pointer; user-select: none;
+      transition: background var(--t);
+    }
+    .net-ch-summary:hover { background: var(--bg-hover); color: var(--tx); }
+    .net-ch-caret { font-size: 9px; transition: transform 0.14s; color: var(--tx-dim); }
+    .net-ch-summary.open .net-ch-caret { transform: rotate(90deg); }
+    .net-ch-grid { display: none; padding: 6px 10px 10px; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 4px; }
+    .net-ch-grid.open { display: grid; }
+    .net-ch-chip {
+      display: flex; align-items: center; gap: 5px; padding: 4px 8px;
+      border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--bg2);
+      cursor: pointer; transition: border-color var(--t), background var(--t); user-select: none;
+    }
+    .net-ch-chip input[type=checkbox] { display: none; }
+    .net-ch-chip:hover { border-color: var(--border-md); background: var(--bg3); }
+    .net-ch-chip.on { border-color: rgba(0,220,140,0.40); background: rgba(0,220,140,0.07); }
+    .net-ch-chip.on:hover { background: rgba(0,220,140,0.12); }
+    .ch-chip-id   { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--tx-bright); flex-shrink: 0; }
+    .ch-chip-freq { font-family: var(--mono); font-size: 10px; color: var(--accent); flex-shrink: 0; }
+    .ch-chip-mode { font-family: var(--mono); font-size: 9px; color: var(--tx-dim); flex-shrink: 0; margin-left: auto; }
+    .net-ch-chip.on .ch-chip-id   { color: var(--accent); }
+    .net-ch-chip.on .ch-chip-mode { color: var(--tx-muted); }
+
+    /* ── Utilities ── */
+    .hidden { display: none !important; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-md); border-radius: 2px; }
+
+    /* Mobile-only elements hidden on desktop */
+    .mob-action-bar,
+    .mob-nav,
+    .mob-more { display: none; }
+
+    /* Hidden state anchors: #scanBtn / #pttBtn stay in the DOM so app.js can
+       drive them and the MutationObserver can mirror their state to the
+       mobile action-bar buttons, but they never render. */
+    .mob-state-anchor { display: none !important; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   MOBILE ADAPTATIONS  (≤ 767 px)
+   All desktop rules remain intact; this section overrides layout only.
+   Design tokens are inherited unchanged — same palette, same type.
+══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 767px) {
+
+  /* ── Mobile layout variables ── */
+  :root {
+    --mob-nav-h:    56px;   /* bottom tab bar */
+    --mob-bar-h:    66px;   /* PTT / scan action bar */
+    --mob-hdr-h:    90px;   /* approx. 2-row header */
+    /* Contrast lift for small mobile text — the desktop values are fine at 13 px
+       on a large screen, but at 16 px body on phones the muted/dim ramps need to
+       clear 4.5:1 / 3:1 against --bg. */
+    --tx-muted: #8daecf;
+    --tx-dim:   #5a7894;
+  }
+
+  /* ── Allow natural page scroll ── */
+  html, body {
+    overflow: auto;
+    height: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Smooth, non-janky scrolling: momentum + scroll containment on every
+     nested scroll region so they don't chain/jerk into the page scroll. */
+  .pbody, .ale-log-body, #heardList, .scontent, .snav,
+  .ssec[data-sec="lqa"] .ch-table {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+
+  /* ── Base type: 16 px floor (avoids iOS auto-zoom on input focus).
+     tabular-nums on every numeric readout so frequencies, timers, and LQA
+     metrics don't reflow as digits change. ── */
+  body { font-size: 16px; }
+  #freqVal, #radioFreq, #callTimer, #clockTime,
+  .lqa-cell, .heard-avail, .qbar, .ale-log-body {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Touch + a11y floor ── */
+  button, [role="button"], .plabel-btn, .hdr-btn, .mob-nav-tab,
+  .more-item, .call-mode-btn, .sound-opt, .contact-item {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--r-sm);
+  }
+  /* No layout shift from keyboard focus on tappable controls. */
+  .mob-nav-tab:focus-visible, .mob-ch-btn:focus-visible,
+  .mob-ptt:focus-visible, .more-btn:focus-visible, .net-btn:focus-visible {
+    outline-offset: -2px;
+  }
+  /* Respect reduced-motion: kill the glow pulse, sheet slide, icon lifts. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+    [data-mob-tab="call"] .mob-freq .hdr-stat-val { text-shadow: none; }
+    .mob-nav-tab.mob-tab-active svg { transform: none; }
+  }
+
+  /* ── App shell ── */
+  .app {
+    height: auto;
+    min-height: 100dvh;
+    padding: 0;
+    gap: 0;
+    padding-bottom: calc(var(--mob-bar-h) + var(--mob-nav-h) + env(safe-area-inset-bottom));
+  }
+
+  /* ══════════════════════════
+     HEADER  — compact 2-row
+  ══════════════════════════ */
+  .header {
+    height: auto;
+    min-height: auto;
+    padding: 0;
+    flex-wrap: wrap;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+    position: sticky;
+    top: 0;
+    z-index: 90;
+    padding-top: env(safe-area-inset-top);
+    gap: 0;
+  }
+
+  /* Row 1: logo + status + clock */
+  .logo {
+    flex: 1 0 100%;
+    padding: 7px 12px 6px;
+    border-bottom: 1px solid var(--border);
+    gap: 10px;
+    order: 0;
+  }
+  .logo-mark { font-size: 15px; }
+  .logo-divider { height: 22px; }
+  .logo-std  { display: none; }   /* hide decorative subtitle — room for the busy chip */
+  .logo-self { font-size: 11px; }
+
+  /* Cross-tab busy indicator on the logo row: same look as the strip chip,
+     compact, pushed to the right edge. Visible on every tab so the operator
+     sees channel occupancy before pressing PTT, not only on CALL. */
+  .hdr-busy {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 4px 8px;
+    background: var(--accent-glow);
+    border: 1px solid rgba(0,220,140,.25);
+    border-radius: var(--r-md);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    cursor: default;
+  }
+  .hdr-busy.busy {
+    background: rgba(255,167,38,.12);
+    border-color: rgba(255,167,38,.30);
+    color: #ffa726;
+  }
+  .hdr-busy .busy-dot { background: var(--accent); }
+  .hdr-busy.busy .busy-dot { background: #ffa726; animation: blink 0.9s infinite; }
+
+  /* Status + clock live in hdr-right → reflow them next to logo */
+  .status-chip {
+    margin-left: auto;
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+  .hdr-clock { padding: 2px 8px; }
+  .hdr-clock-time { font-size: 12px; }
+  .hdr-clock-zone { font-size: 7px; }
+
+  /* Row 2: Net + ⋯ More — the only two controls on the strip. Secondary
+     triggers (Sound/Radio/Settings/Help) carry .mob-hide and are reached via
+     the More sheet. #moreWrap (.mob-more) is desktop-hidden, shown here. */
+  .mob-hide { display: none !important; }
+  .mob-more { display: flex; }
+
+  .hdr-right {
+    flex: 1 0 100%;
+    order: 1;
+    flex-wrap: nowrap;
+    overflow-x: visible;
+    padding: 8px 12px;
+    gap: 8px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  .hdr-right::-webkit-scrollbar { display: none; }
+
+  /* Net picker = primary control, full emphasis. */
+  .net-btn {
+    flex: 1 1 auto;
+    min-height: 44px;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .net-btn #netBtnLbl { font-size: 13px; color: var(--accent); }
+  .net-btn .caret { font-size: 10px; }
+
+  /* ⋯ More trigger — secondary, contained width. */
+  .more-btn {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 0 14px;
+    gap: 7px;
+    font-size: 13px;
+  }
+  .more-btn .caret { font-size: 10px; color: var(--tx-muted); }
+
+  /* Compact freq stat */
+  .hdr-stat.freq { width: 108px; }
+  .hdr-stat-val  { font-size: 12px; }
+  .hdr-stat-sub  { font-size: 7.5px; }
+
+  /* Buttons a touch friendlier in the scrollable row */
+  .hdr-btn  { min-height: 36px; padding: 6px 10px; font-size: 11px; }
+  .hdr-icon { width: 36px; height: 36px; }
+
+  /* ══════════════════════════
+     MAIN  — single-column
+  ══════════════════════════ */
+  .main {
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    /* clear grid constraints */
+    grid-template-columns: none;
+    grid-template-rows: none;
+  }
+
+  .left-col  { grid-column: auto; grid-row: auto; min-height: 0; order: 0; }
+  .right-col { grid-column: auto; grid-row: auto; min-height: 0; order: 1; }
+  .ale-log   { grid-column: auto; grid-row: auto; order: 2;
+               height: auto; min-height: 180px; max-height: 320px; }
+  .strip     { grid-column: auto; grid-row: auto; order: 3;
+               height: auto; flex-direction: column; }
+
+  /* The busy indicator moves to the header (#hdrBusy) so it shows on every tab;
+     the strip's stats column is redundant on mobile — the strip is just the
+     waterfall. */
+  .strip-stats { display: none; }
+  .strip-wf { height: 80px; }
+
+  /* Panel height overrides */
+  .panel-heard    { height: auto; max-height: 260px; flex-shrink: 0; }
+  .panel-messages { flex: 1 1 auto; min-height: 200px; max-height: 360px; }
+
+  /* ══════════════════════════
+     TAB VISIBILITY SYSTEM
+     .app[data-mob-tab="X"] hides what isn't X.
+  ══════════════════════════ */
+
+  /* Frequency readout: lives on the CALL tab only (hidden elsewhere). */
+  .mob-freq { display: none; }
+
+  /* CALL tab: freq readout → contacts/CTA → waterfall.
+     .left-col is empty here (incoming panel removed; messages & heard belong
+     to their own tabs), so hide it. The waterfall sits at the bottom of the
+     content flow — directly above the fixed action bar and below the contacts
+     panel, whose last item (the Group rosters section, re-ordered below the
+     Call CTA) sits immediately above it. */
+  [data-mob-tab="call"] .left-col,
+  [data-mob-tab="call"] .ale-log { display: none; }
+  [data-mob-tab="call"] .mob-freq   { display: flex; order: 0; }
+  [data-mob-tab="call"] .strip      { display: flex; order: 1; }
+  [data-mob-tab="call"] .right-col  { order: 2; }
+
+  /* CALL tab is a fixed viewport — no page scroll. The header + freq readout
+     stay put at the top, the waterfall stays pinned at the bottom, and only the
+     contacts list scrolls (inside its panel). Whole-page scrolling here was the
+     source of the jerky feel: the waterfall's per-frame redraw competed with
+     scrolling a tall page past it. */
+  [data-mob-tab="call"] {
+    height: 100dvh;
+    overflow: hidden;
+  }
+  [data-mob-tab="call"] .main {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  [data-mob-tab="call"] .right-col {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  [data-mob-tab="call"] .panel-contacts {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  /* Contact list scrolls here; the search row + Call CTA stay pinned top/bottom. */
+  [data-mob-tab="call"] .panel-contacts .pbody {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    min-height: 0;
+  }
+  [data-mob-tab="call"] .panel-contacts .search-wrap { flex-shrink: 0; }
+  [data-mob-tab="call"] .strip { flex: 0 0 auto; }
+
+  /* MSG tab: messages panel only */
+  [data-mob-tab="msg"] .panel-heard,
+  [data-mob-tab="msg"] .right-col,
+  [data-mob-tab="msg"] .ale-log,
+  [data-mob-tab="msg"] .strip       { display: none; }
+
+  /* HEARD tab: heard stations only */
+  [data-mob-tab="heard"] .panel-messages,
+  [data-mob-tab="heard"] .right-col,
+  [data-mob-tab="heard"] .ale-log,
+  [data-mob-tab="heard"] .strip      { display: none; }
+  [data-mob-tab="heard"] .panel-heard {
+    height: calc(100dvh - var(--mob-hdr-h) - var(--mob-bar-h) - var(--mob-nav-h) - 16px);
+    max-height: none;
+  }
+
+  /* LOG tab: ALE log only */
+  [data-mob-tab="log"] .left-col,
+  [data-mob-tab="log"] .right-col,
+  [data-mob-tab="log"] .strip        { display: none; }
+  [data-mob-tab="log"] .ale-log {
+    height: calc(100dvh - var(--mob-hdr-h) - var(--mob-bar-h) - var(--mob-nav-h) - 16px);
+    max-height: none;
+  }
+
+  /* Waterfall sizing on the CALL tab — useful but not dominant. */
+  [data-mob-tab="call"] .strip-wf { height: 80px; flex: 0 0 auto; }
+
+  /* Frequency readout on the CALL tab — the signature element: the live VFO
+     frequency is the most characteristic thing on a radio control surface, so
+     it gets tabular figures and one restrained accent glow. Everything else
+     on the tab stays quiet around it. Kept compact (~half the earlier height)
+     and horizontally centered so it reads as a centered status slab, not a
+     tall banner. */
+  [data-mob-tab="call"] .mob-freq {
+    border: 1px solid var(--border-md);
+    border-radius: var(--r-lg);
+    background: linear-gradient(160deg, var(--bg2), var(--bg));
+    padding: 3px 16px;             /* ~half the previous 14 px → height roughly halved */
+    align-items: center;
+    justify-content: center;       /* center the freq block horizontally */
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+  }
+  [data-mob-tab="call"] .mob-freq .hdr-stat.freq {
+    width: auto; border: none; text-align: center; padding: 0;
+  }
+  [data-mob-tab="call"] .mob-freq .hdr-stat-val {
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
+    color: var(--accent);
+    text-shadow: 0 0 10px rgba(0,220,140,0.25);
+  }
+  [data-mob-tab="call"] .mob-freq .hdr-stat-suf {
+    font-size: 10px; font-variant-numeric: tabular-nums; color: var(--tx-muted);
+  }
+  [data-mob-tab="call"] .mob-freq .hdr-stat-sub {
+    font-size: 9px; font-family: var(--mono); color: var(--tx-dim);
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+
+  /* ── CALL hero CTA + call-mode sheet + target line ── */
+  /* The selected-contact target line sits just above the CTA so the operator
+     sees who they are about to call before tapping. */
+  .call-target {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--tx-muted);
+    padding: 6px 2px 8px;
+    text-align: center;
+    letter-spacing: 0.02em;
+  }
+  /* Promote Call to the unambiguous hero of the CALL tab. */
+  .btn-call {
+    min-height: 56px;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    border-radius: var(--r-lg);
+    box-shadow: 0 6px 22px rgba(0,220,140,0.22);
+  }
+  .btn-call:disabled {
+    box-shadow: none;
+    background: var(--bg3);
+    color: var(--tx-dim);
+    opacity: 1;
+  }
+  .btn-call .caret { font-size: 12px; opacity: 0.85; }
+  /* Call-mode sheet opens upward from the CTA (already absolute bottom:100%),
+     full bleed on mobile. */
+  .call-mode-panel {
+    left: 8px; right: 8px;
+    bottom: calc(100% + 8px);
+    box-shadow: var(--shadow-lg);
+    border-color: var(--border-md);
+  }
+  .call-mode-btn { min-height: 56px; padding: 12px 14px; }
+  .cmo-title { font-size: 15px; }
+  .cmo-desc  { font-size: 12px; }
+
+  /* Saved-roster rendering lives in Settings › Groups now; keep the empty +
+     add-button helpers used by renderGroupRosters(). The CALL-tab disclosure
+     and reordering are gone — rosters moved out of the contacts panel. */
+  .rosters-empty { font-size: 12px; color: var(--tx-dim); padding: 4px 2px 8px; }
+  .rosters-add { margin-top: 6px; }
+
+  /* Multi-select contacts: the selected avatar swaps to a green checkmark
+     glyph (set in renderContacts) — make sure that glyph reads green and the
+     selected row tint is strong enough to scan a multi-selection at a glance. */
+  .contact-item.sel .contact-avatar {
+    background: var(--accent-glow-hi);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .contact-item.sel .contact-cs { color: var(--accent); }
+
+  /* ⋯ More sheet items — icon + label + dimmed sub. */
+  .more-item {
+    display: flex; align-items: center; gap: 12px;
+    text-align: left;
+    min-height: 52px;
+    padding: 12px 14px;
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--tx);
+    border-color: var(--border);
+  }
+  .more-item svg { flex: 0 0 auto; color: var(--accent); }
+  .more-sub {
+    margin-left: auto;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--tx-dim); font-weight: 400; letter-spacing: 0.02em;
+  }
+  .more-panel .radio-head { margin-bottom: 6px; }
+
+  /* ══════════════════════════
+     TOUCH TARGETS  (min 44 px)
+  ══════════════════════════ */
+  .btn         { min-height: 50px; font-size: 14px; }
+  .btn-answer,
+  .btn-decline { min-height: 54px; font-size: 15px; }
+  .btn-call    { min-height: 54px; font-size: 14px; }
+  .btn-end     { min-height: 48px; }
+  .btn-send    { min-height: 44px; padding: 10px 18px; font-size: 13px; }
+  .btn-sm      { min-height: 42px; padding: 9px 14px; }
+  .plabel-btn  { min-height: 32px; padding: 5px 12px; font-size: 10px; }
+  .rk          { min-height: 46px; }
+  .snav-item   { min-height: 44px; }
+
+  /* Toggle slightly larger */
+  .ftoggle     { width: 46px; height: 24px; }
+  .ftrack::after {
+    width: 16px; height: 16px; left: 4px; top: 4px;
+  }
+  .ftoggle input:checked + .ftrack::after { transform: translateX(22px); }
+
+  /* Contact tap targets */
+  .contact-item  { padding: 12px 10px; }
+  .contact-avatar{ width: 34px; height: 34px; }
+  .contact-cs    { font-size: 16px; }
+  .contact-edit  { opacity: 1; }  /* always visible on touch */
+  .contact-name  { font-size: 13px; }
+  .msg-text      { font-size: 15px; }
+  .msg-from      { font-size: 12px; }
+
+  /* Soften the ALL-CAPS panel sublabels into small, dim sentence-case hints
+     so they stop shouting on a small screen. */
+  .plabel em {
+    font-size: 10px;
+    opacity: 0.5;
+    letter-spacing: 0.06em;
+    text-transform: none;
+  }
+  /* Match panel headers to ale-log-hdr height (28 px). */
+  .plabel { height: 28px; min-height: 28px; padding-top: 0; padding-bottom: 0; }
+
+  /* ══════════════════════════
+     PANELS — visual tweaks
+  ══════════════════════════ */
+  .inc-callsign  { font-size: 26px; }
+  .call-cs       { font-size: 30px; }
+  .ring-icon     { width: 46px; height: 46px; }
+
+  /* Message compose + search: 16 px inputs avoid iOS auto-zoom on focus. */
+  .msg-input   { font-size: 16px; padding: 12px 14px; min-height: 44px; }
+  .msg-compose { padding: 8px; gap: 6px; }
+
+  /* MSG tab: pin compose bar above action bar; reduce to ~80% height. */
+  [data-mob-tab="msg"] .msg-compose {
+    position: fixed;
+    bottom: calc(var(--mob-bar-h) + var(--mob-nav-h) + env(safe-area-inset-bottom));
+    left: 0; right: 0;
+    z-index: 75;
+    padding: 5px 10px;
+  }
+  [data-mob-tab="msg"] .msg-input {
+    max-height: 44px;
+    font-size: 14px;
+    padding: 8px 12px;
+    min-height: 0;
+  }
+  /* Keep message list from sliding under the fixed compose bar. */
+  [data-mob-tab="msg"] .panel-messages { padding-bottom: 68px; }
+
+  /* Search */
+  .search-input { font-size: 16px; padding: 12px 14px; min-height: 44px; }
+
+  /* Heard cards on mobile: 44px tap floor on Call/Add + larger callsign.
+     #heardList stays non-scrolling horizontally; .heard-avail sizing also
+     feeds the Settings/LQA table badges. */
+  #heardList { overflow-x: hidden; -webkit-overflow-scrolling: touch; padding: 4px 0; }
+  .heard-avail { font-size: 10px; min-width: 40px; }
+  .hc-cs { font-size: 19px; }
+  .hc-call { min-height: 44px; font-size: 13px; }
+  .hc-add { width: 44px; }
+  .hc-details > summary { min-height: 44px; }
+
+  /* ══════════════════════════
+     FORM GRIDS  — collapse
+  ══════════════════════════ */
+  .fg-row.col2 { grid-template-columns: 1fr; }
+  .fg-row.col3 { grid-template-columns: 1fr; }
+
+  /* ══════════════════════════
+     SETTINGS MODAL — bottom sheet
+  ══════════════════════════ */
+  .modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal {
+    max-width: 100%;
+    max-height: 92dvh;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+  }
+  /* Settings is the focused-task surface: let it fill most of the screen so
+     the form has room instead of feeling squashed. height (not just
+     max-height) forces the sheet to actually take the space; modal-body and
+     scontent flex to fill it and the form scrolls inside. */
+  #settingsModal .modal {
+    height: 92dvh;
+    max-height: 92dvh;
+  }
+  /* Settings nav: horizontal scrollable tab strip */
+  .modal-body { flex-direction: column; }
+  /* Settings nav: wrap to 2–3 rows instead of a horizontal scroll, with the
+     three section headers (Station / ALE / RX · Modem) as full-width row
+     breaks so all 13 sections are visible and grouped without scrolling. */
+  .snav {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow-x: visible;
+    padding: 5px 8px;
+    gap: 2px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    height: auto;
+    max-height: none;
+    min-height: auto;
+    background: var(--bg);
+  }
+  .snav-section-hdr {
+    display: block;
+    flex: 0 0 100%;
+    padding: 6px 4px 2px;
+    font-size: 8px;
+  }
+  .snav-item {
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding: 7px 10px;
+    font-size: 12px;
+    border-radius: var(--r-sm);
+  }
+  /* Icon takes space in horizontal mode — hide it */
+  .snav-icon  { display: none; }
+  .snav-label { font-size: 12px; }
+  /* Active indicator becomes bottom border instead of left inset */
+  .snav-item.active {
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+  /* Settings content */
+  .scontent { padding: 16px; }
+  /* LQA table horizontal scroll */
+  .ssec[data-sec="lqa"] .ch-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    min-width: 680px;
+  }
+
+  /* Dropdown panels (Net / Sound / Radio / More): one consistent full-width
+     bottom sheet floating just above the action bar. The id selectors carry
+     equal specificity to the desktop #netWrap / #soundPanel width overrides
+     and sit later in the source, so they win — every dropdown is the same
+     width and the same vertical position (no more narrow left-anchored
+     panels next to full-width ones). */
+  .radio-wrap .radio-panel,
+  #netWrap .radio-panel,
+  #soundPanel,
+  #morePanel {
+    position: fixed;
+    bottom: calc(var(--mob-bar-h) + var(--mob-nav-h) + env(safe-area-inset-bottom) + 8px);
+    left: 8px;
+    right: 8px;
+    top: auto;
+    width: auto;
+    max-width: none;
+    max-height: 55dvh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    z-index: 200;
+  }
+
+  /* ⋯ More panel: a dropdown centered directly below its trigger button and
+     clamped to the viewport so no item is off-screen. position:fixed; the
+     left/top are set by JS (toggleMorePanel) from #moreBtn's rect — unlike the
+     shared fixed bottom sheet used by Net/Sound/Radio. */
+  #morePanel {
+    position: fixed;
+    top: auto; right: auto; left: auto; bottom: auto;
+    width: 260px;
+    max-width: calc(100vw - 16px);
+    max-height: 55dvh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    z-index: 200;
+  }
+
+  /* Small modals (contact / incoming / warnings): full-width bottom sheets on
+     mobile. !important overrides the inline max-width:420px on some of them
+     so every small modal is the same width — no centered floating boxes. */
+  #contactModal .modal,
+  #idleWarnModal .modal,
+  #soundingWarnModal .modal,
+  #incomingCallModal .modal {
+    max-width: 100% !important;
+  }
+
+  /* ══════════════════════════
+     MOBILE BOTTOM BARS
+  ══════════════════════════ */
+
+  /* Action bar (PTT + scan) */
+  .mob-action-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: fixed;
+    bottom: calc(var(--mob-nav-h) + env(safe-area-inset-bottom));
+    left: 0;
+    right: 0;
+    height: var(--mob-bar-h);
+    padding: 0 16px;
+    gap: 10px;
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    z-index: 80;
+  }
+
+  /* Channel step buttons */
+  .mob-ch-grp {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .mob-ch-btn {
+    width: 44px;
+    height: 44px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    color: var(--tx-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.12s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mob-ch-btn:active { background: var(--bg-hover); border-color: var(--border-md); }
+
+  /* Mobile scan button */
+  .mob-scan-btn {
+    height: 44px;
+    padding: 0 16px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    color: var(--tx-muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.12s;
+    -webkit-tap-highlight-color: transparent;
+    white-space: nowrap;
+  }
+  .mob-scan-btn.scan-on {
+    background: var(--accent-glow);
+    border-color: rgba(0,220,140,0.30);
+    color: var(--accent);
+  }
+
+  /* PTT pill */
+  .mob-ptt {
+    flex: 0 0 auto;
+    height: 52px;
+    padding: 0 24px;
+    background: var(--bg3);
+    border: 2px solid var(--border-md);
+    border-radius: 26px;
+    color: var(--tx-muted);
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.08s;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mob-ptt:active,
+  .mob-ptt.ptt-on {
+    background: rgba(255,82,82,0.16);
+    border-color: rgba(255,82,82,0.55);
+    color: var(--s-error);
+    box-shadow: 0 0 18px rgba(255,82,82,0.28);
+  }
+  .mob-ptt-lbl { pointer-events: none; }
+
+  /* Bottom nav */
+  .mob-nav {
+    display: flex;
+    align-items: stretch;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: calc(var(--mob-nav-h) + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    z-index: 80;
+  }
+
+  .mob-nav-tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    background: none;
+    border: none;
+    color: var(--tx-dim);
+    cursor: pointer;
+    padding: 0 4px;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition: color 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    user-select: none;
+  }
+  .mob-nav-tab svg { color: inherit; transition: transform 0.15s ease; }
+  .mob-nav-tab.mob-tab-active { color: var(--accent); }
+  .mob-nav-tab.mob-tab-active svg { transform: translateY(-1px); }
+
+  /* Active indicator: a centered top tick + soft glow under the icon. */
+  .mob-nav-tab.mob-tab-active::before {
+    content: '';
+    position: absolute;
+    width: 28px; height: 3px;
+    top: 0; left: 50%; transform: translateX(-50%);
+    background: var(--accent);
+    border-radius: 0 0 3px 3px;
+    box-shadow: 0 0 10px rgba(0,220,140,0.5);
+  }
+  .mob-nav-tab { position: relative; }
+
+  /* MSG unread count badge — top-right of the tab, clear of the active tick. */
+  .mob-nav-badge {
+    position: absolute;
+    top: 2px;
+    left: 50%;
+    transform: translateX(12px);
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    box-shadow: 0 0 8px rgba(0,220,140,0.45);
+    pointer-events: none;
+  }
+  .mob-nav-badge[hidden] { display: none; }
+
+  /* CALL linked dot — signals an active link is up from any tab. Sits right of
+     the active tick so the two never overlap. */
+  .mob-nav-dot {
+    position: absolute;
+    top: 3px;
+    left: 50%;
+    transform: translateX(16px);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--s-linked);
+    box-shadow: 0 0 8px rgba(0,230,118,0.6);
+    pointer-events: none;
+  }
+  .mob-nav-dot[hidden] { display: none; }
+
+}
+
+/* ── Landscape phone: tighten vertical chrome ── */
+@media (max-width: 767px) and (orientation: landscape) {
+  :root {
+    --mob-nav-h: 48px;
+    --mob-bar-h: 56px;
+  }
+  .logo { padding: 5px 12px 4px; }
+  .header { padding-top: 0; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FIRST-RUN WIZARD  (#setupWizard)
+══════════════════════════════════════════════════════════════════════ */
+
+    .wz-pips {
+      display: flex;
+      gap: 6px;
+      margin: 0 10px;
+    }
+
+    .wz-pip {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--border-md);
+      transition: background 0.2s, transform 0.2s;
+      flex-shrink: 0;
+    }
+    .wz-pip.active { background: var(--accent); transform: scale(1.25); }
+    .wz-pip.done   { background: var(--accent-dim); }
+
+    .wz-step {
+      display: flex;
+      flex-direction: column;
+      padding: 24px 22px 20px;
+    }
+    .wz-step.hidden { display: none; }
+
+    .wz-step-num {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--tx-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      margin-bottom: 6px;
+    }
+
+    .wz-step-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--tx-bright);
+      margin-bottom: 8px;
+      line-height: 1.2;
+    }
+
+    .wz-step-desc {
+      font-size: 12px;
+      color: var(--tx-muted);
+      line-height: 1.55;
+    }
+
+    .wz-cs-input {
+      margin-top: 18px;
+      font-family: var(--mono);
+      font-size: 26px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      text-align: center;
+      padding: 14px 16px;
+      background: var(--bg3);
+      border: 1px solid var(--border-md);
+      border-radius: var(--r-md);
+      width: 100%;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .wz-cs-input::placeholder { color: var(--tx-dim); font-weight: 400; }
+    .wz-cs-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow-hi);
+    }
+
+    .wz-status {
+      min-height: 18px;
+      font-size: 11px;
+      margin-top: 8px;
+      color: var(--tx-muted);
+      font-family: var(--mono);
+    }
+    .wz-status.ok  { color: var(--s-scanning); }
+    .wz-status.err { color: var(--s-error); }
+
+    .wz-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 12px;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .wz-btn-next {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      padding: 9px 22px;
+      border-radius: var(--r-md);
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.12s;
+      touch-action: manipulation;
+    }
+    .wz-btn-next:hover { background: var(--accent-dim); }
+    .wz-btn-next:active { background: #009b62; }
+
+    .wz-btn-skip {
+      background: transparent;
+      border: none;
+      color: var(--tx-dim);
+      font-family: var(--sans);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 6px 4px;
+      touch-action: manipulation;
+      transition: color 0.12s;
+    }
+    .wz-btn-skip:hover { color: var(--tx-muted); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   SETUP INCOMPLETE BANNER  (#setupBanner)
+   Lives at the top of .right-col on the CALL tab.
+   Dismissed by configuring callsign + channels.
+══════════════════════════════════════════════════════════════════════ */
+
+    .setup-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      background: rgba(255,202,40,0.07);
+      border: 1px solid rgba(255,202,40,0.22);
+      border-radius: var(--r-md);
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .setup-banner:hover { background: rgba(255,202,40,0.12); }
+    .setup-banner.hidden { display: none; }
+
+    .setup-banner-icon { flex-shrink: 0; }
+
+    .setup-banner-body {
+      flex: 1;
+      font-size: 11px;
+      color: var(--tx-muted);
+      line-height: 1.4;
+    }
+    .setup-banner-body strong { color: var(--tx); font-weight: 600; }
+
+    .setup-banner-btn {
+      flex-shrink: 0;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+
+/* ══════════════════════════════════════════════════════════════════════
+   SETTINGS NAV — Advanced collapse (mobile only)
+   On desktop #advNavItems stays block; .snav-adv-toggle stays hidden.
+══════════════════════════════════════════════════════════════════════ */
+
+/* Desktop: always visible, toggle button never shown */
+#advNavItems    { display: block; }
+.snav-adv-toggle { display: none; }
+
+@media (max-width: 767px) {
+    /* Mobile: collapse advanced items behind a toggle */
+    .snav-adv-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding: 6px 10px;
+        margin: 2px 0;
+        background: var(--bg3);
+        border: 1px solid var(--border-sm);
+        border-radius: 6px;
+        color: var(--tx-muted);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .snav-adv-toggle:active { background: var(--border-sm); }
+
+    /* Hidden by default; display:contents makes children join parent flex-wrap */
+    #advNavItems          { display: none; }
+    #advNavItems.open     { display: contents; }
+
+    /* Section headers inside advanced group get full-width treatment in pill row */
+    #advNavItems.open .snav-section-hdr { width: 100%; }
+}

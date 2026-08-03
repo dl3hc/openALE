@@ -1,0 +1,3 @@
+---
+# logger.cpp uses vprintf/vfprintf internally — that IS the PAL abstraction point.
+Checks: '-cppcoreguidelines-pro-type-vararg'

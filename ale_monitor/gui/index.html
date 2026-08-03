@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ALE Monitor</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ── Bridge offline overlay ─────────────────────────────────────────────── -->
+<div id="bridgeOverlay" class="bridge-overlay">
+  <div class="bridge-overlay-box">
+    <div class="bridge-overlay-title">ALE Monitor — not running</div>
+    <div class="bridge-overlay-sub">Start the monitor, then this page will connect automatically.</div>
+    <div class="bridge-overlay-cmd" id="bridgeOverlayCmd">ale_monitor --port …</div>
+  </div>
+</div>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<header class="hdr">
+  <div class="hdr-left">
+    <div class="logo">
+      <span class="logo-text">ALE<em>Monitor</em></span>
+    </div>
+    <div class="logo-divider"></div>
+    <div class="freq-display">
+      <span id="freqVal" class="freq-val">—</span>
+      <span id="freqUnit" class="freq-unit">MHz</span>
+      <span id="freqSub" class="freq-sub">VFO · USB</span>
+    </div>
+  </div>
+  <div class="hdr-right">
+    <div id="lbtChip" class="busy-chip" title="Channel occupancy (LBT)">
+      <div class="dot busy-dot"></div>
+      <span id="lbtLabel">IDLE</span>
+    </div>
+    <div id="statusChip" class="status-chip">
+      <div class="dot idle" id="statusDot"></div>
+      <span class="status-text" id="statusText">IDLE</span>
+    </div>
+    <button class="hdr-btn" id="scanBtn" onclick="doScan()">▶ Scan</button>
+    <button class="hdr-btn" id="availBtn" onclick="doAvailable()">■ Stop</button>
+    <button class="hdr-btn" id="settingsToggle" onclick="toggleSettings()">⚙ Settings</button>
+    <button class="hdr-btn" onclick="clearLog()">Clear Log</button>
+  </div>
+</header>
+
+<!-- ── Settings panel (collapsible) ────────────────────────────────────────── -->
+<div id="settingsPanel" class="settings-panel hidden">
+  <div class="settings-grid">
+    <fieldset class="settings-group">
+      <legend>Audio Input</legend>
+      <select id="setAudioIn" class="set-select"></select>
+      <div class="set-row">
+        <button class="set-btn" onclick="doAudioOpen()">Open</button>
+        <button class="set-btn" onclick="doAudioClose()">Close</button>
+        <span id="audioStatus" class="set-status">—</span>
+      </div>
+    </fieldset>
+
+    <fieldset class="settings-group">
+      <legend>Radio</legend>
+      <select id="setRigModel" class="set-select"></select>
+      <div class="set-row"><label>Host</label><input id="setRigHost" class="set-input" value="127.0.0.1"></div>
+      <div class="set-row"><label>Port</label><input id="setRigPort" class="set-input" value="4532"></div>
+      <div class="set-row"><label>Serial</label><input id="setRigSerial" class="set-input" placeholder="COM3 / /dev/ttyUSB0"></div>
+      <div class="set-row"><label>Baud</label><input id="setRigBaud" class="set-input" type="number" value="0"></div>
+      <div class="set-row">
+        <button class="set-btn" onclick="doRigConnect()">Connect</button>
+        <button class="set-btn" onclick="doRigDisconnect()">Disconnect</button>
+        <span id="rigStatus" class="set-status">—</span>
+      </div>
+    </fieldset>
+
+    <fieldset class="settings-group">
+      <legend>Scan / Filter / Mode</legend>
+      <div class="set-row">
+        <label>Dwell (ms)</label>
+        <input id="setDwell" class="set-input" type="number" value="2000">
+        <button class="set-btn" onclick="doDwellSet()">Set</button>
+      </div>
+      <div class="set-row">
+        <label>Filter</label>
+        <select id="setFilter" class="set-select" onchange="doFilterSet()">
+          <option value="all">All channels</option>
+          <option value="ale">ALE only</option>
+          <option value="sel">SEL only</option>
+        </select>
+      </div>
+      <div class="set-row">
+        <label>Mode</label>
+        <input id="setModeOverride" class="set-input" placeholder="blank=file mode; e.g. USB-D">
+        <button class="set-btn" onclick="doModeOverrideSet()">Apply</button>
+      </div>
+      <div class="set-row">
+        <button class="set-btn set-save" onclick="doConfigSave()">💾 Save as startup</button>
+      </div>
+    </fieldset>
+  </div>
+</div>
+
+<!-- ── Main content ───────────────────────────────────────────────────────── -->
+<main class="main">
+  <!-- Left column: waterfall -->
+  <div class="left-col">
+    <div class="panel waterfall-panel">
+      <div class="plabel">Waterfall
+        <span>0 – 4000 Hz</span>
+      </div>
+      <div class="waterfall-wrap">
+        <canvas id="waterfallCanvas"></canvas>
+        <div id="wfTicks" class="wf-ticks"></div>
+        <div id="wfBandRegion" class="wf-band-region"></div>
+        <div id="wfBandLabel"  class="wf-band-label">ALE</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right column: heard stations + LQA -->
+  <div class="right-col">
+    <!-- Heard stations -->
+    <div class="panel panel-heard">
+      <div class="plabel">Heard Stations
+        <span>
+          <button class="plabel-btn" onclick="clearHeard()">Clear</button>
+        </span>
+      </div>
+      <div class="pbody" id="heardList">
+        <div class="heard-empty">No stations heard yet</div>
+      </div>
+    </div>
+
+    <!-- LQA table -->
+    <div class="panel panel-lqa">
+      <div class="plabel">Channel Quality (FROM)
+        <span>
+          <select id="cfgLqaSort" onchange="renderLqa()" class="plabel-select">
+            <option value="score">Sort: Score</option>
+            <option value="age">Sort: Age</option>
+            <option value="addr">Sort: Callsign</option>
+          </select>
+          <button class="plabel-btn" onclick="clearLqa()">Clear</button>
+        </span>
+      </div>
+      <div class="pbody lqa-scroll">
+        <table class="ch-table lqa-table">
+          <thead>
+            <tr>
+              <th>Station</th>
+              <th>Freq (MHz)</th>
+              <th>Avail</th>
+              <th>Score</th>
+              <th>SINAD</th>
+              <th>BER</th>
+              <th>Age</th>
+            </tr>
+          </thead>
+          <tbody id="lqaBody">
+            <tr><td colspan="7" class="msg-empty">No LQA data yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ── ALE Log bar ─────────────────────────────────────────────────────────── -->
+<footer class="ale-log panel">
+  <div class="plabel">ALE Word / Frame Log
+    <span id="aleLogCount">0 entries</span>
+  </div>
+  <div class="pbody ale-log-body" id="aleLogBody">
+    <div class="ale-log-empty">Waiting for ALE traffic…</div>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

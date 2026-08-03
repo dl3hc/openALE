@@ -1,0 +1,563 @@
+﻿/**
+ * \file aqc_protocol.h
+ * \brief AQC-ALE (Advanced Quick Call ALE) protocol extensions
+ * 
+ * Implements MIL-STD-188-141B AQC-ALE enhancements:
+ *  - Data Elements (DE1-DE9) extracted from 21-bit payload
+ *  - CRC protection for orderwire messages
+ *  - Slotted response mechanism (slots 0-7)
+ *  - Transaction codes for link management
+ *  - Traffic class identification
+ * 
+ * Key Finding: AQC-ALE uses the SAME 8-FSK modem as standard 2G ALE.
+ * This is a PROTOCOL layer enhancement, not a different physical layer.
+ * 
+ * Specification: MIL-STD-188-141B Appendix C (AQC-ALE)
+ */
+
+#pragma once
+
+#include "Word/ale_word.h"
+#include <cstdint>
+#include <string>
+
+namespace ale {
+namespace aqc {
+
+// ============================================================================
+// AQC 16-bit Compact Word Format
+// ============================================================================
+
+/**
+ * \struct AQCWord
+ * AQC-ALE 16-bit compact word format (MIL-STD-188-141B Appendix C).
+ *
+ * Packs 3 characters into 16 bits — visibly more compact than the 24-bit
+ * Base-ALE word (ALEWord: 3-bit preamble + 3×7-bit payload = 24 bits).
+ *
+ * Bit layout:
+ * \code
+ *  [15]    type_flag — 0=address word, 1=control word
+ *  [14:10] char1     — first character, 5-bit AQC-32 code
+ *  [9:5]   char2     — second character, 5-bit AQC-32 code
+ *  [4:0]   char3     — third character, 5-bit AQC-32 code
+ * \endcode
+ *
+ * AQC-32 character set (5 bits per character, 32 values):
+ *   Codes 0–25  → 'A'–'Z'
+ *   Codes 26–31 → '0'–'5'
+ *
+ * Contrast with ALEWord (ale_word.h):
+ *   ALEWord: 3-bit preamble (8 types) + 3×7-bit payload (Basic-38) = 24 bits
+ *   AQCWord: 1-bit type flag (2 types) + 3×5-bit payload (AQC-32)  = 16 bits
+ */
+struct AQCWord {
+    uint16_t raw; ///< 16-bit packed word
+
+    AQCWord() : raw(0) {}
+    explicit AQCWord(uint16_t r) : raw(r) {}
+
+    /// True for control words; false for address words.
+    bool     type_flag() const { return (raw >> 15) & 1u; }
+    /// First character code (0–31, AQC-32).
+    uint8_t  char1()     const { return (raw >> 10) & 0x1Fu; }
+    /// Second character code (0–31, AQC-32).
+    uint8_t  char2()     const { return (raw >>  5) & 0x1Fu; }
+    /// Third character code (0–31, AQC-32).
+    uint8_t  char3()     const { return  raw        & 0x1Fu; }
+
+    /**
+     * Encode three AQC-32 character codes and a type flag into a 16-bit word.
+     * \param type_flag  false=address, true=control
+     * \param c1 c2 c3   AQC-32 character codes (must be 0–31)
+     * \return Packed AQCWord.
+     */
+    static AQCWord encode(bool type_flag, uint8_t c1, uint8_t c2, uint8_t c3) {
+        uint16_t r = (static_cast<uint16_t>(type_flag ? 1u : 0u) << 15)
+                   | (static_cast<uint16_t>(c1 & 0x1Fu) << 10)
+                   | (static_cast<uint16_t>(c2 & 0x1Fu) <<  5)
+                   |  static_cast<uint16_t>(c3 & 0x1Fu);
+        return AQCWord(r);
+    }
+
+    // ------------------------------------------------------------------
+    // AQC-32 character set helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Convert an ASCII character to its 5-bit AQC-32 code.
+     * \return Code 0–31 on success; 0xFF if the character is not in AQC-32.
+     */
+    static uint8_t char_to_aqc32(char ch) {
+        if (ch >= 'A' && ch <= 'Z') return static_cast<uint8_t>(ch - 'A');
+        if (ch >= '0' && ch <= '5') return static_cast<uint8_t>(26 + (ch - '0'));
+        return 0xFFu; // not representable in AQC-32
+    }
+
+    /**
+     * Convert a 5-bit AQC-32 code back to its ASCII character.
+     * \return ASCII char on success; '\0' for an out-of-range code.
+     */
+    static char aqc32_to_char(uint8_t code) {
+        if (code <= 25u) return static_cast<char>('A' + code);
+        if (code <= 31u) return static_cast<char>('0' + (code - 26u));
+        return '\0';
+    }
+
+    /**
+     * Build an AQCWord from three ASCII characters and a type flag.
+     * Characters must belong to the AQC-32 set (A–Z, 0–5).
+     * \param[out] out  Resulting word on success.
+     * \return true on success; false if any character is not in AQC-32.
+     */
+    static bool from_chars(bool type_flag, char c1, char c2, char c3, AQCWord& out) {
+        uint8_t code1 = char_to_aqc32(c1);
+        uint8_t code2 = char_to_aqc32(c2);
+        uint8_t code3 = char_to_aqc32(c3);
+        if (code1 == 0xFFu || code2 == 0xFFu || code3 == 0xFFu) return false;
+        out = encode(type_flag, code1, code2, code3);
+        return true;
+    }
+
+    /**
+     * Decode an AQCWord back to three ASCII characters.
+     * \param[out] c1 c2 c3  Decoded characters.
+     * \return true (AQC-32 codes are always in range 0–31).
+     */
+    bool to_chars(char& c1, char& c2, char& c3) const {
+        c1 = aqc32_to_char(char1());
+        c2 = aqc32_to_char(char2());
+        c3 = aqc32_to_char(char3());
+        return (c1 != '\0' && c2 != '\0' && c3 != '\0');
+    }
+};
+
+// ============================================================================
+// Data Element (DE) Definitions per MIL-STD-188-141B
+// ============================================================================
+
+/**
+ * \enum DE3_TrafficClass
+ * DE3: Traffic class identifier (voice type, data mode)
+ */
+enum class DE3_TrafficClass : uint8_t {
+    CLEAR_VOICE = 0,            ///< Clear analog voice
+    DIGITAL_VOICE = 1,          ///< Digital voice (unencrypted)
+    HFD_VOICE = 2,              ///< HF digital voice
+    RESERVED_3 = 3,             ///< Reserved
+    SECURE_DIGITAL_VOICE = 4,   ///< Encrypted digital voice
+    RESERVED_5 = 5,             ///< Reserved
+    RESERVED_6 = 6,             ///< Reserved
+    RESERVED_7 = 7,             ///< Reserved
+    ALE_MSG = 8,                ///< ALE messaging mode
+    PSK_MSG = 9,                ///< PSK data mode
+    TONE_39_MSG = 10,           ///< 39-tone data mode
+    HF_EMAIL = 11,              ///< HF email mode
+    KY100_ACTIVE = 12,          ///< KY-100 encryption active
+    RESERVED_13 = 13,           ///< Reserved
+    RESERVED_14 = 14,           ///< Reserved
+    RESERVED_15 = 15            ///< Reserved
+};
+
+/**
+ * \enum DE9_TransactionCode
+ * DE9: Transaction code for link management
+ */
+enum class DE9_TransactionCode : uint8_t {
+    RESERVED_0 = 0,             ///< Reserved
+    MS_141A = 1,                ///< MIL-STD-188-141A messaging
+    ACK_LAST = 2,               ///< Acknowledge last message
+    NAK_LAST = 3,               ///< Negative acknowledge last
+    TERMINATE = 4,              ///< Terminate link
+    OP_ACKNAK = 5,              ///< Operator acknowledge/NAK
+    AQC_CMD = 6,                ///< AQC command follows
+    RESERVED_7 = 7              ///< Reserved
+};
+
+/**
+ * \enum CRCStatus
+ * CRC validation result for orderwire messages
+ */
+enum class CRCStatus : uint8_t {
+    NOT_APPLICABLE = 0,         ///< No CRC in message
+    CRC_OK = 1,                 ///< CRC valid
+    CRC_ERROR = 2               ///< CRC mismatch
+};
+
+// ============================================================================
+// Data Element Structure
+// ============================================================================
+
+/**
+ * \struct DataElements
+ * Parsed data elements from AQC-enhanced word payload
+ * 
+ * The 21-bit payload is structured differently in AQC mode:
+ * - Standard 2G: 3 × 7-bit ASCII characters
+ * - AQC mode: Data elements (DE1-DE9) with specific bit fields
+ */
+struct DataElements {
+    uint8_t de1;                ///< DE1: Reserved (future use)
+    uint8_t de2;                ///< DE2: Slot position (0-7)
+    DE3_TrafficClass de3;       ///< DE3: Traffic class
+    uint8_t de4;                ///< DE4: LQA/signal quality
+    uint8_t de5;                ///< DE5: Link quality metric 1
+    uint8_t de6;                ///< DE6: Link quality metric 2
+    uint8_t de7;                ///< DE7: Reserved (future use)
+    uint8_t de8;                ///< DE8: Number of orderwire commands
+    DE9_TransactionCode de9;    ///< DE9: Transaction code
+    
+    DataElements() : de1(0), de2(0), de3(DE3_TrafficClass::CLEAR_VOICE), 
+                     de4(0), de5(0), de6(0), de7(0), de8(0), 
+                     de9(DE9_TransactionCode::RESERVED_0) {}
+};
+
+// ============================================================================
+// AQC Message Structures
+// ============================================================================
+
+/**
+ * \struct AQCCallProbe
+ * AQC call probe message (enhanced TO call)
+ */
+struct AQCCallProbe {
+    std::string to_address;     ///< Destination address
+    std::string term_address;   ///< Terminator (calling station)
+    DataElements de;            ///< Data elements
+    uint32_t timestamp_ms;      ///< Reception time
+    
+    AQCCallProbe() : timestamp_ms(0) {}
+};
+
+/**
+ * \struct AQCCallHandshake
+ * AQC call handshake (enhanced response)
+ */
+struct AQCCallHandshake {
+    std::string to_address;     ///< Original caller
+    std::string from_address;   ///< Responding station
+    DataElements de;            ///< Data elements
+    CRCStatus crc_status;       ///< CRC validation result
+    bool ack_this_flag;         ///< Acknowledge this call
+    uint8_t slot_position;      ///< Assigned slot (0-7)
+    uint32_t timestamp_ms;      ///< Reception time
+    
+    AQCCallHandshake() : crc_status(CRCStatus::NOT_APPLICABLE), 
+                         ack_this_flag(false), slot_position(0), 
+                         timestamp_ms(0) {}
+};
+
+/**
+ * \struct AQCInlink
+ * AQC inlink message (link established)
+ */
+struct AQCInlink {
+    std::string to_address;     ///< Destination
+    std::string term_address;   ///< Terminator
+    DataElements de;            ///< Data elements
+    CRCStatus crc_status;       ///< CRC validation result
+    bool ack_this_flag;         ///< Acknowledge flag
+    bool net_address_flag;      ///< Net call flag
+    uint8_t slot_position;      ///< Response slot
+    uint32_t timestamp_ms;      ///< Reception time
+    
+    AQCInlink() : crc_status(CRCStatus::NOT_APPLICABLE), 
+                  ack_this_flag(false), net_address_flag(false), 
+                  slot_position(0), timestamp_ms(0) {}
+};
+
+/**
+ * \struct AQCOrderwire
+ * AQC orderwire message (AMD - Automatic Message Display)
+ */
+struct AQCOrderwire {
+    std::string message;        ///< Orderwire text
+    CRCStatus crc_status;       ///< CRC validation result
+    uint16_t calculated_crc;    ///< CRC value
+    uint32_t timestamp_ms;      ///< Reception time
+    
+    AQCOrderwire() : crc_status(CRCStatus::NOT_APPLICABLE), 
+                     calculated_crc(0), timestamp_ms(0) {}
+};
+
+// ============================================================================
+// AQC Parser
+// ============================================================================
+
+/**
+ * \class AQCParser
+ * Parse AQC-enhanced ALE words and extract data elements
+ */
+class AQCParser {
+public:
+    AQCParser();
+    
+    /**
+     * Detect if word is AQC-enhanced format
+     * \param word Decoded ALE word
+     * \return true if AQC format detected
+     */
+    static bool is_aqc_format(const ALEWord& word);
+    
+    /**
+     * Extract data elements from 21-bit payload
+     * Bit mapping per MIL-STD-188-141B AQC spec
+     * 
+     * \param payload 21-bit payload from word
+     * \param de [out] Extracted data elements
+     * \return true if extraction successful
+     */
+    static bool extract_data_elements(uint32_t payload, DataElements& de);
+    
+    /**
+     * Parse AQC call probe message
+     * \param words Array of ALE words
+     * \param count Number of words
+     * \param probe [out] Parsed call probe
+     * \return true if parsing successful
+     */
+    bool parse_call_probe(const ALEWord* words, size_t count, AQCCallProbe& probe);
+    
+    /**
+     * Parse AQC call handshake message
+     * \param words Array of ALE words
+     * \param count Number of words
+     * \param handshake [out] Parsed handshake
+     * \return true if parsing successful
+     */
+    bool parse_call_handshake(const ALEWord* words, size_t count, AQCCallHandshake& handshake);
+    
+    /**
+     * Parse AQC inlink message
+     * \param words Array of ALE words
+     * \param count Number of words
+     * \param inlink [out] Parsed inlink
+     * \return true if parsing successful
+     */
+    bool parse_inlink(const ALEWord* words, size_t count, AQCInlink& inlink);
+    
+    /**
+     * Parse AQC orderwire (AMD) message
+     * \param words Array of ALE words
+     * \param count Number of words
+     * \param orderwire [out] Parsed orderwire
+     * \return true if parsing successful
+     */
+    bool parse_orderwire(const ALEWord* words, size_t count, AQCOrderwire& orderwire);
+    
+    /**
+     * Get traffic class name
+     * \param tc Traffic class enum
+     * \return Human-readable name
+     */
+    static const char* traffic_class_name(DE3_TrafficClass tc);
+    
+    /**
+     * Get transaction code name
+     * \param code Transaction code enum
+     * \return Human-readable name
+     */
+    static const char* transaction_code_name(DE9_TransactionCode code);
+};
+
+// ============================================================================
+// CRC Calculation
+// ============================================================================
+
+/**
+ * \class AQCCRC
+ * CRC calculation for AQC orderwire messages
+ * Uses CRC-8 or CRC-16 per MIL-STD-188-141B
+ */
+class AQCCRC {
+public:
+    /**
+     * Calculate CRC-8 for orderwire message
+     * Polynomial: 0x07 (x^8 + x^2 + x + 1)
+     * 
+     * \param data Message data
+     * \param length Data length in bytes
+     * \return 8-bit CRC value
+     */
+    static uint8_t calculate_crc8(const uint8_t* data, size_t length);
+    
+    /**
+     * Calculate CRC-16 for orderwire message
+     * Polynomial: 0x1021 (CCITT CRC-16)
+     * 
+     * \param data Message data
+     * \param length Data length in bytes
+     * \return 16-bit CRC value
+     */
+    static uint16_t calculate_crc16(const uint8_t* data, size_t length);
+    
+    /**
+     * Validate CRC-8 in message
+     * \param data Message with CRC appended
+     * \param length Total length (data + CRC)
+     * \return true if CRC valid
+     */
+    static bool validate_crc8(const uint8_t* data, size_t length);
+    
+    /**
+     * Validate CRC-16 in message
+     * \param data Message with CRC appended
+     * \param length Total length (data + CRC)
+     * \return true if CRC valid
+     */
+    static bool validate_crc16(const uint8_t* data, size_t length);
+};
+
+// ============================================================================
+// Slot Management
+// ============================================================================
+
+/**
+ * \class SlotManager
+ * Manage slotted response timing for AQC (slots 0-7)
+ *
+ * AQC backward compatibility: slot duration tracks the remote station's dwell
+ * time (TD5=200 ms at 5 ch/s; TD2=500 ms at 2 ch/s per MIL-STD-188-141B).
+ * Use the dwell_ms overload when calling a station with a known, non-standard
+ * dwell rate so that response windows align correctly.
+ */
+class SlotManager {
+public:
+    SlotManager();
+
+    // Spec-defined dwell-rate constants (MIL-STD-188-141B Annex B §"Programmable timing")
+    static constexpr uint32_t DWELL_TD5_MS = 200u;  ///< Td(5)  — 5 ch/s basic scan
+    static constexpr uint32_t DWELL_TD2_MS = 500u;  ///< Td(2)  — 2 ch/s minimum scan
+
+    /**
+     * Calculate slot timing using the default (TD5 = 200 ms) dwell rate.
+     * \param slot_number Slot position (0-7)
+     * \param base_time_ms Base time reference
+     * \return Transmission time in milliseconds
+     */
+    static uint32_t calculate_slot_time(uint8_t slot_number, uint32_t base_time_ms);
+
+    /**
+     * Calculate slot timing for a remote station with a known variable dwell rate.
+     * Enables backward compatibility with AQC stations scanning at TD2 (500 ms)
+     * or any other spec-conformant rate.
+     * \param slot_number Slot position (0-7)
+     * \param base_time_ms Base time reference
+     * \param dwell_ms Remote station's dwell time (e.g. DWELL_TD2_MS = 500)
+     * \return Transmission time in milliseconds
+     */
+    static uint32_t calculate_slot_time(uint8_t slot_number, uint32_t base_time_ms,
+                                        uint32_t dwell_ms);
+
+    /**
+     * Return true when dwell_ms is a spec-conformant ALE dwell rate.
+     * Accepts TD5 (200 ms) and TD2 (500 ms) as defined in MIL-STD-188-141B.
+     * \param dwell_ms Dwell duration to validate
+     * \return true if recognised and spec-compliant
+     */
+    static bool is_valid_dwell_rate(uint32_t dwell_ms);
+
+    /**
+     * Assign slot based on address hash
+     * Distributes stations across slots to reduce collisions
+     *
+     * \param address Station address
+     * \return Assigned slot (0-7)
+     */
+    static uint8_t assign_slot(const std::string& address);
+
+    /**
+     * Get default slot duration in milliseconds (TD5 = 200 ms).
+     * \return Slot duration
+     */
+    static uint32_t get_slot_duration_ms();
+
+private:
+    static constexpr uint32_t SLOT_DURATION_MS = DWELL_TD5_MS;  ///< default: 200 ms (TD5)
+    static constexpr uint8_t  NUM_SLOTS        = 8;              ///< 8 slots total
+};
+
+// ============================================================================
+// AQC-ALE Frame Differentiation & Fixed-Bit Mechanism
+// ============================================================================
+
+/**
+ * \class AQCProtocol
+ * AQC-ALE backward compatibility helpers: fixed-bit detection and Base-ALE
+ * frame differentiation (MIL-STD-188-141B A.4.5 / FEAT-GEN-010).
+ *
+ * Fixed-Bit Mechanism
+ * -------------------
+ * AQC *control* words (type_flag = true) always have bit 15 of their 16-bit
+ * compact word set to 1.  This "fixed bit" is the key to backward
+ * compatibility:
+ *
+ *  - AQC address words (type_flag=false, bit15=0): a Base-ALE receiver parses
+ *    them as normal address words.  The AQC-32 encoded payload produces
+ *    characters that don't match any known address, so the Base-ALE station
+ *    silently ignores the frame — no crash, no error state.
+ *
+ *  - AQC control words (type_flag=true, bit15=1): the fixed bit (bit 15 of
+ *    the 21-bit Base-ALE payload) marks the word as AQC-specific.  An
+ *    AQC-aware receiver uses it for frame discrimination; a Base-ALE receiver
+ *    encounters payload content it doesn't recognise and ignores it — again
+ *    no crash.
+ *
+ * Usage
+ * -----
+ * \code
+ *   // Detect an AQC control word from its 16-bit raw value:
+ *   bool ctrl = AQCProtocol::is_aqc_word(aqc_word.raw);
+ *
+ *   // Detect from the 21-bit Base-ALE payload (ALEWord.raw_payload):
+ *   bool aqc  = AQCProtocol::payload_has_aqc_fixed_bit(ale_word.raw_payload);
+ *
+ *   // Test whether an ALEWord is a plain Base-ALE frame (no fixed bit):
+ *   bool base = AQCProtocol::is_base_ale_frame(ale_word);
+ * \endcode
+ */
+class AQCProtocol {
+public:
+    /**
+     * Returns true if the 16-bit AQC word is an AQC control word (bit 15 = 1).
+     *
+     * Bit 15 is the "fixed bit" defined in the AQC specification.  It is set
+     * in all AQC control words (AQCWord::type_flag == true) and clear in all
+     * AQC address words (AQCWord::type_flag == false).
+     *
+     * \param raw  Raw 16-bit AQC word value (AQCWord::raw).
+     * \return     true  — bit 15 is 1, word is an AQC control word.
+     *             false — bit 15 is 0, word is an AQC address word.
+     */
+    static bool is_aqc_word(uint16_t raw) {
+        return (raw >> 15) & 1u;
+    }
+
+    /**
+     * Returns true if the 21-bit Base-ALE payload carries the AQC fixed bit.
+     *
+     * The AQC 16-bit word occupies bits [15:0] of the 21-bit Base-ALE payload.
+     * Bit 15 of that word is therefore also bit 15 of the payload.  When it is
+     * 1, the payload contains an AQC control word.
+     *
+     * \param payload21  21-bit payload from ALEWord::raw_payload.
+     * \return  true if the AQC fixed bit (payload bit 15) is set.
+     */
+    static bool payload_has_aqc_fixed_bit(uint32_t payload21) {
+        return (payload21 >> 15) & 1u;
+    }
+
+    /**
+     * Returns true if the ALEWord does NOT carry an AQC fixed bit, i.e. it is
+     * a plain Base-ALE frame.
+     *
+     * \param word  Decoded Base-ALE word.
+     * \return  true if the word is a non-AQC (Base-ALE) frame.
+     */
+    static bool is_base_ale_frame(const ALEWord& word) {
+        return !payload_has_aqc_fixed_bit(word.raw_payload);
+    }
+};
+
+} // namespace aqc
+} // namespace ale
