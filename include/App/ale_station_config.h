@@ -68,12 +68,16 @@ struct ALEStationConfig {
     // ── PTT-Timing ────────────────────────────────────────────────────────
     /// Zeit nach PTT-Assertion bevor Audio gesendet wird (ms).
     /// Kompensiert CAT/CI-V-Latenz beim Sounding (Calling hat bereits Tt als Lead).
-    /// 0 = kein Delay.
-    uint32_t  ptt_lead_ms             = 100;
+    /// 0 = kein Delay. Standard 0 — Werte > ~10ms verletzen die knappen
+    /// Trw-Zeitfenster des Handshakes und koennen Verbindungen zu anderen
+    /// Stationen vollstaendig verhindern; nur bei nachweislich langsamer
+    /// CAT/PTT-Hardware erhoehen.
+    uint32_t  ptt_lead_ms             = 0;
     /// Zeit nach SM-RX-Freigabe bevor PTT deasserted wird (ms).
-    /// Lässt den Audio-Buffer vollständig leerlaufen bevor auf RX umgeschaltet.
-    /// 0 = sofortige PTT-Freigabe.
-    uint32_t  ptt_tail_ms             = 350;
+    /// Laesst den Audio-Buffer vollstaendig leerlaufen bevor auf RX umgeschaltet.
+    /// 0 = sofortige PTT-Freigabe. Standard 0 — siehe ptt_lead_ms fuer die
+    /// gleiche Trw-Zeitfenster-Warnung.
+    uint32_t  ptt_tail_ms             = 0;
 
     // ── LQA-Austausch ─────────────────────────────────────────────────────
     /// true = CMD LQA / CMD NOISE / LQA Report aktiv senden und auswerten.

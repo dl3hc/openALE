@@ -6,6 +6,18 @@
 **Maintainer:** DL3HC
 **License:** MIT
 
+> **Early development status.** This project is in a very early stage of development. Expect
+> rough edges, unfinished features, bugs, and design decisions that still need to be revisited
+> and polished. Several spec-conformant features — including Group/Net calls, SELCALL, and the
+> FED-STD-1052 (FS-1052) ARQ modem/modes — are in some cases only partially prepared, not fully
+> implemented, or not implemented at all. Support from other developers (code, testing, review,
+> documentation) is actively sought — see [Contributing](#contributing).
+>
+> **No warranty — use at your own risk.** This software controls real radio transmitters. The
+> maintainer assumes no liability for damage to equipment or for personal injury resulting from
+> its use. You are solely responsible for verifying correct, safe, and legal operation of your
+> station before transmitting.
+
 openALE is a C++17 implementation of **MIL-STD-188-141B Automatic Link Establishment (ALE)**
 and **FED-STD-1052 ARQ** for HF radio, built for amateur and experimental HF networks. It
 started as a fork of [PC-ALE 2.0](https://github.com/Alex-Pennington/PC-ALE) by Alex Pennington
