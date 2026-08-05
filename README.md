@@ -37,7 +37,7 @@ for attribution.
 - **Radio control** — Hamlib CAT/PTT (required at build time; see [Build](#build))
 - **WebSocket bridge + Web GUI** — the `openALE` binary serves a browser-based desktop and
   mobile UI directly, no separate web server needed
-- **ale_monitor** — passive RX-only traffic/LQA monitor, no TX capability
+- **ale_monitor** — passive RX-only traffic/LQA monitor
 - **Channel/Net model** — per-net channel files (`.ale`), per-net scanning/sounding policy
 
 Full protocol/architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
