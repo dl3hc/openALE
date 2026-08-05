@@ -40,8 +40,6 @@ for attribution.
 - **ale_monitor** — passive RX-only traffic/LQA monitor
 - **Channel/Net model** — per-net channel files (`.ale`), per-net scanning/sounding policy
 
-Full protocol/architecture details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
 ---
 
 ## Build
@@ -82,32 +80,17 @@ phone). `--remote` binds to `0.0.0.0` for LAN access instead of localhost only.
 For scripted/headless control, `tools/ale_cli.py` drives the same WebSocket API. For testing
 without radio hardware, `radio_mock.exe` emulates a Hamlib `rigctld`-compatible TRX over TCP.
 
----
-
-## Testing
-
-```bash
-ctest --test-dir build --verbose
-```
-Covers the modem, protocol/word parsing, link state machine, AQC extensions, FS-1052 ARQ, LQA
-(database, metrics, propagation, bilateral exchange), channel/net store, and the GUI bridge —
-62 test suites at the time of writing. See [docs/TESTING.md](docs/TESTING.md).
 
 ---
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) — system design and protocol layers
-- [API Reference](docs/API_REFERENCE.md)
-- [Integration Guide](docs/INTEGRATION_GUIDE.md) — audio I/O and radio integration
 - [AMD Orderwire](docs/AMD_ORDERWIRE.md) — Automatic Message Display (A.5.7.2)
 - [Channel/Net/Contact Format](docs/CHANNEL_NET_FORMAT.md) — `.ale` station file + WS management API
 - [LQA Bilateral Exchange & Auto-Relink](docs/LQA_BILATERAL_RELINK.md) — A.5.4.4/A.5.4.5
 - [Propagation-Aware LQA Scoring](docs/LQA_PROPAGATION.md) — solar-elevation/SFI ranking factor
 - [Voice Audio Routing](docs/VOICE_AUDIO_ROUTING.md)
 - [Threading Model](docs/THREADING.md)
-- [Glossary](docs/GLOSSARY.md) — ALE terminology and acronyms
-- [Testing Guide](docs/TESTING.md)
 
 ---
 
