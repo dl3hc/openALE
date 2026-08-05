@@ -215,23 +215,14 @@ private:
         level_db_ = 10.0f * std::log10(var + 1.0f);
 
         if (!floor_valid_) {
-            // Anchor to the pre-TX floor: never re-seed lower than the last
-            // known-good baseline (protects against a muted/near-silent first
-            // block), but still let a genuinely louder block (AGC pump) win.
+            // First block after reactivation: establish the floor via the
+            // anchor clamp before any hot check — there is no prior in-window
+            // reference to compare this sample against yet. Not hot by
+            // construction (level <= floor_db_ either way the max() falls).
             floor_db_        = std::max(floor_before_relearn_db_, level_db_);
             floor_valid_     = true;
             relearn_blocks_  = RELEARN_BLOCKS;
-        }
-
-        if (relearn_blocks_ > 0) {
-            // Settling window: track both directions at a fast rate so a
-            // genuine AGC pump is still absorbed quickly, but clamp the result
-            // so a muted/near-silent block can't drag the floor below the
-            // pre-TX anchor — only the vote is suppressed while this converges.
-            floor_db_ = std::max(floor_before_relearn_db_,
-                                  floor_db_ + ALPHA_RELEARN * (level_db_ - floor_db_));
-            --relearn_blocks_;
-            hot_ring_ = static_cast<uint8_t>(hot_ring_ << 1);   // forced non-hot
+            hot_ring_ = static_cast<uint8_t>(hot_ring_ << 1);
             if (blocks_seen_ < 4) ++blocks_seen_;
             int hot_count = 0;
             for (uint8_t b = hot_ring_; b; b >>= 1) hot_count += (b & 1u);
@@ -239,15 +230,31 @@ private:
             return;
         }
 
+        // Compare against the floor as it stood entering this block, THEN
+        // adapt it for the next one — same order as the steady-state path
+        // below, so the vote is never suppressed: the anchor clamp (not vote
+        // suppression) is what keeps a mute/squelch transient from reading
+        // busy, so a genuine signal is still caught within ~2-3 blocks even
+        // while the floor is still settling.
         const bool hot = level_db_ > floor_db_ + margin_db_;
 
-        // Asymmetric EWMA: down always fast; up only from non-hot blocks —
-        // plus the small unconditional drift as the anti-lockout escape hatch.
-        if (level_db_ < floor_db_)
-            floor_db_ += ALPHA_DOWN * (level_db_ - floor_db_);
-        else if (!hot)
-            floor_db_ += ALPHA_UP * (level_db_ - floor_db_);
-        floor_db_ += FLOOR_DRIFT_DB;
+        if (relearn_blocks_ > 0) {
+            // Settling window: track both directions at a fast rate so a
+            // genuine AGC pump is still absorbed quickly, clamped so a
+            // muted/near-silent block can't drag the floor below the pre-TX
+            // anchor.
+            floor_db_ = std::max(floor_before_relearn_db_,
+                                  floor_db_ + ALPHA_RELEARN * (level_db_ - floor_db_));
+            --relearn_blocks_;
+        } else {
+            // Asymmetric EWMA: down always fast; up only from non-hot blocks —
+            // plus the small unconditional drift as the anti-lockout escape hatch.
+            if (level_db_ < floor_db_)
+                floor_db_ += ALPHA_DOWN * (level_db_ - floor_db_);
+            else if (!hot)
+                floor_db_ += ALPHA_UP * (level_db_ - floor_db_);
+            floor_db_ += FLOOR_DRIFT_DB;
+        }
 
         // N-of-M vote over the last 4 blocks (2-of-4 → busy).
         hot_ring_ = static_cast<uint8_t>(((hot_ring_ << 1) | (hot ? 1u : 0u)) & 0x0Fu);
