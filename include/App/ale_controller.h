@@ -1187,6 +1187,7 @@ private:
     bool                     lbt_occupancy_enabled_ = true;
     bool                     voice_tx_active_        = false;  // set by bridge during voice PTT
     bool                     lbt_busy_reported_     = false;  // edge-detect for status emission
+    bool                     lbt_relearn_was_active_ = false; // edge-detect for relearn-settled diagnostic
 
     /// A.5.4.7.1: set SM shared/ALE-only LBT duration from the channels involved.
     void apply_lbt_policy_(const std::vector<Channel>& channels);

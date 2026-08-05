@@ -36,6 +36,23 @@
  *     drops any half-filled block and the hot-block vote, and push_samples()
  *     becomes a no-op.  This prevents the sticky-latch failure where `busy`
  *     lingered true through a TX because no block completed to revise it.
+ *   - Floor relearn window: reactivation (every RX reopen after TX) also
+ *     invalidates the tracked floor, and the *first* block after that would
+ *     naively become the new floor outright.  Confirmed on real hardware
+ *     (2026-08-05): this is NOT sampling variance but a radio's PTT-release
+ *     RX mute/squelch tail — the audio genuinely reads digital silence for
+ *     the whole post-reactivation settling window, not just one unlucky
+ *     block.  Since hot blocks are excluded from the asymmetric EWMA's
+ *     up-adaptation by design, a floor pinned this low has no way back except
+ *     the slow FLOOR_DRIFT_DB escape hatch — effectively a permanent false
+ *     BUSY once normal ambient noise resumes.  Fix: the relearned floor is
+ *     anchored to the pre-reactivation (last known-good) value — during the
+ *     RELEARN_BLOCKS settling window it can only move UP from that anchor
+ *     (still absorbing a genuine AGC pump quickly) and the vote is forced
+ *     non-hot, but it can never be re-seeded lower by a muted/near-silent
+ *     transient.  After the window elapses, normal unclamped adaptation
+ *     resumes so a genuinely, permanently quieter environment is still
+ *     learned over time via the ordinary fast ALPHA_DOWN path.
  *
  * margin_db is operator-settable (default 6 dB) to match local noise
  * conditions; see ALEController::set_lbt_margin_db().
@@ -52,6 +69,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -98,17 +116,33 @@ public:
             // blocks are excluded from ALPHA_UP, the floor could only catch up
             // via the 0.01 dB/block drift (~60 s per 6 dB of margin) — the pill
             // stayed FREQ BUSY for minutes after a transmission. Dropping the
-            // floor here makes the first post-TX block re-learn the current
-            // noise floor, so steady (even AGC-pumped) noise reads CLEAR at once
-            // and a real signal still drives BUSY. A TX is an RX-off period,
-            // exactly the case reset() anticipates.
+            // floor here makes finish_block_() re-learn the current noise floor
+            // over the RELEARN_BLOCKS settling window (see finish_block_) rather
+            // than trusting a single possibly-anomalous block, so steady (even
+            // AGC-pumped) noise reads CLEAR shortly after reactivation and a
+            // real signal still drives BUSY. A TX is an RX-off period, exactly
+            // the case reset() anticipates.
+            floor_before_relearn_db_ = floor_db_;   // diagnostic snapshot — see finish_block_
             busy_.store(false, std::memory_order_relaxed);
             acc_count_ = 0; sum_ = 0.0f; sum_sq_ = 0.0f;
             floor_valid_ = false;
+            relearn_blocks_ = 0;   // re-armed by finish_block_() on the next block
             hot_ring_ = 0; blocks_seen_ = 0;
         }
     }
     bool active() const { return active_.load(std::memory_order_relaxed); }
+
+    /** True while the post-reactivation floor settling window is running (see
+     *  finish_block_).  Used by the controller to detect when relearn completes,
+     *  purely for diagnostics — not consulted by the busy decision itself. */
+    bool relearning() const { return relearn_blocks_ > 0; }
+
+    /** The floor as it stood immediately before the last reactivation invalidated
+     *  it (diagnostic only) — lets the caller compare "floor before TX" against
+     *  "floor after the relearn window settled" to distinguish a genuine AGC
+     *  pump from a miscalibration (e.g. the first post-TX block landing on a
+     *  radio's PTT-release mute/squelch tail rather than real ambient noise). */
+    float floor_before_relearn_db() const { return floor_before_relearn_db_; }
 
     void  set_margin_db(float db) { margin_db_ = (db < 0.0f) ? 0.0f : db; }
     float margin_db() const       { return margin_db_; }
@@ -120,6 +154,7 @@ public:
     void reset() {
         acc_count_ = 0; sum_ = 0.0f; sum_sq_ = 0.0f;
         floor_valid_ = false;
+        relearn_blocks_ = 0;
         hot_ring_ = 0; blocks_seen_ = 0;
         busy_.store(false, std::memory_order_relaxed);
     }
@@ -153,6 +188,23 @@ private:
     static constexpr float ALPHA_UP       = 0.05f;   ///< non-busy blocks pull floor up
     static constexpr float FLOOR_DRIFT_DB = 0.01f;   ///< unconditional up-drift per block
 
+    // Relearn window after reactivation (RX reopen post-TX, or operator re-enable):
+    // trusting fresh post-reactivation blocks outright is fragile — confirmed on
+    // real hardware (2026-08-05 diagnostic capture) to be a radio's PTT-release
+    // RX mute/squelch tail, not sampling variance: the entire prior 4-block/
+    // 400ms window read digital silence (0 dB) against a 52 dB pre-TX floor,
+    // settling the floor at 0 dB and leaving every subsequent NORMAL ambient
+    // block reading as busy — recoverable only via the ~0.01 dB/block drift
+    // (minutes). Fix: anchor the relearned floor to the LAST KNOWN-GOOD (pre-TX)
+    // value — it can only move UP during the settling window (to accommodate a
+    // genuine AGC pump), never get pinned low by a mute/squelch transient. The
+    // window is widened past the observed >=400ms mute duration for margin, but
+    // stays bounded — after it elapses, normal unclamped adaptation resumes so
+    // a genuinely, permanently quieter environment can still be learned over
+    // time via the ordinary (already-correct) fast ALPHA_DOWN path.
+    static constexpr int   RELEARN_BLOCKS  = 10;     ///< ~1 s settling window (was 4 / 400ms — too short to outlast the observed RX mute tail)
+    static constexpr float ALPHA_RELEARN   = 0.50f;  ///< fast tracking while relearning (still floor-clamped, see finish_block_)
+
     void finish_block_() {
         const float n    = static_cast<float>(acc_count_);
         const float mean = sum_ / n;
@@ -162,7 +214,30 @@ private:
         // +1.0 keeps log10 finite on digital silence (level 0 dB).
         level_db_ = 10.0f * std::log10(var + 1.0f);
 
-        if (!floor_valid_) { floor_db_ = level_db_; floor_valid_ = true; }
+        if (!floor_valid_) {
+            // Anchor to the pre-TX floor: never re-seed lower than the last
+            // known-good baseline (protects against a muted/near-silent first
+            // block), but still let a genuinely louder block (AGC pump) win.
+            floor_db_        = std::max(floor_before_relearn_db_, level_db_);
+            floor_valid_     = true;
+            relearn_blocks_  = RELEARN_BLOCKS;
+        }
+
+        if (relearn_blocks_ > 0) {
+            // Settling window: track both directions at a fast rate so a
+            // genuine AGC pump is still absorbed quickly, but clamp the result
+            // so a muted/near-silent block can't drag the floor below the
+            // pre-TX anchor — only the vote is suppressed while this converges.
+            floor_db_ = std::max(floor_before_relearn_db_,
+                                  floor_db_ + ALPHA_RELEARN * (level_db_ - floor_db_));
+            --relearn_blocks_;
+            hot_ring_ = static_cast<uint8_t>(hot_ring_ << 1);   // forced non-hot
+            if (blocks_seen_ < 4) ++blocks_seen_;
+            int hot_count = 0;
+            for (uint8_t b = hot_ring_; b; b >>= 1) hot_count += (b & 1u);
+            busy_.store(hot_count >= 2, std::memory_order_relaxed);
+            return;
+        }
 
         const bool hot = level_db_ > floor_db_ + margin_db_;
 
@@ -188,10 +263,12 @@ private:
     float    sum_sq_    = 0.0f;
 
     // Levels
-    float level_db_    = 0.0f;
-    float floor_db_    = 0.0f;
-    bool  floor_valid_ = false;
-    float margin_db_   = DEFAULT_MARGIN_DB;
+    float level_db_               = 0.0f;
+    float floor_db_               = 0.0f;
+    bool  floor_valid_            = false;
+    int   relearn_blocks_         = 0;   ///< blocks left in the post-reactivation settling window
+    float floor_before_relearn_db_ = 0.0f;  ///< diagnostic snapshot, see set_active()/floor_before_relearn_db()
+    float margin_db_              = DEFAULT_MARGIN_DB;
 
     // Busy vote
     uint8_t           hot_ring_    = 0;   ///< last 4 block hot flags
