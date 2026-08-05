@@ -132,6 +132,13 @@ static std::string resolve_web_root() {
 
 // ── Config file ──────────────────────────────────────────────────────────────
 
+// One watchlist entry: a callsign plus which alert modes it triggers in the GUI.
+struct WatchlistEntry {
+    std::string addr;
+    bool        audible = true;
+    bool        visible = true;
+};
+
 struct MonitorConfig {
     uint16_t    port = 8081;
     bool        remote = false;
@@ -146,6 +153,10 @@ struct MonitorConfig {
     std::string channel_filter = "all";   // all | ale | sel
     std::string mode_override;            // empty = use file mode
     std::string lqa_file = "monitor_lqa.bin";
+    std::string lqa_history_file = "monitor_lqa_history.csv";
+    uint32_t    history_retention_days = 90;
+    bool        history_enabled = true;
+    std::vector<WatchlistEntry> watchlist;  // repeatable "watchlist = ADDR:A+V" config lines
 };
 
 static std::string trim(const std::string& s) {
@@ -179,6 +190,24 @@ static MonitorConfig parse_config(const std::string& path) {
         else if (key == "channel_filter") { cfg.channel_filter = val.empty() ? "all" : val; }
         else if (key == "mode_override")  { cfg.mode_override = val; }
         else if (key == "lqa_file")       { if (!val.empty()) cfg.lqa_file = val; }
+        else if (key == "lqa_history_file")    { if (!val.empty()) cfg.lqa_history_file = val; }
+        else if (key == "history_retention_days") { try { cfg.history_retention_days = static_cast<uint32_t>(std::stoul(val)); } catch (...) {} }
+        else if (key == "history_enabled") { cfg.history_enabled = (val == "1" || val == "true"); }
+        else if (key == "watchlist") {
+            // Repeatable key — every occurrence APPENDS an entry (unlike every
+            // other key here, which is last-value-wins). Format: ADDR:A+V
+            // where A/V are "1"/"0" audible/visible flags, e.g. "K1ABC:1+1".
+            const auto colon = val.find(':');
+            WatchlistEntry we;
+            we.addr = trim(colon == std::string::npos ? val : val.substr(0, colon));
+            if (colon != std::string::npos) {
+                const std::string flags = val.substr(colon + 1);
+                const auto plus = flags.find('+');
+                we.audible = plus == std::string::npos ? true : (trim(flags.substr(0, plus)) == "1");
+                we.visible = plus == std::string::npos ? true : (trim(flags.substr(plus + 1)) == "1");
+            }
+            if (!we.addr.empty()) cfg.watchlist.push_back(we);
+        }
     }
     return cfg;
 }
@@ -200,7 +229,12 @@ static void save_config(const std::string& path, const MonitorConfig& cfg) {
       << "dwell_ms = " << cfg.dwell_ms << "\n"
       << "channel_filter = " << cfg.channel_filter << "\n"
       << "mode_override = " << cfg.mode_override << "\n"
-      << "lqa_file = " << cfg.lqa_file << "\n";
+      << "lqa_file = " << cfg.lqa_file << "\n"
+      << "lqa_history_file = " << cfg.lqa_history_file << "\n"
+      << "history_retention_days = " << cfg.history_retention_days << "\n"
+      << "history_enabled = " << (cfg.history_enabled ? 1 : 0) << "\n";
+    for (const auto& w : cfg.watchlist)
+        f << "watchlist = " << w.addr << ":" << (w.audible ? 1 : 0) << "+" << (w.visible ? 1 : 0) << "\n";
 }
 
 // Write a commented default template so a first run gives the user something
@@ -227,7 +261,14 @@ static void write_config_template(const std::string& path) {
       << "channel_filter = all\n"
       << "# mode_override: empty = use each channel's file mode; e.g. USB-D\n"
       << "mode_override =\n"
-      << "lqa_file = monitor_lqa.bin\n";
+      << "lqa_file = monitor_lqa.bin\n"
+      << "# lqa_history_file: append-only sounding/contact history for the\n"
+      << "# Propagation Analysis GUI page (never overwritten, unlike lqa_file).\n"
+      << "lqa_history_file = monitor_lqa_history.csv\n"
+      << "history_retention_days = 90\n"
+      << "history_enabled = 1\n"
+      << "# watchlist: repeatable — one line per entry, ADDR:audible+visible (1/0 flags)\n"
+      << "# watchlist = K1ABC:1+1\n";
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -522,6 +563,66 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
         return mj::dump(make_reply(msg, true));
     }
 
+    // ── LQA history (append-only — separate store, separate clear action) ──
+    if (cmd == "LQA_HISTORY_LIST") {
+        const uint64_t since_ms = static_cast<uint64_t>(msg.get_number("since_ms", 0));
+        const std::string station = msg.get_string("station");
+        const uint32_t freq_hz = static_cast<uint32_t>(msg.get_number("freq_hz", 0));
+        const size_t limit = static_cast<size_t>(msg.get_number("limit", 0));
+        mj::Value list = mj::arr();
+        for (const auto& s : ctrl.get_lqa_history(since_ms, station, freq_hz, limit)) {
+            mj::Value v = mj::obj();
+            v.set("ts_ms",    mj::Value::number(static_cast<double>(s.ts_ms)));
+            v.set("freq_hz",  mj::Value::number(s.frequency_hz));
+            v.set("station",  mj::Value::string(s.station));
+            v.set("sinad_db", mj::Value::number(s.sinad_db));
+            v.set("ber",      mj::Value::number(s.ber));
+            v.set("score",    mj::Value::number(s.score));
+            list.push_back(std::move(v));
+        }
+        mj::Value r = make_reply(msg, true);
+        r.set("data", std::move(list));
+        return mj::dump(r);
+    }
+    if (cmd == "LQA_HISTORY_CLEAR") {
+        const bool ok = ctrl.clear_lqa_history(ctx.cfg->lqa_history_file);
+        mj::Value r = make_reply(msg, ok);
+        if (!ok) r.set("error", mj::Value::string("could not clear history file"));
+        return mj::dump(r);
+    }
+
+    // ── Watchlist / alerting ─────────────────────────────────────────────
+    if (cmd == "WATCHLIST_GET") {
+        mj::Value list = mj::arr();
+        for (const auto& w : ctx.cfg->watchlist) {
+            mj::Value v = mj::obj();
+            v.set("addr",    mj::Value::string(w.addr));
+            v.set("audible", mj::Value::boolean(w.audible));
+            v.set("visible", mj::Value::boolean(w.visible));
+            list.push_back(std::move(v));
+        }
+        mj::Value r = make_reply(msg, true);
+        r.set("data", std::move(list));
+        return mj::dump(r);
+    }
+    if (cmd == "WATCHLIST_SET") {
+        // Full replace — not auto-persisted; the GUI calls MON_CONFIG_SAVE
+        // separately (reuses the existing "Save as startup" button).
+        std::vector<WatchlistEntry> next;
+        const mj::Value* list = msg.find("list");
+        if (list && list->is_array()) {
+            for (const auto& item : list->items()) {
+                WatchlistEntry we;
+                we.addr    = item.get_string("addr");
+                we.audible = item.get_bool("audible", true);
+                we.visible = item.get_bool("visible", true);
+                if (!we.addr.empty()) next.push_back(we);
+            }
+        }
+        ctx.cfg->watchlist = std::move(next);
+        return mj::dump(make_reply(msg, true));
+    }
+
     // ── VFO (read-only) ───────────────────────────────────────────────────
     if (cmd == "VFO_GET") {
         ctrl.sync_radio_state();
@@ -710,6 +811,10 @@ int main(int argc, char* argv[]) {
 
     if (ctrl.load_lqa(cfg.lqa_file))
         pal::log_info("ale_monitor", "LQA loaded from %s", cfg.lqa_file.c_str());
+
+    ctrl.set_lqa_history_config(cfg.history_retention_days, cfg.history_enabled);
+    if (ctrl.load_lqa_history(cfg.lqa_history_file))
+        pal::log_info("ale_monitor", "LQA history loaded from %s", cfg.lqa_history_file.c_str());
 
     // ── Radio ────────────────────────────────────────────────────────────
     std::unique_ptr<pal::IRadio> radio;

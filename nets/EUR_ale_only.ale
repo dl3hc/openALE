@@ -1,0 +1,11 @@
+# openALE station file - EUR nets (HFLINK Worldwide Channel Matrix 2019)
+# ID:id rx_hz tx_hz mode [flags] [label]   flags=[OFF,RX,IC,IS,IR]
+# tx_hz=0 = simplex. Dwell/policy set independently (NET lines use defaults).
+ID:03D 3596000 0 USB 03DALE
+ID:07D 7102000 0 USB 07DALE
+ID:10D 10145500 0 USB 10DALE
+ID:14B 14109000 0 USB 14BALE
+ID:18A 18106000 0 USB 18AALE
+ID:21B 21096000 0 USB 21BALE
+# NET:name id,id,...  [dwell=ms] [scan=0|1] [sound=0|1] [sndint=sec] [c=N]
+NET:HFN 03D,07D,10D,14B,18A,21B

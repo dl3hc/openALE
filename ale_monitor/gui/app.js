@@ -130,6 +130,11 @@ function syncSettingsFromBridge() {
     if (!r.ok) return;
     document.getElementById('rigStatus').textContent = r.status;
   });
+  bridgeSend('WATCHLIST_GET', {}, (r) => {
+    if (!r.ok) return;
+    watchlist = r.data || [];
+    renderWatchlist();
+  });
 }
 
 function setField(id, val) {
@@ -200,6 +205,91 @@ function doConfigSave() {
   bridgeSend('MON_CONFIG_SAVE', {}, (r) => {
     aleLogInfo(r.ok ? 'Settings saved as startup config' : ('Save failed: ' + (r.error || '?')));
   });
+}
+
+// ── Watchlist / Alerting ─────────────────────────────────────────────────────
+
+let watchlist = [];  // [{addr, audible, visible}]
+
+function doWatchlistAdd() {
+  const addrEl = document.getElementById('wlAddAddr');
+  const addr = addrEl.value.trim().toUpperCase();
+  if (!addr) return;
+  const audible = document.getElementById('wlAddAudible').checked;
+  const visible = document.getElementById('wlAddVisible').checked;
+  watchlist = watchlist.filter(w => w.addr !== addr);
+  watchlist.push({ addr, audible, visible });
+  addrEl.value = '';
+  renderWatchlist();
+  doWatchlistSave();
+}
+
+function doWatchlistRemove(addr) {
+  watchlist = watchlist.filter(w => w.addr !== addr);
+  renderWatchlist();
+  doWatchlistSave();
+}
+
+function doWatchlistSave() {
+  bridgeSend('WATCHLIST_SET', { list: watchlist }, (r) => {
+    if (r.ok) aleLogInfo('Watchlist updated (' + watchlist.length + ' entries) — click "Save as startup" to persist across restarts');
+  });
+}
+
+function renderWatchlist() {
+  const el = document.getElementById('watchlistBody');
+  if (!el) return;
+  if (!watchlist.length) {
+    el.innerHTML = '<div class="watchlist-empty">No watchlisted callsigns</div>';
+    return;
+  }
+  el.innerHTML = watchlist.map(w =>
+    `<div class="watchlist-row">` +
+      `<span>${escapeHtml(w.addr)}</span>` +
+      `<span class="heard-avail ${w.audible ? 'ha-yes' : 'ha-unk'}">${w.audible ? 'AUDIBLE' : 'MUTE'}</span>` +
+      `<span class="heard-avail ${w.visible ? 'ha-yes' : 'ha-unk'}">${w.visible ? 'VISIBLE' : 'HIDDEN'}</span>` +
+      `<button class="heard-del" onclick='doWatchlistRemove(${JSON.stringify(w.addr)})' title="Remove">×</button>` +
+    `</div>`
+  ).join('');
+}
+
+// Per-station alert cooldown — avoids re-alerting on every decoded word from
+// the same station within one sounding/handshake burst.
+const WL_COOLDOWN_MS = 5 * 60 * 1000;
+const wlLastAlert = new Map();
+
+function checkWatchlistAlert(addr) {
+  const entry = watchlist.find(w => w.addr === addr);
+  if (!entry) return;
+  const now = Date.now();
+  if (now - (wlLastAlert.get(addr) || 0) < WL_COOLDOWN_MS) return;
+  wlLastAlert.set(addr, now);
+  if (entry.audible) playAlertTone();
+  if (entry.visible) flashWatchlistBanner(addr);
+}
+
+function playAlertTone() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 880;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.3);
+    osc.onended = () => ctx.close();
+  } catch {}
+}
+
+function flashWatchlistBanner(addr) {
+  const el = document.getElementById('watchlistFlash');
+  if (!el) return;
+  el.textContent = '⚠ Watchlist: ' + addr + ' heard!';
+  el.classList.add('flashing');
+  clearTimeout(el._hideTimer);
+  el._hideTimer = setTimeout(() => el.classList.remove('flashing'), 4000);
 }
 
 // Pull current freq/mode from the radio on connect and on channel_changed events.
@@ -558,9 +648,13 @@ function deleteHeard(addr, freqHz) {
 }
 
 function clearHeard() {
-  heardStations.forEach(h => heardDeleted.add(h.addr + '|' + h.freq_hz));
-  heardStations = [];
-  renderHeard();
+  if (!confirm('Clear all heard-station data? This also overwrites the saved LQA file.')) return;
+  bridgeSend('LQA_CLEAR', {}, () => {
+    heardDeleted = new Set();
+    heardStations = [];
+    renderHeard();
+    syncLqaFromBridge();
+  });
 }
 
 function renderHeard() {
@@ -570,7 +664,12 @@ function renderHeard() {
     el.innerHTML = '<div class="heard-empty">No stations heard yet</div>';
     return;
   }
-  const body = heardStations.map(h => {
+  const sort = document.getElementById('heardSort')?.value || 'score';
+  const rows = [...heardStations].sort((a, b) =>
+    sort === 'age'  ? (a.ageMin || 0) - (b.ageMin || 0) :
+    sort === 'addr' ? a.addr.localeCompare(b.addr) || (b.score || 0) - (a.score || 0) :
+                      (b.score || 0) - (a.score || 0));
+  const body = rows.map(h => {
     const sinadFromG = (h.sinad_from != null) ? h.sinad_from / 30 : null;
     const berFromG   = (h.ber_from   != null) ? 1 - Math.min(1, h.ber_from / 48) : null;
     const scoreG     = Math.min(1, Math.max(0, (h.score || 0) / 30));
@@ -622,6 +721,7 @@ function aleLogAppend(html) {
 function onAleLogWord(e, dir) {
   dir = dir || 'rx';
   const isTx  = dir === 'tx';
+  if (!isTx && e.addr) checkWatchlistAlert(e.addr);
   const fid   = e.frame_id;
   let freqHz;
   if (isTx) {
@@ -756,15 +856,6 @@ function syncLqaFromBridge() {
       heardStations = heardStations.filter(h => dbKeys.has(h.addr + '|' + h.freq_hz));
     }
     renderHeard();
-    renderLqa();
-  });
-}
-
-function clearLqa() {
-  if (!confirm('Clear all LQA data? This also overwrites the saved file.')) return;
-  bridgeSend('LQA_CLEAR', {}, () => {
-    heardDeleted = new Set();
-    syncLqaFromBridge();
   });
 }
 
@@ -787,29 +878,235 @@ function availBadge(av) {
   return `<td class="lqa-cell"><span class="heard-avail ${cls}" title="${tip}">${txt}</span></td>`;
 }
 
-function renderLqa() {
-  const tb   = document.getElementById('lqaBody');
-  if (!tb) return;
-  const sort = document.getElementById('cfgLqaSort')?.value || 'score';
-  const rows = [...lqaEntries].sort((a, b) =>
-    sort === 'age'  ? a.ageMin - b.ageMin :
-    sort === 'addr' ? a.addr.localeCompare(b.addr) || b.score - a.score :
-                      b.score - a.score);
-  tb.innerHTML = rows.length ? rows.map(e => {
-    const sinadFromG = e.sinad_from != null ? e.sinad_from / 30 : null;
-    const berFromG   = e.ber_from   != null ? 1 - Math.min(1, e.ber_from / 48) : null;
-    const scoreG     = Math.min(1, Math.max(0, e.score / 30));
-    const ageG       = 1 - Math.min(1, e.ageMin / 60);
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PROPAGATION ANALYSIS  (append-only LQA history — separate from lqaEntries
+//  above, which is the live overwritten snapshot. All aggregation is done
+//  here client-side from the raw history array; the backend is a dumb
+//  data exporter (LQA_HISTORY_LIST).
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let historyRaw = [];  // [{ts_ms, freq_hz, station, sinad_db, ber, score}]
+
+function toggleAnalysis() {
+  const page = document.getElementById('analysisPage');
+  const main = document.getElementById('main');
+  page.classList.toggle('hidden');
+  main.classList.toggle('hidden');
+  if (!page.classList.contains('hidden')) syncHistoryFromBridge();
+}
+
+function showAnalysisView(name) {
+  document.querySelectorAll('.analysis-view').forEach(v => v.classList.add('hidden'));
+  const view = document.getElementById('analysis' + name[0].toUpperCase() + name.slice(1));
+  if (view) view.classList.remove('hidden');
+  document.querySelectorAll('.subnav-btn[data-view]').forEach(b =>
+    b.classList.toggle('active', b.dataset.view === name));
+  if      (name === 'station') renderStationHistory();
+  else if (name === 'channel') renderChannelHistory();
+  else if (name === 'heatmap') renderHeatmaps();
+  else if (name === 'tod')     renderTimeOfDay();
+}
+
+function syncHistoryFromBridge() {
+  bridgeSend('LQA_HISTORY_LIST', { limit: 20000 }, (r) => {
+    if (!r.ok) return;
+    historyRaw = r.data || [];
+    populateStationPicker();
+    populateChannelPicker();
+    const active = document.querySelector('.subnav-btn[data-view].active');
+    showAnalysisView(active ? active.dataset.view : 'station');
+  });
+}
+
+function doHistoryClear() {
+  if (!confirm('Permanently delete all propagation history? This cannot be undone.')) return;
+  bridgeSend('LQA_HISTORY_CLEAR', {}, (r) => {
+    if (r.ok) { historyRaw = []; syncHistoryFromBridge(); aleLogInfo('Propagation history cleared'); }
+    else aleLogInfo('History clear failed: ' + (r.error || '?'));
+  });
+}
+
+function doExportHistoryCsv() {
+  const header = 'timestamp_utc,freq_mhz,station,sinad_db,ber,score\n';
+  const rows = historyRaw.map(s =>
+    [new Date(s.ts_ms).toISOString(), fmtChFreqExact(s.freq_hz), s.station, s.sinad_db, s.ber, s.score].join(','));
+  const blob = new Blob([header + rows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ale_monitor_lqa_history.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function groupBy(rows, keyFn) {
+  const m = new Map();
+  for (const r of rows) {
+    const k = keyFn(r);
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(r);
+  }
+  return m;
+}
+
+function avg(rows, field) {
+  if (!rows.length) return null;
+  return rows.reduce((s, r) => s + r[field], 0) / rows.length;
+}
+
+function populateStationPicker() {
+  const sel = document.getElementById('stationPicker');
+  const prev = sel.value;
+  const stations = [...new Set(historyRaw.map(s => s.station))].sort();
+  sel.innerHTML = stations.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')
+    || '<option value="">(no history yet)</option>';
+  if (stations.includes(prev)) sel.value = prev;
+}
+
+function populateChannelPicker() {
+  const sel = document.getElementById('channelPicker');
+  const prev = sel.value;
+  const freqs = [...new Set(historyRaw.map(s => s.freq_hz))].sort((a, b) => a - b);
+  sel.innerHTML = freqs.map(f => `<option value="${f}">${fmtChFreqExact(f)} MHz</option>`).join('')
+    || '<option value="">(no history yet)</option>';
+  if (freqs.some(f => String(f) === prev)) sel.value = prev;
+}
+
+// Minimal hand-rolled line chart: static redraw (no animation — historical, not live).
+function drawLineChart(canvasId, points, color, fmtY) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const w = canvas.clientWidth || 260, h = canvas.clientHeight || 120;
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  if (points.length < 2) {
+    ctx.fillStyle = 'rgba(200,216,232,0.4)';
+    ctx.font = '11px monospace';
+    ctx.fillText('not enough data', 8, h / 2);
+    return;
+  }
+  const pad = 20;
+  const xs = points.map(p => p.ts_ms), ys = points.map(p => p.y);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const xr = xMax - xMin || 1, yr = yMax - yMin || 1;
+  const px = t => pad + ((t - xMin) / xr) * (w - 2 * pad);
+  const py = v => h - pad - ((v - yMin) / yr) * (h - 2 * pad);
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.strokeRect(pad, pad, w - 2 * pad, h - 2 * pad);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  points.forEach((p, i) => { const x = px(p.ts_ms), y = py(p.y); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(200,216,232,0.55)';
+  ctx.font = '9px monospace';
+  ctx.fillText(fmtY(yMax), 2, pad);
+  ctx.fillText(fmtY(yMin), 2, h - pad + 9);
+}
+
+function renderStationHistory() {
+  const station = document.getElementById('stationPicker').value;
+  const rows = historyRaw.filter(s => s.station === station).sort((a, b) => a.ts_ms - b.ts_ms);
+  drawLineChart('chartSinad', rows.map(r => ({ ts_ms: r.ts_ms, y: r.sinad_db })), '#00dc8c', v => v.toFixed(0));
+  drawLineChart('chartBer',   rows.map(r => ({ ts_ms: r.ts_ms, y: r.ber })),      '#ff8a65', v => v.toFixed(0));
+  drawLineChart('chartScore', rows.map(r => ({ ts_ms: r.ts_ms, y: r.score })),    '#4dc8ff', v => v.toFixed(0));
+
+  const el = document.getElementById('soundingHistoryTable');
+  if (!rows.length) { el.innerHTML = '<div class="msg-empty">No history for this station yet</div>'; return; }
+  const body = [...rows].reverse().map(r =>
+    `<tr>` +
+      `<td class="lqa-cell" style="text-align:left">${new Date(r.ts_ms).toLocaleString()}</td>` +
+      `<td class="lqa-cell">${fmtChFreqExact(r.freq_hz)}</td>` +
+      qCell(r.sinad_db.toFixed(1), r.sinad_db / 30) +
+      qCell(r.ber.toFixed(1), 1 - Math.min(1, r.ber / 48)) +
+      qCell(r.score.toFixed(1), r.score / 30) +
+    `</tr>`
+  ).join('');
+  el.innerHTML =
+    `<table class="ch-table"><thead><tr>` +
+    `<th>Time</th><th>Freq (MHz)</th><th>SINAD</th><th>BER</th><th>Score</th>` +
+    `</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function renderChannelHistory() {
+  const freq = Number(document.getElementById('channelPicker').value);
+  const rows = historyRaw.filter(s => s.freq_hz === freq);
+  const el = document.getElementById('channelStatsTable');
+  if (!rows.length) { el.innerHTML = '<div class="msg-empty">No history for this channel yet</div>'; return; }
+  const byHour = groupBy(rows, r => new Date(r.ts_ms).getHours());
+  let bestHour = null, bestScore = -1;
+  for (const [hour, hrows] of byHour) {
+    const a = avg(hrows, 'score');
+    if (a > bestScore) { bestScore = a; bestHour = hour; }
+  }
+  const stations = new Set(rows.map(r => r.station));
+  el.innerHTML =
+    `<table class="ch-table"><tbody>` +
+    `<tr><td class="lqa-cell" style="text-align:left">Reception count</td><td class="lqa-cell">${rows.length}</td></tr>` +
+    `<tr><td class="lqa-cell" style="text-align:left">Distinct stations</td><td class="lqa-cell">${stations.size}</td></tr>` +
+    `<tr><td class="lqa-cell" style="text-align:left">Avg SINAD</td><td class="lqa-cell">${avg(rows, 'sinad_db').toFixed(1)}</td></tr>` +
+    `<tr><td class="lqa-cell" style="text-align:left">Avg BER</td><td class="lqa-cell">${avg(rows, 'ber').toFixed(1)}</td></tr>` +
+    `<tr><td class="lqa-cell" style="text-align:left">Avg Score</td><td class="lqa-cell">${avg(rows, 'score').toFixed(1)}</td></tr>` +
+    `<tr><td class="lqa-cell" style="text-align:left">Best operating hour (UTC-local)</td><td class="lqa-cell">${bestHour}:00</td></tr>` +
+    `</tbody></table>`;
+}
+
+function heatCell(scoreAvg, count) {
+  if (count === 0) return `<td class="heatmap-cell" style="color:var(--tx-dim)">·</td>`;
+  return `<td class="heatmap-cell" style="background:${qColor(scoreAvg / 30)}22;color:${qColor(scoreAvg / 30)}" title="${count} samples">${scoreAvg.toFixed(0)}</td>`;
+}
+
+function renderHeatmaps() {
+  const freqTimeEl = document.getElementById('heatmapFreqTime');
+  const stationFreqEl = document.getElementById('heatmapStationFreq');
+  if (!historyRaw.length) {
+    freqTimeEl.innerHTML = stationFreqEl.innerHTML = '<div class="msg-empty">No history yet</div>';
+    return;
+  }
+
+  // Frequency × hour-of-day
+  const freqs = [...new Set(historyRaw.map(s => s.freq_hz))].sort((a, b) => a - b);
+  let head = '<tr><th>Freq</th>' + Array.from({ length: 24 }, (_, h) => `<th>${h}</th>`).join('') + '</tr>';
+  let body = freqs.map(f => {
+    const cells = Array.from({ length: 24 }, (_, h) => {
+      const rows = historyRaw.filter(s => s.freq_hz === f && new Date(s.ts_ms).getHours() === h);
+      return heatCell(avg(rows, 'score') || 0, rows.length);
+    }).join('');
+    return `<tr><td class="lqa-cell" style="text-align:left">${fmtChFreqExact(f)}</td>${cells}</tr>`;
+  }).join('');
+  freqTimeEl.innerHTML = `<table class="ch-table heatmap-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+
+  // Station × frequency
+  const stations = [...new Set(historyRaw.map(s => s.station))].sort();
+  head = '<tr><th>Station</th>' + freqs.map(f => `<th>${fmtChFreqExact(f)}</th>`).join('') + '</tr>';
+  body = stations.map(st => {
+    const cells = freqs.map(f => {
+      const rows = historyRaw.filter(s => s.station === st && s.freq_hz === f);
+      return heatCell(avg(rows, 'score') || 0, rows.length);
+    }).join('');
+    return `<tr><td class="lqa-cell" style="text-align:left">${escapeHtml(st)}</td>${cells}</tr>`;
+  }).join('');
+  stationFreqEl.innerHTML = `<table class="ch-table heatmap-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+function renderTimeOfDay() {
+  const el = document.getElementById('todTable');
+  if (!historyRaw.length) { el.innerHTML = '<div class="msg-empty">No history yet</div>'; return; }
+  const byHour = groupBy(historyRaw, r => new Date(r.ts_ms).getHours());
+  const rows = Array.from({ length: 24 }, (_, h) => {
+    const hrows = byHour.get(h) || [];
+    const a = avg(hrows, 'score');
     return `<tr>` +
-      `<td class="lqa-cell" style="text-align:left">${escapeHtml(e.addr)}</td>` +
-      `<td class="lqa-cell">${e.ch}</td>` +
-      availBadge(e.available) +
-      qCell(e.score, scoreG) +
-      qCell(e.sinad_from != null ? `+${Math.round(e.sinad_from)}` : null, sinadFromG) +
-      qCell(e.ber_from   != null ? e.ber_from.toFixed(1)          : null, berFromG) +
-      qCell(e.ageMin >= 60 ? '>60m' : e.ageMin + 'm', ageG) +
-      `</tr>`;
-  }).join('') : '<tr><td colspan="7" class="msg-empty">No LQA data yet</td></tr>';
+      `<td class="lqa-cell" style="text-align:left">${h}:00</td>` +
+      `<td class="lqa-cell">${hrows.length}</td>` +
+      (a == null ? `<td class="lqa-cell" style="color:var(--tx-dim)">—</td>` : qCell(a.toFixed(1), a / 30)) +
+    `</tr>`;
+  }).join('');
+  el.innerHTML =
+    `<table class="ch-table"><thead><tr><th>Hour</th><th>Samples</th><th>Avg Score</th></tr></thead>` +
+    `<tbody>${rows}</tbody></table>`;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

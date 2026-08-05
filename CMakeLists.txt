@@ -155,6 +155,7 @@ target_link_libraries(ale_fs1052 ale_protocol ale_fsk_core ale_fec)
 # LQA system
 add_library(ale_lqa
     src/LQA/lqa_database.cpp
+    src/LQA/lqa_history.cpp
     src/LQA/lqa_metrics.cpp
     src/LQA/lqa_analyzer.cpp
     src/LQA/lqa_exchange.cpp
