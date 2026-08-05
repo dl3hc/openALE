@@ -1296,6 +1296,26 @@ void ALEController::update(uint32_t now_ms)
     // would poison the floor — same treatment as ALE TX).
     occupancy_.set_active(lbt_occupancy_enabled_ && demodulator_.enabled() && !voice_tx_active_);
 
+    // Diagnostic: log once when the post-reactivation floor-relearn window
+    // (see ChannelOccupancyDetector::finish_block_) finishes settling, comparing
+    // the floor just before this TX (pre-TX baseline) against where it settled.
+    // A settled floor near 0 dB points at a radio PTT-release mute/squelch tail
+    // being mistaken for the new ambient floor; a settled floor close to the
+    // pre-TX value with busy still true points elsewhere (relearn not helping,
+    // or a genuine AGC pump larger than the settling window can absorb).
+    {
+        const bool relearning_now = occupancy_.relearning();
+        if (lbt_relearn_was_active_ && !relearning_now) {
+            pal::log_trace("LBT",
+                            "relearn: pre-TX floor=%.0f dB -> settled floor=%.0f dB "
+                            "(level=%.0f dB, margin=%.0f dB, busy=%s)",
+                            occupancy_.floor_before_relearn_db(), occupancy_.floor_db(),
+                            occupancy_.level_db(), occupancy_.margin_db(),
+                            occupancy_.is_busy() ? "yes" : "no");
+        }
+        lbt_relearn_was_active_ = relearning_now;
+    }
+
     // §A.5.3.3 stage-1: arm the ALE-energy detector on the settle EDGE, not at the
     // hop.  With an async radio the audio right after a hop is still the previous
     // channel until the tune completes; the stage-1 detector is level-invariant and
