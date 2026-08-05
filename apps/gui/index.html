@@ -810,13 +810,13 @@
           <div class="fg-row col2">
             <div>
               <label class="flabel">PTT Lead (ms)</label>
-              <input class="finput" id="cfgPttLead" type="number" value="100" min="0">
-              <div class="fhint">Delay after PTT key-up before audio transmits — covers CAT/CI-V latency.</div>
+              <input class="finput" id="cfgPttLead" type="number" value="0" min="0">
+              <div class="fhint">Delay after PTT key-up before audio transmits — covers CAT/CI-V latency. Keep at 0 unless your radio needs it: the protocol's handshake timing windows are only tens of ms wide, and values above ~10 ms can silently break handshaking with other stations entirely.</div>
             </div>
             <div>
               <label class="flabel">PTT Tail (ms)</label>
-              <input class="finput" id="cfgPttTail" type="number" value="350" min="0">
-              <div class="fhint">Delay after RX re-enable before PTT releases — allows audio buffer to drain.</div>
+              <input class="finput" id="cfgPttTail" type="number" value="0" min="0">
+              <div class="fhint">Delay after RX re-enable before PTT releases — allows audio buffer to drain. Keep at 0 unless your radio needs it: the protocol's handshake timing windows are only tens of ms wide, and values above ~10 ms can silently break handshaking with other stations entirely.</div>
             </div>
           </div>
 
