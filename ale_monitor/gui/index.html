@@ -31,6 +31,7 @@
     </div>
   </div>
   <div class="hdr-right">
+    <div id="watchlistFlash" class="watchlist-flash"></div>
     <div id="lbtChip" class="busy-chip" title="Channel occupancy (LBT)">
       <div class="dot busy-dot"></div>
       <span id="lbtLabel">IDLE</span>
@@ -41,6 +42,7 @@
     </div>
     <button class="hdr-btn" id="scanBtn" onclick="doScan()">▶ Scan</button>
     <button class="hdr-btn" id="availBtn" onclick="doAvailable()">■ Stop</button>
+    <button class="hdr-btn" id="analysisToggle" onclick="toggleAnalysis()">📊 Analysis</button>
     <button class="hdr-btn" id="settingsToggle" onclick="toggleSettings()">⚙ Settings</button>
     <button class="hdr-btn" onclick="clearLog()">Clear Log</button>
   </div>
@@ -97,11 +99,27 @@
         <button class="set-btn set-save" onclick="doConfigSave()">💾 Save as startup</button>
       </div>
     </fieldset>
+
+    <fieldset class="settings-group">
+      <legend>Watchlist / Alerting</legend>
+      <div class="set-row">
+        <input id="wlAddAddr" class="set-input" placeholder="Callsign (e.g. K1ABC)">
+        <label><input type="checkbox" id="wlAddAudible" checked> Audible</label>
+        <label><input type="checkbox" id="wlAddVisible" checked> Visible</label>
+        <button class="set-btn" onclick="doWatchlistAdd()">+ Add</button>
+      </div>
+      <div id="watchlistBody" class="watchlist-body">
+        <div class="watchlist-empty">No watchlisted callsigns</div>
+      </div>
+      <div class="set-row">
+        <button class="set-btn set-save" onclick="doConfigSave()">💾 Save as startup</button>
+      </div>
+    </fieldset>
   </div>
 </div>
 
 <!-- ── Main content ───────────────────────────────────────────────────────── -->
-<main class="main">
+<main id="main" class="main">
   <!-- Left column: waterfall -->
   <div class="left-col">
     <div class="panel waterfall-panel">
@@ -123,47 +141,75 @@
     <div class="panel panel-heard">
       <div class="plabel">Heard Stations
         <span>
-          <button class="plabel-btn" onclick="clearHeard()">Clear</button>
+          <select id="heardSort" onchange="renderHeard()" class="plabel-select">
+            <option value="score">Sort: Score</option>
+            <option value="age">Sort: Age</option>
+            <option value="addr">Sort: Callsign</option>
+          </select>
+          <button class="plabel-btn" onclick="clearHeard()" title="Clears the list and wipes the saved LQA file">Clear</button>
         </span>
       </div>
       <div class="pbody" id="heardList">
         <div class="heard-empty">No stations heard yet</div>
       </div>
     </div>
-
-    <!-- LQA table -->
-    <div class="panel panel-lqa">
-      <div class="plabel">Channel Quality (FROM)
-        <span>
-          <select id="cfgLqaSort" onchange="renderLqa()" class="plabel-select">
-            <option value="score">Sort: Score</option>
-            <option value="age">Sort: Age</option>
-            <option value="addr">Sort: Callsign</option>
-          </select>
-          <button class="plabel-btn" onclick="clearLqa()">Clear</button>
-        </span>
-      </div>
-      <div class="pbody lqa-scroll">
-        <table class="ch-table lqa-table">
-          <thead>
-            <tr>
-              <th>Station</th>
-              <th>Freq (MHz)</th>
-              <th>Avail</th>
-              <th>Score</th>
-              <th>SINAD</th>
-              <th>BER</th>
-              <th>Age</th>
-            </tr>
-          </thead>
-          <tbody id="lqaBody">
-            <tr><td colspan="7" class="msg-empty">No LQA data yet</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
   </div>
 </main>
+
+<!-- ── Propagation Analysis (toggled via header button) ───────────────────── -->
+<div id="analysisPage" class="analysis-page hidden">
+  <nav class="analysis-subnav">
+    <button class="subnav-btn active" data-view="station" onclick="showAnalysisView('station')">Station History</button>
+    <button class="subnav-btn" data-view="channel" onclick="showAnalysisView('channel')">Channel History</button>
+    <button class="subnav-btn" data-view="heatmap" onclick="showAnalysisView('heatmap')">Heat Maps</button>
+    <button class="subnav-btn" data-view="tod" onclick="showAnalysisView('tod')">Time-of-Day</button>
+    <span class="analysis-spacer"></span>
+    <button class="subnav-btn" onclick="doHistoryClear()" title="Wipes the persisted history file — separate from Heard Stations Clear">🗑 Clear History</button>
+    <button class="subnav-btn" onclick="doExportHistoryCsv()">⬇ Export CSV</button>
+  </nav>
+
+  <div id="analysisStation" class="analysis-view">
+    <div class="analysis-picker-row">
+      <label>Station</label>
+      <select id="stationPicker" onchange="renderStationHistory()"></select>
+    </div>
+    <div class="analysis-charts">
+      <div class="chart-box">
+        <div class="chart-title">SINAD (dB)</div>
+        <canvas id="chartSinad"></canvas>
+      </div>
+      <div class="chart-box">
+        <div class="chart-title">BER (vote count)</div>
+        <canvas id="chartBer"></canvas>
+      </div>
+      <div class="chart-box">
+        <div class="chart-title">Score</div>
+        <canvas id="chartScore"></canvas>
+      </div>
+    </div>
+    <div class="plabel">Sounding History</div>
+    <div id="soundingHistoryTable" class="pbody analysis-table-wrap"></div>
+  </div>
+
+  <div id="analysisChannel" class="analysis-view hidden">
+    <div class="analysis-picker-row">
+      <label>Channel</label>
+      <select id="channelPicker" onchange="renderChannelHistory()"></select>
+    </div>
+    <div id="channelStatsTable" class="pbody analysis-table-wrap"></div>
+  </div>
+
+  <div id="analysisHeatmap" class="analysis-view hidden">
+    <div class="plabel">Frequency × Time-of-Day (avg score)</div>
+    <div id="heatmapFreqTime" class="pbody analysis-table-wrap"></div>
+    <div class="plabel">Station × Frequency (avg score)</div>
+    <div id="heatmapStationFreq" class="pbody analysis-table-wrap"></div>
+  </div>
+
+  <div id="analysisTod" class="analysis-view hidden">
+    <div id="todTable" class="pbody analysis-table-wrap"></div>
+  </div>
+</div>
 
 <!-- ── ALE Log bar ─────────────────────────────────────────────────────────── -->
 <footer class="ale-log panel">

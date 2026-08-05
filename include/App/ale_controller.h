@@ -41,6 +41,7 @@
 #include "PAL/events.h"
 #include "App/ale_event_data.h"
 #include "LQA/lqa_database.h"
+#include "LQA/lqa_history.h"
 #include "LQA/lqa_analyzer.h"
 #include "LQA/lqa_metrics.h"
 #include "LQA/lqa_exchange.h"
@@ -208,6 +209,39 @@ public:
 
     /** Clear all LQA entries from memory (does not touch the file on disk). */
     void clear_lqa();
+
+    // ── LQA history (append-only, ale_monitor Propagation Analysis) ───────────
+    // Separate from the LQA database above: lqa_database_ blends every new
+    // measurement into one row per (frequency, station) for live channel
+    // scoring; lqa_history_ keeps every raw measurement forever (subject to
+    // retention) purely to feed history/trend views. Neither store touches
+    // the other.
+
+    /** Configure retention window (days) / enable flag for LQA history recording. */
+    void set_lqa_history_config(uint32_t retention_days, bool enabled);
+
+    /**
+     * Load LQA history from @p path (call at startup) and keep the file open
+     * in append mode so subsequent measurements are persisted as they occur.
+     * \return false if the file does not exist yet (not an error — no prior
+     *         history) or could not be opened for appending.
+     */
+    bool load_lqa_history(const std::string& path);
+
+    /**
+     * Query recorded LQA history.
+     * @param since_ms  0 = no lower time bound (epoch ms)
+     * @param station   empty = no station filter
+     * @param freq_hz   0 = no frequency filter
+     * @param limit     0 = unlimited, else at most this many (most-recent-first)
+     */
+    std::vector<LQAHistorySample> get_lqa_history(uint64_t since_ms,
+                                                   const std::string& station,
+                                                   uint32_t freq_hz,
+                                                   size_t limit) const;
+
+    /** Wipe LQA history in memory and on disk (separate from clear_lqa()). */
+    bool clear_lqa_history(const std::string& path);
 
     /**
      * Enable/disable automatic periodic sounding on channels already in the LQA DB.
@@ -1114,6 +1148,7 @@ private:
 
     // LQA
     LQADatabase              lqa_database_;
+    LQAHistoryStore          lqa_history_;        // append-only, separate from lqa_database_ (see accessors above)
     LQAAnalyzer              lqa_analyzer_;
     LQAMetrics               lqa_metrics_;        // standalone noise-floor tracking (no DB)
     LQAMetrics               lqa_db_metrics_;     // connected to lqa_database_; fed into the SM
@@ -1419,6 +1454,12 @@ private:
     /// accumulator. No-op if no words are buffered or no peer is resolvable.
     /// Called from tick_frame_settle() once the frame has settled (Tdrw silence).
     void commit_rx_ber_sample();
+    /// Append an LQAHistorySample for (freq_hz, station) to lqa_history_, reading
+    /// the freshly-committed sinad/ber/score back from lqa_database_. Called right
+    /// after every lqa_database_.update_entry_extended(freq_hz, station, ...) site.
+    /// No-op if lqa_database_ has no entry for the key (should not happen, since
+    /// update_entry_extended always creates one).
+    void record_lqa_history(uint32_t freq_hz, const std::string& station);
     void emit_status(const std::string& msg);
     void dispatch(pal::EventType type, const std::string& msg = "",
                   int32_t code = 0, const void* data = nullptr, size_t data_size = 0);

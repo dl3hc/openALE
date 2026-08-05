@@ -12,6 +12,7 @@
 #include "Word/address_encoder.h"
 #include "Word/ale_word.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdio>
@@ -1892,6 +1893,7 @@ void ALEController::maybe_emit_call_alert()
                     static_cast<float>(hs_call_acc_.ber_score()),
                     hs_call_acc_.sinad_avg(),
                     0.0f, -120.0f, 0, static_cast<int>(hs_call_acc_.word_count()), 0);
+                record_lqa_history(hs_call_freq_hz_, caller);
                 if (debug_rx_)
                     emit_status("LQA calling-frame FROM: " + caller
                                 + " freq=" + std::to_string(hs_call_freq_hz_)
@@ -1993,6 +1995,7 @@ void ALEController::commit_rx_ber_sample()
                                              avg_snr, avg_ber, avg_sinad,
                                              0.0f, -120.0f, 0,
                                              static_cast<int>(words), 0);
+        record_lqa_history(rx_ber_freq_hz_, sender);
         if (debug_rx_)
             emit_status("LQA BER: " + sender + " ch=" + std::to_string(rx_ber_freq_hz_)
                         + " ber=" + std::to_string(static_cast<int>(avg_ber))
@@ -2192,6 +2195,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
                         hs_resp_acc_.sinad_avg(),
                         0.0f, -120.0f, 0,
                         static_cast<int>(hs_resp_acc_.word_count()), 0);
+                    record_lqa_history(hs_resp_freq_hz_, peer);
                     if (debug_rx_)
                         emit_status("LQA response-frame FROM: " + peer
                                     + " freq=" + std::to_string(hs_resp_freq_hz_)
@@ -2255,6 +2259,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
                         hs_resp_acc_.sinad_avg(),
                         0.0f, -120.0f, 0,
                         static_cast<int>(hs_resp_acc_.word_count()), 0);
+                    record_lqa_history(hs_resp_freq_hz_, peer);
                 }
             }
             hs_resp_acc_.reset();
@@ -2788,6 +2793,47 @@ bool ALEController::save_lqa(const std::string& path) const
 void ALEController::clear_lqa()
 {
     lqa_database_.clear();
+}
+
+// ── LQA history (append-only) ────────────────────────────────────────────────
+
+void ALEController::set_lqa_history_config(uint32_t retention_days, bool enabled)
+{
+    LQAHistoryStore::Config cfg;
+    cfg.retention_days = retention_days;
+    cfg.enabled        = enabled;
+    lqa_history_.set_config(cfg);
+}
+
+bool ALEController::load_lqa_history(const std::string& path)
+{
+    const bool loaded = lqa_history_.load_from_file(path);
+    lqa_history_.open_append(path);
+    return loaded;
+}
+
+std::vector<LQAHistorySample> ALEController::get_lqa_history(uint64_t since_ms,
+                                                               const std::string& station,
+                                                               uint32_t freq_hz,
+                                                               size_t limit) const
+{
+    return lqa_history_.query(since_ms, station, freq_hz, limit);
+}
+
+bool ALEController::clear_lqa_history(const std::string& path)
+{
+    return lqa_history_.clear_and_truncate(path);
+}
+
+void ALEController::record_lqa_history(uint32_t freq_hz, const std::string& station)
+{
+    auto e = lqa_database_.get_entry(freq_hz, station);
+    if (!e) return;
+    const uint64_t ts_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
+    lqa_history_.record({ts_ms, freq_hz, station, e->sinad_db, e->ber, e->score});
 }
 
 void ALEController::enable_automatic_sounding(bool on)
