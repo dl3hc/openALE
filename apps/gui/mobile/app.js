@@ -278,8 +278,14 @@ function onBridgeEvent(e) {
       // fully reassembled caller address.
       document.getElementById('incCs').textContent   = e.caller;
       document.getElementById('incName').textContent = 'accept connection to';
-      showInc(true);
-      showCallPanel(false);
+      // Auto-accept: don't surface the Accept/Decline panel at all — the link
+      // handler below completes the call without operator input. Showing it
+      // here (even briefly, before link_established) would let the operator
+      // click Accept/Decline on a call that's already being auto-answered.
+      if (!autoAcceptOn()) {
+        showInc(true);
+        showCallPanel(false);
+      }
       break;
     case 'link_established':
       hideIdleWarn();   // fresh link — clear any stale idle-warning popup
