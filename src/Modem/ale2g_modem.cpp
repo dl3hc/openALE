@@ -18,6 +18,7 @@
 #include "Codec/ale_decoder.h"
 #include "FEC/ale_fec_codec.h"
 #include "FEC/golay.h"
+#include "PAL/logger.h"
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -41,6 +42,14 @@ Modulator::Modulator()
 
 void Modulator::enqueue_word(const ALEWord& word)
 {
+    // Diagnostic (2026-08-07): confirms the exact word content handed to the
+    // modulator at the TX boundary, so a real-radio capture can be compared
+    // against this trace to rule out (or confirm) a TX-side drop of the last
+    // word of a conclusion. Called from the SM/main thread (via
+    // ALEController's transmit_callback), not the real-time audio thread —
+    // safe to log here. Silent by default (LogLevel::TRACE).
+    pal::log_trace("TXWord", "enqueue %s [%s]",
+                    WordParser::word_type_name(word.type), word.address);
     std::lock_guard<std::mutex> lk(mtx_);
     enqueue_tx49_(word.encode());
 }

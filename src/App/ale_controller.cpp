@@ -413,8 +413,19 @@ void ALEController::wire_callbacks()
             return;
         }
         modulator_.enqueue_word(w);
-        if (audio_device_)
-            audio_device_->arm_frame_complete([this]() { sm_.on_word_complete(); });
+        if (audio_device_) {
+            // Diagnostic (2026-08-07): confirms this word's audio was actually
+            // rendered by the DAC (arm_frame_complete only fires once
+            // frames_rendered_ reaches this word's target — real playback
+            // position, not mere submission; see WasapiDevice::service_render).
+            // Fires on the main thread (tick()), safe to log.
+            const char* type_name = WordParser::word_type_name(w.type);
+            const std::string addr = w.address;
+            audio_device_->arm_frame_complete([this, type_name, addr]() {
+                pal::log_trace("TXWord", "rendered %s [%s]", type_name, addr.c_str());
+                sm_.on_word_complete();
+            });
+        }
     });
 
     // SM state transitions
