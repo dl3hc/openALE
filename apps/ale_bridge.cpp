@@ -663,11 +663,16 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         // lqa_enabled: record per-frame FROM-direction BER/SNR for every received
         // transmission after word sync into the LQA Memory (A.5.4.1.1).
         if (msg.has("lqa_enabled")) ctrl.set_lqa_enabled(msg.get_bool("lqa_enabled"));
+        // lqa_exchange_enabled: active bilateral CMD 'a' (LQA request) exchange
+        // sent during calling/handshake (A.5.4.2). false = EMCON/Debug.
+        if (msg.has("lqa_exchange_enabled"))
+            ctrl.set_lqa_exchange_enabled(msg.get_bool("lqa_exchange_enabled"));
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "LQA_GET") {
         mj::Value r = make_reply(msg, true);
         r.set("lqa_enabled", mj::Value::boolean(ctrl.lqa_enabled()));
+        r.set("lqa_exchange_enabled", mj::Value::boolean(ctrl.lqa_exchange_enabled()));
         return mj::dump(r);
     }
 

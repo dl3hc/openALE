@@ -1074,6 +1074,25 @@ public:
     void set_lqa_enabled(bool on)                { op_params_.set_lqa_enabled(on); }
     bool lqa_enabled() const                     { return op_params_.lqa_enabled; }
 
+    // ── LQA bilateral exchange (StationConfig::lqa_exchange_enabled, A.5.4.2) ──
+    /// Enable/disable the active bilateral CMD 'a' (LQA request) exchange sent
+    /// during calling/handshake. false = EMCON/Debug: no CMD 'a' transmitted;
+    /// FROM measurements (lqa_enabled above) continue unaffected.
+    /// Disabling also drops any already-queued CMD 'a'/CMD 'r' still sitting in
+    /// the SM's pending_lqa_cmd_/pending_lqa_report_seq_ slots (queued while the
+    /// exchange was still on, e.g. by an earlier call attempt or a call-alert
+    /// that fired moments before the operator flipped this off) — otherwise the
+    /// gate here only stops *new* words from being queued and a stale one still
+    /// goes out on the next transmitted frame.
+    void set_lqa_exchange_enabled(bool on) {
+        config_.lqa_exchange_enabled = on;
+        if (!on) {
+            sm_.clear_pending_lqa_cmd();
+            sm_.clear_pending_lqa_report_seq();
+        }
+    }
+    bool lqa_exchange_enabled() const            { return config_.lqa_exchange_enabled; }
+
     // ── Spectrum / waterfall ────────────────────────────────────────────────
     using SpectrumCallback = ALE2GModem::Demodulator::SpectrumCallback;
 

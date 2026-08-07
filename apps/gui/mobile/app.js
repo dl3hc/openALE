@@ -2831,12 +2831,16 @@ function applyTimingToBridge() {
   bridgeSend('TIMING_SET', args);
 }
 
-// Push the "Record LQA" toggle to the core (A.5.4.1.1 per-frame BER/SNR
-// measurement into the LQA Memory). Fired on change and from saveSettings().
+// Push the "Record LQA" + "Request LQA" toggles to the core: lqa_enabled
+// gates per-frame BER/SNR measurement into the LQA Memory (A.5.4.1.1);
+// lqa_exchange_enabled gates the active bilateral CMD 'a' request exchange
+// sent during calling/handshake (A.5.4.2). Fired on change and from
+// saveSettings().
 function applyLqaToBridge() {
   if (!bridgeConnected) return;
-  const on = document.getElementById('cfgRecLqa')?.checked ?? true;
-  bridgeSend('LQA_SET', { lqa_enabled: on });
+  const on    = document.getElementById('cfgRecLqa')?.checked ?? true;
+  const reqOn = document.getElementById('cfgReqLqa')?.checked ?? true;
+  bridgeSend('LQA_SET', { lqa_enabled: on, lqa_exchange_enabled: reqOn });
 }
 
 // Push Auto-Relink settings (enabled + threshold) to the core (A.5.4.5).
@@ -3577,11 +3581,16 @@ function fmtBerCode(code) {
 // The mapping keeps FROM and TO SEPARATE for the bilateral matrix table, and
 // also derives collapsed best-available values for the compact heard list.
 function syncLqaFromBridge() {
-  // Reflect the core's Record-LQA state into the toggle (A.5.4.1.1).
+  // Reflect the core's Record-LQA + Request-LQA state into the toggles
+  // (A.5.4.1.1 / A.5.4.2).
   bridgeSend('LQA_GET', {}, (r) => {
     if (r.ok && typeof r.lqa_enabled === 'boolean') {
       const el = document.getElementById('cfgRecLqa');
       if (el) el.checked = r.lqa_enabled;
+    }
+    if (r.ok && typeof r.lqa_exchange_enabled === 'boolean') {
+      const el = document.getElementById('cfgReqLqa');
+      if (el) el.checked = r.lqa_exchange_enabled;
     }
   });
   syncRelinkFromBridge();
