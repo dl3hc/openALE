@@ -155,6 +155,10 @@ public:
 
     std::vector<std::string> list_devices() const override;
 
+    uint32_t output_latency_ms() const override {
+        return static_cast<uint32_t>(r_stream_latency_100ns_ / 10000);
+    }
+
 private:
     // ── Audio thread ──────────────────────────────────────────────────────
     std::thread          audio_thread_;
@@ -239,6 +243,10 @@ private:
     IAudioRenderClient* r_svc_        = nullptr;
     WAVEFORMATEX*       r_fmt_        = nullptr;
     UINT32              r_buf_frames_ = 0;
+    // Shared-mode audio-engine latency beyond GetCurrentPadding's own buffer
+    // accounting (IAudioClient::GetStreamLatency(), 100-ns units) — queried
+    // once in open_render(). See IAudioDriver::output_latency_ms().
+    REFERENCE_TIME      r_stream_latency_100ns_ = 0;
     uint32_t            r_rate_       = MODEM_RATE;
     uint16_t            r_ch_         = 1;
     uint16_t            r_bits_       = 16;
@@ -623,6 +631,9 @@ bool WasapiDevice::open_render(const std::string& name)
     if (FAILED(r_client_->SetEventHandle(render_event_)))               return false;
     if (FAILED(r_client_->GetService(__uuidof(IAudioRenderClient),
                                      (void**)&r_svc_)))                 return false;
+    // Best-effort: not fatal if unsupported by this endpoint/driver — PTT-tail
+    // margin simply falls back to whatever config_.ptt_tail_ms alone provides.
+    r_client_->GetStreamLatency(&r_stream_latency_100ns_);
     return true;
 }
 
