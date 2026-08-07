@@ -131,6 +131,23 @@ public:
 
     /** Enumerate available audio device names (IN:/OUT: prefixed). */
     virtual std::vector<std::string> list_devices() const = 0;
+
+    /**
+     * Extra render-path latency (ms) between a frame being marked "rendered"
+     * by arm_frame_complete() and it actually reaching the analog output.
+     *
+     * On WASAPI shared-mode streams, GetCurrentPadding()-based completion
+     * tracking (which arm_frame_complete() uses) only proves a frame left the
+     * app's endpoint buffer — the shared audio engine's own mix/forward stage
+     * adds further latency before real DAC output (IAudioClient::GetStreamLatency()).
+     * Callers that release PTT on frame completion (see ALEController's
+     * ptt_tail_ms) should add this value to their own margin so PTT is not
+     * dropped while the engine still holds the last word's audio.
+     *
+     * Default 0 — drivers with no such hidden stage (e.g. NullAudioDriver)
+     * need not override this.
+     */
+    virtual uint32_t output_latency_ms() const { return 0; }
 };
 
 /** Factory: returns the platform-appropriate IAudioDriver. */

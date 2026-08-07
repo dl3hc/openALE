@@ -484,8 +484,19 @@ void ALEController::wire_callbacks()
             // TX→RX: cancel any pending lead, apply tail
             ptt_lead_deadline_ms_ = 0;
             pending_tx_words_.clear();
-            if (config_.ptt_tail_ms > 0) {
-                ptt_tail_deadline_ms_ = now_ms_ + config_.ptt_tail_ms;
+            // arm_frame_complete's "rendered" only proves the last word left
+            // openALE's own WASAPI buffer — on shared-mode audio the engine's
+            // own mix/forward stage adds further latency before real DAC
+            // output (see IAudioDriver::output_latency_ms()). Fold that into
+            // the tail automatically so a configured ptt_tail_ms=0 doesn't
+            // silently drop it; the user-configured value still covers
+            // whatever is downstream of the sound card (radio interface,
+            // virtual audio cable, SDR software, etc.), which openALE has no
+            // way to measure.
+            const uint32_t effective_tail_ms = config_.ptt_tail_ms
+                + (audio_device_ ? audio_device_->output_latency_ms() : 0);
+            if (effective_tail_ms > 0) {
+                ptt_tail_deadline_ms_    = now_ms_ + effective_tail_ms;
                 // actual PTT release + demod enable happen in update()
             } else {
                 set_ptt_and_notify(false);
