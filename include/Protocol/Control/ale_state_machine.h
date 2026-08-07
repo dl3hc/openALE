@@ -319,6 +319,34 @@ public:
     const TimingParameters&  get_timing_parameters() const                   { return timing_; }
 
     /**
+     * Correct for a deferred RX turnaround: rx_enabled_callback(true) fires —
+     * and the "started waiting for the peer" timestamp (listening_start_ms /
+     * hs_ack_start_ms / sounding_listening_start_ms_) is stamped — at the
+     * moment THIS station's own audio finishes rendering, not at the moment
+     * it can actually receive. When ptt_tail_ms/output_latency_ms defer the
+     * real PTT release and demod re-enable (ALEController::tick_ptt_timing()),
+     * that gap silently eats into this station's OWN turnaround budget (e.g.
+     * WAIT_ACK's Twr window, spec-defined and otherwise untouched here) before
+     * a single peer word could possibly have arrived — on top of, not instead
+     * of, the peer's own unknown turnaround overhead. Call this once, right
+     * after the deferred release actually happens, with the exact
+     * ptt_release_delay_ms that was applied; it shifts whichever "waiting for
+     * peer" timer is currently live forward by that amount so the
+     * spec-mandated window is measured from when this station could truly
+     * start listening, not from when it merely decided to. No-op if no such
+     * timer is currently armed (e.g. plain PTT release with nothing pending).
+     */
+    void extend_peer_wait_window_for_ptt_release_delay(uint32_t ptt_release_delay_ms) {
+        if (ptt_release_delay_ms == 0) return;
+        if (calling_phase == CallingPhase::LISTENING && !response_to_detected)
+            listening_start_ms += ptt_release_delay_ms;
+        if (handshake_phase == HandshakePhase::WAIT_ACK && hs_ack_to_ms == 0)
+            hs_ack_start_ms += ptt_release_delay_ms;
+        if (sounding_phase_ == SoundingPhase::LISTENING)
+            sounding_listening_start_ms_ += ptt_release_delay_ms;
+    }
+
+    /**
      * Setze Slot-Nummer und Wartezeit für One-to-Many-Protokolle (A.5.5.4.1.3).
      * slot = 0 und tswt_ms = 0 für Individual Calls (kein Warten).
      * Muss vor dem HANDSHAKE-Eintritt gesetzt werden.

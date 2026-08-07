@@ -497,6 +497,7 @@ void ALEController::wire_callbacks()
                 + (audio_device_ ? audio_device_->output_latency_ms() : 0);
             if (effective_tail_ms > 0) {
                 ptt_tail_deadline_ms_    = now_ms_ + effective_tail_ms;
+                ptt_tail_armed_delay_ms_ = effective_tail_ms;
                 // actual PTT release + demod enable happen in update()
             } else {
                 set_ptt_and_notify(false);
@@ -1451,6 +1452,12 @@ void ALEController::tick_ptt_timing(uint32_t now_ms)
         // tx_only (Direction=TX): keep RX disabled — transmit-only channel.
         if (!rx_inhibited(get_current_frequency()))
             demodulator_.set_enabled(true);
+        // The SM stamped its own "waiting for peer" timer (e.g. WAIT_ACK's
+        // Twr window) back when it decided to listen, not now that it truly
+        // can — replay the delay we just imposed so that timer isn't already
+        // running down before this station could physically hear anything.
+        sm_.extend_peer_wait_window_for_ptt_release_delay(ptt_tail_armed_delay_ms_);
+        ptt_tail_armed_delay_ms_ = 0;
     }
 }
 

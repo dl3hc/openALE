@@ -1258,6 +1258,12 @@ private:
     // PTT timing (set_manual_ptt, wire_callbacks, update)
     uint32_t                 ptt_lead_deadline_ms_ = 0;   // flush pending_tx_words_ when now_ms_ >= this; 0 = inactive
     uint32_t                 ptt_tail_deadline_ms_ = 0;   // release PTT when now_ms_ >= this; 0 = inactive
+    // Delay armed into ptt_tail_deadline_ms_ above (config_.ptt_tail_ms +
+    // output_latency_ms() at arm time) — replayed into the SM via
+    // extend_peer_wait_window_for_ptt_release_delay() once the deferred
+    // release actually fires, so the SM's own "waiting for peer" timers
+    // account for it too.
+    uint32_t                 ptt_tail_armed_delay_ms_ = 0;
 
     // Deferred radio mode verify (schedule_mode_verify, tick_mode_verify).
     // An SDR front-end can revert a just-commanded mode asynchronously after
