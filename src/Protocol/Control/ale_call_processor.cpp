@@ -12,6 +12,7 @@
 #include "Protocol/Control/ale_call_processor.h"
 #include "Protocol/Control/ale_timing.h"
 #include "FEC/golay.h"            // MAX_GOLAY_ERRORS
+#include "PAL/logger.h"
 #include <algorithm>
 #include <string>
 
@@ -312,6 +313,22 @@ void ALECallProcessor::update_lqa(ALEStateMachine& sm, const LinkQuality& lq)
 // ── process_received_word — verbatim flow from ALEStateMachine::process_received_word() ──
 void ALECallProcessor::process_received_word(ALEStateMachine& sm, const ALEWord& word)
 {
+    // Diagnostic (2026-08-07): unconditional per-word trace, valid AND invalid,
+    // BEFORE any classification/state mutation — the only point that answers
+    // "did the demodulator hand the SM this word at all, and was it valid" for
+    // the still-open truncated multi-word-address investigation (a real-radio
+    // conclusion's DATA extension word is consistently absent from the RX log
+    // that only ever shows valid, classified words). Silent by default
+    // (LogLevel::TRACE, filtered unless the logger's min level is lowered).
+    if (word.valid) {
+        pal::log_trace("RXWord", "%s [%s] fec_errors=%u sinad=%.1f votes=%u",
+                        WordParser::word_type_name(word.type), word.address,
+                        word.fec_errors, word.sinad_db, word.unanimous_votes);
+    } else {
+        pal::log_trace("RXWord", "INVALID golay_uncorrectable=%d fec_errors=%u",
+                        word.golay_uncorrectable ? 1 : 0, word.fec_errors);
+    }
+
     if (!word.valid) { on_invalid_word_(sm); return; }
     sm.contiguous_errors = 0;
     sm.last_word_time_ms = sm.current_time_ms;
