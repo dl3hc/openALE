@@ -519,7 +519,12 @@ void ALEController::wire_callbacks()
             ptt_lead_deadline_ms_ = (config_.ptt_lead_ms > 0)
                 ? now_ms_ + config_.ptt_lead_ms : 0;
         }
-        dispatch(rx_on ? pal::EventType::PTT_OFF : pal::EventType::PTT_ON);
+        // Every branch above already dispatches PTT_ON/PTT_OFF itself, via
+        // set_ptt_and_notify() at the point the radio is actually commanded
+        // (immediately here, or later from tick_ptt_timing() when ptt_tail_ms
+        // defers the real release) — no unconditional trailing dispatch here,
+        // or the ptt_tail_ms>0 path would emit a premature PTT_OFF event before
+        // the hardware has actually released.
     });
 
     // Idle-timeout warning (Twa lead) → forward to the controller callback so
