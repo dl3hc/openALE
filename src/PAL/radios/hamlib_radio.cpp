@@ -452,7 +452,14 @@ bool HamlibRadio::impl_set_mode(RadioMode mode) {
 void HamlibRadio::impl_set_ptt(bool on) {
     if (!rig_) { transmitting_.store(false); return; }
 
-    const ptt_t ptt_mode = on ? RIG_PTT_ON : RIG_PTT_OFF;
+    ptt_t ptt_mode = RIG_PTT_OFF;
+    if (on) {
+        switch (policy_.ptt_input) {
+        case SerialLinePolicy::PttInput::MIC:  ptt_mode = RIG_PTT_ON_MIC;  break;
+        case SerialLinePolicy::PttInput::DATA: ptt_mode = RIG_PTT_ON_DATA; break;
+        default:                               ptt_mode = RIG_PTT_ON;     break;
+        }
+    }
     if (rig_set_ptt(rig_, RIG_VFO_CURR, ptt_mode) == RIG_OK) {
         transmitting_.store(on);  // confirm optimistic value
         pal::log_info("HamlibRadio", on ? "PTT ON (transmitting)" : "PTT OFF (receiving)");

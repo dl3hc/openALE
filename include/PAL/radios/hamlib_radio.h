@@ -34,9 +34,17 @@ namespace pal {
  */
 struct SerialLinePolicy {
     enum class State { ON, OFF, AUTO };
+
+    // CAT-seitige PTT-Audioquelle (z. B. Kenwood TX0=Mic / TX1=Data). Nur
+    // Rigs mit Mic/Data-Unterscheidung in Hamlib (Kenwood-Familie: TS-480,
+    // TS-590, TS-890, …) werten das aus; alle anderen ignorieren es und
+    // bekommen weiterhin das generische PTT ON.
+    enum class PttInput { NORMAL, MIC, DATA };
+
     State    dtr              = State::ON;   ///< DTR-Zustand nach Port-Open (default: HIGH)
     State    rts              = State::ON;   ///< RTS-Zustand nach Port-Open (default: HIGH)
     uint32_t stabilization_ms = 200;         ///< Wartezeit nach Port-Open vor erstem CAT-Befehl
+    PttInput ptt_input        = PttInput::NORMAL;  ///< CAT-Audioeingang bei PTT ON
 };
 
 /**

@@ -659,6 +659,19 @@
             </div>
           </div>
 
+          <div class="fg">
+            <label class="flabel">TX Audio Input (CAT)</label>
+            <select class="fselect" id="rigPttInput">
+              <option value="normal" selected>Radio default (plain TX)</option>
+              <option value="mic">Mic input (TX0)</option>
+              <option value="data">Data input (TX1)</option>
+            </select>
+            <div class="fhint">Kenwood rigs only (TS-480, TS-590, TS-890, …). Forces the CAT PTT
+              command to select Mic or Data audio input on transmit — needed when feeding audio
+              through the DATA/ACC socket, since on the TS-480 only the CAT command (not any menu
+              setting) picks the TX input. Leave "Radio default" for non-Kenwood rigs.</div>
+          </div>
+
           <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
             <button class="btn-sm" onclick="testRig()">↺ Test Connection</button>
             <button class="btn-sm accent" id="rigConnectBtn" onclick="connectRig()"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg> Connect</button>

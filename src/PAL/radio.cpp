@@ -14,14 +14,18 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
 {
 #ifdef HAVE_HAMLIB
     // Format (serial):
-    //   "hamlib:<model>:<port>[,<baud>][,dtr=on|off|auto][,rts=on|off|auto][,stab=<ms>]"
+    //   "hamlib:<model>:<port>[,<baud>][,dtr=on|off|auto][,rts=on|off|auto][,stab=<ms>][,ptt=normal|mic|data]"
     // Format (TCP):
-    //   "hamlib:2:tcp://<host>:<port>"
+    //   "hamlib:2:tcp://<host>:<port>[,ptt=normal|mic|data]"
+    //
+    // ptt=mic|data selects the CAT PTT audio input (Kenwood TX0/TX1 etc.) —
+    // only rigs with a Mic/Data distinction in Hamlib honor it; others fall
+    // back to the plain PTT-ON command. Default "normal" = plain PTT ON.
     //
     // Beispiele:
-    //   "hamlib:3021:COM3,9600,dtr=on,rts=on,stab=200"
+    //   "hamlib:3021:COM3,9600,dtr=on,rts=on,stab=200,ptt=data"
     //   "hamlib:3021:COM3,9600"
-    //   "hamlib:2:tcp://127.0.0.1:4532"
+    //   "hamlib:2:tcp://127.0.0.1:4532,ptt=data"
     if (config.rfind("hamlib:", 0) == 0) {
         const std::string rest  = config.substr(7);
         const auto        colon = rest.find(':');
@@ -30,7 +34,9 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
         const std::string model        = rest.substr(0, colon);
         const std::string port_and_rest = rest.substr(colon + 1);
 
-        // Für TCP-Specs ("tcp://…") gibt es keine weiteren Komma-Params.
+        // TCP-Specs ("tcp://…") können ebenfalls Komma-Params tragen (z. B.
+        // ptt=data); dtr/rts/stab werden dabei von apply_line_policy() über
+        // is_serial_port() ignoriert.
         const auto first_comma = port_and_rest.find(',');
         const std::string port = first_comma == std::string::npos
                                   ? port_and_rest
@@ -65,6 +71,10 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
                     } else if (key == "stab") {
                         try { policy.stabilization_ms = static_cast<uint32_t>(std::stoul(val)); }
                         catch (...) {}
+                    } else if (key == "ptt") {
+                        if      (val == "mic")  policy.ptt_input = SerialLinePolicy::PttInput::MIC;
+                        else if (val == "data") policy.ptt_input = SerialLinePolicy::PttInput::DATA;
+                        else                    policy.ptt_input = SerialLinePolicy::PttInput::NORMAL;
                     }
                 }
                 first_seg = false;
