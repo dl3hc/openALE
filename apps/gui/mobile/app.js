@@ -1920,6 +1920,7 @@ function rigArgs() {
     dtr:     document.getElementById('rigDtr')?.value  ?? 'on',
     rts:     document.getElementById('rigRts')?.value  ?? 'on',
     stab:    parseInt(document.getElementById('rigStab')?.value, 10) || 200,
+    ptt:     document.getElementById('rigPttInput')?.value ?? 'normal',
   };
 }
 
