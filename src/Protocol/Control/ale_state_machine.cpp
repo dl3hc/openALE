@@ -1504,6 +1504,25 @@ void ALEStateMachine::on_word_complete() {
         return;
     }
 
+    // ── LINKED orderwire path (AMD / EFS over an established link) ────────
+    // trigger_linked_orderwire() sends TO[peer] (+CMD…) + TIS:SELF while
+    // LINKED (handle_linked()'s orderwire_transmitting_ branch). Without this
+    // branch no case below matched LINKED, so words_pending never reached 0
+    // and every orderwire burst fell through to handle_linked()'s
+    // TX_DRAIN_TIMEOUT_MS (10 s) safety net before PTT was released and RX
+    // re-enabled — a fixed 10 s TRX hang after every AMD/EFS send. Mirrors
+    // the linked_terminating_ branch above: decrement-first, then check 0 so
+    // the last word's completion is the one that reopens RX.
+    if (current_state == ALEState::LINKED && orderwire_transmitting_) {
+        if (words_pending > 0) --words_pending;
+        if (words_pending == 0) {
+            orderwire_transmitting_ = false;
+            tx_drain_start_ms_      = 0;   // disarm the drain safety net
+            if (rx_enabled_callback) rx_enabled_callback(true);
+        }
+        return;
+    }
+
     // ── SOUNDING path (T-05 + T-08) ──────────────────────────────────────
     // Decrement-first, dann auf 0 prüfen (wie LINKED-Terminierung/SENDING_ACK):
     // das LETZTE gesendete Wort öffnet das RX-Fenster. Der Zero-Word-Fall
