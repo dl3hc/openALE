@@ -128,7 +128,7 @@ function connectBridge() {
   };
 }
 
-function syncAllFromBridge(pullOnly = false) {
+function syncAllFromBridge() {
   bridgeSend('STATUS', {}, applyStatusReply);
   syncChannelsFromBridge();
   syncNetsFromBridge();
@@ -147,17 +147,15 @@ function syncAllFromBridge(pullOnly = false) {
   syncLocationFromBridge();         // pull Station Location & Propagation from core
   pollRigStatus();   // establish initial radio-control lock state
   populateRigDropdown();
-  if (pullOnly) {
-    // After a settings import: PULL the just-loaded core state into the GUI.
-    // The default push path would read stale DOM values and clobber the import.
-    syncTimingFromBridge();
-    syncManualAcceptFromBridge();
-    syncSoundAutoFromBridge();
-  } else {
-    applyManualAcceptToBridge();  // push the GUI's accept-mode default to the SM
-    applyTimingToBridge();        // push Timing settings (Sounding Interval etc.) to the core
-    applySoundAuto();             // re-assert periodic-sounding mode if active
-  }
+  // Always PULL core state into the GUI on connect — never push stale DOM
+  // values here. The DOM only reflects whatever the browser last rendered
+  // (page-load HTML defaults, or leftovers from a previous session); pushing
+  // it back on every connect/reconnect would silently clobber the core's
+  // real, persisted config (e.g. PTT lead/tail, auto-accept) with those
+  // defaults. Explicit user edits still push via saveSettings()/onchange.
+  syncTimingFromBridge();
+  syncManualAcceptFromBridge();
+  syncSoundAutoFromBridge();
 }
 
 // VFO/PTT frequency+mode+PTT display is now event-driven via the
@@ -2320,7 +2318,7 @@ function loadAleFile() {
   if (!bridgeConnected) { aleLogInfo('Load: bridge not connected'); return; }
   bridgeSend('STATION_LOAD', { path }, (r) => {
     if (r.ok) {
-      syncAllFromBridge(true);
+      syncAllFromBridge();
       aleLogInfo('✓ Station file loaded ← ' + path);
     } else {
       aleLogInfo('✗ Failed to load station file: ' + path);
@@ -2350,7 +2348,7 @@ function importConf() {
   if (!bridgeConnected) { aleLogInfo('Import: bridge not connected'); return; }
   bridgeSend('SETTINGS_IMPORT', { path }, (r) => {
     if (r.ok) {
-      syncAllFromBridge(true);   // pull-only: don't push stale GUI values over the import
+      syncAllFromBridge();
       closeSettings();
       aleLogInfo('✓ Konfiguration geladen ← ' + path);
     } else {
@@ -3546,7 +3544,7 @@ function wzNext() {
     wzSetStatus(3, 'Loading channels…');
     bridgeSend('STATION_LOAD', { path }, (r) => {
       if (r.ok) {
-        syncAllFromBridge(true);
+        syncAllFromBridge();
         wzSetStatus(3, '✓ Channels loaded', 'ok');
         setTimeout(closeWizard, 700);
       } else {
@@ -3653,7 +3651,7 @@ function qsLoadChannels() {
   if (!bridgeConnected) { qsSetStatus('Not connected to openALE bridge', 'err'); return; }
   qsSetStatus('Loading channels…');
   bridgeSend('STATION_LOAD', { path }, (r) => {
-    if (r.ok) { syncAllFromBridge(true); qsSetStatus('✓ Channels loaded', 'ok'); }
+    if (r.ok) { syncAllFromBridge(); qsSetStatus('✓ Channels loaded', 'ok'); }
     else qsSetStatus('✗ ' + (r.error || 'File not found — check path'), 'err');
   });
 }
