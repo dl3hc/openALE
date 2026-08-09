@@ -68,16 +68,20 @@ struct ALEStationConfig {
     // ── PTT-Timing ────────────────────────────────────────────────────────
     /// Zeit nach PTT-Assertion bevor Audio gesendet wird (ms).
     /// Kompensiert CAT/CI-V-Latenz beim Sounding (Calling hat bereits Tt als Lead).
-    /// 0 = kein Delay. Standard 0 — Werte > ~10ms verletzen die knappen
-    /// Trw-Zeitfenster des Handshakes und koennen Verbindungen zu anderen
-    /// Stationen vollstaendig verhindern; nur bei nachweislich langsamer
-    /// CAT/PTT-Hardware erhoehen.
-    uint32_t  ptt_lead_ms             = 0;
+    /// 0 = kein Delay. Standard 10 ms — deckt die CAT-PTT-Latenz gaengiger SDR-
+    /// Transceiver ab; ohne diese Marge wird das erste Wort (der volle eigene
+    /// Rufname) teilweise abgeschnitten, bevor das Funkgeraet tatsaechlich
+    /// sendet, was die Gegenstation verwirrt. Werte > ~10ms verletzen die
+    /// knappen Trw-Zeitfenster des Handshakes und koennen Verbindungen zu
+    /// anderen Stationen vollstaendig verhindern; nur bei nachweislich
+    /// langsamerer CAT/PTT-Hardware erhoehen.
+    uint32_t  ptt_lead_ms             = 10;
     /// Zeit nach SM-RX-Freigabe bevor PTT deasserted wird (ms).
     /// Laesst den Audio-Buffer vollstaendig leerlaufen bevor auf RX umgeschaltet.
-    /// 0 = sofortige PTT-Freigabe. Standard 0 — siehe ptt_lead_ms fuer die
-    /// gleiche Trw-Zeitfenster-Warnung.
-    uint32_t  ptt_tail_ms             = 0;
+    /// 0 = sofortige PTT-Freigabe. Standard 200 ms — deckt die WASAPI/CAT-
+    /// Ausgangslatenz gaengiger SDR-Hardware ab; siehe ptt_lead_ms fuer die
+    /// gleiche Trw-Zeitfenster-Warnung bei weiterer Erhoehung.
+    uint32_t  ptt_tail_ms             = 200;
 
     // ── LQA-Austausch ─────────────────────────────────────────────────────
     /// true = CMD LQA / CMD NOISE / LQA Report aktiv senden und auswerten.

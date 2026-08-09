@@ -904,13 +904,13 @@
           <div class="fg-row col3">
             <div>
               <label class="flabel">PTT Lead (ms)</label>
-              <input class="finput" id="cfgPttLead" type="number" value="0" min="0">
-              <div class="fhint">Delay after PTT key-up before audio transmits — covers CAT/CI-V latency. Keep at 0 unless your radio needs it: the protocol's handshake timing windows are only tens of ms wide, and values above ~10 ms can silently break handshaking with other stations entirely.</div>
+              <input class="finput" id="cfgPttLead" type="number" value="10" min="0">
+              <div class="fhint">Delay after PTT key-up before audio transmits — covers CAT/CI-V latency. Default 10 ms covers typical SDR/CAT hardware; without it the first word (your own full callsign) can be clipped before the radio has actually keyed, confusing the other station. The protocol's handshake timing windows are only tens of ms wide, so values much above ~10 ms can silently break handshaking with other stations entirely — only raise it for demonstrably slower CAT/PTT hardware.</div>
             </div>
             <div>
               <label class="flabel">PTT Tail (ms)</label>
-              <input class="finput" id="cfgPttTail" type="number" value="0" min="0">
-              <div class="fhint">Delay after RX re-enable before PTT releases — allows audio buffer to drain. Keep at 0 unless your radio needs it: the protocol's handshake timing windows are only tens of ms wide, and values above ~10 ms can silently break handshaking with other stations entirely.</div>
+              <input class="finput" id="cfgPttTail" type="number" value="200" min="0">
+              <div class="fhint">Delay after RX re-enable before PTT releases — allows audio buffer to drain. Default 200 ms covers typical SDR/CAT output latency so the last word isn't clipped. Lower it only if your radio switches to RX faster than that.</div>
             </div>
             <div>
               <label class="flabel">Test-Channel Hold (s)</label>
