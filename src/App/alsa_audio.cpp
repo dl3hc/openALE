@@ -233,6 +233,13 @@ std::string AlsaDevice::resolve_device(const std::string& hint, bool is_output)
     if (name.size() > 5 && (name.substr(0,5) == "OUT: " ||
                              name.substr(0,5) == "IN:  "))
         name = name.substr(5);
+    // Strip the " — <description>" suffix list_devices() appends. Passing the
+    // full "NAME — DESC" display string straight to snd_pcm_open() feeds ALSA's
+    // config parser a comma-laden DESC (e.g. "UA-25EX, USB Audio Hardware...")
+    // as bogus plughw: arguments, producing "Parameter DEV must be an integer".
+    const size_t dash = name.find(" — ");
+    if (dash != std::string::npos)
+        name = name.substr(0, dash);
 
     snd_pcm_stream_t dir = is_output ? SND_PCM_STREAM_PLAYBACK : SND_PCM_STREAM_CAPTURE;
 

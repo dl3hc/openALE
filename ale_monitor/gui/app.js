@@ -93,14 +93,16 @@ function syncAllFromBridge() {
 
 function syncSettingsFromBridge() {
   // Audio device dropdown (enumerate; select the currently-open device if any).
-  // The bridge's WASAPI resolve_device() matches the BARE device name, so strip
-  // the "IN:"/"OUT:" prefix the enumerator adds (mirrors apps/gui/app.js enumDevices).
+  // resolve_device() matches the BARE device name, so strip both the "IN:"/"OUT:"
+  // prefix and (ALSA only) the " — DESC" suffix list_devices() appends — leaving
+  // the description in feeds ALSA's plughw: parser a comma-laden string and
+  // produces "Parameter DEV must be an integer" (mirrors apps/gui/app.js enumDevices).
   bridgeSend('AUDIO_DEVICES', {}, (r) => {
     if (!r.ok) return;
-    const strip = s => s.replace(/^(IN:|OUT:)\s*/, '');
+    const strip = s => s.replace(/^(IN:|OUT:)\s*/, '').replace(/ — .*$/, '');
     const sel = document.getElementById('setAudioIn');
     sel.innerHTML = '<option value="">(none — RX idle)</option>' +
-      r.inputs.map(d => { const n = strip(d); return `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`; }).join('');
+      r.inputs.map(d => { const n = strip(d); return `<option value="${escapeHtml(n)}">${escapeHtml(d.replace(/^(IN:|OUT:)\s*/, ''))}</option>`; }).join('');
   });
   // Radio model dropdown (full Hamlib rig list).
   bridgeSend('RIG_LIST', {}, (r) => {
