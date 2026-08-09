@@ -1220,8 +1220,9 @@
       <button class="modal-close" onclick="closeTestChannelPanel()">✕</button>
     </div>
     <div class="modal-body">
+     <div class="tc-panel">
       <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px">
-        <label style="flex:1">
+        <label style="flex:1;min-width:0">
           <div style="font-size:11px;opacity:.7;margin-bottom:4px">Peer address</div>
           <input id="testChannelAddr" type="text" placeholder="e.g. KA1ABC"
                  style="width:100%;box-sizing:border-box" />
@@ -1233,15 +1234,16 @@
         <span>Peer: <strong id="testChannelPeer">—</strong></span>
         <span>Progress: <strong id="testChannelProgress">0 / 0</strong></span>
       </div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <table class="ch-table">
         <thead>
-          <tr style="text-align:left;opacity:.7">
+          <tr>
             <th>Channel</th><th>Freq Hz</th><th>Linked</th><th>Score</th><th>Quality</th>
           </tr>
         </thead>
         <tbody id="testChannelBody"><tr><td colspan="5">—</td></tr></tbody>
       </table>
       <pre id="testChannelSummary" style="margin-top:8px;white-space:pre-wrap;font-size:11px;opacity:.85"></pre>
+     </div>
     </div>
     <div class="modal-footer">
       <button class="btn-cancel" onclick="closeTestChannelPanel()">Close</button>
