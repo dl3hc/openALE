@@ -474,6 +474,18 @@ void ALEController::wire_callbacks()
     // PTT tail (TX→RX): demodulator and PTT release deferred by ptt_tail_ms to
     // let the audio buffer drain fully before switching to RX.
     sm_.set_rx_enabled_callback([this](bool rx_on) {
+        // transition_to() calls this defensively on entry to CALLING/HANDSHAKE/
+        // LINKED/SOUNDING regardless of whether RX was already in that state
+        // (e.g. IDLE/SCANNING, already RX-on, → HANDSHAKE on an incoming call;
+        // WAIT_ACK, already RX-on, → LINKED). Without this guard a redundant
+        // true→true call still arms ptt_tail_deadline_ms_ for a release that
+        // never had a matching PTT-on, so tick_ptt_timing() later fires a
+        // spurious PTT_OFF event and calls extend_peer_wait_window_for_ptt_
+        // release_delay() with a bogus delay, corrupting whatever peer-wait
+        // timer (WAIT_ACK/LISTENING) happens to be live by then — surfacing as
+        // PTT appearing to toggle several times for a single logical TX/RX
+        // cycle (seen e.g. around AMD calls, which exercise both transitions).
+        if (rx_on == sm_rx_enabled_) return;
         sm_rx_enabled_ = rx_on;
         if (manual_ptt_) {
             if (!rx_on) demodulator_.set_enabled(false);
