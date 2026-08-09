@@ -1140,6 +1140,19 @@
     }
     .ch-table tr:last-child td { border-bottom: none; }
     .ch-table tr:hover td { background: var(--bg3); }
+    .tc-ok { color: var(--accent); }
+    .tc-no { color: var(--tx-dim); }
+
+    /* Test-Channel modal: .modal-body is a row flex container (sidebar +
+       content, see .snav/.scontent above) — this panel is its single flex
+       item so the address/buttons row, progress line, results table and
+       summary stack normally instead of being laid out side by side. */
+    .tc-panel {
+      flex: 1;
+      min-width: 0;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
     .ch-inp {
       background: transparent;
       border: 1px solid transparent;
