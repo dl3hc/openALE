@@ -1675,8 +1675,12 @@ function enumDevices() {
   if (bridgeConnected) {
     bridgeSend('AUDIO_DEVICES', {}, (r) => {
       if (!r.ok) return;
-      const strip = s => s.replace(/^(IN:|OUT:)\s*/, '');
-      const mkOpt = s => { const n = strip(s); return `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`; };
+      // ALSA entries are "IN:/OUT: NAME — DESC" (see alsa_audio.cpp list_devices);
+      // resolve_device() matches on NAME alone, so the option value must drop the
+      // " — DESC" suffix too — leaving it in feeds ALSA's plughw: parser a comma-
+      // laden description and produces "Parameter DEV must be an integer".
+      const strip = s => s.replace(/^(IN:|OUT:)\s*/, '').replace(/ — .*$/, '');
+      const mkOpt = s => { const n = strip(s); return `<option value="${escapeHtml(n)}">${escapeHtml(s.replace(/^(IN:|OUT:)\s*/, ''))}</option>`; };
       document.getElementById('audioIn').innerHTML  = (r.inputs  || []).map(mkOpt).join('')  || '<option value="">— none —</option>';
       document.getElementById('audioOut').innerHTML = (r.outputs || []).map(mkOpt).join('') || '<option value="">— none —</option>';
       restoreAudioSelection();
