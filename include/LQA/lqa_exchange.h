@@ -40,6 +40,16 @@ public:
     // Reset pending bilateral state at the start of each new handshake (safety net).
     void on_handshake_start();
 
+    // Discard any incomplete inbound CMD 'a' / Block C5 report state. Called at
+    // the start of every new handshake AND every new outgoing call (on_handshake_start()
+    // covers the responder role; ALEController also calls this directly when entering
+    // CALLING for the caller role). Without this, an interrupted Block C5 report
+    // (dropped/corrupted DATA word, e.g. on a marginal Test-Channel sweep channel)
+    // leaves report_decoder_ stuck active_=true, and every later unrelated DATA word
+    // received (in ANY subsequent call) gets spliced into the stale buffer and
+    // eventually decoded as bogus LQA data.
+    void reset();
+
     // Encode outgoing CMD 'a': read DB for (freq_hz, target), encode, queue via
     // sm_queue_cmd_a. request_report=true sets KA1 and records call context so
     // on_call_concluded can call mark_bilateral_attempted on failure.
@@ -73,6 +83,17 @@ public:
 
 private:
     LQACmdPayload build_payload(uint32_t freq_hz, const std::string& target) const;
+
+    // Block C5 reports carry one word per ~1.7 entries (36 bits/entry, 21
+    // bits/word) plus a header word, inserted into a handshake response frame
+    // that shares the modem's MAX_TX_SEQUENCE_WORDS=64 budget with the TO/TIS
+    // address words and CMD 'a'. get_entries_for_station() returns every entry
+    // on file for the peer with no cap, so a long-lived or heavily-tested peer
+    // (Test-Channel's per-channel sweep against one target is the prime case)
+    // can otherwise grow a report past that budget and overflow the TX queue.
+    // 20 entries -> ceil(20*36/21)=35 DATA words + 1 header word, comfortably
+    // under the ceiling alongside the rest of the response frame.
+    static constexpr size_t kMaxReportEntries = 20;
 
     LQADatabase&                             db_;
     std::function<bool(const std::string&)>  is_self_;

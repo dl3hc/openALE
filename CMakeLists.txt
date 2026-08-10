@@ -626,6 +626,11 @@ target_link_libraries(test_bilateral_lqa ale_app_core ale_lqa ale_link ale_modem
 target_include_directories(test_bilateral_lqa PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME BilateralLQA COMMAND test_bilateral_lqa)
 
+add_executable(test_lqa_report_bounds tests/chan/unit/test_lqa_report_bounds.cpp)
+target_link_libraries(test_lqa_report_bounds ale_app_core ale_lqa ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_lqa_report_bounds PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME LQAReportBounds COMMAND test_lqa_report_bounds)
+
 add_executable(test_address_encoder tests/addr/unit/test_address_encoder.cpp)
 target_link_libraries(test_address_encoder ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_address_encoder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

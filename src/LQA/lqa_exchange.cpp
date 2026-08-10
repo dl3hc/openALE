@@ -20,7 +20,13 @@ LqaExchangeManager::LqaExchangeManager(
 
 void LqaExchangeManager::on_handshake_start()
 {
+    reset();
+}
+
+void LqaExchangeManager::reset()
+{
     pending_valid_ = false;
+    report_decoder_.reset();
 }
 
 LQACmdPayload LqaExchangeManager::build_payload(uint32_t freq_hz,
@@ -110,9 +116,21 @@ bool LqaExchangeManager::apply_pending(const std::string& peer,
         emit("LQA bilateral RX: " + peer + " SINAD=" + std::to_string(pending_.sinad));
 
         if (can_queue_c5 && pending_.ka1) {
-            const uint32_t now     = db_.get_current_time_ms();
-            const auto     entries = db_.get_entries_for_station(peer, 25.0f);
+            const uint32_t now = db_.get_current_time_ms();
+            auto entries = db_.get_entries_for_station(peer, 25.0f);
             if (!entries.empty()) {
+                // Bound the report to the modem's TX word budget (see
+                // kMaxReportEntries) regardless of how many channels this peer
+                // has on file -- keep the highest-scoring (most useful) entries.
+                if (entries.size() > kMaxReportEntries) {
+                    std::partial_sort(entries.begin(),
+                                       entries.begin() + static_cast<long>(kMaxReportEntries),
+                                       entries.end(),
+                                       [](const LQAEntry& a, const LQAEntry& b) {
+                                           return a.score > b.score;
+                                       });
+                    entries.resize(kMaxReportEntries);
+                }
                 std::vector<LQAReport> reports;
                 for (const auto& e : entries) {
                     LQAReport r;

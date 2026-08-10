@@ -2183,9 +2183,15 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     }
 
     // Fresh response-frame accumulator for each new outgoing call.
+    // Also reset lqa_exchange_'s report_decoder_/pending_ state here: the SAM
+    // (caller) role never enters HANDSHAKE, so on_handshake_start() above never
+    // fires for it. Without this reset an interrupted Block C5 report from a
+    // prior call (e.g. a dropped word on a marginal Test-Channel sweep channel)
+    // would leave the decoder stuck active and silently corrupt this new call.
     if (to == ALEState::CALLING) {
         hs_resp_acc_.reset();
         hs_resp_freq_hz_ = 0;
+        lqa_exchange_.reset();
     }
 
     // Entering SOUNDING = we are about to *transmit* our own sounding. Per
