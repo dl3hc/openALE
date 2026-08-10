@@ -354,6 +354,7 @@ add_library(ale_app_core
     src/App/freq_select_manager.cpp
     src/App/gps_service.cpp
     src/App/sfi_service.cpp
+    src/App/sounding_identity_accumulator.cpp
     src/App/voice_path_manager.cpp
 )
 
@@ -675,6 +676,11 @@ add_executable(test_sounding_timing tests/chan/unit/test_sounding_timing.cpp)
 target_link_libraries(test_sounding_timing ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_sounding_timing PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME SoundingTiming COMMAND test_sounding_timing)
+
+add_executable(test_sounding_identity_accumulator tests/chan/unit/test_sounding_identity_accumulator.cpp)
+target_link_libraries(test_sounding_identity_accumulator ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_sounding_identity_accumulator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME SoundingIdentityAccumulator COMMAND test_sounding_identity_accumulator)
 
 add_executable(test_channel_selector tests/chan/unit/test_channel_selector.cpp)
 target_link_libraries(test_channel_selector ale_channel ale_stores ale_lqa ale_protocol ale_fsk_core ale_fec)

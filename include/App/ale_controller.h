@@ -46,6 +46,7 @@
 #include "LQA/lqa_metrics.h"
 #include "LQA/lqa_exchange.h"
 #include "App/freq_select_manager.h"
+#include "App/sounding_identity_accumulator.h"
 #include "Stores/ale_data_store.h"
 #include <functional>
 #include <string>
@@ -1293,23 +1294,17 @@ private:
     uint8_t                  last_votes_      = 0;
     int                      last_fec_errors_ = 0;
 
-    // Received-sounding address reassembly (A.5.3.1): a sounding frame is the
-    // self-address conclusion (TIS [DATA|REP]*) sent twice. on_received_word()
-    // captures the TIS (first 3 chars) and appends each DATA/REP extension word
-    // (chars 4-15); the accumulated full address is committed to the LQA DB once
-    // the frame settles (Tdrw of silence after the last word) — mirrors the
-    // handshake caller-address reassembly in react_handshake(). Without this the
-    // LQA entry was keyed by only the 3-char TIS, truncating >3-char self
-    // addresses. snr/ber are averaged across the frame's words (A.5.4.1.1
-    // "linear average BER/LQA").
-    std::string              sounding_caller_acc_;
-    uint32_t                 sounding_freq_hz_    = 0;
-    uint32_t                 sounding_settle_ms_  = 0;
-    uint32_t                 sounding_word_count_ = 0;
-    float                    sounding_snr_sum_    = 0.0f;
-    float                    sounding_ber_sum_    = 0.0f;
-    float                    sounding_sinad_sum_  = 0.0f;  ///< A.5.4.1.2 SINAD accumulator
-    bool                     sounding_twas_       = false; ///< conclusion type of the frame being accumulated (true=TWAS, not available)
+    // Received-sounding address reassembly (A.5.3.1): a sounding transmission
+    // repeats its self-address conclusion (TIS/TWAS anchor + DATA/REP
+    // extension words) several times for redundancy. SoundingIdentityAccumulator
+    // owns per-slot cross-cycle voting (a later repeat's lost extension word
+    // no longer discards an earlier repeat's fully-assembled address) and
+    // per-cycle positional acceptance (DATA/REP alternation by chunk index,
+    // no arrival-order splicing). Full address committed to the LQA DB once
+    // the burst settles (Tdrw of silence) — see commit_sounding_result() and
+    // tick_frame_settle(). snr/ber/sinad are averaged across the whole
+    // session's words (A.5.4.1.1 "linear average BER/LQA").
+    SoundingIdentityAccumulator sounding_accumulator_;
 
     // Run-time tunables (Stores/ale_data_store.h). Only lqa_enabled is consulted
     // here — it gates the per-frame FROM-direction BER/SNR measurement into the
@@ -1468,10 +1463,15 @@ private:
      * Called from tick_sm() after driving the state machine.
      */
     void maybe_emit_call_alert();
-    /// Commit the accumulated received-sounding frame (full address + averaged
-    /// snr/ber) to the LQA DB and clear the reassembly buffer. No-op if nothing
-    /// is buffered. Called from tick_frame_settle() once the frame has settled.
-    void commit_sounding_sample();
+    /// Commit a finalized SoundingIdentityAccumulator::Result to the LQA DB:
+    /// applies the self-address guard (never store our own callsign, per
+    /// MIL-STD Fig. A-27) then calls LQAAnalyzer::process_sounding(). Called
+    /// from tick_frame_settle() after sounding_accumulator_.finalize() (Tdrw
+    /// silence), from rx_accumulate_sounding() when on_word() flushes a
+    /// different station's finished session (anchor mismatch), and from the
+    /// handshake call sites that flush partial sounding metrics before
+    /// marking bilateral/call-concluded state.
+    void commit_sounding_result(const SoundingIdentityAccumulator::Result& r);
     /// Evaluate whether the current link should be renegotiated to a better channel.
     /// Called from tick_relink() while LINKED + relink_enabled.
     void evaluate_relink(uint32_t now_ms);
