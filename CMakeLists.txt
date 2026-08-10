@@ -124,7 +124,7 @@ target_include_directories(ale_modem PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(ale_modem ale_codec ale_protocol ale_fsk_core ale_fec)
+target_link_libraries(ale_modem ale_codec ale_protocol ale_fsk_core ale_fec ale_pal)
 
 # ALE state machine (link layer)
 add_library(ale_link
@@ -138,7 +138,7 @@ target_include_directories(ale_link PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(ale_link ale_stores ale_protocol ale_fsk_core ale_fec)
+target_link_libraries(ale_link ale_stores ale_protocol ale_fsk_core ale_fec ale_pal)
 
 # FS-1052 ARQ
 add_library(ale_fs1052
