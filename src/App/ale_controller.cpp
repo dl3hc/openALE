@@ -1490,11 +1490,11 @@ void ALEController::tick_sm(uint32_t now_ms)
 
 void ALEController::tick_frame_settle(uint32_t now_ms)
 {
-    // Commit a settled received-sounding frame to the LQA DB (full address +
-    // frame-averaged snr/ber). Checked every tick — cheap, and time-sensitive.
-    if (!sounding_caller_acc_.empty() && sounding_settle_ms_ > 0
-        && (now_ms - sounding_settle_ms_) >= ALETimingConstants::Tdrw_ms) {
-        commit_sounding_sample();
+    // Commit a settled received-sounding session to the LQA DB (full address +
+    // session-averaged snr/ber). Checked every tick — cheap, and time-sensitive.
+    if (sounding_accumulator_.timed_out(now_ms)) {
+        if (auto r = sounding_accumulator_.finalize())
+            commit_sounding_result(*r);
     }
 
     // Commit a settled non-sounding RX frame's averaged BER/SNR (A.5.4.1.1) to
@@ -1996,38 +1996,14 @@ void ALEController::maybe_emit_call_alert()
     dispatch(pal::EventType::ALE_CALL_RECEIVED, caller);
 }
 
-void ALEController::commit_sounding_sample()
+void ALEController::commit_sounding_result(const SoundingIdentityAccumulator::Result& r)
 {
-    if (sounding_caller_acc_.empty() || sounding_word_count_ == 0) {
-        sounding_caller_acc_.clear();
-        return;
-    }
     // MIL-STD Fig. A-27: LQA matrix is remote-stations only — never store own address.
-    if (self_address_store_.matches_self(sounding_caller_acc_)) {
-        sounding_caller_acc_.clear();
-        sounding_settle_ms_  = 0;
-        sounding_word_count_ = 0;
-        sounding_snr_sum_    = 0.0f;
-        sounding_ber_sum_    = 0.0f;
-        sounding_sinad_sum_  = 0.0f;
-        sounding_twas_       = false;
-        return;
-    }
-    const float n        = static_cast<float>(sounding_word_count_);
-    const float avg_snr  = sounding_snr_sum_  / n;
-    const float avg_ber  = sounding_ber_sum_  / n;
-    const float avg_sinad = sounding_sinad_sum_ / n;
+    if (self_address_store_.matches_self(r.station)) return;
     // Forward the sounding's conclusion type so the LQA entry is flagged
     // available (TIS) / not available (TWAS) for active link establishment.
-    lqa_analyzer_.process_sounding(sounding_caller_acc_, sounding_freq_hz_,
-                                   avg_snr, avg_ber, avg_sinad, sounding_twas_);
-    sounding_caller_acc_.clear();
-    sounding_settle_ms_  = 0;
-    sounding_word_count_ = 0;
-    sounding_snr_sum_    = 0.0f;
-    sounding_ber_sum_    = 0.0f;
-    sounding_sinad_sum_  = 0.0f;
-    sounding_twas_       = false;
+    lqa_analyzer_.process_sounding(r.station, r.frequency_hz,
+                                   r.snr_db, r.ber, r.sinad_db, r.twas_conclusion);
 }
 
 void ALEController::commit_rx_ber_sample()
@@ -2191,7 +2167,7 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     // Entering SOUNDING = we are about to *transmit* our own sounding. Per
     // A.5.4.1.1/A.5.4.1.2 a transmitted sounding produces no received words and
     // MUST NOT create an LQA entry (only stations that *receive* a sounding
-    // perform channel measurements — see commit_sounding_sample()). The sounding
+    // perform channel measurements — see commit_sounding_result()). The sounding
     // scheduler is driven by auto_sounding_last_ms_, not the LQA DB, so there is
     // nothing to write here. Block B3 (CMD NOISE attach) is TX command assembly,
     // not an LQA DB write, and remains below.
@@ -2284,10 +2260,10 @@ void ALEController::on_operator_event(OperatorEvent ev)
 
             // Block A6 — successful call: bilateral data was (or wasn't) received.
             // Flush any pending response-frame word metrics BEFORE marking bilateral
-            // attempted: commit_sounding_sample() stores the TIS:peer FROM-direction
+            // attempted: finalizing here stores the TIS:peer FROM-direction
             // quality so mark_bilateral_attempted finds a real entry to annotate
             // instead of creating a zero-score stub (which scores ~6 recency-only).
-            commit_sounding_sample();
+            if (auto r = sounding_accumulator_.finalize()) commit_sounding_result(*r);
             if (config_.lqa_exchange_enabled)
                 lqa_exchange_.on_call_concluded();
 
@@ -2331,7 +2307,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
             hs_resp_acc_.reset();
             hs_resp_freq_hz_ = 0;
             // Block A6 — flush any partial response metrics before marking
-            commit_sounding_sample();
+            if (auto r = sounding_accumulator_.finalize()) commit_sounding_result(*r);
             if (config_.lqa_exchange_enabled)
                 lqa_exchange_.on_call_concluded();
             emit_status("Call rejected by remote station (TWAS)");
@@ -2342,7 +2318,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
             hs_resp_acc_.reset();
             hs_resp_freq_hz_ = 0;
             // Block A6 — flush any partial response metrics before marking
-            commit_sounding_sample();
+            if (auto r = sounding_accumulator_.finalize()) commit_sounding_result(*r);
             if (config_.lqa_exchange_enabled) {
                 // A.5.4.5.1: all tried channels failed → deprioritise for next attempt.
                 const std::string& tgt = lqa_exchange_.call_target();
@@ -2663,25 +2639,15 @@ void ALEController::rx_handle_freq_select(const ALEWord& word)
 
 void ALEController::rx_accumulate_sounding(const ALEWord& word)
 {
-    // Accumulate a foreign sounding frame (TIS + DATA/REP extension words)
-    // received while SCANNING/IDLE (A.5.3.1). Full address committed once the
-    // frame settles (Tdrw silence) — see commit_sounding_sample() in tick_frame_settle().
-    //
-    // BER (A.5.4.1.1): averaged non-unanimous 2/3-vote count across all words.
+    // Accumulate a foreign sounding frame (TIS/TWAS + DATA/REP extension
+    // words) received while SCANNING/IDLE (A.5.3.1). Full address committed
+    // once the frame settles (Tdrw silence) — see commit_sounding_result()
+    // in tick_frame_settle(). Slot-indexed acceptance + cross-cycle voting
+    // logic lives in SoundingIdentityAccumulator (see its header for the
+    // position-grammar rationale and the TO-field-handshake non-goal note).
     if (!op_params_.lqa_enabled) return;
     const ALEState cur_st = sm_.get_state();
     if (cur_st != ALEState::SCANNING && cur_st != ALEState::IDLE) return;
-
-    // TIS (individual) and TWAS (net/group) both carry the sender's self-address
-    // and start a new sounding frame in the accumulator.
-    const bool is_conclusion = word.valid && (word.type == PreambleType::TIS
-                                              || word.type == PreambleType::TWAS);
-    const bool is_ext  = word.valid && (word.type == PreambleType::DATA
-                                        || word.type == PreambleType::REP);
-    const bool is_uncorr = word.golay_uncorrectable && !sounding_caller_acc_.empty();
-
-    if (!is_conclusion && !(is_ext && !sounding_caller_acc_.empty()) && !is_uncorr)
-        return;
 
     // Radio-backed channel (cf. 1562ea9): sm_.get_current_channel()
     // returns nullptr in IDLE state (scan list empty after a
@@ -2689,35 +2655,8 @@ void ALEController::rx_accumulate_sounding(const ALEWord& word)
     const Channel cur_snd_ch = get_current_channel();
     if (cur_snd_ch.rx_frequency_hz == 0) return;
 
-    // A.5.4.1.1: non_unanimous votes = 48 − unanimous_votes for
-    // correctable words; uncorrectable half(s) → contribute 48.
-    constexpr float kMaxVotes = 48.0f;
-    const float snr_db = word.valid
-        ? (word.unanimous_votes / kMaxVotes) * 31.0f : 0.0f;
-    const float ber = word.golay_uncorrectable
-        ? 48.0f
-        : static_cast<float>(48u - word.unanimous_votes);
-
-    if (is_conclusion) {
-        // A new TIS/TWAS restarts the frame (Trs: last copy wins).
-        sounding_caller_acc_  = trim_ale_address(word.address);
-        sounding_freq_hz_     = cur_snd_ch.rx_frequency_hz;
-        sounding_word_count_  = 1;
-        sounding_snr_sum_     = snr_db;
-        sounding_ber_sum_     = ber;
-        sounding_sinad_sum_   = word.sinad_db;
-        // Capture the conclusion type: TWAS = announce-only (not available),
-        // TIS = invites return calls (available). Committed with the sample.
-        sounding_twas_        = (word.type == PreambleType::TWAS);
-    } else {
-        if (is_ext)
-            sounding_caller_acc_ += trim_ale_address(word.address);
-        sounding_word_count_ += 1;
-        sounding_snr_sum_    += snr_db;
-        sounding_ber_sum_    += ber;
-        sounding_sinad_sum_  += word.sinad_db;
-    }
-    sounding_settle_ms_ = now_ms_;
+    if (auto flushed = sounding_accumulator_.on_word(word, cur_snd_ch.rx_frequency_hz, now_ms_))
+        commit_sounding_result(*flushed);
 }
 
 void ALEController::rx_accumulate_frame_ber(const ALEWord& word)
