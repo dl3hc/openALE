@@ -47,9 +47,13 @@ for attribution.
 Requires a C++17 compiler, CMake ≥ 3.15, and **Hamlib** (mandatory — the build fails with a
 `FATAL_ERROR` if Hamlib isn't found, since the bridge unconditionally calls into it).
 
+## Prerequesites
 **Linux:**
 ```bash
-sudo apt install libhamlib-dev
+sudo apt install build-essential cmake pkg-config libhamlib-dev libasound2-dev
+```
+
+```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --verbose
