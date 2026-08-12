@@ -1248,6 +1248,32 @@ function hideTestChannelPanel() {
   document.getElementById('testChannelModal').classList.add('hidden');
 }
 
+// Clears the previous run's peer, address, progress, summary and per-channel
+// rows. Only called from user-initiated open paths (header button, contact
+// context menu) — never from onTestChannelEvent's 'start' handler, which
+// already writes the new run's values immediately before it reveals the
+// panel via showTestChannelPanel().
+function resetTestChannelPanel() {
+  testChannelActive = false;
+  testChannelRows = [];
+  const peerEl = document.getElementById('testChannelPeer');
+  if (peerEl) peerEl.textContent = '—';
+  const progEl = document.getElementById('testChannelProgress');
+  if (progEl) progEl.textContent = '0 / 0';
+  const sumEl = document.getElementById('testChannelSummary');
+  if (sumEl) sumEl.textContent = '';
+  const addrEl = document.getElementById('testChannelAddr');
+  if (addrEl) addrEl.value = '';
+  renderTestChannelRows();
+}
+
+// Generic "Test Ch" header-button entry point — no peer context yet, so
+// reset before showing.
+function openTestChannelPanel() {
+  resetTestChannelPanel();
+  showTestChannelPanel();
+}
+
 function renderTestChannelRows() {
   const body = document.getElementById('testChannelBody');
   if (!body) return;
@@ -1335,6 +1361,7 @@ function closeTestChannelPanel() {
 function testChannelFromContact(idx) {
   const c = contacts[idx];
   if (!c) return;
+  resetTestChannelPanel();
   const inp = document.getElementById('testChannelAddr');
   if (inp) inp.value = c.cs;
   showTestChannelPanel();
