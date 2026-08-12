@@ -793,11 +793,14 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("mode", mj::Value::string(ctrl.get_current_mode()));
         r.set("tune_step_hz", mj::Value::number(ctrl.get_tune_step()));
         r.set("ptt", mj::Value::boolean(ctrl.get_ptt_state()));
+        r.set("power_pct", mj::Value::number(ctrl.get_current_power()));
+        r.set("power_supported", mj::Value::boolean(ctrl.power_control_supported()));
         return mj::dump(r);
     }
     if (cmd == "VFO_SET_FREQ")      { return mj::dump(make_reply(msg, ctrl.set_frequency(static_cast<uint32_t>(msg.get_number("hz"))))); }
     if (cmd == "VFO_SET_MODE")      { return mj::dump(make_reply(msg, ctrl.set_mode(msg.get_string("mode")))); }
     if (cmd == "VFO_SET_CHANNEL")   { return mj::dump(make_reply(msg, ctrl.set_vfo_channel(static_cast<uint32_t>(msg.get_number("hz")), msg.get_string("mode")))); }
+    if (cmd == "VFO_SET_POWER")     { return mj::dump(make_reply(msg, ctrl.set_power(static_cast<int>(msg.get_number("pct"))))); }
     if (cmd == "VFO_STEP")          { return mj::dump(make_reply(msg, ctrl.step_channel(static_cast<int>(msg.get_number("direction"))))); }
     if (cmd == "VFO_NUDGE")         { ctrl.nudge_frequency(static_cast<int>(msg.get_number("direction"))); return mj::dump(make_reply(msg, true)); }
     if (cmd == "VFO_SET_TUNE_STEP") { ctrl.set_tune_step(static_cast<uint32_t>(msg.get_number("hz"))); return mj::dump(make_reply(msg, true)); }

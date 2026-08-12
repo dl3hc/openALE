@@ -77,6 +77,25 @@ int main(int argc, char* argv[])
     ret = rig_set_freq(rig, RIG_VFO_CURR, 14109000.0);
     fprintf(stderr, "TEST F2: rig_set_freq(14109000 repeat) -> %s\n", rigerror(ret));
 
+    // RFPOWER round-trip (P2-02 regression guard). radio_mock advertises
+    // RIG_LEVEL_RFPOWER in its dump_state (0x1000 bit) — confirm hamlib's
+    // capability probe picks that up, then set/get and confirm the value
+    // survives the wire.
+    const bool has_set = rig_has_set_level(rig, RIG_LEVEL_RFPOWER) != 0;
+    const bool has_get = rig_has_get_level(rig, RIG_LEVEL_RFPOWER) != 0;
+    fprintf(stderr, "TEST L0: rig_has_set_level(RFPOWER)=%d rig_has_get_level(RFPOWER)=%d\n",
+            has_set, has_get);
+
+    value_t val{};
+    val.f = 0.5f;
+    ret = rig_set_level(rig, RIG_VFO_CURR, RIG_LEVEL_RFPOWER, val);
+    fprintf(stderr, "TEST L1: rig_set_level(RFPOWER, 0.5) -> %s\n", rigerror(ret));
+
+    value_t got{};
+    ret = rig_get_level(rig, RIG_VFO_CURR, RIG_LEVEL_RFPOWER, &got);
+    fprintf(stderr, "TEST L2: rig_get_level(RFPOWER) -> %s val=%.3f\n",
+            rigerror(ret), got.f);
+
     rig_close(rig);
     rig_cleanup(rig);
     return 0;

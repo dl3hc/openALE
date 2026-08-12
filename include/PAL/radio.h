@@ -105,6 +105,24 @@ public:
         return set_channel(c);
     }
 
+    // Set TX power only (0-100%), without disturbing frequency/mode. Default
+    // implementation is a read-modify-write through set_channel(); backends
+    // that can set power independently (e.g. hamlib RIG_LEVEL_RFPOWER) override
+    // this to send only the power command.
+    virtual bool set_power(int pct) {
+        Channel c = get_channel();
+        c.power = pct;
+        return set_channel(c);
+    }
+
+    // True if this backend can actually apply set_power()/Channel::power to
+    // the hardware (e.g. hamlib backends where rig_has_set_level(RFPOWER) is
+    // true for the connected rig). Default false: callers (GUI, bridge) must
+    // not present a power control as functional unless this returns true —
+    // an RF-safety requirement, since a silently-ignored power command would
+    // let the operator believe they reduced power when they did not.
+    virtual bool supports_power_control() const { return false; }
+
     // Query the radio for its actual current frequency and mode and update the
     // internal channel state.  Returns true if anything changed.  The default
     // implementation is a no-op (returns false) for backends that have no

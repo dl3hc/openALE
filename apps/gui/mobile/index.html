@@ -148,6 +148,17 @@
             <button class="rk rk-step" data-step="100000"  onclick="radioSetStep(100000)">100 k</button>
             <button class="rk rk-step" data-step="1000000" onclick="radioSetStep(1000000)">1 M</button>
           </div>
+
+          <div class="radio-steps" id="radioPowerRow" title="RF transmit power">
+            <span class="radio-sub">Power</span>
+            <button class="rk rk-pwr" data-pct="25"  onclick="radioSetPower(25)">25%</button>
+            <button class="rk rk-pwr" data-pct="50"  onclick="radioSetPower(50)">50%</button>
+            <button class="rk rk-pwr" data-pct="75"  onclick="radioSetPower(75)">75%</button>
+            <button class="rk rk-pwr" data-pct="100" onclick="radioSetPower(100)">100%</button>
+            <button class="rk rk-tune" onclick="radioNudgePower(-5)" title="Decrease by 5%">▼</button>
+            <span class="radio-pwr-val" id="radioPowerVal">100%</span>
+            <button class="rk rk-tune" onclick="radioNudgePower(5)" title="Increase by 5%">▲</button>
+          </div>
         </div>
       </div>
 

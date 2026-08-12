@@ -158,6 +158,22 @@ bool HamlibRadio::start() {
         rig_->state.lock_mode = 0;
     }
 
+    // RF-power capability check (RIG_LEVEL_RFPOWER) — pure capability lookup,
+    // no I/O, safe here before the worker thread launches. Cached for the
+    // lifetime of this connection: set_power()/impl_set_channel() gate on
+    // power_supported_ (SET) so an unsupported rig is never silently sent a
+    // power command it will ignore (RF-safety requirement — see
+    // IRadio::supports_power_control()). power_readback_supported_ (GET) is
+    // checked separately — see its doc comment in the header — because many
+    // real rigs support setting RFPOWER over CAT but never implement reading
+    // it back at all; without this split, impl_sync_from_radio() would poll
+    // a GET the backend never advertised, failing on every ~2 s tick.
+    power_supported_.store(rig_has_set_level(rig_, RIG_LEVEL_RFPOWER) != 0);
+    power_readback_supported_.store(rig_has_get_level(rig_, RIG_LEVEL_RFPOWER) != 0);
+    pal::log_info("HamlibRadio", "RF power control: set=%s get=%s",
+                  power_supported_.load() ? "supported" : "not supported",
+                  power_readback_supported_.load() ? "supported" : "not supported");
+
     // Serielle Schnittstelle: DTR/RTS-Leitungszustand nach Open setzen,
     // dann stabilization_ms warten bevor der erste CAT-Befehl gesendet wird.
     if (is_serial_port()) {
@@ -238,6 +254,16 @@ bool HamlibRadio::set_mode(RadioMode mode) {
     return true;
 }
 
+bool HamlibRadio::set_power(int pct) {
+    pct = std::clamp(pct, 0, 100);
+    {
+        std::lock_guard<std::mutex> lk(channel_mtx_);
+        cached_channel_.power = pct;
+    }
+    enqueue(CmdSetPower{pct});
+    return true;
+}
+
 bool HamlibRadio::sync_from_radio() {
     // Fire-and-forget: actual sync happens on the worker thread, cache is updated
     // there.  All callers (tick_mode_verify, VFO_GET) ignore the return value.
@@ -266,6 +292,8 @@ bool HamlibRadio::is_tune_settled() const {
 }
 
 std::string HamlibRadio::get_port_config() const { return port_; }
+
+bool HamlibRadio::supports_power_control() const { return power_supported_.load(); }
 
 void HamlibRadio::register_send_callback(SendCommandCallback callback) {
     send_callback_ = std::move(callback);
@@ -348,6 +376,8 @@ void HamlibRadio::worker_dispatch(const RadioCommand& cmd) {
     } else if (std::holds_alternative<CmdSetMode>(cmd)) {
         impl_set_mode(std::get<CmdSetMode>(cmd).mode);
         tunes_in_flight_.fetch_sub(1, std::memory_order_acq_rel);  // tune settled
+    } else if (std::holds_alternative<CmdSetPower>(cmd)) {
+        impl_set_power(std::get<CmdSetPower>(cmd).pct);
     } else if (std::holds_alternative<CmdSetPtt>(cmd)) {
         impl_set_ptt(std::get<CmdSetPtt>(cmd).on);
     } else if (std::holds_alternative<CmdSync>(cmd)) {
@@ -416,21 +446,33 @@ bool HamlibRadio::impl_set_channel(const Channel& ch) {
         last_mode_cmd_ = std::chrono::steady_clock::now();  // same mode → skip CAT (1R), keep
     }                                                       // the reassert window armed
 
+    // Power: only sent when it changes (per-channel power_pct, one CAT round-trip
+    // saved on every same-power hop — same reasoning as the mode skip above).
+    const bool power_changed = power_supported_.load() && ch.power != current_channel_.power;
+    const int  prev_power    = current_channel_.power;
+    int power_ret = RIG_OK;
+    if (power_changed) power_ret = assert_power(ch.power);
+
     // Always track the intended state regardless of return codes. Over TCP,
     // hamlib can report failure even when rigctld applied the command (e.g. a
     // slow rig makes the RPRT read time out after rigctld already set it).
     current_channel_ = ch;
+    // Power is the one exception: unlike freq/mode, a rig that lacks RFPOWER
+    // support (or a genuine CAT failure) must NOT be reported as having
+    // changed power — that would mislead the operator into thinking a power
+    // reduction took effect when the hardware never received it.
+    if (power_changed && power_ret != RIG_OK) current_channel_.power = prev_power;
 
     // Update the main-thread-readable cache with the confirmed post-call state.
     {
         std::lock_guard<std::mutex> lk(channel_mtx_);
-        cached_channel_ = ch;
+        cached_channel_ = current_channel_;
     }
 
     if (mode_ret != RIG_OK)
         pal::log_error("HamlibRadio", "  assert_mode(%s) -> FAILED: %s",
                        mname ? mname : "?", rigerror(mode_ret));
-    return freq_ret == RIG_OK && mode_ret == RIG_OK;
+    return freq_ret == RIG_OK && mode_ret == RIG_OK && power_ret == RIG_OK;
 }
 
 bool HamlibRadio::impl_set_frequency(uint32_t hz) {
@@ -489,6 +531,22 @@ bool HamlibRadio::impl_set_mode(RadioMode mode) {
     if (ret != RIG_OK)
         pal::log_error("HamlibRadio", "set_mode: %s -> FAILED: %s",
                        mname ? mname : "?", rigerror(ret));
+    return ret == RIG_OK;
+}
+
+bool HamlibRadio::impl_set_power(int pct) {
+    if (!rig_) return false;
+    const int ret = assert_power(pct);
+    // Unlike freq/mode (which track "intended state" through transient
+    // netrigctl failures), only trust the new value on RIG_OK: assert_power()
+    // returns a dedicated failure when the rig lacks RFPOWER support at all,
+    // and get_channel()/the GUI must keep reporting the last real value in
+    // that case rather than a power level that was never actually applied.
+    if (ret == RIG_OK) {
+        current_channel_.power = pct;
+        std::lock_guard<std::mutex> lk(channel_mtx_);
+        cached_channel_.power = pct;
+    }
     return ret == RIG_OK;
 }
 
@@ -596,6 +654,36 @@ bool HamlibRadio::impl_sync_from_radio() {
                 : "sync_from_radio: window expired — not re-asserting");
         }
     }
+
+    // RF power readback — the "reflects the actual/current value" half of power
+    // control. Gated on power_readback_supported_ (GET), NOT power_supported_
+    // (SET) — see the header doc comment: a rig can accept power commands
+    // over CAT while never implementing readback of them, and polling a GET
+    // it never advertised would fail on every sync tick.
+    if (power_readback_supported_.load()) {
+        value_t val{};
+        const auto t0 = std::chrono::steady_clock::now();
+        const int ret = rig_get_level(rig_, RIG_VFO_CURR, RIG_LEVEL_RFPOWER, &val);
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        if (ret != RIG_OK) {
+            trace_cat("get_level(RFPOWER) -> ERROR %s (%.0f ms)", rigerror(ret), ms);
+        } else {
+            const int new_power = std::clamp(static_cast<int>(val.f * 100.0f + 0.5f), 0, 100);
+            trace_cat("get_level(RFPOWER) -> %d%% (%.0f ms)", new_power, ms);
+            if (new_power != current_channel_.power) {
+                pal::log_info("HamlibRadio", "sync_from_radio: external power change %d%%->%d%%",
+                              current_channel_.power, new_power);
+                current_channel_.power = new_power;
+                {
+                    std::lock_guard<std::mutex> lk(channel_mtx_);
+                    cached_channel_.power = new_power;
+                }
+                changed = true;
+            }
+        }
+    }
+
     return changed;
 }
 
@@ -640,6 +728,39 @@ int HamlibRadio::assert_mode(RadioMode mode) {
         trace_cat("set_mode(%s) -> OK (%.0f ms)", mname ? mname : "?", ms);
     }
     return mode_ret;
+}
+
+// Send RF power exactly ONCE — the power analogue of assert_mode() above, same
+// single-fire-and-forget shape (no readback loop; readback is the separate
+// periodic rig_get_level() in impl_sync_from_radio()). Returns -RIG_ENAVAIL
+// without touching the wire if the connected rig doesn't advertise RFPOWER —
+// callers (impl_set_power/impl_set_channel) use that distinct code to avoid
+// ever reporting a power change that was never actually sent (RF-safety: see
+// IRadio::supports_power_control()).
+//
+// Worker-only.
+int HamlibRadio::assert_power(int pct) {
+    if (!power_supported_.load()) {
+        trace_cat("set_power(%d%%) -> UNSUPPORTED (rig has no RFPOWER level)", pct);
+        return -RIG_ENAVAIL;
+    }
+
+    value_t val{};
+    val.f = std::clamp(pct, 0, 100) / 100.0f;
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const int ret = rig_set_level(rig_, RIG_VFO_CURR, RIG_LEVEL_RFPOWER, val);
+    const double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    if (ret != RIG_OK) {
+        pal::log_error("HamlibRadio", "  assert_power: rig_set_level(RFPOWER, %d%%) -> FAILED: %s",
+                       pct, rigerror(ret));
+        trace_cat("set_level(RFPOWER, %d%%) -> ERROR %s (%.0f ms)", pct, rigerror(ret), ms);
+    } else {
+        pal::log_info("HamlibRadio", "  assert_power: rig_set_level(RFPOWER, %d%%) -> sent", pct);
+        trace_cat("set_level(RFPOWER, %d%%) -> OK (%.0f ms)", pct, ms);
+    }
+    return ret;
 }
 
 // ── File-static helpers (hamlib types stay out of the header) ─────────────────

@@ -700,6 +700,24 @@ bool ALEController::set_mode(const std::string& mode)
     return true;
 }
 
+bool ALEController::set_power(int pct)
+{
+    if (!radio_) return false;
+    pct = std::clamp(pct, 0, 100);
+    radio_->set_power(pct);
+    return true;
+}
+
+uint8_t ALEController::get_current_power() const
+{
+    return radio_ ? static_cast<uint8_t>(radio_->get_channel().power) : 100;
+}
+
+bool ALEController::power_control_supported() const
+{
+    return radio_ && radio_->supports_power_control();
+}
+
 bool ALEController::set_vfo_channel(uint32_t hz, const std::string& mode)
 {
     if (!radio_ || hz == 0) return false;
