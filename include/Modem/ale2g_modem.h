@@ -172,7 +172,10 @@ public:
     /// True once the receiver has grid-locked onto an ALE word stream on the
     /// current channel (WordGridTracker::is_grid_locked()) — false while still
     /// acquiring, and reset by reset()/a channel hop/set_enabled(false). For
-    /// GUI diagnostics display (P1-11): "Acquiring lock" vs "Locked".
+    /// GUI diagnostics display (P1-11): drives the "Sync" pill's dot color
+    /// (red when true); a separate transient signal (see
+    /// ALEController::SignalQuality::decoding) overlays "Decoding" onto the
+    /// main ALE-state pill while a word is actively landing.
     bool is_word_locked() const { return tracker_.is_grid_locked(); }
 
     /** Feed PCM samples (8 kHz, mono, 16-bit). May invoke word_cb_. */

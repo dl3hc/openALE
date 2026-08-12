@@ -196,25 +196,28 @@ function qualityLabel(q) {
 }
 
 // Reflects the modem's word-grid lock (P1-11) — SIGNAL_QUALITY's word_locked
-// + decoding fields — as the header chip next to the main ALE-state status
-// chip. Three states: still hunting (idle, scanning, or noise) -> "Acquiring
-// lock"; grid-locked but between words -> "Locked"; a valid word landed in
-// the last ~1s (see DECODE_ACTIVE_WINDOW_MS server-side) -> "Decoding".
-function applyWordLock(locked, decoding) {
+// field — on the "Sync" chip next to the main ALE-state status chip. Binary:
+// dot is red (see .dot.sync) when locked, dim/idle otherwise. Text is static
+// ("Sync") — this chip no longer has states of its own. The related
+// "Decoding" signal (SIGNAL_QUALITY's decoding field) is NOT shown here; it
+// overlays the main ALE-state pill instead — see renderStatus()/isDecoding.
+function applyWordLock(locked) {
   const dot = document.getElementById('wordLockDot');
-  const txt = document.getElementById('wordLockText');
-  const state = decoding ? 'decoding' : (locked ? 'locked' : 'acquiring');
-  const label = decoding ? 'Decoding'  : (locked ? 'Locked'  : 'Acquiring lock');
-  if (dot) dot.className = 'dot ' + state;
-  if (txt) txt.textContent = label;
+  if (dot) dot.className = 'dot ' + (locked ? 'sync' : 'idle');
+  // Amber highlight on the whole chip, not just the dot — easier to notice
+  // at a glance than a single 7px dot changing color.
+  const chip = document.getElementById('wordLockChip');
+  if (chip) chip.classList.toggle('sync', locked);
 }
 
-// Poll SIGNAL_QUALITY for the active-link quality panel (bars + label) and
-// the word-lock chip.
+// Poll SIGNAL_QUALITY for the active-link quality panel (bars + label), the
+// Sync chip, and the main pill's transient "Decoding" overlay.
 function pollSignalQuality() {
   bridgeSend('SIGNAL_QUALITY', {}, (r) => {
     if (!r.ok) return;
-    applyWordLock(!!r.word_locked, !!r.decoding);
+    applyWordLock(!!r.word_locked);
+    isDecoding = !!r.decoding;
+    renderStatus();
     const sinad = Math.max(0, Math.min(30, Math.round(r.sinad_db)));
     // Rating is BER-led (A.5.4.1.1): votes = unanimous 2/3 count (0–48, 48=clean),
     // higher=better. SINAD (shown in dB) only refines it, so a flawless decode is
@@ -681,6 +684,8 @@ const AXIS_MINOR = [500, 1500, 2500];             // unlabelled gridlines (Hz)
 
 let rows = [];
 let wfState  = 'scanning';
+let wfLabel  = 'Scanning';  // true underlying main-pill label (setStatus's `label` arg)
+let isDecoding = false;     // transient overlay: SIGNAL_QUALITY's `decoding` — see renderStatus()
 
 function resizeCanvas() {
   const el = canvas.parentElement;
@@ -1149,10 +1154,20 @@ function tickTimer() {
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    STATE HELPERS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+// Paints the main ALE-state pill, preferring the transient "Decoding" overlay
+// (isDecoding, from SIGNAL_QUALITY) over the true state (wfLabel/wfState) —
+// see setStatus() and pollSignalQuality(). Button/state logic elsewhere keys
+// off wfState/cls directly, never off what's currently painted, so a
+// "Decoding" flash never lies about the real ALE state to other UI.
+function renderStatus() {
+  document.getElementById('statusText').textContent = isDecoding ? 'Decoding' : wfLabel;
+  document.getElementById('statusDot').className    = 'dot ' + (isDecoding ? 'decoding' : wfState);
+}
+
 function setStatus(label, cls) {
-  document.getElementById('statusText').textContent = label;
-  document.getElementById('statusDot').className    = 'dot ' + cls;
+  wfLabel = label;
   wfState = cls;
+  renderStatus();
   // Keep the header Scan toggle in sync with whatever drove the state change.
   const b = document.getElementById('scanBtn');
   if (b) {
