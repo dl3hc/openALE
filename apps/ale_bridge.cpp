@@ -169,7 +169,7 @@ static mj::Value lqa_line_to_json(const std::string& line) {
     std::stringstream ss(line);
     std::string tok;
     while (std::getline(ss, tok, '|')) f.push_back(tok);
-    f.resize(12);
+    f.resize(13);
     mj::Value v = mj::obj();
     v.set("freq_hz", mj::Value::number(std::atof(f[0].c_str())));
     v.set("station", mj::Value::string(f[1]));
@@ -183,6 +183,10 @@ static mj::Value lqa_line_to_json(const std::string& line) {
     v.set("bilateral_mp", mj::Value::number(std::atof(f[9].c_str())));
     v.set("display_score", mj::Value::number(std::atof(f[10].c_str())));
     v.set("available", mj::Value::number(std::atoi(f[11].c_str())));
+    // P1-12: raw LQA-DB timestamp (ms since epoch, 32-bit wrapped — see
+    // ALEController::get_all_lqa_entries()) so the GUI can show an absolute
+    // "received at" time alongside the relative age_ms.
+    v.set("last_activity_ms", mj::Value::number(std::atof(f[12].c_str())));
     return v;
 }
 

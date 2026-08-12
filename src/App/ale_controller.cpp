@@ -3044,24 +3044,29 @@ std::vector<std::string> ALEController::get_all_lqa_entries() const
         const uint32_t age_ms = (now > e.last_activity_ms()) ? (now - e.last_activity_ms()) : 0u;
         // Fields: freq|station|snr_db|ber|sinad_db|score|age_ms
         //        |bilateral_sinad|bilateral_ber|bilateral_mp|display_score|available
+        //        |last_activity_ms
         // score already incorporates the bilateral fallback (see compute_score),
         // so display_score == score; bilateral_* are shipped so the GUI can show
         // the peer-reported SINAD/BER/MP when no local FROM measurement exists.
         // available: sounding-conclusion availability flag — 1 = TIS (available
         // for active link establishment), 0 = TWAS (not available), -1 = no
         // sounding heard from this station (entry from a contact only).
+        // last_activity_ms (P1-12): the LQA database's own raw timestamp (ms
+        // since epoch, LQADatabase::get_current_time_ms() clock — the same
+        // clock age_ms above is derived from) so the GUI can show an absolute
+        // "received at" time, not just a relative age.
         const int available = (e.last_sounding_ms > 0)
             ? (e.sounding_twas ? 0 : 1)
             : -1;
-        char buf[200];
+        char buf[220];
         std::snprintf(buf, sizeof(buf),
-                      "%u|%s|%.1f|%.4f|%.1f|%.1f|%u|%u|%u|%u|%.1f|%d",
+                      "%u|%s|%.1f|%.4f|%.1f|%.1f|%u|%u|%u|%u|%.1f|%d|%u",
                       e.frequency_hz, e.remote_station.c_str(),
                       e.snr_db, e.ber, e.sinad_db, e.score, age_ms,
                       static_cast<unsigned>(e.bilateral_sinad),
                       static_cast<unsigned>(e.bilateral_ber),
                       static_cast<unsigned>(e.bilateral_mp),
-                      e.score, available);
+                      e.score, available, e.last_activity_ms());
         out.push_back(buf);
     }
     return out;
