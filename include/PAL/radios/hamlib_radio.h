@@ -5,6 +5,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -144,10 +145,23 @@ public:
     void register_ack_callback(AckCallback callback)          override;
     void process_response(const uint8_t* data, size_t length) override;
 
+    // Optional CAT-traffic diagnostics (see IRadio). set_cat_trace_enabled()
+    // is safe to call from any thread; drain_cat_trace() is a polling read
+    // meant for the controller's own tick, mirroring get_channel()'s
+    // cached-state pattern rather than a cross-thread callback into it.
+    void set_cat_trace_enabled(bool on)         override;
+    std::vector<std::string> drain_cat_trace()  override;
+
 private:
     bool configure_port();
     void apply_line_policy();
     bool is_serial_port() const;
+
+    // Formats and (when tracing is enabled) buffers one CAT-trace line.
+    // Worker-thread-only call sites; hand-off to drain_cat_trace() is via
+    // trace_mtx_. Bounded so an enabled-but-unpolled buffer cannot grow
+    // without limit.
+    void trace_cat(const char* fmt, ...);
 
     // Sendet `mode` genau einmal als autoritativen Per-Hop-Force (kein Readback-
     // Loop, kein sleep). Asynchrone Band-Mode-Reverts fängt der verzögerte
@@ -224,6 +238,11 @@ private:
 
     SendCommandCallback send_callback_;
     AckCallback         ack_callback_;
+
+    // ── CAT-traffic trace buffer (see set_cat_trace_enabled/drain_cat_trace) ──
+    std::atomic<bool>       cat_trace_enabled_{false};
+    std::mutex               trace_mtx_;
+    std::deque<std::string>  trace_lines_;   // capped at kCatTraceCap in trace_cat()
 };
 
 // Set HamlibRadio log verbosity. Mirrors the GUI cfgLogLevel values:

@@ -1019,6 +1019,14 @@ public:
     void set_debug_rx(bool on)                   { config_.debug_rx = on; debug_rx_ = on; }
     bool debug_rx() const                        { return debug_rx_; }
 
+    /// Diagnostics: when on, relay the attached radio's CAT/rig traffic
+    /// (rigctld/Hamlib commands, responses/errors, timing — see
+    /// pal::IRadio::drain_cat_trace) into the status stream as "[CAT] ..."
+    /// lines. Off by default; radios with no CAT trace of their own (mocks)
+    /// simply never produce any.
+    void set_cat_trace(bool on);
+    bool cat_trace() const                       { return cat_trace_; }
+
     // ── LBT occupancy detection (A.5.4.7 listen-before-transmit) ─────────────
     // Broadband busy detector (ChannelOccupancyDetector) consulted by the SM in
     // all three LBT windows, in addition to the ALE-word busy path.  The busy
@@ -1206,6 +1214,9 @@ private:
     bool                     debug_rx_   = false;
     int                      dbg_peak_   = 0;   // running peak |sample| since last report
     uint32_t                 dbg_count_  = 0;   // samples accumulated since last report
+
+    // CAT-traffic diagnostics (set_cat_trace) — see tick_cat_trace()
+    bool                     cat_trace_  = false;
 
     // LBT occupancy detection (A.5.4.7.2) — fed from feed_audio() while RX is
     // enabled; queried by the SM via set_channel_busy_query.
@@ -1441,6 +1452,7 @@ private:
     void tick_offline_completion();             ///< pull symbol frames in offline (no-audio) mode
     void tick_lqa_update(uint32_t now_ms);      ///< throttled LQA DB prune + auto-sounding check
     void tick_mode_verify(uint32_t now_ms);     ///< deferred radio-mode verify after channel activation
+    void tick_cat_trace(uint32_t now_ms);       ///< drains radio_->drain_cat_trace() into the status stream
 
     /// Arm the deferred mode-verify checks after any non-scanning radio
     /// channel/mode command. Re-arming on every command means checks only fire

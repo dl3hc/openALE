@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <functional>
+#include <vector>
 
 namespace pal {
 
@@ -116,6 +117,15 @@ public:
     // Primarily useful in tests that need to verify hardware-side effects of
     // set_channel() / sync_from_radio() without introducing arbitrary sleeps.
     virtual void flush() {}
+
+    // Optional CAT-traffic diagnostics (opt-in, off by default). When enabled,
+    // a backend that talks a text CAT protocol (e.g. HamlibRadio/rigctld)
+    // records one line per command — command, response/error, elapsed time —
+    // and drain_cat_trace() polls and clears them. Backends with no
+    // meaningful CAT traffic (mocks, GPIO-only PTT) keep the default no-ops:
+    // enabling does nothing and drain always returns empty.
+    virtual void set_cat_trace_enabled(bool /*on*/) {}
+    virtual std::vector<std::string> drain_cat_trace() { return {}; }
 
     // True when the radio has finished ("settled on") every tune command
     // (set_channel / set_frequency / set_mode) issued so far — i.e. no tune is

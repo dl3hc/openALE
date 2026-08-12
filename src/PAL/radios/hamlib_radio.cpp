@@ -9,6 +9,7 @@
 #include <hamlib/rig.h>
 #include <algorithm>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <thread>
@@ -276,6 +277,35 @@ void HamlibRadio::register_ack_callback(AckCallback callback) {
 
 void HamlibRadio::process_response(const uint8_t*, size_t) {}
 
+void HamlibRadio::set_cat_trace_enabled(bool on) {
+    cat_trace_enabled_.store(on);
+    if (!on) {
+        std::lock_guard<std::mutex> lk(trace_mtx_);
+        trace_lines_.clear();
+    }
+}
+
+std::vector<std::string> HamlibRadio::drain_cat_trace() {
+    std::lock_guard<std::mutex> lk(trace_mtx_);
+    std::vector<std::string> out(trace_lines_.begin(), trace_lines_.end());
+    trace_lines_.clear();
+    return out;
+}
+
+namespace { constexpr size_t kCatTraceCap = 200; }
+
+void HamlibRadio::trace_cat(const char* fmt, ...) {
+    if (!cat_trace_enabled_.load(std::memory_order_relaxed)) return;
+    char buf[192];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    std::lock_guard<std::mutex> lk(trace_mtx_);
+    if (trace_lines_.size() >= kCatTraceCap) trace_lines_.pop_front();
+    trace_lines_.emplace_back(buf);
+}
+
 // ── Async worker ─────────────────────────────────────────────────────────────
 
 void HamlibRadio::enqueue(RadioCommand cmd) {
@@ -362,14 +392,21 @@ bool HamlibRadio::impl_set_channel(const Channel& ch) {
     // long same-mode scan. VFO = RIG_VFO_CURR; passband = RIG_PASSBAND_NORMAL.
     int freq_ret = RIG_OK;
     if (freq_changed) {
+        const auto t0 = std::chrono::steady_clock::now();
         freq_ret = rig_set_freq(rig_, RIG_VFO_CURR,
                                 static_cast<freq_t>(ch.tx_frequency));
-        if (freq_ret != RIG_OK)
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        if (freq_ret != RIG_OK) {
             pal::log_error("HamlibRadio", "  rig_set_freq(%u) -> FAILED: %s",
                            ch.tx_frequency, rigerror(freq_ret));
-        else
+            trace_cat("set_freq(%u) -> ERROR %s (%.0f ms)",
+                      ch.tx_frequency, rigerror(freq_ret), ms);
+        } else {
             pal::log_info("HamlibRadio", "  rig_set_freq: %u Hz -> OK",
                           ch.tx_frequency);
+            trace_cat("set_freq(%u) -> OK (%.0f ms)", ch.tx_frequency, ms);
+        }
     }
 
     int mode_ret = RIG_OK;
@@ -404,11 +441,17 @@ bool HamlibRadio::impl_set_frequency(uint32_t hz) {
     // openALE's mode must be authoritative — always assert it.
     const RadioMode saved_mode = current_channel_.tx_mode;
 
+    const auto t0 = std::chrono::steady_clock::now();
     const int ret = rig_set_freq(rig_, RIG_VFO_CURR, static_cast<freq_t>(hz));
-    if (ret != RIG_OK)
+    const double set_freq_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    if (ret != RIG_OK) {
         pal::log_error("HamlibRadio", "rig_set_freq(%u) failed: %s", hz, rigerror(ret));
-    else
+        trace_cat("set_freq(%u) -> ERROR %s (%.0f ms)", hz, rigerror(ret), set_freq_ms);
+    } else {
         pal::log_info("HamlibRadio", "freq=%u Hz (simplex)", hz);
+        trace_cat("set_freq(%u) -> OK (%.0f ms)", hz, set_freq_ms);
+    }
 
     current_channel_.rx_frequency = hz;
     current_channel_.tx_frequency = hz;
@@ -460,12 +503,18 @@ void HamlibRadio::impl_set_ptt(bool on) {
         default:                               ptt_mode = RIG_PTT_ON;     break;
         }
     }
-    if (rig_set_ptt(rig_, RIG_VFO_CURR, ptt_mode) == RIG_OK) {
+    const auto t0 = std::chrono::steady_clock::now();
+    const int ptt_ret = rig_set_ptt(rig_, RIG_VFO_CURR, ptt_mode);
+    const double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    if (ptt_ret == RIG_OK) {
         transmitting_.store(on);  // confirm optimistic value
         pal::log_info("HamlibRadio", on ? "PTT ON (transmitting)" : "PTT OFF (receiving)");
+        trace_cat("set_ptt(%s) -> OK (%.0f ms)", on ? "ON" : "OFF", ms);
     } else {
         transmitting_.store(false);  // revert optimistic store — Hamlib call failed
         pal::log_error("HamlibRadio", "rig_set_ptt(%s) failed", on ? "ON" : "OFF");
+        trace_cat("set_ptt(%s) -> ERROR (%.0f ms)", on ? "ON" : "OFF", ms);
     }
 }
 
@@ -473,11 +522,32 @@ bool HamlibRadio::impl_sync_from_radio() {
     if (!rig_ || !ready_.load()) return false;
 
     freq_t freq = 0;
-    if (rig_get_freq(rig_, RIG_VFO_CURR, &freq) != RIG_OK) return false;
+    {
+        const auto t0 = std::chrono::steady_clock::now();
+        const int ret = rig_get_freq(rig_, RIG_VFO_CURR, &freq);
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        if (ret != RIG_OK) {
+            trace_cat("get_freq -> ERROR %s (%.0f ms)", rigerror(ret), ms);
+            return false;
+        }
+        trace_cat("get_freq -> %.0f Hz (%.0f ms)", static_cast<double>(freq), ms);
+    }
 
     rmode_t mode = RIG_MODE_NONE;
     pbwidth_t bw  = 0;
-    if (rig_get_mode(rig_, RIG_VFO_CURR, &mode, &bw) != RIG_OK) return false;
+    {
+        const auto t0 = std::chrono::steady_clock::now();
+        const int ret = rig_get_mode(rig_, RIG_VFO_CURR, &mode, &bw);
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        if (ret != RIG_OK) {
+            trace_cat("get_mode -> ERROR %s (%.0f ms)", rigerror(ret), ms);
+            return false;
+        }
+        const char* mname = rig_strrmode(mode);
+        trace_cat("get_mode -> %s (%.0f ms)", mname ? mname : "?", ms);
+    }
 
     const auto new_freq = static_cast<uint32_t>(freq);
     bool changed = false;
@@ -555,13 +625,20 @@ int HamlibRadio::assert_mode(RadioMode mode) {
     last_sent_mode_ = mode;   // track the mode on the wire so set_channel can skip unchanged hops
     mode_ever_sent_ = true;
 
+    const auto t0 = std::chrono::steady_clock::now();
     const int mode_ret = rig_set_mode(rig_, RIG_VFO_CURR, target, RIG_PASSBAND_NORMAL);
-    if (mode_ret != RIG_OK)
+    const double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    if (mode_ret != RIG_OK) {
         pal::log_error("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> FAILED: %s",
                        mname ? mname : "?", rigerror(mode_ret));
-    else
+        trace_cat("set_mode(%s) -> ERROR %s (%.0f ms)",
+                  mname ? mname : "?", rigerror(mode_ret), ms);
+    } else {
         pal::log_debug("HamlibRadio", "  assert_mode: rig_set_mode(%s) -> sent",
                        mname ? mname : "?");
+        trace_cat("set_mode(%s) -> OK (%.0f ms)", mname ? mname : "?", ms);
+    }
     return mode_ret;
 }
 

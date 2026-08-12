@@ -1079,6 +1079,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "DEBUG_RX")        { ctrl.set_debug_rx(msg.get_bool("on")); return mj::dump(make_reply(msg, true)); }
+    if (cmd == "CAT_TRACE")       { ctrl.set_cat_trace(msg.get_bool("on")); return mj::dump(make_reply(msg, true)); }
 
     mj::Value r = make_reply(msg, false);
     r.set("error", mj::Value::string("unknown command: " + cmd));
