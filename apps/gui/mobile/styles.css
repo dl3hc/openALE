@@ -838,6 +838,7 @@
     .hc-m > span { color: var(--tx-dim); }
     .hc-m > b { font-weight: 600; font-variant-numeric: tabular-nums; }
     .hc-na { color: var(--tx-dim); font-weight: 400; }
+    .hc-ts { color: var(--tx-dim); font-weight: 500; }
 
     /* ══════════════════════════════════════════════════════════════════════
        ALE LOG

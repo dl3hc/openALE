@@ -975,6 +975,8 @@ function upsertHeard(e) {
     // station heard again bubbles back to the top regardless of array order.
     // ageMin (rounded minutes) is too coarse to order by.
     age_ms:      (typeof e.age_ms === 'number') ? e.age_ms : 0,
+    // Raw LQA-DB timestamp (ms since epoch) — P1-12 "received at" display.
+    ts_ms:       (typeof e.ts_ms === 'number') ? e.ts_ms : 0,
   };
   if (idx >= 0) {
     // Refresh metrics but keep the original "first heard" timestamp.
@@ -1107,6 +1109,11 @@ function renderHeard() {
         : `<b style="color:${qColor(g)}">${text}</b>`;
       return `<div class="hc-m"><span>${label}</span>${val}</div>`;
     };
+    // Plain (non-gradient) metric row — for facts like a timestamp that aren't
+    // a "goodness" measurement, so they shouldn't be dimmed to "—" by metric()'s
+    // g==null fallback.
+    const metricPlain = (label, text) =>
+      `<div class="hc-m"><span>${label}</span><b class="hc-ts">${text}</b></div>`;
 
     return `<div class="heard-card">` +
       `<div class="hc-head">` +
@@ -1119,12 +1126,13 @@ function renderHeard() {
         `<span class="hc-dot">·</span>` +
         `<span class="hc-ch">${fmtChFreqExact(h.freq_hz)}</span>` +
         `<span class="hc-dot">·</span>` +
-        `<span class="hc-age">${ageTxt}</span>` +
+        `<span class="hc-age" title="Received ${fmtLqaTimestamp(h.ts_ms)}">${ageTxt}</span>` +
       `</div>` +
       (canAdd ? `<div class="hc-actions">${addBtn}${callBtn}</div>` : '') +
       `<details class="hc-details"${openAttr} ontoggle="onHeardDetailsToggle(this, ${JSON.stringify(dKey)})">` +
         `<summary><span class="hc-arrow">▸</span> Details</summary>` +
         `<div class="hc-metrics">` +
+          metricPlain('Received', fmtLqaTimestamp(h.ts_ms)) +
           metric('SINAD ↘', h.sinad_from != null ? `+${Math.round(h.sinad_from)}` : null, sinadFromG) +
           metric('SINAD ↗', h.sinad_to   != null ? `+${Math.round(h.sinad_to)}`   : null, sinadToG) +
           metric('BER ↘',   h.ber_from   != null ? h.ber_from.toFixed(1)          : null, berFromG) +
@@ -3661,9 +3669,24 @@ function fmtBerCode(code) {
   return BER_TABLE_A_XIII[c].toExponential(1);
 }
 
+// P1-12: formats the LQA database's raw last_activity_ms (32-bit-wrapped ms
+// since epoch — ALEController::get_all_lqa_entries()/LQADatabase::
+// get_current_time_ms()) as an absolute local time-of-day string. Reconstructs
+// the full timestamp by anchoring to the browser's clock: safe as long as the
+// entry is younger than ~49.7 days (2^32 ms) — LQA entries are pruned well
+// before that (max_age_ms = 25 h, LQAConfig). Returns '—' when unknown (0).
+function fmtLqaTimestamp(u32ms) {
+  if (!u32ms) return '—';
+  const MOD = 4294967296;  // 2^32
+  const nowMs = Date.now();
+  let diff = (nowMs % MOD) - u32ms;
+  if (diff < 0) diff += MOD;
+  return new Date(nowMs - diff).toLocaleTimeString([], { hour12: false });
+}
+
 // Bridge's LQA_LIST format (see ALEController::get_all_lqa_entries()):
 //   freq_hz|station|snr_db|ber|sinad_db|score|age_ms|bilateral_sinad_db|
-//   bilateral_ber|bilateral_mp|display_score|available
+//   bilateral_ber|bilateral_mp|display_score|available|last_activity_ms
 // Four-level model (MIL-STD-188-141B App. A): FROM (snr_db/ber/sinad_db) is the
 // locally MEASURED raw value; bilateral_* is what the peer REPORTED via CMD LQA
 // (A.5.4.2). Per spec: SINAD = dB, higher = better (31 = no measurement); BER
@@ -3740,6 +3763,7 @@ function syncLqaFromBridge() {
         mp:      mpToVal != null ? mpToVal.toFixed(0) + ' ms' : '—',
         age_ms:  (typeof e.age_ms === 'number') ? e.age_ms : 0,
         ageMin:  Math.round(e.age_ms / 60000),
+        ts_ms:   (typeof e.last_activity_ms === 'number') ? e.last_activity_ms : 0,
         available: (typeof e.available === 'number') ? e.available : -1,
       };
     });
@@ -3795,6 +3819,11 @@ function qCell(text, goodness, label) {
     return `<td class="lqa-cell"${dl} style="color:var(--tx-dim)">—</td>`;
   return `<td class="lqa-cell"${dl} style="color:${qColor(goodness)};font-weight:600">${text}</td>`;
 }
+// P1-12: absolute "received at" cell — always shows fmtLqaTimestamp's text
+// (no quality gradient; a timestamp isn't a goodness metric like qCell's cells).
+function tsCell(ms) {
+  return `<td class="lqa-cell" style="color:var(--tx-dim)">${fmtLqaTimestamp(ms)}</td>`;
+}
 // Sounding-conclusion availability badge (1=TIS available, 0=TWAS not, -1=unknown).
 function availBadge(av, label) {
   const dl = label ? ` data-label="${label}"` : '';
@@ -3842,8 +3871,9 @@ function renderLqa() {
       qCell(berToCode    != null ? e.ber_to                       : null, berToG) +
       qCell(e.mp_to      != null ? e.mp_to.toFixed(0) + 'ms'      : null, mpG) +
       qCell(e.ageMin >= 60 ? '>60m' : e.ageMin + 'm', ageG) +
+      tsCell(e.ts_ms) +
       `</tr>`;
-  }).join('') : '<tr><td colspan="10" class="msg-empty">No LQA data yet</td></tr>';
+  }).join('') : '<tr><td colspan="11" class="msg-empty">No LQA data yet</td></tr>';
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
