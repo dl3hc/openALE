@@ -1380,6 +1380,7 @@ function contactClick(idx) {
 function testChannelFromContact(idx) {
   const c = contacts[idx];
   if (!c) return;
+  tcRows = [];   // discard the previous run's rows before opening for a new peer
   tcPeer = c.cs;
   showTestChannelPanel();
 }
