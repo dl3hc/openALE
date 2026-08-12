@@ -590,6 +590,10 @@ void ALEController::wire_callbacks()
 void ALEController::set_radio(pal::IRadio* r)
 {
     radio_ = r;
+    // Carry the current CAT-trace preference over to a (re)attached radio —
+    // e.g. the operator enabled it before a radio connected, or reconnected
+    // to a different backend mid-session.
+    if (radio_) radio_->set_cat_trace_enabled(cat_trace_);
     // Gate the scanner's hop on the radio actually having settled on the channel.
     // is_tune_settled() is true for sync backends (mocks, blocking serial radios)
     // so the gate is a no-op there; async backends (HamlibRadio) return false
@@ -601,6 +605,12 @@ void ALEController::set_radio(pal::IRadio* r)
     sm_.set_hop_ready_query([this]() {
         return !radio_ || radio_->is_tune_settled();
     });
+}
+
+void ALEController::set_cat_trace(bool on)
+{
+    cat_trace_ = on;
+    if (radio_) radio_->set_cat_trace_enabled(on);
 }
 
 // ── Radio / VFO control (manual tuning) ────────────────────────────────────────
@@ -1384,6 +1394,7 @@ void ALEController::update(uint32_t now_ms)
     tick_offline_completion();
     tick_lqa_update(now_ms);
     tick_mode_verify(now_ms);
+    tick_cat_trace(now_ms);
 }
 
 // Check delays after a (non-scanning) channel/mode command: first check catches
@@ -1442,6 +1453,18 @@ void ALEController::tick_mode_verify(uint32_t now_ms)
     } else {
         mode_verify_deadline_ms_ = 0;
     }
+}
+
+// Relays the attached radio's buffered CAT-trace lines (see
+// pal::IRadio::drain_cat_trace) into the status stream, each prefixed so they
+// read as a distinct diagnostics category rather than blending into ordinary
+// ALE status lines. No-op — including no lock on the radio's trace buffer —
+// whenever tracing is off or no radio is attached.
+void ALEController::tick_cat_trace(uint32_t /*now_ms*/)
+{
+    if (!cat_trace_ || !radio_) return;
+    for (const auto& line : radio_->drain_cat_trace())
+        emit_status("[CAT] " + line);
 }
 
 void ALEController::tick_ptt_timing(uint32_t now_ms)

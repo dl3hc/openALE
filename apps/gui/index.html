@@ -591,6 +591,19 @@
               setting) picks the TX input. Leave "Radio default" for non-Kenwood rigs.</div>
           </div>
 
+          <hr class="fsep">
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">CAT/Rig Traffic</div>
+              <div class="ftoggle-desc">Logs rigctld/Hamlib commands, responses/errors and timing ("[CAT] ...") to the status stream</div>
+            </div>
+            <label class="ftoggle">
+              <input type="checkbox" id="cfgCatTrace">
+              <span class="ftrack"></span>
+            </label>
+          </div>
+
           <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
             <button class="btn-sm" onclick="testRig()">↺ Test Connection</button>
             <button class="btn-sm accent" id="rigConnectBtn" onclick="connectRig()"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg> Connect</button>

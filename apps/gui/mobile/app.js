@@ -2593,6 +2593,14 @@ function applyLogLevelToBridge() {
   bridgeSend('LOG_LEVEL_SET', { level });
 }
 
+// Diagnostics: relay the radio backend's CAT/rig traffic (rigctld/Hamlib
+// commands, responses/errors, timing) into the status stream as "[CAT] ..."
+// lines. Off by default — opt-in per P1-10.
+function applyCatTraceToBridge() {
+  if (!bridgeConnected) return;
+  bridgeSend('CAT_TRACE', { on: document.getElementById('cfgCatTrace')?.checked ?? false });
+}
+
 function saveSettings() {
   applyManualAcceptToBridge();
   applyTimingToBridge();        // Timing + Calling Policy → core
@@ -2603,6 +2611,7 @@ function saveSettings() {
   applyScanDetectToBridge();    // scan-stop squelch enable + margin → core (A.5.3.3)
   applyEnhFreqSelectToBridge(); // Enhanced Freq-Select → core (A.5.6.3.2)
   applyLogLevelToBridge();      // HamlibRadio debug logging → core
+  applyCatTraceToBridge();      // CAT/rig traffic tracing → core
   applySoundAuto();             // interval may have changed → re-assert periodic mode
   updateSelfHeader();
   closeSettings();
