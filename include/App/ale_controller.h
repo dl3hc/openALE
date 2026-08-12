@@ -189,6 +189,12 @@ public:
     /** Update per-net policy (dwell, scan/sound enables, interval, calling-length C). */
     bool update_net(const Net& updated);
 
+    /** Rename a net (old_name → new_name) and propagate to every place that
+     *  references a net by name: active_scan_net_, auto_sounding_net_, and every
+     *  Contact::net_members list. Reconfigures the sounding timer if the renamed
+     *  net was the auto-sounding net. Auto-saves station_file_ if set. */
+    bool rename_net(const std::string& old_name, const std::string& new_name);
+
     /** Active scan/sound net — set by the GUI net picker; scopes start_scanning() to this net's
      *  channels and dwell. Falls back to all enabled channels when empty. */
     void        set_active_scan_net(const std::string& name) { active_scan_net_ = name; }

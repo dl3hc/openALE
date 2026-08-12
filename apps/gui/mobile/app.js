@@ -1468,7 +1468,7 @@ function goScanning() {
 // ALEController::add_contact()'s valid_channels format.
 let contacts = [];
 let selectedContacts = [];   // multi-select array of contact objects; 1 → 1:1 call, >1 → group call
-let editingContactIdx = -1;
+let editingContactCs = null;
 
 function renderContacts() {
   const q  = (document.getElementById('contactSearch')?.value || '').toUpperCase();
@@ -1548,20 +1548,27 @@ function syncContactsFromBridge() {
 }
 
 function openContactEditor(idx) {
-  editingContactIdx = (typeof idx === 'number') ? idx : -1;
-  const c = editingContactIdx >= 0 ? contacts[editingContactIdx]
-                                   : { cs:'', name:'', fav:false };
-  document.getElementById('ceCs').value    = c.cs;
-  document.getElementById('ceName').value  = c.name || '';
-  document.getElementById('ceFav').checked = !!c.fav;
-  document.getElementById('ceDelete').style.display = editingContactIdx >= 0 ? '' : 'none';
-  document.getElementById('ceTitle').textContent    = editingContactIdx >= 0 ? 'Edit Contact' : 'Add Contact';
+  const c = (typeof idx === 'number') ? contacts[idx] : null;
+  editingContactCs = c ? c.cs : null;
+  const cc = c || { cs:'', name:'', fav:false };
+  document.getElementById('ceCs').value    = cc.cs;
+  document.getElementById('ceName').value  = cc.name || '';
+  document.getElementById('ceFav').checked = !!cc.fav;
+  document.getElementById('ceDelete').style.display = editingContactCs !== null ? '' : 'none';
+  document.getElementById('ceTitle').textContent    = editingContactCs !== null ? 'Edit Contact' : 'Add Contact';
   document.getElementById('contactModal').classList.remove('hidden');
   document.getElementById('ceCs').focus();
 }
 
-function closeContactEditor() { document.getElementById('contactModal').classList.add('hidden'); }
+function closeContactEditor() {
+  document.getElementById('contactModal').classList.add('hidden');
+  editingContactCs = null;
+}
 
+// editingContactCs (not a raw index) is re-resolved here against the *current*
+// contacts array — the editor modal can stay open across an async round trip
+// (e.g. a Heard-Station auto-promotion elsewhere resyncing `contacts`), so a
+// held index could point at the wrong entry by the time Save/Delete fires.
 function saveContact() {
   const cs = (document.getElementById('ceCs').value || '').toUpperCase().trim();
   if (!cs) { document.getElementById('ceCs').focus(); return; }
@@ -1570,8 +1577,9 @@ function saveContact() {
     name: document.getElementById('ceName').value.trim(),
     fav:  document.getElementById('ceFav').checked,
   };
-  const prevCs = editingContactIdx >= 0 ? contacts[editingContactIdx].cs : null;
-  if (editingContactIdx >= 0) contacts[editingContactIdx] = c;
+  const editingIdx = editingContactCs !== null ? contacts.findIndex(x => x.cs === editingContactCs) : -1;
+  const prevCs = editingIdx >= 0 ? contacts[editingIdx].cs : null;
+  if (editingIdx >= 0) contacts[editingIdx] = c;
   else { contacts.push(c); selectedContacts = [c]; }
   closeContactEditor();
   renderContacts();
@@ -1583,10 +1591,11 @@ function saveContact() {
 
 function deleteContact() {
   let removedCs = null;
-  if (editingContactIdx >= 0) {
-    removedCs = contacts[editingContactIdx].cs;
-    selectedContacts = selectedContacts.filter(x => x !== contacts[editingContactIdx]);
-    contacts.splice(editingContactIdx, 1);
+  const editingIdx = editingContactCs !== null ? contacts.findIndex(x => x.cs === editingContactCs) : -1;
+  if (editingIdx >= 0) {
+    removedCs = contacts[editingIdx].cs;
+    selectedContacts = selectedContacts.filter(x => x !== contacts[editingIdx]);
+    contacts.splice(editingIdx, 1);
   }
   closeContactEditor();
   renderContacts();
@@ -2337,7 +2346,7 @@ function renderNets() {
 <div class="net-card${isActive ? ' active' : ''}">
   <div class="net-card-hdr">
     <input class="net-name-inp" value="${safeName}"
-      oninput="netSet(${i},'name',this.value)" title="Net name — click to rename">
+      onblur="netCommitName(${i})" title="Net name — click to rename">
     ${isActive ? '<span class="net-active-badge">ACTIVE</span>' : ''}
     <span class="net-count-badge">${memberCnt} ch</span>
     <button class="net-del-btn" onclick="delNet(${i})" title="Delete net">
@@ -2391,11 +2400,44 @@ function renderNets() {
   }).join('');
 }
 
-// Net rename has no direct Core primitive (NetStore is add_net(name)/
-// del_net(name) only) — kept local-only here rather than faking a rename
-// via delete+recreate+reassign, which would briefly drop the net and isn't
-// worth the edge-case risk for what's a rare admin action.
-function netSet(i, field, val) { nets[i][field] = val; }
+// Commit a net-rename edit on blur: validates non-empty + unique locally,
+// pushes NET_RENAME to core, and only mutates local state (or reverts the
+// input) once core confirms — mirrors chCommitId()'s channel-id-rename flow.
+function netCommitName(i) {
+  const n = nets[i];
+  if (!n) return;
+  const card = document.querySelectorAll('#netList .net-card')[i];
+  const inp = card && card.querySelector('.net-name-inp');
+  if (!inp) return;
+  const newName = (inp.value || '').trim();
+  const oldName = n.name;
+  if (!newName || newName === oldName) { inp.value = oldName; return; }
+  if (nets.some((o, j) => j !== i && o.name === newName)) {
+    aleLogInfo('Net name "' + newName + '" already in use — keeping ' + oldName);
+    inp.value = oldName;
+    return;
+  }
+  if (bridgeConnected) {
+    bridgeSend('NET_RENAME', { old_name: oldName, new_name: newName }, (r) => {
+      if (!r || !r.ok) {
+        inp.value = oldName;
+        aleLogInfo('Net rename to "' + newName + '" rejected — keeping ' + oldName);
+        return;
+      }
+      applyNetRename(i, oldName, newName);
+    });
+  } else {
+    applyNetRename(i, oldName, newName);
+  }
+}
+
+function applyNetRename(i, oldName, newName) {
+  nets[i].name = newName;
+  if (activeNet === oldName) activeNet = newName;
+  renderNets();
+  renderSoundPanel();
+  renderNetPill();
+}
 
 function netPolicySet(i, field, val) {
   nets[i][field] = val;

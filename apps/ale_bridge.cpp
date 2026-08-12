@@ -591,6 +591,9 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     }
     if (cmd == "NET_ADD")      { return pc(msg, ctrl, "CMD:ADD_NET " + msg.get_string("name")); }
     if (cmd == "NET_DEL")      { return pc(msg, ctrl, "CMD:DEL_NET " + msg.get_string("name")); }
+    if (cmd == "NET_RENAME") {
+        return pc(msg, ctrl, "CMD:RENAME_NET " + msg.get_string("old_name") + " " + msg.get_string("new_name"));
+    }
     if (cmd == "NET_ASSIGN") {
         return pc(msg, ctrl, "CMD:ASSIGN_CHANNEL " + msg.get_string("net") + " " + msg.get_string("channel_id"));
     }

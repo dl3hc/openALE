@@ -146,6 +146,16 @@ bool NetStore::update_net(const Net& updated) {
     return true;
 }
 
+bool NetStore::rename_net(const std::string& old_name, const std::string& new_name) {
+    if (old_name == new_name) return true;
+    if (new_name.empty()) return false;
+    if (find(new_name)) return false;             // collision
+    Net* n = find_mutable(old_name);
+    if (!n) return false;                          // unknown old_name
+    n->name = new_name;
+    return true;
+}
+
 bool NetStore::assign_channel(const std::string& net_name, const std::string& channel_id) {
     Net* n = find_mutable(net_name);
     if (!n) return false;

@@ -134,6 +134,11 @@ public:
     /** Update per-net policy fields (channel_ids unchanged). Returns false if not found. */
     bool update_net(const Net& updated);
 
+    /** Rename a net (old_name → new_name). Rejects empty new_name, an unknown
+     *  old_name, or a collision with an existing net name. No-op (true) if
+     *  new_name == old_name. */
+    bool rename_net(const std::string& old_name, const std::string& new_name);
+
     /** Remove channel_id from every net's member list (e.g. after deleting a channel). */
     void unassign_channel_everywhere(const std::string& channel_id);
 

@@ -3614,6 +3614,31 @@ bool ALEController::update_net(const Net& updated)
     return ok;
 }
 
+bool ALEController::rename_net(const std::string& old_name, const std::string& new_name)
+{
+    if (old_name == new_name) return true;
+    if (new_name.empty()) return false;
+    if (!net_store_.rename_net(old_name, new_name)) return false;
+
+    if (active_scan_net_ == old_name) active_scan_net_ = new_name;
+    if (auto_sounding_net_ == old_name) {
+        auto_sounding_net_ = new_name;
+        refresh_auto_sounding_interval();
+    }
+
+    const std::vector<Contact> all_contacts = contact_store_.all();   // snapshot first
+    for (const auto& c : all_contacts) {
+        if (std::find(c.net_members.begin(), c.net_members.end(), old_name) == c.net_members.end())
+            continue;
+        Contact updated = c;
+        std::replace(updated.net_members.begin(), updated.net_members.end(), old_name, new_name);
+        contact_store_.add_or_update(updated);
+    }
+
+    if (!station_file_.empty()) save_station_file(station_file_);
+    return true;
+}
+
 // ── Group-call rosters ────────────────────────────────────────────────────────
 
 bool ALEController::add_group_roster(const std::string& name)
@@ -3885,6 +3910,16 @@ std::string ALEController::process_command(const std::string& raw)
         if (!del_net(name))
             return "ERROR: net '" + name + "' not found";
         return "OK: net " + name + " removed";
+    }
+    if (cmd.rfind("CMD:RENAME_NET ", 0) == 0) {
+        std::istringstream iss(cmd.substr(15));   // "CMD:RENAME_NET ".size()
+        std::string old_name, new_name;
+        iss >> old_name >> new_name;
+        if (old_name.empty() || new_name.empty())
+            return "ERROR: CMD:RENAME_NET <old_name> <new_name>";
+        if (!rename_net(old_name, new_name))
+            return "ERROR: net '" + old_name + "' not found or '" + new_name + "' already exists";
+        return "OK: net " + old_name + " renamed to " + new_name;
     }
     if (cmd.rfind("CMD:ASSIGN_CHANNEL ", 0) == 0) {
         std::istringstream iss(cmd.substr(19));
@@ -4169,6 +4204,7 @@ std::string ALEController::process_command(const std::string& raw)
             "  -- Nets --\n"
             "  CMD:ADD_NET <name>                       add a net\n"
             "  CMD:DEL_NET <name>                       remove a net\n"
+            "  CMD:RENAME_NET <old_name> <new_name>     rename a net\n"
             "  CMD:ASSIGN_CHANNEL <net> <id>            assign a channel ID to a net\n"
             "  CMD:UNASSIGN_CHANNEL <net> <id>          remove a channel ID from a net\n"
             "  CMD:LIST_NETS                            list all nets and their channels\n"
