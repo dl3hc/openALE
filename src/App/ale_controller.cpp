@@ -2850,6 +2850,17 @@ void ALEController::enable_automatic_sounding(bool on)
 
 void ALEController::set_automatic_sounding(bool on, const std::string& net_name)
 {
+    // Idempotency guard: the GUI re-asserts SOUND_AUTO on almost every settings
+    // save and net (re)selection, even when the on/off + net target hasn't
+    // actually changed. Without this, each redundant call re-logged "Periodic
+    // multi-channel sounding on/off", burying real ALE events in status spam,
+    // and reset the sounding timer on every no-op "on" reassertion. Interval-
+    // only changes are picked up separately via refresh_auto_sounding_interval()
+    // (NET_UPDATE / net-rename handlers), so skipping here is safe.
+    const bool new_on = on && !net_name.empty();
+    const std::string new_net = on ? net_name : std::string{};
+    if (new_on == auto_sounding_on_ && new_net == auto_sounding_net_) return;
+
     // Cancel an active warning popup before changing state.
     if (sounding_warning_active_) {
         ale::SoundingWarningData swd{ auto_sounding_net_.c_str(), 0, "cancel" };
