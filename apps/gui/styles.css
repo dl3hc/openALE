@@ -155,6 +155,12 @@
       border: 1px solid rgba(0,220,140,0.22);
       border-radius: var(--r-md);
     }
+    /* Word-grid-lock ("Sync") amber highlight — the whole chip lights up, not
+       just the 7px dot, so a lock event is noticeable at a glance. */
+    .status-chip.sync {
+      background: rgba(255,167,38,.12);
+      border-color: rgba(255,167,38,.30);
+    }
 
     .busy-chip {
       display: flex;
@@ -189,9 +195,8 @@
     .dot.handshake{ background: var(--s-handshake); animation: blink 0.5s infinite; }
     .dot.linked   { background: var(--s-linked); }
     .dot.incoming { background: var(--s-incoming); animation: blink 0.38s infinite; }
-    .dot.acquiring{ background: var(--s-scanning); animation: blink 0.9s infinite; }
-    .dot.locked   { background: var(--s-linked); }
     .dot.decoding { background: var(--accent); animation: blink 0.3s infinite; }
+    .dot.sync     { background: var(--s-error); }
 
     @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }
     @keyframes pulse-red {

@@ -194,9 +194,8 @@
     .dot.handshake{ background: var(--s-handshake); animation: blink 0.5s infinite; }
     .dot.linked   { background: var(--s-linked); }
     .dot.incoming { background: var(--s-incoming); animation: blink 0.38s infinite; }
-    .dot.acquiring{ background: var(--s-scanning); animation: blink 0.9s infinite; }
-    .dot.locked   { background: var(--s-linked); }
     .dot.decoding { background: var(--accent); animation: blink 0.3s infinite; }
+    .dot.sync     { background: var(--s-error); }
 
     @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }
     @keyframes pulse-red {
@@ -1453,6 +1452,10 @@
       text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap;
     }
     .word-lock-badge .dot { width: 6px; height: 6px; }
+    /* Word-grid-lock ("Sync") amber highlight — text tints along with the dot
+       so a lock event is noticeable at a glance (no box here, unlike desktop's
+       chip, to avoid a layout jump in the tight CALL-tab freq hero). */
+    .word-lock-badge.sync { color: #ffa726; }
 
     /* ── Header Network pill (active-net selector; replaces the old SINAD pill).
        Sits in .hdr-right as its own bordered control, kept visually separate from
