@@ -1,6 +1,7 @@
 # Build output
 build/
 build_*/
+installer/
 
 # CTest scratch + diagnostic WAV dumps (tools/tx_wav_dump)
 Testing/
