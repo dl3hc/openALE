@@ -2369,6 +2369,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
 
 void ALEController::on_received_word(const ALEWord& word)
 {
+    if (word.valid) last_word_decoded_ms_ = now_ms_;  // P1-11: drives SignalQuality::decoding
     rx_log_word(word);
     rx_track_signal_quality(word);
     rx_accumulate_caller_identity(word);
@@ -3098,6 +3099,13 @@ ALEController::SignalQuality ALEController::get_current_signal_quality() const
     q.votes    = static_cast<int8_t>(last_votes_);
     q.fec_errors = last_fec_errors_;
     q.sinad_db = last_sinad_db_;  // Goertzel SINAD (A.5.4.1.2); upgraded below if LQA entry exists
+    q.word_locked = demodulator_.is_word_locked();
+    // "Decoding" = a valid word landed within the last ~2.5 word periods (392 ms/word
+    // at 49 symbols x 8 ms — A.5.2.6.3). Wide enough to bridge one missed/uncorrectable
+    // word without flickering back to "Locked", tight enough to read as live activity.
+    static constexpr uint32_t DECODE_ACTIVE_WINDOW_MS = 1000;
+    q.decoding = q.word_locked && last_word_decoded_ms_ != 0
+              && (now_ms_ - last_word_decoded_ms_) < DECODE_ACTIVE_WINDOW_MS;
 
     const Channel* ch = sm_.get_current_channel();
     if (ch) {
