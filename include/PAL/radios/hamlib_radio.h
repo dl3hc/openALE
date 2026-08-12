@@ -108,6 +108,15 @@ public:
     bool    set_mode(RadioMode mode)            override;
 
     /**
+     * @brief Setzt nur die TX-Leistung (0-100%); kehrt sofort zurück.
+     *
+     * No-op (returns true optimistically, hardware unchanged) if the
+     * connected rig doesn't support RIG_LEVEL_RFPOWER — see
+     * supports_power_control().
+     */
+    bool    set_power(int pct)                  override;
+
+    /**
      * @brief Stellt eine Synchronisation vom Radio in die Warteschlange.
      *
      * Gibt immer false zurück; das Ergebnis wird asynchron im Worker-Thread
@@ -152,6 +161,11 @@ public:
     void set_cat_trace_enabled(bool on)         override;
     std::vector<std::string> drain_cat_trace()  override;
 
+    // True once start() has confirmed the connected rig advertises
+    // RIG_LEVEL_RFPOWER support (rig_has_set_level). Safe to read from any
+    // thread — set exactly once in start(), before the worker launches.
+    bool supports_power_control() const override;
+
 private:
     bool configure_port();
     void apply_line_policy();
@@ -168,16 +182,22 @@ private:
     // Hintergrund-Verify (tick_mode_verify -> sync_from_radio). Nur vom Worker.
     int  assert_mode(RadioMode mode);
 
+    // Sends `pct` (0-100%) as RIG_LEVEL_RFPOWER exactly once — the power
+    // analogue of assert_mode(). No-op (returns RIG_OK without touching the
+    // wire) if power_supported_ is false. Only vom Worker.
+    int  assert_power(int pct);
+
     // ── Async-Worker-Kommandotypen ────────────────────────────────────────────
     struct CmdSetChannel   { Channel ch; };
     struct CmdSetFrequency { uint32_t hz; };
     struct CmdSetMode      { RadioMode mode; };
+    struct CmdSetPower     { int pct; };
     struct CmdSetPtt       { bool on; };
     struct CmdSync         {};
     struct CmdFlush        { std::shared_ptr<std::promise<void>> done; };
 
     using RadioCommand = std::variant<
-        CmdSetChannel, CmdSetFrequency, CmdSetMode, CmdSetPtt, CmdSync, CmdFlush>;
+        CmdSetChannel, CmdSetFrequency, CmdSetMode, CmdSetPower, CmdSetPtt, CmdSync, CmdFlush>;
 
     void enqueue(RadioCommand cmd);    ///< thread-sicher; no-op wenn Worker nicht läuft
     void worker_main();
@@ -188,6 +208,7 @@ private:
     bool impl_set_channel(const Channel& ch);
     bool impl_set_frequency(uint32_t hz);
     bool impl_set_mode(RadioMode mode);
+    bool impl_set_power(int pct);
     void impl_set_ptt(bool on);
     bool impl_sync_from_radio();
 
@@ -198,6 +219,21 @@ private:
     SerialLinePolicy policy_;
 
     RIG* rig_ = nullptr;
+
+    // Set once in start() via rig_has_set_level(RFPOWER) — a capability check
+    // only, no I/O — before the worker thread launches. Read from any thread
+    // afterward (never written again). See IRadio::supports_power_control().
+    // Gates the WRITE path (assert_power/set_power/impl_set_channel) only.
+    std::atomic<bool> power_supported_{false};
+
+    // Set once in start() via rig_has_get_level(RFPOWER) — separate from
+    // power_supported_ above because Hamlib tracks set- and get-capability as
+    // independent bits, and plenty of real rig backends can SET RFPOWER over
+    // CAT but never implement reading it back (most rigs don't report actual
+    // TX power via CAT at all). Gates ONLY the periodic readback in
+    // impl_sync_from_radio() — reusing power_supported_ there would poll a
+    // GET the backend never claimed to support, failing forever.
+    std::atomic<bool> power_readback_supported_{false};
 
     // ── Worker-only State (nach start() kein konkurrierender Zugriff nötig) ──
     // last_mode_cmd_ und current_channel_ werden ausschließlich vom Worker-Thread

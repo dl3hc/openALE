@@ -771,6 +771,33 @@ public:
     bool set_mode(const std::string& mode);
 
     /**
+     * Set TX RF power (manual override, independent of any channel's
+     * configured power_pct). Clamped to [0,100]. On a radio backend that
+     * doesn't support power control (see power_control_supported()), the
+     * command is a no-op on the hardware — check power_control_supported()
+     * before presenting this as available (RF-safety requirement).
+     * @param pct Power level 0-100%
+     * @return false if no radio is attached
+     */
+    bool set_power(int pct);
+
+    /**
+     * Get current RF power in percent (see get_current_channel()).
+     * @return radio_->get_channel().power if a radio is attached, else 100
+     */
+    uint8_t get_current_power() const;
+
+    /**
+     * True if the attached radio's CAT backend can actually apply RF power
+     * commands to the hardware (e.g. hamlib rig_has_set_level(RFPOWER) was
+     * true for the connected rig). False (including no radio attached) means
+     * set_power()/a channel's power_pct are silently not applied — callers
+     * (GUI, bridge) must reflect this rather than presenting a power control
+     * that appears to work but doesn't.
+     */
+    bool power_control_supported() const;
+
+    /**
      * Atomically tune the attached radio to an explicit frequency AND mode in a
      * SINGLE set_channel() call — the exact path scanning (sm_.set_channel_callback)
      * and step_channel() use. Manual channel selection must go through here, NOT

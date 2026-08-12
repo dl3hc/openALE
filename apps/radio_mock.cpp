@@ -29,6 +29,8 @@
  *   s / \get_split_vfo  → liefert Split-Status (0 + VFOA) + RPRT 0
  *   T <0|1> / \set_ptt  → schaltet PTT
  *   t / \get_ptt        → liefert PTT-Status
+ *   L RFPOWER <0..1> / \set_level → setzt TX-Leistung (Bruchteil der Maximalleistung)
+ *   l RFPOWER / \get_level        → liefert TX-Leistung + RPRT 0
  *   \get_lock_mode      → "RPRT -4" (Default, QUISK-artig) bzw. "0" + RPRT 0
  *                         mit --lock-mode ok (rigctld-artig)
  *   Q / q               → Verbindung beenden
@@ -90,6 +92,7 @@ static double      s_freq_hz = 14'000'000.0;
 static std::string s_mode    = "USB";
 static int         s_bw      = 2400;
 static int         s_ptt     = 0;   // 0 = RX, 1 = TX
+static double      s_power   = 1.0; // RIG_LEVEL_RFPOWER, fraction of max [0.0 .. 1.0]
 
 // ── Logging ──────────────────────────────────────────────────────────────────
 
@@ -153,8 +156,8 @@ static std::string make_dump_state()
         "0\n"              // attenuator list end
         "0x00000003\n"     // has_get_func
         "0x00000003\n"     // has_set_func
-        "0x00000001\n"     // has_get_level (STRENGTH)
-        "0x00000001\n"     // has_set_level
+        "0x00001001\n"     // has_get_level (PREAMP | RFPOWER)
+        "0x00001001\n"     // has_set_level (PREAMP | RFPOWER)
         "0\n"              // has_get_parm
         "0\n"              // has_set_parm
         "\n"
@@ -328,6 +331,50 @@ static std::string handle_line(const std::string& raw)
         char buf[16];
         std::snprintf(buf, sizeof(buf), "%d\nRPRT 0\n", s_ptt);
         return buf;
+    }
+
+    // ── Levels (RFPOWER only) ────────────────────────────────────────────
+    // Simple:   "L <level> <val>"  /  "l <level>"
+    // VFO mode: "L <vfo> <level> <val>"  /  "l <vfo> <level>" (tolerated like F/M,
+    // though chk_vfo="0" above means hamlib never actually sends the VFO form).
+    if (cmd.rfind("set_level", 0) == 0 ||
+        (cmd.size() >= 2 && cmd[0] == 'L' && cmd[1] == ' '))
+    {
+        const std::string args = trim(cmd.substr(cmd.find(' ') + 1));
+        std::istringstream ss(args);
+        std::string tok1, tok2, tok3;
+        ss >> tok1;
+        std::string level_name, val_str;
+        if (is_vfo_token(tok1)) { ss >> tok2 >> tok3; level_name = tok2; val_str = tok3; }
+        else                    { ss >> tok2;         level_name = tok1; val_str = tok2; }
+
+        if (level_name == "RFPOWER") {
+            s_power = std::stod(val_str);
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "[TRX] Power %.0f%%", s_power * 100.0);
+            log_event(buf);
+        } else if (g_verbose) {
+            std::printf("[IGN] set_level %s (unhandled)\n", level_name.c_str());
+            std::fflush(stdout);
+        }
+        return "RPRT 0\n";
+    }
+    if (cmd.rfind("get_level", 0) == 0 ||
+        (cmd.size() >= 2 && cmd[0] == 'l' && cmd[1] == ' '))
+    {
+        const std::string args = trim(cmd.substr(cmd.find(' ') + 1));
+        std::istringstream ss(args);
+        std::string tok1, tok2;
+        ss >> tok1;
+        std::string level_name = tok1;
+        if (is_vfo_token(tok1)) { ss >> tok2; level_name = tok2; }
+
+        if (level_name == "RFPOWER") {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.3f\nRPRT 0\n", s_power);
+            return buf;
+        }
+        return "RPRT 0\n";  // unhandled level, benign — same as the general catch-all
     }
 
     // ── Catch-all ─────────────────────────────────────────────────────────

@@ -1544,9 +1544,9 @@
       background: var(--accent-glow); border-color: rgba(0,220,140,0.3);
     }
     .rk-enter:hover { background: var(--accent-glow-hi); }
-    .rk-mode, .rk-step { font-size: 10px; padding: 7px 0; }
+    .rk-mode, .rk-step, .rk-pwr { font-size: 10px; padding: 7px 0; }
     .rk-tune { font-size: 14px; padding: 8px 0; }
-    .rk-mode.active, .rk-step.active {
+    .rk-mode.active, .rk-step.active, .rk-pwr.active {
       background: var(--accent); color: #041008; border-color: var(--accent); font-weight: 700;
     }
 
@@ -1554,7 +1554,15 @@
       display: flex; align-items: center; flex-wrap: wrap; gap: 5px;
       margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--border);
     }
-    .radio-steps .rk-step { flex: 1; min-width: 34px; padding: 6px 0; }
+    .radio-steps .rk-step, .radio-steps .rk-pwr { flex: 1; min-width: 34px; padding: 6px 0; }
+    .radio-pwr-val {
+      font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--accent);
+      min-width: 32px; text-align: center;
+    }
+    /* RF-safety: a rig that doesn't advertise RFPOWER support must show the
+       control as visibly inert, not silently accept clicks that do nothing. */
+    #radioPowerRow.unsupported { opacity: 0.4; }
+    #radioPowerRow.unsupported .rk { cursor: not-allowed; }
 
     /* Sounding dropdown (mirrors .radio-panel) */
     #soundPanel { width: 260px; }

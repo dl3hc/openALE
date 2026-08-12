@@ -3166,6 +3166,8 @@ let radioStep    = 1000;          // Hz per UP/DOWN nudge
 let radioEntry       = '';     // keypad direct-entry buffer (digits)
 let radioEntryActive = false;  // true when entry mode is on (even if buffer is empty after CLR)
 let pttOn        = false;
+let radioPower          = 100;   // commanded/actual TX power %, kept in sync via syncVfoFromBridge()
+let radioPowerSupported = true;  // false once the bridge reports the connected rig lacks RFPOWER
 
 function fmtRadioFreq(hz) {
   if (hz >= 1e9) {
@@ -3204,6 +3206,18 @@ function updateRadioDisplay() {
   const cf = document.getElementById('callFreqLbl');  if (cf) cf.textContent = fmtRadioFreq(radioFreqHz) + ' ' + freqUnit(radioFreqHz) + ' · ' + radioMode;
   document.querySelectorAll('.rk-mode').forEach(b => b.classList.toggle('active', b.dataset.mode === radioMode));
   document.querySelectorAll('.rk-step').forEach(b => b.classList.toggle('active', +b.dataset.step === radioStep));
+  document.querySelectorAll('.rk-pwr').forEach(b => b.classList.toggle('active', +b.dataset.pct === radioPower));
+  const pv = document.getElementById('radioPowerVal'); if (pv) pv.textContent = radioPower + '%';
+  const prow = document.getElementById('radioPowerRow');
+  if (prow) {
+    // Locked (no live CAT link) hides the reason behind the generic VFO lock;
+    // connected-but-unsupported gets its own explicit tooltip so the operator
+    // knows this rig specifically can't take power commands (RF safety).
+    const unsupported = bridgeConnected && !radioPowerSupported;
+    prow.classList.toggle('unsupported', unsupported);
+    prow.title = unsupported ? 'Not supported by this rig' : 'RF transmit power';
+    prow.querySelectorAll('button').forEach(b => b.disabled = radioCtrlLocked() || unsupported);
+  }
 }
 
 function toggleRadioPanel() {
@@ -3245,6 +3259,8 @@ function syncVfoFromBridge() {
     radioMode   = r.mode;
     radioStep   = r.tune_step_hz;
     pttOn       = r.ptt;
+    radioPower          = r.power_pct;
+    radioPowerSupported = r.power_supported;
     applyPttUi();
     updateRadioDisplay();
   });
@@ -3330,6 +3346,15 @@ function radioSetMode(m) {
   if (radioCtrlLocked()) return;
   if (bridgeConnected) { bridgeSend('VFO_SET_MODE', { mode: m }, () => syncVfoFromBridge()); return; }
   radioMode = m; updateRadioDisplay();
+}
+function radioSetPower(pct) {
+  if (radioCtrlLocked() || (bridgeConnected && !radioPowerSupported)) return;
+  pct = Math.max(0, Math.min(100, pct));
+  if (bridgeConnected) { bridgeSend('VFO_SET_POWER', { pct }, () => syncVfoFromBridge()); return; }
+  radioPower = pct; updateRadioDisplay();
+}
+function radioNudgePower(delta) {
+  radioSetPower(radioPower + delta);
 }
 function radioSetStep(hz){
   if (radioCtrlLocked()) return;
