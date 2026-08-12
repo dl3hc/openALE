@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Help · openALE</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  html, body { height: auto; min-height: 100vh; overflow-y: auto; }
+  .app { height: auto; min-height: 100vh; }
+  .help-main { flex: 1; display: flex; min-height: 0; margin: 14px 20px 20px; background: var(--bg2); border: 1px solid var(--border-md); border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--shadow-md); }
+  .help-body { display: flex; flex: 1; min-height: 0; width: 100%; }
+  .help-body .snav { width: 200px; flex-shrink: 0; }
+  .help-body .scontent { flex: 1; overflow-y: auto; max-height: calc(100vh - 90px); padding: 28px 36px; }
+  .help-kicker { font-family: var(--mono); font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--tx-dim); margin-bottom: 4px; }
+  .help-h { font-family: var(--sans); font-size: 21px; font-weight: 600; color: var(--tx-bright); margin: 2px 0 12px; }
+  .help-lead { color: var(--tx-muted); font-size: 13px; line-height: 1.6; margin-bottom: 20px; max-width: 760px; }
+  .help-steps { counter-reset: step; list-style: none; display: flex; flex-direction: column; gap: 16px; margin: 0 0 24px; max-width: 760px; padding: 0; }
+  .help-steps li { counter-increment: step; position: relative; padding-left: 40px; }
+  .help-steps li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-glow); border: 1px solid rgba(0,220,140,0.30); color: var(--accent); font-family: var(--mono); font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+  .help-steps b { color: var(--tx-bright); }
+  .help-steps p { margin: 3px 0 0; font-size: 12.5px; color: var(--tx-muted); line-height: 1.55; }
+  .help-note { background: var(--bg3); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--r-md); padding: 12px 16px; font-size: 12.5px; color: var(--tx-muted); line-height: 1.55; margin: 16px 0; max-width: 760px; }
+  .help-note strong { color: var(--tx-bright); }
+  .help-warn { border-left-color: var(--s-error, #e05a5a); }
+  .help-warn strong { color: var(--s-error, #e05a5a); }
+  .help-field { margin-bottom: 18px; max-width: 760px; }
+  .help-field .flabel { display: block; margin-bottom: 3px; }
+  .help-field p { font-size: 12.5px; color: var(--tx-muted); line-height: 1.55; margin: 0; }
+  .help-fieldgroup { border-top: 1px solid var(--border); padding-top: 18px; margin-top: 18px; }
+  .help-fieldgroup:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+  .help-glossary dt { font-family: var(--mono); color: var(--accent); font-size: 12.5px; font-weight: 700; margin-top: 14px; }
+  .help-glossary dd { color: var(--tx-muted); font-size: 12.5px; margin: 3px 0 0; line-height: 1.55; max-width: 700px; }
+  .help-glossary dt:first-child { margin-top: 0; }
+  .help-btn-tag { display: inline-block; background: var(--bg3); border: 1px solid var(--border-md); border-radius: var(--r-sm); padding: 1px 7px; font-family: var(--mono); font-size: 11px; color: var(--accent); }
+  .help-toc { margin: 0 0 20px; padding-left: 18px; max-width: 760px; }
+  .help-toc li { font-size: 12.5px; color: var(--tx-muted); margin-bottom: 4px; }
+  .help-toc a { color: var(--tx-muted); text-decoration: none; }
+  .help-toc a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="logo">
+      <div class="logo-mark">openALE</div>
+      <div class="logo-divider"></div>
+      <div class="logo-meta">
+        <div class="logo-std">MIL-STD-188-141B · 2G ALE</div>
+        <div class="logo-self">HELP &amp; SETUP GUIDE</div>
+      </div>
+    </div>
+    <div class="hdr-right">
+      <a class="hdr-btn" href="index.html">← Back to openALE</a>
+    </div>
+  </header>
+
+  <div class="help-main">
+    <div class="help-body">
+      <nav class="snav">
+        <div class="snav-section-hdr">Getting Started</div>
+        <div class="snav-item active" data-sec="quickstart" onclick="showSec('quickstart')">
+          <svg class="snav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+          <span class="snav-label">Quick Start</span>
+        </div>
+        <div class="snav-item" data-sec="glossary" onclick="showSec('glossary')">
+          <svg class="snav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          <span class="snav-label">Glossary</span>
+        </div>
+
+        <div class="snav-section-hdr">Station</div>
+        <div class="snav-item" data-sec="identity" onclick="showSec('identity')"><span class="snav-icon">◆</span><span class="snav-label">Identity</span></div>
+        <div class="snav-item" data-sec="voice" onclick="showSec('voice')"><span class="snav-icon">◆</span><span class="snav-label">Voice</span></div>
+        <div class="snav-item" data-sec="radio" onclick="showSec('radio')"><span class="snav-icon">◆</span><span class="snav-label">Radio / CAT</span></div>
+        <div class="snav-item" data-sec="location" onclick="showSec('location')"><span class="snav-icon">◆</span><span class="snav-label">Location</span></div>
+
+        <div class="snav-section-hdr">ALE</div>
+        <div class="snav-item" data-sec="channels" onclick="showSec('channels')"><span class="snav-icon">◆</span><span class="snav-label">Channels</span></div>
+        <div class="snav-item" data-sec="nets" onclick="showSec('nets')"><span class="snav-icon">◆</span><span class="snav-label">Nets</span></div>
+        <div class="snav-item" data-sec="timing" onclick="showSec('timing')"><span class="snav-icon">◆</span><span class="snav-label">Timing</span></div>
+        <div class="snav-item" data-sec="policy" onclick="showSec('policy')"><span class="snav-icon">◆</span><span class="snav-label">Policy</span></div>
+        <div class="snav-item" data-sec="lqa" onclick="showSec('lqa')"><span class="snav-icon">◆</span><span class="snav-label">LQA</span></div>
+
+        <div class="snav-section-hdr">Modem</div>
+        <div class="snav-item" data-sec="audio" onclick="showSec('audio')"><span class="snav-icon">◆</span><span class="snav-label">Audio</span></div>
+        <div class="snav-item" data-sec="fec" onclick="showSec('fec')"><span class="snav-icon">◆</span><span class="snav-label">FEC / Sync</span></div>
+
+        <div class="snav-section-hdr">Advanced</div>
+        <div class="snav-item" data-sec="logging" onclick="showSec('logging')"><span class="snav-icon">◆</span><span class="snav-label">Logging</span></div>
+        <div class="snav-item" data-sec="files" onclick="showSec('files')"><span class="snav-icon">◆</span><span class="snav-label">Files</span></div>
+        <div class="snav-item" data-sec="misc" onclick="showSec('misc')"><span class="snav-icon">◆</span><span class="snav-label">Misc / Sounding</span></div>
+
+        <div class="snav-section-hdr">Help</div>
+        <div class="snav-item" data-sec="troubleshooting" onclick="showSec('troubleshooting')">
+          <svg class="snav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+          <span class="snav-label">Troubleshooting</span>
+        </div>
+      </nav>
+
+      <div class="scontent" id="helpScontent">
+
+        <section class="ssec active" data-sec="quickstart">
+          <div class="help-kicker">Getting Started</div>
+          <div class="help-h">Quick Start</div>
+          <p class="help-lead">openALE is a software console for MIL-STD-188-141B 2nd-Generation Automatic Link Establishment (2G ALE). It talks to a radio through Hamlib/CAT and to the operator through this browser page. Follow the steps below to get a fresh install talking on the air.</p>
+
+          <div class="help-note"><strong>Mobile shortcut:</strong> on the mobile layout, open the <span class="help-btn-tag">☰ More</span> menu on first run — a 4-step Setup Wizard walks through Callsign, Audio, Radio/CAT and Channels automatically. The steps below cover the same ground manually and apply to both layouts.</div>
+
+          <ol class="help-steps">
+            <li><b>Set your station callsign.</b>
+              <p>Open <span class="help-btn-tag">Settings → Identity</span> and add a Self Address (your station's ALE callsign, letters/digits, no spaces). This is broadcast as SELF in the header and is what other stations call to reach you.</p>
+            </li>
+            <li><b>Connect your radio.</b>
+              <p>Open <span class="help-btn-tag">Settings → Radio / CAT</span>, pick your Hamlib rig model, fill in the network host/port or serial port, then click <span class="help-btn-tag">Connect</span>. Use <span class="help-btn-tag">Test Connection</span> first if you just want to confirm reachability without taking control of the radio.</p>
+            </li>
+            <li><b>Pick your audio devices.</b>
+              <p>Open <span class="help-btn-tag">Settings → Audio</span> and select the RX Input (from the radio) and TX Output (to the radio) devices. Run the level meter to confirm audio is actually flowing before you rely on scanning.</p>
+            </li>
+            <li><b>Load a channel plan.</b>
+              <p>Open <span class="help-btn-tag">Settings → Files</span> and load a <code>.ale</code> channel file — the <code>nets/</code> folder ships with ready-made HFLINK presets (<code>hflink_usa.ale</code>, <code>hflink_eur.ale</code>, <code>hflink_uk.ale</code>, <code>hflink_ja.ale</code>, <code>hflink_aus.ale</code>). This populates the Channels and Nets tabs.</p>
+            </li>
+            <li><b>Review Channels and Nets.</b>
+              <p><span class="help-btn-tag">Settings → Channels</span> lists every frequency openALE will scan; <span class="help-btn-tag">Settings → Nets</span> groups channels together with a dwell/sounding schedule. Adjust or add entries for your own frequency plan if the presets don't fit.</p>
+            </li>
+            <li><b>Save &amp; Apply.</b>
+              <p>Click <span class="help-btn-tag">Save &amp; Apply</span> at the bottom of Settings to push everything to the running bridge. See the <a class="help-toc-link" onclick="showSec('files')">Files</a> section for what is and isn't remembered between restarts.</p>
+            </li>
+            <li><b>Start scanning.</b>
+              <p>Close Settings and click the <span class="help-btn-tag">Scan</span> toggle in the header. openALE will step through your channel plan, sound periodically, and listen for calls.</p>
+            </li>
+            <li><b>Make a call.</b>
+              <p>Pick a destination in the Net dropdown or type an address directly, then use the call control in the header to initiate a handshake. Linked stations appear with a LINKED status and an active channel.</p>
+            </li>
+          </ol>
+
+          <div class="help-note">New to ALE terminology? Check the <a class="help-toc-link" onclick="showSec('glossary')">Glossary</a> tab for plain-language definitions of SELF, LQA, SINAD, Sounding and more.</div>
+        </section>
+
+        <section class="ssec" data-sec="glossary">
+          <div class="help-kicker">Getting Started</div>
+          <div class="help-h">Glossary</div>
+          <p class="help-lead">Plain-language definitions for the ALE and radio jargon used throughout openALE.</p>
+          <dl class="help-glossary">
+            <dt>SELF</dt><dd>Your station's own ALE address (callsign), shown in the header. A station may have more than one Self Address, each restricted to particular channels if needed.</dd>
+            <dt>Net</dt><dd>A named group of channels sharing one dwell/sounding schedule and a common calling list — the unit you actually "join" and scan against.</dd>
+            <dt>Channel</dt><dd>One RX/TX frequency pair (with mode) that ALE can scan, sound and call on. Channels can be restricted to receive-only, transmit-only, or excluded from calling/sounding.</dd>
+            <dt>Scanning</dt><dd>Continuously stepping through a channel list listening for calls addressed to you or to AllCall.</dd>
+            <dt>Sounding</dt><dd>A station periodically transmitting an unaddressed test signal so other stations can measure the link quality to it on that channel, without a full handshake.</dd>
+            <dt>LQA (Link Quality Analysis)</dt><dd>The database of measured link quality (BER/SINAD-derived scores) between stations and channels, built up from soundings and handshakes. Used to automatically pick the best channel when calling.</dd>
+            <dt>SINAD</dt><dd>Signal to Noise-And-Distortion ratio, in dB — one of the raw measurements behind an LQA score. Higher is better.</dd>
+            <dt>BER</dt><dd>Bit Error Rate measured from the ALE waveform's redundant (Golay) encoding — the other raw measurement behind an LQA score. Lower is better.</dd>
+            <dt>Golay(24,12) / FEC votes</dt><dd>The forward error correction code ALE words are encoded with. Each bit is sent with redundancy; the demodulator "votes" across repeats to correct errors — see the FEC/Sync section.</dd>
+            <dt>Handshake</dt><dd>The 3-way call/response/acknowledge exchange that establishes (links) a connection between two stations on a chosen channel.</dd>
+            <dt>AMD (Automatic Message Display)</dt><dd>A short free-text data message (up to ~90 characters) sent over an established or unlinked ALE channel — the closest thing ALE has to a text message.</dd>
+            <dt>AllCall</dt><dd>The reserved broadcast address every ALE station listens to in addition to its own — used for calls to "anyone listening."</dd>
+            <dt>Hamlib / CAT</dt><dd>Computer Aided Transceiver control — the library and protocol openALE uses to remote-control your radio's frequency, mode and PTT over serial or network.</dd>
+            <dt>PTT Lead / Tail</dt><dd>Extra time openALE keys the radio before audio starts (lead) and keeps it keyed after audio ends (tail), to absorb relay/amplifier turn-on latency.</dd>
+            <dt>Dwell Time</dt><dd>How long a scan pauses on each channel while listening, before moving to the next.</dd>
+            <dt>Grid Locator (Maidenhead)</dt><dd>A compact alphanumeric geographic coordinate (e.g. <code>EM12</code>) used as an alternative to decimal lat/lon in the Location tab.</dd>
+            <dt>SFI (Solar Flux Index)</dt><dd>A measure of solar activity that influences HF propagation — optionally factored into LQA channel scoring.</dd>
+            <dt>Relink</dt><dd>Automatically re-establishing a link on a better channel when the current one's measured quality drops below a threshold.</dd>
+            <dt>Enhanced Frequency Select</dt><dd>Using the LQA database (instead of just scan order) to choose the best-scoring channel when placing a call.</dd>
+            <dt>LBT (Listen Before Transmit)</dt><dd>A busy-channel check performed immediately before transmitting, to avoid keying up over another station.</dd>
+          </dl>
+        </section>
+
+        <section class="ssec" data-sec="identity">
+          <div class="help-kicker">Station</div>
+          <div class="help-h">Identity</div>
+          <p class="help-lead">Defines who this station is on the air. Every Self Address here is one you can be called on.</p>
+          <div class="help-field">
+            <span class="flabel">Self Addresses table</span>
+            <p>Lists every ALE address this station answers to, its enabled/disabled status, and which channels it is valid on (leave blank for "all channels"). The header's SELF readout shows the first enabled address. Use <span class="help-btn-tag">+ Add Self Address</span> to add another — useful for a station that answers to more than one callsign or role address.</p>
+          </div>
+          <div class="help-field">
+            <span class="flabel">Station Name</span>
+            <p>A free-text label for your own reference (e.g. site name). It is not transmitted over ALE and does not need to be unique.</p>
+          </div>
+        </section>
+
+        <section class="ssec" data-sec="voice">
+          <div class="help-kicker">Station</div>
+          <div class="help-h">Voice</div>
+          <p class="help-lead">Configures the browser-side microphone/speaker path used for voice passthrough once a link is established — independent from the modem's RX/TX audio devices under Settings → Audio.</p>
+          <div class="help-field"><span class="flabel">Microphone / Speaker device</span><p>Select the browser input/output devices used for voice once linked. Click <span class="help-btn-tag">Refresh Devices</span> if a newly-plugged device isn't listed.</p></div>
+          <div class="help-field"><span class="flabel">Armed</span><p>When on, voice passthrough activates automatically as soon as a link is established, rather than requiring a manual step.</p></div>
+          <div class="help-field"><span class="flabel">PTT Direction</span><p>Controls whether pressing the on-screen PTT keys the radio for voice, data, or both, depending on your operating procedure.</p></div>
+          <div class="help-field"><span class="flabel">Mic Test</span><p>Plays back your microphone locally so you can confirm levels before going on the air.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="radio">
+          <div class="help-kicker">Station</div>
+          <div class="help-h">Radio / CAT</div>
+          <p class="help-lead">Controls how openALE remote-controls your transceiver via Hamlib.</p>
+          <div class="help-field"><span class="flabel">Rig Model</span><p>Select your transceiver from the Hamlib model list. This determines which CAT command set is used.</p></div>
+          <div class="help-field"><span class="flabel">Connection type — Network vs Serial</span><p>Network rigs (e.g. rigctld, IP-connected transceivers) need Host and Port. Serial rigs need a Port name plus Baud Rate and, for some models, DTR/RTS line settings and a stabilization delay after opening the port.</p></div>
+          <div class="help-field"><span class="flabel">PTT Method</span><p>Chooses how transmit is keyed: via the CAT command set itself, via a separate serial control line, or via an external PTT port. Use PTT Port to specify that separate line when it isn't CAT.</p></div>
+          <div class="help-field"><span class="flabel">TX Audio Input</span><p>On rigs that accept audio over the same CAT/USB link (rather than a sound-card cable), selects which input the transmit audio is injected into.</p></div>
+          <div class="help-field"><span class="flabel">CAT / Rig Traffic trace</span><p>An opt-in diagnostic toggle that prints every raw CAT command/response as "[CAT] ..." lines in the ALE Log — useful when a rig isn't responding as expected.</p></div>
+          <div class="help-field"><span class="flabel">Test Connection vs Connect</span><p><strong>Test Connection</strong> opens the port/socket just long enough to confirm the rig answers, then releases it. <strong>Connect</strong> takes and holds control of the radio for actual operation — do this before scanning or calling.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="location">
+          <div class="help-kicker">Station</div>
+          <div class="help-h">Location</div>
+          <p class="help-lead">Your station's geographic position, used to improve LQA-based channel scoring against propagation conditions.</p>
+          <div class="help-field"><span class="flabel">Position Source</span><p>Choose None (position unused), manual Lat/Lon, a Maidenhead Grid Locator, or a live GPS feed (gpsd or a serial NMEA source).</p></div>
+          <div class="help-field"><span class="flabel">Use SFI in scoring</span><p>When enabled, factors the current Solar Flux Index into LQA channel scoring alongside measured link data.</p></div>
+          <div class="help-field"><span class="flabel">Apply</span><p>Pushes the location settings to the running bridge immediately, without waiting for the modal's Save &amp; Apply.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="channels">
+          <div class="help-kicker">ALE</div>
+          <div class="help-h">Channels</div>
+          <p class="help-lead">The list of individual RX/TX frequency pairs openALE can scan, sound, and call on.</p>
+          <div class="help-field"><span class="flabel">ID</span><p>A short label identifying the channel (shown in the frequency display and channel steppers in the header).</p></div>
+          <div class="help-field"><span class="flabel">RX / TX Frequency &amp; Mode</span><p>The receive and transmit frequencies (simplex channels use the same value for both) and the ALE waveform mode used on it.</p></div>
+          <div class="help-field"><span class="flabel">Direction flags</span><p>Mark a channel rx_only or tx_only to exclude it from the half it shouldn't be used for — e.g. a monitor-only frequency.</p></div>
+          <div class="help-field"><span class="flabel">Inhibit flags</span><p>Independently exclude a channel from calling, sounding, or reporting/logging, while still leaving it available for the other operations.</p></div>
+          <div class="help-field"><span class="flabel">ALE-only / short LBT</span><p>Marks a channel as ALE-only, applying a shorter Listen-Before-Transmit window appropriate for a channel with no voice traffic to avoid.</p></div>
+          <div class="help-field"><span class="flabel">+ Add Channel</span><p>Appends a new blank channel row to configure. Remember to save — see the <a class="help-toc-link" onclick="showSec('files')">Files</a> section for how Channels are persisted.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="nets">
+          <div class="help-kicker">ALE</div>
+          <div class="help-h">Nets</div>
+          <p class="help-lead">A Net groups one or more Channels under a shared scanning/sounding schedule and a common name shown in the header's Net picker.</p>
+          <div class="help-field"><span class="flabel">Dwell Time</span><p>How long the scanner listens on each member channel per pass before moving on.</p></div>
+          <div class="help-field"><span class="flabel">Sounding Interval</span><p>How often this net's channels are sounded, in minutes — keeps the LQA database current for automatic channel selection.</p></div>
+          <div class="help-field"><span class="flabel">Calling Length override</span><p>Overrides the global calling-segment duration (Timing tab) for this net specifically, useful for nets with unusually congested or clean channels.</p></div>
+          <div class="help-field"><span class="flabel">+ Add Net</span><p>Creates a new net; assign existing channels to it from the Channels tab or when editing the net.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="timing">
+          <div class="help-kicker">ALE</div>
+          <div class="help-h">Timing</div>
+          <p class="help-lead">Protocol timing parameters, mostly aligned to MIL-STD-188-141B defaults. Change these only if you understand the handshake state machine — values that are too tight will cause missed handshakes with other implementations.</p>
+          <div class="help-field"><span class="flabel">Call Timeout</span><p>How long to wait for a response after placing a call before giving up.</p></div>
+          <div class="help-field"><span class="flabel">Handshake Timeout</span><p>Maximum time allowed for the full call/response/acknowledge exchange to complete.</p></div>
+          <div class="help-field"><span class="flabel">Link Idle Timeout</span><p>How long an established link may sit idle (no data/AMD/voice) before it is automatically torn down.</p></div>
+          <div class="help-field"><span class="flabel">AMD Wait</span><p>Delay before considering an AMD send complete, allowing time for the far end to acknowledge.</p></div>
+          <div class="help-field"><span class="flabel">Sounding Warning Lead</span><p>How far in advance of a scheduled sounding to log/flag it, useful when coordinating manual operation around automatic soundings.</p></div>
+          <div class="help-field"><span class="flabel">Turn-Around Time</span><p>The gap left between transmit and receive direction changes during a handshake, to allow radio and relay switching to settle.</p></div>
+          <div class="help-field"><span class="flabel">Max Tune Time</span><p>Upper bound on how long an antenna tuner is given to complete a tune cycle before ALE proceeds regardless.</p></div>
+          <div class="help-field"><span class="flabel">PTT Lead / PTT Tail</span><p>Extra key-up time before audio starts and extra key-down time after audio ends, to absorb amplifier/relay latency. If handshakes fail intermittently on a slow-switching rig or amp, increasing these first is usually the fix.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="policy">
+          <div class="help-kicker">ALE</div>
+          <div class="help-h">Policy</div>
+          <p class="help-lead">Controls how incoming calls are accepted.</p>
+          <div class="help-field"><span class="flabel">Auto-Accept</span><p>When on, incoming calls that pass the filters below link automatically. When off, every call requires manual acceptance within the call-timeout window.</p></div>
+          <div class="help-field"><span class="flabel">Accept Any Call</span><p>Accepts calls from stations not in any known contact/roster list, not just recognized ones.</p></div>
+          <div class="help-field"><span class="flabel">Accept AllCall</span><p>Accepts broadcast calls to the AllCall address in addition to calls addressed specifically to one of your Self Addresses.</p></div>
+          <div class="help-field"><span class="flabel">Accept AMD</span><p>Accepts inbound AMD text messages automatically rather than requiring a linked session first.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="lqa">
+          <div class="help-kicker">ALE</div>
+          <div class="help-h">LQA</div>
+          <p class="help-lead">Link Quality Analysis — the measured-quality database that lets openALE automatically pick the best channel to call a station on.</p>
+          <div class="help-field"><span class="flabel">Record LQA</span><p>When on, every sounding and handshake updates the LQA database with a fresh score for that station/channel pair.</p></div>
+          <div class="help-field"><span class="flabel">Auto-Relink + threshold</span><p>Automatically re-links an established call onto a better-scoring channel once the current channel's LQA score drops below the configured threshold.</p></div>
+          <div class="help-field"><span class="flabel">Enhanced Frequency-Select</span><p>Uses LQA scores (rather than plain scan order) to choose which channel to call a station on.</p></div>
+          <div class="help-field"><span class="flabel">Request LQA</span><p>Actively asks a station to exchange LQA data rather than waiting for a passive sounding.</p></div>
+          <div class="help-field"><span class="flabel">LQA Age Limit</span><p>Scores older than this are treated as stale and excluded from automatic channel selection.</p></div>
+          <div class="help-field"><span class="flabel">LQA table (FROM / TO / Score / TIS / TWAS)</span><p>FROM and TO identify the station pair; Score is the derived quality figure; TIS ("this is") / TWAS ("that was") show the most recent vs. previous measurement for that pair/channel. Use Refresh to re-pull from the bridge, Clear to wipe the database.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="audio">
+          <div class="help-kicker">Modem</div>
+          <div class="help-h">Audio</div>
+          <p class="help-lead">The sound-card devices the ALE modem itself uses to demodulate/modulate the waveform — separate from the Voice tab's passthrough devices.</p>
+          <div class="help-field"><span class="flabel">RX Input / TX Output</span><p>Select the audio interface connected to your radio's receive and transmit audio. On a typical setup this is a USB sound-card or interface, not your computer's built-in mic/speakers.</p></div>
+          <div class="help-field"><span class="flabel">Level meter</span><p>Shows live input level once a device is selected — use it to confirm the radio's audio is actually reaching openALE before trusting scan/decode results.</p></div>
+          <div class="help-field"><span class="flabel">TX Volume</span><p>Adjusts transmit audio output level — set with your radio's ALC in mind; too hot causes distortion the far station will fail to decode.</p></div>
+          <div class="help-field"><span class="flabel">Connect Audio / Level Test / Refresh List</span><p>Connect Audio opens the selected devices for use. Level Test runs a short local loopback/level check. Refresh List re-scans the system for newly attached devices.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="fec">
+          <div class="help-kicker">Modem</div>
+          <div class="help-h">FEC / Sync</div>
+          <p class="help-lead">Controls the Golay(24,12) forward-error-correction voting used to recover ALE words from noisy audio.</p>
+          <div class="help-field"><span class="flabel">Correction mode (3/4, 2/5, 1/6, 0/7)</span><p>Each ALE word is sent with 7-fold redundancy; these modes trade how many of the 7 repeats may disagree (be "corrected") before a word is accepted versus rejected as unrecoverable. More correction tolerance decodes weaker signals but risks accepting a wrong word.</p></div>
+          <div class="help-field"><span class="flabel">Min Unanimous Votes</span><p>Out of the 49 possible bit votes per word, the minimum that must agree for a bit to be trusted outright before Golay correction is applied.</p></div>
+          <div class="help-field"><span class="flabel">Adaptive FEC</span><p>When on, openALE adjusts correction strictness automatically based on recent channel conditions instead of using a fixed mode.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="logging">
+          <div class="help-kicker">Advanced</div>
+          <div class="help-h">Logging</div>
+          <p class="help-lead">Controls how much detail openALE writes to its log file and the on-screen ALE Log panel.</p>
+          <div class="help-field"><span class="flabel">Log Level</span><p>From least to most verbose. Raise this when diagnosing a problem; leave it low for normal operation to keep the log readable.</p></div>
+          <div class="help-field"><span class="flabel">Log File</span><p>The path logs are written to on disk, in addition to the in-app ALE Log panel.</p></div>
+          <div class="help-field"><span class="flabel">RX Debug Output</span><p>Dumps additional raw demodulator diagnostics — intended for troubleshooting decode issues, not routine use.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="files">
+          <div class="help-kicker">Advanced</div>
+          <div class="help-h">Files</div>
+          <p class="help-lead">Three independent files back different parts of openALE's configuration. They are <strong>not</strong> all handled the same way — read this section carefully.</p>
+
+          <div class="help-fieldgroup">
+            <div class="help-field"><span class="flabel">Configuration File (ale.conf) — Export / Import</span><p>A portable snapshot of settings: timing, policy, LQA toggles, self addresses, audio device names. Nothing loads this automatically — click <span class="help-btn-tag">Export</span> to save a snapshot, <span class="help-btn-tag">Import</span> to restore one.</p></div>
+
+            <div class="help-field"><span class="flabel">Channel File (.ale) — Load / Save</span><p>Holds your Channels and Nets.</p>
+              <div class="help-note help-warn"><strong>Important:</strong> this file is not loaded automatically at startup, and editing Channels/Nets and clicking Save &amp; Apply does <em>not</em> write this file. After adding or changing channels/nets, you must explicitly click <span class="help-btn-tag">Save</span> here to keep them, and explicitly <span class="help-btn-tag">Load</span> this file again the next time you start openALE — otherwise your channel plan will be gone on restart.</div>
+            </div>
+
+            <div class="help-field"><span class="flabel">LQA Database (lqa.bin)</span><p>The one file that genuinely takes care of itself: it auto-loads at startup and auto-saves on shutdown (see also Misc → Auto-save LQA on Exit). No manual action is needed for LQA history to persist.</p></div>
+          </div>
+        </section>
+
+        <section class="ssec" data-sec="misc">
+          <div class="help-kicker">Advanced</div>
+          <div class="help-h">Misc / Sounding</div>
+          <p class="help-lead">Miscellaneous behavior that doesn't fit elsewhere: automatic sounding, channel-busy detection, and scan squelch calibration.</p>
+          <div class="help-field"><span class="flabel">Auto-save LQA on Exit</span><p>When on, the LQA database is written to <code>lqa.bin</code> automatically on shutdown, in addition to its automatic load at startup.</p></div>
+          <div class="help-field"><span class="flabel">Automatic Sounding</span><p>Lets openALE transmit scheduled soundings across a net's channels on its own, per each net's Sounding Interval, without operator action.</p></div>
+          <div class="help-field"><span class="flabel">LBT Busy Detection + margin</span><p>Enables a Listen-Before-Transmit check immediately before keying up; the margin sets how far above the noise floor a signal must be to count as "busy."</p></div>
+          <div class="help-field"><span class="flabel">LBT Override</span><p>Allows transmitting even when LBT reports the channel busy — use with care, as this can step on another station.</p></div>
+          <div class="help-field"><span class="flabel">Scan Stop Squelch + margin / Calibrate</span><p>Sets the signal threshold that pauses the scanner on a channel with activity. Click Calibrate to have openALE sample the current noise floor and suggest a margin automatically.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="troubleshooting">
+          <div class="help-kicker">Help</div>
+          <div class="help-h">Troubleshooting</div>
+          <p class="help-lead">Common first-run and operational issues.</p>
+          <div class="help-field"><span class="flabel">"Bridge Offline" flashes briefly on load</span><p>Normal — the page is reconnecting its WebSocket to the bridge. It should clear within a few seconds if openALE is actually running; if it doesn't clear, confirm the bridge process is up and reachable on this port.</p></div>
+          <div class="help-field"><span class="flabel">Radio / Scan controls are greyed out</span><p>Radio/CAT isn't connected yet. Go to <span class="help-btn-tag">Settings → Radio / CAT</span> and click <span class="help-btn-tag">Connect</span> — Test Connection alone only checks reachability, it doesn't take control of the rig.</p></div>
+          <div class="help-field"><span class="flabel">No stations ever appear in Heard Stations</span><p>Confirm audio is actually arriving (Settings → Audio → run the level meter), that a net/channel is selected, and that Scan is running in the header.</p></div>
+          <div class="help-field"><span class="flabel">Channels/Nets are gone after restarting openALE</span><p>Expected with the current persistence behavior — see the <a class="help-toc-link" onclick="showSec('files')">Files</a> section. Load your <code>.ale</code> file explicitly each session, or re-export/import it as needed.</p></div>
+          <div class="help-field"><span class="flabel">Test Channel shows failures on every channel</span><p>The remote peer must actually be reachable on each tested frequency — real propagation and timing (band conditions, time of day) affect the result just as they would a live sounding.</p></div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function showSec(id) {
+  document.querySelectorAll('.snav-item').forEach(function (el) {
+    el.classList.toggle('active', el.dataset.sec === id);
+  });
+  document.querySelectorAll('.ssec').forEach(function (el) {
+    el.classList.toggle('active', el.dataset.sec === id);
+  });
+  var scontent = document.getElementById('helpScontent');
+  if (scontent) scontent.scrollTop = 0;
+  history.replaceState(null, '', '#' + id);
+}
+window.addEventListener('DOMContentLoaded', function () {
+  var id = (location.hash || '').replace('#', '');
+  if (id && document.querySelector('.ssec[data-sec="' + id + '"]')) showSec(id);
+});
+</script>
+</body>
+</html>
