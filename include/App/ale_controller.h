@@ -976,6 +976,9 @@ public:
         float multipath_ms = 0.0f; // Multipath delay in ms
         int8_t votes = 0;          // Unanimous votes (0-48)
         int fec_errors = 0;        // FEC correction count
+        bool word_locked = false;  // Demodulator word-grid lock (P1-11 diagnostics)
+        bool decoding = false;     // word_locked AND a valid word committed within
+                                    // DECODE_ACTIVE_WINDOW_MS (P1-11 diagnostics)
     };
     SignalQuality get_current_signal_quality() const;
 
@@ -1214,6 +1217,11 @@ private:
     bool                     debug_rx_   = false;
     int                      dbg_peak_   = 0;   // running peak |sample| since last report
     uint32_t                 dbg_count_  = 0;   // samples accumulated since last report
+
+    // Word-lock diagnostics (P1-11): timestamp of the last VALID committed word
+    // (on_received_word), used to derive SignalQuality::decoding — "actively
+    // decoding" vs. merely grid-locked between words. 0 = none yet this session.
+    uint32_t                 last_word_decoded_ms_ = 0;
 
     // CAT-traffic diagnostics (set_cat_trace) — see tick_cat_trace()
     bool                     cat_trace_  = false;

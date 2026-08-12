@@ -773,6 +773,8 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("multipath_ms", mj::Value::number(q.multipath_ms));
         r.set("votes", mj::Value::number(q.votes));
         r.set("fec_errors", mj::Value::number(q.fec_errors));
+        r.set("word_locked", mj::Value::boolean(q.word_locked));
+        r.set("decoding", mj::Value::boolean(q.decoding));
         return mj::dump(r);
     }
 

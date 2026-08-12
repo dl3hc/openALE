@@ -198,9 +198,24 @@ function qualityLabel(q) {
 }
 
 // Poll SIGNAL_QUALITY for the active-link quality panel (bars + label).
+// Reflects the modem's word-grid lock (P1-11) — SIGNAL_QUALITY's word_locked
+// + decoding fields — as the badge under the CALL tab's frequency readout.
+// Three states: still hunting (idle, scanning, or noise) -> "Acquiring lock";
+// grid-locked but between words -> "Locked"; a valid word landed in the last
+// ~1s (see DECODE_ACTIVE_WINDOW_MS server-side) -> "Decoding".
+function applyWordLock(locked, decoding) {
+  const dot = document.getElementById('wordLockDot');
+  const txt = document.getElementById('wordLockText');
+  const state = decoding ? 'decoding' : (locked ? 'locked' : 'acquiring');
+  const label = decoding ? 'Decoding'  : (locked ? 'Locked'  : 'Acquiring lock');
+  if (dot) dot.className = 'dot ' + state;
+  if (txt) txt.textContent = label;
+}
+
 function pollSignalQuality() {
   bridgeSend('SIGNAL_QUALITY', {}, (r) => {
     if (!r.ok) return;
+    applyWordLock(!!r.word_locked, !!r.decoding);
     const sinad = Math.max(0, Math.min(30, Math.round(r.sinad_db)));
     // Rating is BER-led (A.5.4.1.1): votes = unanimous 2/3 count (0–48, 48=clean),
     // higher=better. SINAD (shown in dB) only refines it, so a flawless decode is

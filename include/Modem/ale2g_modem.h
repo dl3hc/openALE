@@ -169,6 +169,12 @@ public:
     }
     bool enabled() const { return enabled_; }
 
+    /// True once the receiver has grid-locked onto an ALE word stream on the
+    /// current channel (WordGridTracker::is_grid_locked()) — false while still
+    /// acquiring, and reset by reset()/a channel hop/set_enabled(false). For
+    /// GUI diagnostics display (P1-11): "Acquiring lock" vs "Locked".
+    bool is_word_locked() const { return tracker_.is_grid_locked(); }
+
     /** Feed PCM samples (8 kHz, mono, 16-bit). May invoke word_cb_. */
     void push_samples(const int16_t* samples, uint32_t count);
 

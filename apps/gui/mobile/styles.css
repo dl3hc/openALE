@@ -194,6 +194,9 @@
     .dot.handshake{ background: var(--s-handshake); animation: blink 0.5s infinite; }
     .dot.linked   { background: var(--s-linked); }
     .dot.incoming { background: var(--s-incoming); animation: blink 0.38s infinite; }
+    .dot.acquiring{ background: var(--s-scanning); animation: blink 0.9s infinite; }
+    .dot.locked   { background: var(--s-linked); }
+    .dot.decoding { background: var(--accent); animation: blink 0.3s infinite; }
 
     @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }
     @keyframes pulse-red {
@@ -1443,6 +1446,12 @@
       font-family: var(--mono); font-size: 8px; color: var(--tx-bright);
       text-transform: uppercase; letter-spacing: 0.13em; line-height: 1.2; white-space: nowrap;
     }
+    .word-lock-badge {
+      display: flex; align-items: center; justify-content: center; gap: 5px;
+      margin-top: 4px; font-family: var(--mono); font-size: 8px; color: var(--tx-dim);
+      text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap;
+    }
+    .word-lock-badge .dot { width: 6px; height: 6px; }
 
     /* ── Header Network pill (active-net selector; replaces the old SINAD pill).
        Sits in .hdr-right as its own bordered control, kept visually separate from
@@ -2170,6 +2179,7 @@
     font-size: 9px; font-family: var(--mono); color: var(--tx-dim);
     letter-spacing: 0.06em; text-transform: uppercase;
   }
+  [data-mob-tab="call"] .mob-freq .word-lock-badge { font-size: 9px; margin-top: 3px; }
 
   /* ── CALL hero CTA + call-mode sheet + target line ── */
   /* The selected-contact target line sits just above the CTA so the operator
