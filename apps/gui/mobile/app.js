@@ -934,6 +934,12 @@ let heardStations = [];  // { addr, freq_hz, ts, score, available, sinad_from, s
 // session so syncLqaFromBridge's mirror step doesn't re-add them on the next
 // LQA_LIST sync. Reset only by clearLqa() (full DB clear).
 let heardDeleted = new Set();
+// Keys ('addr|freq_hz') whose Details <details> panel is currently expanded.
+// renderHeard() rebuilds the list's innerHTML on every live update (station
+// heard again, metrics refreshed, …), which would otherwise reset any open
+// <details> back to collapsed; re-applying this set keeps a user's expanded
+// card open across those refreshes.
+let heardDetailsOpen = new Set();
 
 function upsertHeard(e) {
   const idx = heardStations.findIndex(h => h.addr === e.addr && h.freq_hz === e.freq_hz);
@@ -967,6 +973,7 @@ function upsertHeard(e) {
 
 function deleteHeard(addr, freqHz) {
   heardDeleted.add(addr + '|' + freqHz);
+  heardDetailsOpen.delete(addr + '|' + freqHz);
   heardStations = heardStations.filter(h => !(h.addr === addr && h.freq_hz === freqHz));
   renderHeard();
 }
@@ -974,7 +981,15 @@ function deleteHeard(addr, freqHz) {
 function clearHeard() {
   heardStations.forEach(h => heardDeleted.add(h.addr + '|' + h.freq_hz));
   heardStations = [];
+  heardDetailsOpen.clear();
   renderHeard();
+}
+
+// <details ontoggle> handler — mirrors a card's expand/collapse state into
+// heardDetailsOpen so the next renderHeard() rebuild can restore it.
+function onHeardDetailsToggle(el, key) {
+  if (el.open) heardDetailsOpen.add(key);
+  else heardDetailsOpen.delete(key);
 }
 
 // One-click "add heard station to address book" from a heard-row button.
@@ -1056,6 +1071,9 @@ function renderHeard() {
     const mpG        = (h.mp_to != null) ? 1 - Math.min(1, h.mp_to / 6) : null;
     const ageTxt     = h.ageMin >= 60 ? '>60m' : h.ageMin + 'm';
 
+    const dKey = h.addr + '|' + h.freq_hz;
+    const openAttr = heardDetailsOpen.has(dKey) ? ' open' : '';
+
     // Only rows with a real callsign can be called or added to the address book.
     const canAdd = h.addr && h.addr !== '(sounding)';
     const inBook = canAdd && contacts.some(c => c.cs.toUpperCase() === h.addr.toUpperCase());
@@ -1089,7 +1107,7 @@ function renderHeard() {
         `<span class="hc-age">${ageTxt}</span>` +
       `</div>` +
       (canAdd ? `<div class="hc-actions">${addBtn}${callBtn}</div>` : '') +
-      `<details class="hc-details">` +
+      `<details class="hc-details"${openAttr} ontoggle="onHeardDetailsToggle(this, ${JSON.stringify(dKey)})">` +
         `<summary><span class="hc-arrow">▸</span> Details</summary>` +
         `<div class="hc-metrics">` +
           metric('SINAD ↘', h.sinad_from != null ? `+${Math.round(h.sinad_from)}` : null, sinadFromG) +
