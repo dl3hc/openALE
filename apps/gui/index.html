@@ -23,33 +23,155 @@
     </div>
   </div>
 
-  <!-- ══════ HEADER ══════ -->
-  <header class="header">
-    <div class="logo">
-      <div class="logo-mark">openALE</div>
-      <div class="logo-divider"></div>
-      <div class="logo-meta">
-        <div class="logo-std">MIL-STD-188-141B · 2G ALE</div>
-        <div class="logo-self" id="selfCs">SELF: —</div>
+  <!-- ══════ ICON RAIL ══════
+       Ported 1:1 from proposals/2-command-deck-v2.html. Operate = live workspace (no
+       drawer); every other item carries a data-k and opens the matching Settings section
+       through railClick() (see the inline shell script near the end of <body>). -->
+  <nav class="rail">
+    <div class="rail-logo"><img src="app_icon.png" alt="openALE"></div>
+    <div class="rail-nav">
+
+      <div class="rgrp">
+        <div class="rnav on" data-k="operate" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h4l3-9 4 18 3-9h6"/></svg>
+          <span class="tip"><b>Operate</b><span>Live workspace — signals, active link &amp; contacts</span></span></div>
+      </div>
+
+      <div class="rgrp">
+        <div class="rgrp-lbl">Station</div>
+        <div class="rnav" data-k="identity" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span class="tip"><b>Identity</b><span>Your station's self addresses &amp; callsign</span></span></div>
+        <div class="rnav" data-k="channels" onclick="railClick(this)"><span class="badge-i" id="railChBadge">0</span>
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+          <span class="tip"><b>Channels</b><span>RX/TX frequencies &amp; channel plan</span></span></div>
+        <div class="rnav" data-k="nets" onclick="railClick(this)"><span class="badge-i" id="railNetBadge">0</span>
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+          <span class="tip"><b>Nets</b><span>Scan groups, dwell &amp; sounding schedule</span></span></div>
+        <div class="rnav" data-k="location" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          <span class="tip"><b>Location</b><span>Maidenhead grid &amp; propagation data</span></span></div>
+      </div>
+
+      <div class="rgrp">
+        <div class="rgrp-lbl">Radio</div>
+        <div class="rnav" data-k="cat" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+          <span class="tip"><b>Radio / CAT</b><span>Rig control, PTT keying &amp; TX power</span></span></div>
+        <div class="rnav" data-k="audio" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+          <span class="tip"><b>Audio Devices</b><span>Sound-card input / output routing</span></span></div>
+        <div class="rnav" data-k="voice" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+          <span class="tip"><b>Voice Passthrough</b><span>Analog voice over an established link</span></span></div>
+      </div>
+
+      <div class="rgrp">
+        <div class="rgrp-lbl">ALE</div>
+        <div class="rnav" data-k="timing" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span class="tip"><b>Timing</b><span>Slot, dwell &amp; Tx/Rx turnaround timing</span></span></div>
+        <div class="rnav" data-k="policy" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span class="tip"><b>Calling Policy</b><span>Listen-before-talk, relink &amp; call limits</span></span></div>
+        <div class="rnav" data-k="lqa" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          <span class="tip"><b>LQA / Sounding</b><span>Link-quality analysis &amp; sounding</span></span></div>
+        <div class="rnav" data-k="fec" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span class="tip"><b>FEC / Sync</b><span>Forward error coding &amp; word sync</span></span></div>
+      </div>
+
+      <div class="rgrp">
+        <div class="rgrp-lbl">System</div>
+        <div class="rnav" data-k="logging" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span class="tip"><b>Logging</b><span>Session records &amp; log verbosity</span></span></div>
+        <div class="rnav" data-k="files" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <span class="tip"><b>Station Files</b><span>Import / export configuration</span></span></div>
+        <div class="rnav" data-k="misc" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          <span class="tip"><b>Misc / Sounding</b><span>Maintenance &amp; housekeeping</span></span></div>
+      </div>
+
+      <!-- Help — moved from the row-1 header; opens help.html directly (not a
+           settings section, so no data-k/railClick — same handler as before). -->
+      <div class="rgrp">
+        <div class="rnav" onclick="window.open('help.html','_blank')">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span class="tip"><b>Help</b><span>Setup &amp; operation guide</span></span></div>
+      </div>
+
+    </div>
+  </nav>
+
+  <!-- ══════ WORKSPACE ══════ -->
+  <div class="work">
+
+    <!-- Row 1 : brand · clock (Help moved to the icon rail, beneath Misc) -->
+    <div class="wbar">
+      <div class="hbrand">
+        <img class="wm-img" src="brand_lettering.png" alt="openALE">
+        <div class="sub">MIL-STD-188-141B · 2G ALE</div>
+      </div>
+      <div class="sp"></div>
+      <div class="hdr-clock" id="clock" onclick="toggleClockZone()" title="Click to switch UTC / Local time">
+        <span class="hdr-clock-time" id="clockTime">--:--:--</span>
+        <span class="hdr-clock-zone" id="clockZone">UTC</span>
       </div>
     </div>
 
+    <!-- Row 2 : radio command bar -->
+    <div class="ctrl">
 
-    <div class="hdr-right">
-      <!-- Channel steppers flanking the Scan toggle -->
-      <div class="hdr-group">
-        <button class="hdr-icon" onclick="stepChannel(-1)" title="Step back a channel"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
-        <button class="hdr-btn" id="scanBtn" onclick="toggleScan()">▶ Scan</button>
-        <button class="hdr-icon" onclick="stepChannel(1)" title="Step forward a channel"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></button>
+      <!-- 3 lanes matching the operate grid's 340px/1fr/320px columns below, so
+           the Status and Transmit separators land exactly on the Heard|ActiveLink
+           and ActiveLink|Contacts dividers (Command Deck "rounder" alignment). -->
+      <div class="ctrl-lane ctrl-lane-1">
+      <!-- Operator identity (left anchor) — the whole freed-up lane is now a
+           prominent callsign readout instead of a small pill (the pill style
+           no longer fit once Status moved out of this lane). -->
+      <div class="self-id" onclick="openSettings();showSec('identity')" title="Operator identity — click to edit">
+        <div class="self-id-dot"></div>
+        <span class="self-id-cs" id="selfCs">SELF: —</span>
       </div>
+      </div><!-- /ctrl-lane-1 -->
 
-      <!-- Current channel frequency, beside the Scan controls -->
-      <div class="hdr-stats">
-        <div class="hdr-stat freq">
-          <span class="hdr-stat-val"><span id="freqVal">14.109.000</span><span class="hdr-stat-suf" id="freqUnit">MHz</span></span>
-          <span class="hdr-stat-sub" id="freqSub">CH 1 · USB</span>
+      <div class="ctrl-lane ctrl-lane-2">
+      <div class="cl-sep lead"></div>
+
+      <!-- Status cluster -->
+      <div class="cluster">
+        <span class="cl-lbl">Status</span>
+        <div class="status-chip">
+          <div class="dot scanning" id="statusDot"></div>
+          <span class="status-text" id="statusText">Scanning</span>
+        </div>
+        <div class="status-chip" id="wordLockChip" title="Modem word-grid lock — whether the receiver is currently synced to an ALE signal on this channel">
+          <div class="dot idle" id="wordLockDot"></div>
+          <span class="status-text">Sync</span>
+        </div>
+        <div id="busyChip" class="busy-chip" title="Channel clear (LBT A.5.4.7.2)">
+          <div class="dot busy-dot"></div>
+          <span>FREQ CLEAR</span>
         </div>
       </div>
+
+      <!-- Channel cluster — moved adjacent to Transmit (was adjacent to Self). -->
+      <div class="cluster">
+        <span class="cl-lbl">Channel</span>
+        <button class="hdr-icon" onclick="stepChannel(-1)" title="Step back a channel"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <div class="hdr-stats">
+          <div class="hdr-stat freq">
+            <span class="hdr-stat-val"><span id="freqVal">14.109.000</span><span class="hdr-stat-suf" id="freqUnit">MHz</span></span>
+            <span class="hdr-stat-sub" id="freqSub">CH 1 · USB</span>
+          </div>
+        </div>
+        <button class="hdr-icon" onclick="stepChannel(1)" title="Step forward a channel"><svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></button>
+        <button class="hdr-btn seg-toggle" id="scanBtn" onclick="toggleScan()" title="Toggle scanning">
+          <span class="seg-opt seg-scan">Scan</span><span class="seg-opt seg-idle">Idle</span>
+        </button>
 
       <!-- Network picker — selects the active net that scopes scan / sound / call -->
       <div class="radio-wrap" id="netWrap">
@@ -84,11 +206,6 @@
           </div>
         </div>
       </div>
-
-      <button class="hdr-btn" id="pttBtn"
-              onmousedown="setPtt(true)" onmouseup="setPtt(false)" onmouseleave="setPtt(false)"
-              ontouchstart="setPtt(true)" ontouchend="setPtt(false)"
-              title="Push to talk (hold)"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg> PTT</button>
 
       <!-- Manual radio control — VFO dropdown -->
       <div class="radio-wrap" id="radioWrap">
@@ -161,71 +278,33 @@
             <button class="rk rk-tune" onclick="radioNudgePower(5)" title="Increase by 5%">▲</button>
           </div>
         </div>
-      </div>
+      </div><!-- /radioWrap -->
+      </div><!-- /Channel cluster -->
+      </div><!-- /ctrl-lane-2 -->
 
-      <button class="hdr-btn" onclick="openSettings()"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Settings</button>
-      <button class="hdr-btn" onclick="openTestChannelPanel()" title="Test all channels to a peer (active LQA sweep)"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Test Ch</button>
-      <button class="hdr-btn" onclick="window.open('help.html','_blank')"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Help</button>
-      <div class="status-chip">
-        <div class="dot scanning" id="statusDot"></div>
-        <span class="status-text" id="statusText">Scanning</span>
-      </div>
-      <div class="status-chip" id="wordLockChip" title="Modem word-grid lock — whether the receiver is currently synced to an ALE signal on this channel">
-        <div class="dot idle" id="wordLockDot"></div>
-        <span class="status-text">Sync</span>
-      </div>
-      <div class="hdr-clock" id="clock" onclick="toggleClockZone()" title="Click to switch UTC / Local time">
-        <span class="hdr-clock-time" id="clockTime">--:--:--</span>
-        <span class="hdr-clock-zone" id="clockZone">UTC</span>
-      </div>
-    </div>
-  </header>
+      <div class="ctrl-lane ctrl-lane-3">
+      <div class="cl-sep"></div>
 
-  <!-- ══════ MAIN GRID ══════ -->
-  <main class="main">
-
-    <!-- Left column -->
-    <div class="left-col">
-
-      <!-- Incoming -->
-      <div class="panel panel-incoming">
-        <div class="plabel">Incoming <span>INDIVIDUAL / SELECTIVE CALL</span></div>
-        <div class="pbody" style="padding:8px">
-          <div class="inc-empty" id="incEmpty">
-            <div class="inc-empty-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg></div>
-            <span>Monitoring — no incoming call</span>
-          </div>
-          <div class="inc-alert hidden" id="incAlert">
-            <div class="inc-row">
-              <div class="ring-icon"><svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></div>
-              <div>
-                <div class="inc-callsign" id="incCs">W1ABC</div>
-                <div class="inc-sub" id="incName">Net Control Station</div>
-              </div>
-            </div>
-            <div class="inc-btns">
-              <button class="btn btn-answer" onclick="answerCall()">Accept</button>
-              <button class="btn btn-decline" onclick="declineCall()">Decline</button>
-            </div>
-          </div>
-        </div>
+      <!-- Transmit cluster -->
+      <div class="cluster">
+        <span class="cl-lbl">Transmit</span>
+        <button class="hdr-btn" onclick="openTestChannelPanel()" title="Test all channels to a peer (active LQA sweep)"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Test Ch</button>
+        <button class="hdr-btn" id="pttBtn"
+                onmousedown="setPtt(true)" onmouseup="setPtt(false)" onmouseleave="setPtt(false)"
+                ontouchstart="setPtt(true)" ontouchend="setPtt(false)"
+                title="Push to talk (hold)"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg> PTT</button>
       </div>
+      </div><!-- /ctrl-lane-3 -->
 
-      <!-- Messages -->
-      <div class="panel panel-messages">
-        <div class="plabel">
-          Messages <em>AMD / ORDERWIRE</em>
-          <button class="plabel-btn" onclick="clearMessages()">Clear All</button>
-        </div>
-        <div class="pbody" id="msgList"></div>
-        <div class="msg-compose">
-          <input class="msg-input" id="msgInput" type="text" placeholder="AMD message — max 90 chars, caps…" maxlength="90"
-            oninput="updateMsgCount()"
-            onkeydown="if(event.key==='Enter')sendAmd()">
-          <button class="btn-send" onclick="sendAmd()">Send</button>
-          <span class="msg-count" id="msgCount">0/90</span>
-        </div>
-      </div>
+    </div><!-- /ctrl -->
+
+    <!-- Row 3 : operate grid  (Signals | Active Link + Messages | Contacts) -->
+    <div class="grid">
+
+      <!-- Signals column : Heard Stations only.
+           Incoming CALLS are a state of the centre Active Link pane (mockup parity),
+           not a separate panel — see the relocated #incEmpty / #incAlert block below. -->
+      <div class="gcol">
 
       <!-- Heard Stations -->
       <div class="panel panel-heard">
@@ -238,68 +317,164 @@
         </div>
       </div>
 
-    </div><!-- /left-col -->
+    </div><!-- /Signals column -->
 
-    <!-- Right column -->
-    <div class="right-col">
+      <!-- Active Link + Messages column -->
+      <div class="gcol mid">
 
-      <!-- Contacts -->
-      <div class="panel panel-contacts">
-        <div class="plabel">
-          Contacts <em>ADDRESS BOOK</em>
-          <button class="plabel-btn" onclick="openContactEditor()">+ Add</button>
-        </div>
-        <div class="search-wrap">
-          <input class="search-input" id="contactSearch" type="text" placeholder="Search…" oninput="renderContacts()">
-        </div>
-        <div class="pbody" style="padding:0 8px 8px">
-          <div class="contact-list" id="contactList"></div>
-        </div>
-        <div class="call-zone" id="callZone">
-          <div class="call-mode-panel hidden" id="callModePanel">
-            <button class="call-mode-btn" onclick="startCall(false)">
-              <span class="cmo-title">Multi CH Call</span>
-              <span class="cmo-desc">LQA-optimized · all channels</span>
-            </button>
-            <button class="call-mode-btn" onclick="startCall(true)">
-              <span class="cmo-title">Single CH Call</span>
-              <span class="cmo-desc">Current channel only</span>
-            </button>
-          </div>
-          <button class="btn-call" id="callBtn" onclick="toggleCallModePanel()" disabled>
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> Call ▸
-          </button>
-        </div>
-      </div>
+        <!-- Active Link — ONE stateful window (Command Deck v2 parity). There is
+             no separate "Incoming / Monitoring" pane: the whole call-state machine
+             lives here, driven by app.js's boot-critical IDs via showInc() /
+             showCallPanel() (they toggle .hidden only — IDs preserved verbatim):
+               idle / monitoring → #incEmpty
+               incoming call     → #incAlert  (Accept / Decline)
+               linked            → #callPanel (timer · quality · End Link)
+             app.js leaves #incEmpty un-hidden while a link is up, so the CSS rule
+             `.panel-active:has(#callPanel:not(.hidden)) #incEmpty { display:none }`
+             guarantees exactly one state is ever visible. -->
+        <div class="panel panel-active">
+          <div class="plabel">Active Link <span id="callFreqLbl">MONITORING</span></div>
+          <div class="pbody" style="padding:8px">
 
-      <!-- Active Call (hidden until linked) -->
-      <div class="panel panel-call hidden" id="callPanel">
-        <div class="plabel plabel-linked">
-          ● Active Link
-          <span id="callFreqLbl" style="color:var(--tx-dim)">14.109.000 MHz · USB</span>
-        </div>
-        <div class="call-body">
-          <div class="call-to-lbl">Connected to</div>
-          <div class="call-cs" id="callCs">W1ABC</div>
-          <div class="call-timer" id="callTimer">00:00</div>
-          <div class="quality">
-            <div class="qbars" id="qbars">
-              <div class="qbar"></div><div class="qbar"></div>
-              <div class="qbar"></div><div class="qbar"></div>
-              <div class="qbar"></div>
+            <!-- IDLE / MONITORING -->
+            <div class="inc-empty" id="incEmpty">
+              <div class="inc-empty-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg></div>
+              <div class="inc-empty-text">
+                <span class="inc-empty-title">No active link — monitoring for calls</span>
+                <span class="inc-empty-hint">Select a contact and press <b>Call</b> to initiate a link, or wait for an incoming call.</span>
+              </div>
+              <div class="inc-scan"><i></i>Monitoring</div>
             </div>
-            <span class="qlabel" id="qualityLbl">Good · +18 dB</span>
+
+            <!-- INCOMING (unsolicited inbound call → Accept / Decline) -->
+            <div class="inc-alert hidden" id="incAlert">
+              <div class="inc-row">
+                <div class="ring-icon"><svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></div>
+                <div>
+                  <div class="inc-callsign" id="incCs">W1ABC</div>
+                  <div class="inc-sub" id="incName">Net Control Station</div>
+                  <!-- Reuses the already-known tuned freq/mode (#callFreqLbl content) —
+                       the call is arriving on the currently tuned channel. Not fabricated. -->
+                  <div class="inc-meta" id="incMeta"></div>
+                </div>
+              </div>
+              <div class="inc-btns">
+                <button class="btn btn-answer" onclick="answerCall()">Accept</button>
+                <button class="btn btn-decline" onclick="declineCall()">Decline</button>
+              </div>
+            </div>
+
+            <!-- LINKED (active call — timer, quality, terminate) -->
+            <div class="panel-call hidden" id="callPanel">
+              <div class="call-body">
+                <div class="call-peer-row">
+                  <div class="call-peer-icon"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div>
+                  <div class="call-peer-text">
+                    <div class="call-to-lbl">Connected to</div>
+                    <div class="call-cs" id="callCs">W1ABC</div>
+                    <div class="call-peer-status"><i></i>Link established <span class="call-timer" id="callTimer">00:00</span></div>
+                  </div>
+                </div>
+                <!-- Command-Deck metric grid — real values from the active LQA record
+                     for this peer (updateLinkQualityFromLqa) + the live SIGNAL_QUALITY
+                     poll (pollSignalQuality refreshes SINAD only); never fake numbers. -->
+                <div class="link-mgrid">
+                  <div class="link-mbox"><div class="link-mbox-lbl">SINAD</div><div class="link-mbox-val" id="linkSinad">—</div></div>
+                  <div class="link-mbox"><div class="link-mbox-lbl">BER</div><div class="link-mbox-val" id="linkBer">—</div></div>
+                  <div class="link-mbox"><div class="link-mbox-lbl">Score</div><div class="link-mbox-val" id="linkScore">—</div></div>
+                  <div class="link-mbox"><div class="link-mbox-lbl">Chan</div><div class="link-mbox-val" id="linkChan">—</div></div>
+                </div>
+
+                <div class="quality-card">
+                  <div class="quality-card-label">Link Quality</div>
+                  <div class="quality">
+                    <div class="qbars" id="qbars">
+                      <div class="qbar"></div><div class="qbar"></div>
+                      <div class="qbar"></div><div class="qbar"></div>
+                      <div class="qbar"></div>
+                    </div>
+                    <span class="qlabel" id="qualityLbl">Good · +18 dB</span>
+                  </div>
+                </div>
+
+                <!-- Analog Voice reflects the real voicePassthrough state (set by
+                     applyVoicePathUi()) and opens Settings ▸ Voice to arm/disarm it —
+                     same "jump to the settings section that controls this" pattern
+                     already used by the header Self pill. Digital Voice / DATA are
+                     disabled — not implemented anywhere in the system, same as the
+                     mockup's own "Not yet supported" state. -->
+                <div class="call-actions">
+                  <button class="callact-btn" id="btnAnalogVoice" onclick="openSettings();showSec('voice')" title="Voice passthrough — arm/disarm in Settings ▸ Voice">Analog Voice</button>
+                  <button class="callact-btn" disabled title="Not yet supported">Digital Voice</button>
+                  <button class="callact-btn" disabled title="Not yet supported">DATA</button>
+                  <button class="callact-btn callact-term" onclick="endCall()">Terminate</button>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
-        <button class="btn-end" onclick="endCall()"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="23" y1="1" x2="1" y2="23"/></svg> End Link</button>
-      </div>
 
-    </div><!-- /right-col -->
+        <!-- Messages -->
+        <div class="panel panel-messages">
+          <div class="plabel">
+            Messages <em>AMD / ORDERWIRE</em>
+            <button class="plabel-btn" onclick="clearMessages()">Clear All</button>
+          </div>
+          <div class="pbody" id="msgList"></div>
+          <div class="msg-compose">
+            <input class="msg-input" id="msgInput" type="text" placeholder="AMD message — max 90 chars, caps…" maxlength="90"
+              oninput="updateMsgCount()"
+              onkeydown="if(event.key==='Enter')sendAmd()">
+            <button class="btn-send" onclick="sendAmd()">Send</button>
+            <span class="msg-count" id="msgCount">0/90</span>
+          </div>
+        </div>
 
-    <!-- ALE LOG -->
-    <div class="ale-log" id="aleLog">
+      </div><!-- /mid column -->
+
+      <!-- Contacts column -->
+      <div class="gcol">
+
+        <!-- Contacts -->
+        <div class="panel panel-contacts">
+          <div class="plabel">
+            Contacts <em>ADDRESS BOOK</em>
+            <button class="plabel-btn" onclick="openContactEditor()">+ Add</button>
+          </div>
+          <div class="search-wrap">
+            <input class="search-input" id="contactSearch" type="text" placeholder="Search…" oninput="renderContacts()">
+          </div>
+          <div class="pbody" style="padding:0 8px 8px">
+            <div class="contact-list" id="contactList"></div>
+          </div>
+          <div class="call-zone" id="callZone">
+            <div class="call-mode-panel hidden" id="callModePanel">
+              <button class="call-mode-btn" onclick="startCall(false)">
+                <span class="cmo-title">Multi CH Call</span>
+                <span class="cmo-desc">LQA-optimized · all channels</span>
+              </button>
+              <button class="call-mode-btn" onclick="startCall(true)">
+                <span class="cmo-title">Single CH Call</span>
+                <span class="cmo-desc">Current channel only</span>
+              </button>
+            </div>
+            <button class="btn-call" id="callBtn" onclick="toggleCallModePanel()" disabled>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> Call ▸
+            </button>
+          </div>
+        </div>
+
+      </div><!-- /Contacts column -->
+
+    </div><!-- /grid -->
+
+    <!-- Row 4 : docked console  (ALE log | small waterfall) -->
+    <div class="console">
+
+      <div class="ale-log" id="aleLog">
       <div class="ale-log-hdr">
-        <span class="ale-log-title">ALE Log</span>
+        <span class="ale-log-title">Console <em>ALE Log</em></span>
         <span class="ale-log-count" id="aleLogCount">0 entries</span>
         <span style="flex:1"></span>
         <button class="mon-btn" onclick="clearAleLog()">Clear</button>
@@ -309,18 +484,8 @@
       </div>
     </div>
 
-    <!-- SIGNAL STRIP -->
-    <div class="strip">
-
-      <!-- Channel busy indicator, beside the waterfall -->
-      <div class="strip-stats">
-        <div id="busyChip" class="busy-chip" title="Channel clear (LBT A.5.4.7.2)">
-          <div class="dot busy-dot"></div>
-          <span>FREQ CLEAR</span>
-        </div>
-      </div>
-
-      <!-- Waterfall -->
+    <!-- Small waterfall (docked console, right cell) -->
+    <div class="cwf">
       <div class="strip-wf">
         <div class="wf-band-region" id="wfBandRegion"></div>
         <div class="wf-band-cap" id="wfBandCap">ALE 8-FSK</div>
@@ -330,10 +495,17 @@
         <canvas id="waterfallCanvas"></canvas>
         <div class="wf-ticks" id="wfTicks"></div>
       </div>
-
     </div>
 
-  </main>
+    </div><!-- /console -->
+
+    <!-- Row 5 : footer — same style/color as the row-1 header, half its height -->
+    <div class="wfoot">
+      <div class="sp"></div>
+      <span>v0.1.0</span>
+    </div>
+
+  </div><!-- /work -->
 
 </div><!-- /app -->
 
@@ -1093,17 +1265,17 @@
               <button class="btn-sm accent" onclick="exportConf()">↓ Export</button>
               <button class="btn-sm" onclick="importConf()">↑ Import</button>
             </div>
-            <div class="fhint">Exports all current settings as a portable configuration file.</div>
+            <div class="fhint">Export/import portable settings for moving between machines or backing up. Your live configuration is saved automatically — this is not required for normal use.</div>
           </div>
 
           <div class="fg">
             <label class="flabel">Channel File (.ale)</label>
             <div style="display:flex;gap:8px">
               <input class="finput" id="cfgStationFile" type="text" placeholder="station.ale" style="flex:1">
-              <button class="btn-sm" onclick="loadAleFile()">↑ Load</button>
-              <button class="btn-sm" onclick="saveAleFile()">↓ Save</button>
+              <button class="btn-sm" onclick="loadAleFile()">↑ Import</button>
+              <button class="btn-sm" onclick="saveAleFile()">↓ Export</button>
             </div>
-            <div class="fhint">Channel list loaded at startup; Load / Save operate on this path.</div>
+            <div class="fhint">Import a channel/net plan (e.g. a regional preset) or export your current channels to share. Your live configuration is saved automatically — this is not required for normal use.</div>
           </div>
 
           <div class="fg">
@@ -1184,6 +1356,7 @@
       </div><!-- /scontent -->
     </div><!-- /modal-body -->
 
+    <div class="fhint" style="text-align:center;padding:8px 22px 0">Settings and channels are saved automatically as you make changes.</div>
     <div class="modal-footer">
       <button class="btn-cancel" onclick="closeSettings()">Cancel</button>
       <button class="btn-save" onclick="saveSettings()">Save &amp; Apply</button>
@@ -1313,6 +1486,213 @@
     </div>
   </div>
 </div>
+
+<!-- ══════ FIRST-RUN SETUP WIZARD ══════ -->
+<!-- Shown on first connect when no self address is configured.
+     Five sequential steps: Callsign → Channels → Nets → Radio (optional) →
+     Audio (optional). Not dismissible via backdrop click — operator must
+     complete or ✕. -->
+<div class="modal-overlay hidden" id="setupWizard">
+  <div class="modal" style="max-width:400px;width:92vw">
+
+    <div class="modal-hdr">
+      <span class="modal-title">openALE Setup</span>
+      <div class="wz-nav">
+        <button class="wz-nav-btn" id="wzPrevBtn" onclick="wzGoto(wizardStep-1)" title="Previous step">‹</button>
+        <div class="wz-pips">
+          <div class="wz-pip active"></div>
+          <div class="wz-pip"></div>
+          <div class="wz-pip"></div>
+          <div class="wz-pip"></div>
+          <div class="wz-pip"></div>
+        </div>
+        <button class="wz-nav-btn" id="wzNextBtn" onclick="wzGoto(wizardStep+1)" title="Next step">›</button>
+      </div>
+      <button class="modal-close" onclick="closeWizard()" title="Close — finish setup later in Settings ▸ Identity">✕</button>
+    </div>
+
+    <!-- Step 0: Callsign -->
+    <div class="wz-step" id="wzStep0">
+      <div class="wz-step-num">Step 1 of 5</div>
+      <div class="wz-step-title">Station Callsign</div>
+      <div class="wz-step-desc">Your ALE address — up to 15 characters. Other stations use this to call you. (MIL-STD-188-141B A.4.3.4)</div>
+      <input class="wz-cs-input" id="wzCallsign" type="text" maxlength="15"
+             placeholder="W1ABC" autocomplete="off" spellcheck="false"
+             oninput="this.value=this.value.toUpperCase()"
+             onkeydown="if(event.key==='Enter')wzNext()">
+      <div id="wzStep0Status" class="wz-status"></div>
+      <div class="wz-actions">
+        <button class="wz-btn-next" onclick="wzNext()">Continue →</button>
+      </div>
+    </div>
+
+    <!-- Step 1: Channels -->
+    <div class="wz-step hidden" id="wzStep1">
+      <div class="wz-step-num">Step 2 of 5</div>
+      <div class="wz-step-title">Load Channels</div>
+      <div class="wz-step-desc">Load a <span style="font-family:var(--mono);color:var(--accent)">.ale</span> channel file. Presets ship in the <span style="font-family:var(--mono);color:var(--accent)">nets/</span> folder.</div>
+      <label class="flabel" style="margin-top:14px">File path</label>
+      <input class="finput" id="wzChannelPath" type="text"
+             value="nets/USA.ale" placeholder="nets/USA.ale"
+             style="margin-top:4px;font-family:var(--mono);font-size:12px"
+             onkeydown="if(event.key==='Enter')wzNext()">
+      <div class="fhint" style="margin-top:6px">Presets: <span style="font-family:var(--mono)">USA</span> · <span style="font-family:var(--mono)">EUR</span> · <span style="font-family:var(--mono)">EUR_cur</span> · <span style="font-family:var(--mono)">EUR_ale_only</span> · <span style="font-family:var(--mono)">UK</span> · <span style="font-family:var(--mono)">JA</span> · <span style="font-family:var(--mono)">AUS</span> · <span style="font-family:var(--mono)">ITU1</span> · <span style="font-family:var(--mono)">ITU2</span> · <span style="font-family:var(--mono)">ITU3</span> (add <span style="font-family:var(--mono)">.ale</span>)</div>
+      <div id="wzStep1Status" class="wz-status"></div>
+      <div class="wz-actions">
+        <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
+        <button class="wz-btn-next" onclick="wzNext()">Load &amp; Continue →</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Nets -->
+    <div class="wz-step hidden" id="wzStep2">
+      <div class="wz-step-num">Step 3 of 5</div>
+      <div class="wz-step-title">Nets</div>
+      <div class="wz-step-desc">Nets group channels for scanning, sounding, and calling.</div>
+      <div id="wzNetsList" class="wz-nets-list" style="margin-top:14px"></div>
+      <div class="fhint" style="margin-top:10px">Edit further anytime in Settings ▸ Nets.</div>
+      <div id="wzStep2Status" class="wz-status"></div>
+      <div class="wz-actions">
+        <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
+        <button class="wz-btn-next" onclick="wzNext()">Continue →</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Radio / CAT (optional) -->
+    <div class="wz-step hidden" id="wzStep3">
+      <div class="wz-step-num">Step 4 of 5</div>
+      <div class="wz-step-title">Radio / CAT Control</div>
+      <div class="wz-step-desc">Optional — connect a Hamlib-supported radio for automatic frequency management.</div>
+      <label class="flabel" style="margin-top:14px">Hamlib Model</label>
+      <select class="fselect" id="wzRigModel" style="margin-top:4px"
+              onchange="wzOnRigModelChange()"><option value="">— None / Offline —</option></select>
+      <div id="wzRigNetFields" style="display:none;margin-top:10px">
+        <div style="display:flex;gap:8px">
+          <div style="flex:1">
+            <label class="flabel">Host</label>
+            <input class="finput" id="wzRigHost" type="text" value="127.0.0.1" style="margin-top:4px">
+          </div>
+          <div style="width:88px">
+            <label class="flabel">Port</label>
+            <input class="finput" id="wzRigPort" type="number" value="4532" style="margin-top:4px">
+          </div>
+        </div>
+      </div>
+      <div id="wzRigSerialFields" style="display:none;margin-top:10px">
+        <div style="display:flex;gap:8px">
+          <div style="flex:1">
+            <label class="flabel">Serial Port</label>
+            <input class="finput" id="wzRigSerial" type="text" placeholder="COM3 or /dev/ttyUSB0" style="margin-top:4px">
+          </div>
+          <div style="width:110px">
+            <label class="flabel">Baud Rate</label>
+            <select class="fselect" id="wzRigBaud" style="margin-top:4px">
+              <option>4800</option><option>9600</option><option selected>19200</option>
+              <option>38400</option><option>57600</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div id="wzStep3Status" class="wz-status"></div>
+      <div class="wz-actions">
+        <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
+        <button class="wz-btn-next" onclick="wzNext()">Connect &amp; Continue →</button>
+      </div>
+    </div>
+
+    <!-- Step 4: Audio devices -->
+    <div class="wz-step hidden" id="wzStep4">
+      <div class="wz-step-num">Step 5 of 5</div>
+      <div class="wz-step-title">Audio Devices</div>
+      <div class="wz-step-desc">Select the sound device connected to your radio's audio in/out.</div>
+      <label class="flabel" style="margin-top:14px">RX Input — receiver audio</label>
+      <select class="fselect" id="wzAudioIn" style="margin-top:4px"><option>Loading…</option></select>
+      <label class="flabel" style="margin-top:10px">TX Output — radio TX line</label>
+      <select class="fselect" id="wzAudioOut" style="margin-top:4px"><option>Loading…</option></select>
+      <div id="wzStep4Status" class="wz-status"></div>
+      <div class="wz-actions">
+        <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
+        <button class="wz-btn-next" onclick="wzNext()">Connect &amp; Finish ✓</button>
+      </div>
+    </div>
+
+  </div><!-- /modal -->
+</div><!-- /#setupWizard -->
+
+<!-- ══════ COMMAND-DECK SHELL (icon rail) ══════
+     Ported from proposals/2-command-deck-v2.html. This is presentation-shell wiring ONLY —
+     it never touches ALE state. All backend logic stays in app.js (unchanged). -->
+<script>
+(function(){
+  // data-k → Settings section id. Rail uses the mockup key 'cat'; the Settings
+  // section for the rig is 'radio'. Everything else maps 1:1.
+  var SEC = { cat: 'radio' };
+
+  function setRailActive(node){
+    var rnav = document.querySelectorAll('.rail .rnav');
+    for (var i = 0; i < rnav.length; i++) rnav[i].classList.toggle('on', rnav[i] === node);
+  }
+  function resetRail(){
+    var rnav = document.querySelectorAll('.rail .rnav');
+    for (var i = 0; i < rnav.length; i++)
+      rnav[i].classList.toggle('on', rnav[i].getAttribute('data-k') === 'operate');
+  }
+
+  // Suppresses .rnav's color/background-color transitions for one settling
+  // frame — used around settings-drawer open AND close, where setRailActive()/
+  // resetRail()'s classList.toggle() on rail icons would otherwise run in the
+  // same frame as the drawer's transform slide (see styles.css .rail.no-anim).
+  function quietly(fn){
+    var rail = document.querySelector('.rail');
+    if (rail) rail.classList.add('no-anim');
+    fn();
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){ if (rail) rail.classList.remove('no-anim'); });
+    });
+  }
+
+  // Rail click: Operate = live workspace (no panel); any other item lights up and
+  // opens the matching Settings section. Clicking the already-open item, or Operate,
+  // closes Settings and returns focus to the workspace (mockup toggle behaviour).
+  window.railClick = function(node){
+    var k = node.getAttribute('data-k');
+    var modal = document.getElementById('settingsModal');
+    var open  = modal && !modal.classList.contains('hidden');
+    if (k === 'operate'){ if (open && typeof closeSettings === 'function') quietly(function(){ closeSettings(); resetRail(); }); else resetRail(); return; }
+    if (open && node.classList.contains('on')){ if (typeof closeSettings === 'function') quietly(function(){ closeSettings(); resetRail(); }); else resetRail(); return; }
+    quietly(function(){
+      setRailActive(node);
+      if (typeof openSettings === 'function') openSettings();
+    });
+    if (typeof showSec === 'function') showSec(SEC[k] || k);
+  };
+
+  // Keep the rail highlight in sync when Settings is dismissed by its own ✕ / Cancel /
+  // overlay / Esc — snap the active state back to Operate.
+  document.addEventListener('DOMContentLoaded', function(){
+    var modal = document.getElementById('settingsModal');
+    if (modal && window.MutationObserver){
+      new MutationObserver(function(){
+        // Covers dismissal via ✕ / Cancel / overlay / Esc — railClick()'s own
+        // close path already wraps this in quietly(); this catches every
+        // other way the drawer can close.
+        if (modal.classList.contains('hidden')) quietly(resetRail);
+      }).observe(modal, { attributes: true, attributeFilter: ['class'] });
+    }
+  });
+
+  // Rail count badges (Channels / Nets) mirror the live config. app.js owns the data;
+  // we poll the rendered Settings tables so the shell needs no app.js hook.
+  function syncRailBadges(){
+    var ch  = document.querySelectorAll('#chBody .ch-card').length;
+    var net = document.querySelectorAll('#netList .net-card').length;
+    var chB = document.getElementById('railChBadge'), netB = document.getElementById('railNetBadge');
+    if (chB){  chB.textContent  = ch;  chB.style.display  = ch  ? '' : 'none'; }
+    if (netB){ netB.textContent = net; netB.style.display = net ? '' : 'none'; }
+  }
+  document.addEventListener('DOMContentLoaded', function(){ syncRailBadges(); setInterval(syncRailBadges, 2000); });
+})();
+</script>
 
 <script src="app.js"></script>
 </body>

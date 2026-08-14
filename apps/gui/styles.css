@@ -1,42 +1,62 @@
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
 
     /* ══════════════════════════════════════════════════════════════════════
-       DESIGN TOKENS
-       Background: Concept 2 blue-dark  |  Accent: Concept 1 green
+       DESIGN TOKENS  —  Command Deck v2 "blue-dark steel" retone
+       Production token NAMES are preserved (app.js/markup depend on them);
+       only their VALUES are retoned to the approved steel-blue palette.
+       Mockup aliases (--bg1/4, --hair, --ac, --tx-mute, --s-scan…) are added
+       so Command-Deck layout rules can resolve without renaming anything.
     ══════════════════════════════════════════════════════════════════════ */
     :root {
-      --bg:         #0a0e14;
-      --bg2:        #111720;
-      --bg3:        #1a2230;
+      --bg:         #0a0d12;
+      --bg1:        #0e131b;
+      --bg2:        #121a26;
+      --bg3:        #1b2534;
+      --bg4:        #243247;
       --bg-hover:   #1e2a3a;
-      --border:     #1e2d40;
-      --border-md:  #2a3d54;
+
+      --hair:       #1b2836;
+      --hair2:      #28394f;
+      --border:     #1b2836;
+      --border-md:  #28394f;
       --border-hi:  #3a5070;
 
-      --tx:         #c8d8e8;
-      --tx-muted:   #7a9ab8;
-      --tx-dim:     #3e5870;
+      --tx:         #c6d6e6;
+      --tx-muted:   #7089a3;
+      --tx-dim:     #516781;
+      --tx-mute:    #516781;
       --tx-bright:  #e8f4ff;
 
-      --accent:     #00dc8c;
-      --accent-dim: #00b872;
-      --accent-glow:    rgba(0,220,140,0.09);
-      --accent-glow-hi: rgba(0,220,140,0.20);
+      --ac:         #4f83c4;
+      --ac2:        #6f9ad6;
+      --ac-dim:     #38547f;
+      --ac-glow:    rgba(79,131,196,0.32);
+      --accent:     #4f83c4;
+      --accent-dim: #38547f;
+      --accent-glow:    rgba(79,131,196,0.12);
+      --accent-glow-hi: rgba(79,131,196,0.24);
 
-      --s-idle:     #3e5870;
-      --s-scanning: #00dc8c;
-      --s-calling:  #ffca28;
-      --s-handshake:#29b6f6;
-      --s-linked:   #00e676;
-      --s-incoming: #ff8a65;
-      --s-error:    #ff5252;
+      --s-idle:     #516781;
+      --s-scanning: #5b8fc4;
+      --s-scan:     #5b8fc4;
+      --s-calling:  #c99a45;
+      --s-call:     #c99a45;
+      --s-handshake:#6f9ad6;
+      --s-linked:   #38ac6f;
+      --s-link:     #38ac6f;
+      --s-incoming: #dd8158;
+      --s-inc:      #dd8158;
+      --s-error:    #df5a6b;
+      --s-err:      #df5a6b;
 
       --mono: 'JetBrains Mono', 'Cascadia Code', monospace;
-      --sans: 'Space Grotesk', system-ui, sans-serif;
+      --sans: 'Inter', system-ui, sans-serif;
 
       --r-sm: 3px;
       --r-md: 6px;
       --r-lg: 10px;
+      --r:  9px;
+      --r2: 12px;
 
       --sp-1: 4px;  --sp-2: 6px;  --sp-3: 8px;
       --sp-4: 12px; --sp-5: 16px; --sp-6: 24px;
@@ -45,8 +65,11 @@
       --shadow-md: 0 8px 28px rgba(0,0,0,0.45);
       --shadow-lg: 0 16px 42px rgba(0,0,0,0.55);
       --shadow-xl: 0 32px 80px rgba(0,0,0,0.70);
+      --sh:    0 1px 2px rgba(0,0,0,.5), 0 6px 18px rgba(0,0,0,.4);
+      --sh-lg: 0 12px 40px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.5);
 
       --t: 0.13s ease;
+      --ease: cubic-bezier(.16,1,.3,1);
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -65,14 +88,13 @@
     }
 
     /* ══════════════════════════════════════════════════════════════════════
-       APP SHELL
+       APP SHELL  —  Command Deck: 64px icon rail | workspace
     ══════════════════════════════════════════════════════════════════════ */
     .app {
-      display: flex;
-      flex-direction: column;
+      display: grid;
+      grid-template-columns: 64px 1fr;
       height: 100vh;
-      padding: 10px;
-      gap: 8px;
+      overflow: hidden;
     }
 
     /* ══════════════════════════════════════════════════════════════════════
@@ -145,6 +167,25 @@
       border-color: var(--border-md);
       color: var(--tx);
     }
+
+    /* Scan/Idle segmented pill (mockup .seg parity) — one physical button
+       (#scanBtn keeps its single id/onclick=toggleScan() contract; app.js
+       only ever toggles .scan-on on it, see setStatus()) styled to read as
+       two segments via static child spans + the existing state class. */
+    .seg-toggle {
+      padding: 3px; gap: 0; background: var(--bg2); border-color: var(--hair2);
+    }
+    .seg-toggle:hover { background: var(--bg2); border-color: var(--hair2); }
+    .seg-toggle .seg-opt {
+      padding: 5px 12px;
+      border-radius: calc(var(--r-md) - 2px);
+      font-size: 12px; font-weight: 600;
+      color: var(--tx-dim);
+      transition: all 0.16s;
+    }
+    .seg-toggle .seg-idle { color: var(--tx-bright); background: var(--bg4); }
+    .seg-toggle.scan-on .seg-scan { color: var(--tx-bright); background: var(--bg4); }
+    .seg-toggle.scan-on .seg-idle { color: var(--tx-dim); background: transparent; }
 
     .status-chip {
       display: flex;
@@ -233,17 +274,25 @@
     .ale-log   { grid-column: 1; grid-row: 2; }
     .strip     { grid-column: 1; grid-row: 3; }
 
-    /* ── Panel base ── */
+    /* ── Panel base ──
+       Command-Deck parity: panes are flat and share one background, divided
+       by hairline borders (added by .grid/.gcol below) — not individually
+       boxed cards. Do not reintroduce a per-panel border/radius/background
+       here; that is the mockup's .pane/.pane-h/.pane-b language. */
     .panel {
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      border-radius: var(--r-lg);
+      background: transparent;
       display: flex;
       flex-direction: column;
       overflow: hidden;
     }
 
-    /* K2-style section label — 9 px mono caps */
+    /* K2-style section label — 9 px mono caps.
+       Fixed height (not just padding): some panel headers carry a
+       .plabel-btn ("Clear All"/"+Add"), which is taller than plain text, so
+       height-by-content alone made those headers ~4.5px taller than headers
+       with no button (e.g. Active Link) — misaligning every panel's header
+       divider line across the row. A fixed height makes every .plabel the
+       same regardless of what's inside. */
     .plabel {
       font-family: var(--mono);
       font-size: 9px;
@@ -251,7 +300,8 @@
       letter-spacing: 0.18em;
       text-transform: uppercase;
       color: var(--tx-bright);
-      padding: 9px 14px;
+      height: 37px;
+      padding: 0 14px;
       border-bottom: 1px solid var(--border);
       background: var(--bg);
       display: flex;
@@ -260,6 +310,10 @@
       flex-shrink: 0;
     }
     .plabel span { font-weight: 400; opacity: 0.7; }
+    /* Active Link header freq readout hidden per user request — element stays
+       in the DOM (app.js:3278 writes it unguarded-safe via `cf?.textContent`,
+       and #incMeta reads its text — both still work invisibly). */
+    #callFreqLbl { display: none; }
 
     .pbody {
       flex: 1;
@@ -267,8 +321,12 @@
       padding: 10px;
     }
 
-    /* ── Incoming ── */
-    .panel-incoming { flex-shrink: 0; }
+    /* ── Active Link (single stateful pane: monitoring / incoming / linked) ── */
+    .panel-active { flex-shrink: 0; }
+    /* app.js leaves #incEmpty un-hidden while linked; suppress the idle
+       monitoring line whenever the linked card (#callPanel) is on screen so
+       only one state shows (Command Deck v2 parity). */
+    .panel-active:has(#callPanel:not(.hidden)) #incEmpty { display: none; }
 
     .inc-empty {
       display: flex;
@@ -279,6 +337,32 @@
       font-size: 12px;
     }
     .inc-empty-icon { font-size: 20px; opacity: 0.35; }
+    .inc-empty-text { display: flex; flex-direction: column; gap: 3px; }
+    .inc-empty-title { color: var(--tx-bright); }
+    .inc-empty-hint { font-size: 11px; line-height: 1.5; color: var(--tx-muted); }
+    .inc-empty-hint b { color: var(--tx-dim); font-weight: 600; }
+    .inc-scan {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      padding-left: 14px;
+      flex-shrink: 0;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--s-scan);
+      white-space: nowrap;
+    }
+    .inc-scan i {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--s-scan);
+      box-shadow: 0 0 6px var(--s-scan);
+      animation: blink 2s infinite;
+    }
 
     .inc-alert {
       border-radius: var(--r-md);
@@ -313,6 +397,8 @@
       letter-spacing: 0.06em;
     }
     .inc-sub { font-size: 12px; color: var(--tx-muted); }
+    .inc-meta { font-family: var(--mono); font-size: 10px; color: var(--tx-mute); margin-top: 3px; }
+    .inc-meta:empty { display: none; }
 
     .inc-btns { display: flex; gap: 8px; }
 
@@ -350,18 +436,28 @@
 
     .msg-item {
       position: relative;
+      max-width: 82%;
       background: var(--bg3);
       border: 1px solid var(--border);
       border-radius: var(--r-md);
-      padding: 9px 12px;
+      padding: 9px 34px 9px 12px;
       transition: border-color 0.12s;
     }
     .msg-item:hover { border-color: var(--border-md); }
+    /* Own (outgoing) messages: right-aligned chat bubble, tinted toward accent
+       — mirrors the mockup's .msg.own without touching renderMessages()'s
+       own/incoming class contract. */
+    .msg-own {
+      margin-left: auto;
+      background: linear-gradient(180deg, rgba(79,131,196,0.14), var(--bg3));
+      border-color: var(--accent-dim);
+    }
 
     .msg-hdr {
       display: flex;
       justify-content: space-between;
       margin-bottom: 4px;
+      padding-right: 46px;
     }
     .msg-from {
       font-family: var(--mono);
@@ -370,12 +466,12 @@
       color: var(--accent);
     }
     .msg-time {
-      display: block;
-      text-align: right;
+      position: absolute;
+      top: 9px; right: 34px;
       font-family: var(--mono);
       font-size: 9px;
-      color: var(--tx-bright);
-      margin-top: 4px;
+      color: var(--tx-mute);
+      margin-top: 0;
     }
     .msg-text {
       font-family: var(--mono);
@@ -385,12 +481,17 @@
       letter-spacing: 0.02em;
     }
 
+    /* Fixed height (matches .call-zone below) — the compact input+Send row
+       is naturally shorter than the Call button's footer, which misaligned
+       the border-top line above this row with the one above Call. */
     .msg-compose {
+      height: 60px;
       padding: 8px 10px;
       border-top: 1px solid var(--border);
       background: var(--bg);
       flex-shrink: 0;
       display: flex;
+      align-items: center;
       gap: 8px;
     }
     .msg-input {
@@ -505,12 +606,17 @@
     .contact-name { font-size: 11px; color: var(--tx-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .contact-star { color: var(--s-calling); font-size: 11px; }
 
+    /* Fixed height (matches .msg-compose above) — pins both footers to the
+       same height regardless of content, so their border-top lines align. */
     .call-zone {
       position: relative;
+      height: 60px;
       padding: 8px 10px;
       border-top: 1px solid var(--border);
       background: var(--bg);
       flex-shrink: 0;
+      display: flex;
+      align-items: center;
     }
     .call-mode-panel {
       position: absolute; bottom: calc(100% + 6px); left: 10px; right: 10px; z-index: 50;
@@ -553,40 +659,91 @@
     /* ── Active Call ── */
     .panel-call {
       background: linear-gradient(155deg, rgba(0,230,118,0.05), var(--bg2));
-      border-color: rgba(0,230,118,0.18);
+      border: 1px solid rgba(0,230,118,0.18);
+      border-radius: var(--r-md);
+      overflow: hidden;
       flex-shrink: 0;
     }
-    .panel-call .plabel { color: var(--s-linked); }
-
-    .call-body { padding: 14px 14px 10px; text-align: center; }
+    .call-body { padding: 14px 14px 10px; }
+    /* Peer row — avatar-style icon + callsign + live status caption, echoing
+       the mockup's card header without fabricating per-peer avatar initials
+       (would need app.js to compute them). */
+    .call-peer-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+    .call-peer-icon {
+      flex-shrink: 0;
+      width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 50%;
+      background: rgba(0,230,118,0.10);
+      border: 1px solid rgba(0,230,118,0.28);
+      color: var(--s-linked);
+    }
+    .call-peer-text { flex: 1; text-align: left; min-width: 0; }
     .call-to-lbl {
       font-family: var(--mono);
       font-size: 9px;
       color: var(--tx-dim);
       letter-spacing: 0.14em;
       text-transform: uppercase;
-      margin-bottom: 4px;
+      margin-bottom: 2px;
     }
     .call-cs {
       font-family: var(--mono);
-      font-size: 26px;
+      font-size: 20px;
       font-weight: 700;
       color: var(--tx-bright);
       letter-spacing: 0.06em;
-      margin-bottom: 4px;
+    }
+    .call-peer-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--s-linked);
+      margin-top: 3px;
+    }
+    .call-peer-status i {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--s-linked); box-shadow: 0 0 6px var(--s-linked);
+      flex-shrink: 0;
     }
     .call-timer {
       font-family: var(--mono);
-      font-size: 18px;
-      color: var(--s-linked);
-      margin-bottom: 12px;
+      font-size: 10px;
+      color: var(--tx-mute);
+      margin-left: auto;
+      padding-left: 8px;
+    }
+    /* Hidden per Command-Deck parity — the mockup's Linked card has no
+       separate bar-meter row, only the metric grid (.link-mgrid above) and
+       the action row below. #qbars/#qualityLbl stay in the DOM (app.js keeps
+       writing them via pollSignalQuality()/updateLinkQualityFromLqa() — both
+       guarded, harmless with no visible target) so nothing is dropped, just
+       not rendered. */
+    .quality-card {
+      display: none;
+      background: var(--bg3);
+      border: 1px solid var(--hair2);
+      border-radius: var(--r-md);
+      padding: 10px 14px 12px;
+      margin: 0 10px 12px;
+    }
+    .quality-card-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--tx-mute);
+      margin-bottom: 8px;
     }
     .quality {
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 8px;
-      margin-bottom: 12px;
     }
     .qbars { display: flex; gap: 3px; align-items: flex-end; }
     .qbar { width: 5px; border-radius: 2px; background: var(--s-linked); }
@@ -596,27 +753,46 @@
     .qbar.inactive { opacity: 0.15; }
     .qlabel { font-family: var(--mono); font-size: 11px; color: var(--s-linked); }
 
-    .btn-end {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 7px;
-      width: calc(100% - 20px);
-      margin: 0 10px 12px;
-      padding: 10px;
-      background: rgba(255,82,82,0.10);
-      border: 1px solid rgba(255,82,82,0.28);
-      border-radius: var(--r-md);
-      color: var(--s-error);
-      font-family: var(--sans);
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      cursor: pointer;
-      transition: all 0.12s;
+    /* Linked-state metric grid (Command Deck parity) — real LQA-derived values,
+       written by updateLinkQualityFromLqa()/pollSignalQuality(). */
+    .link-mgrid {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 8px; margin: 0 10px 10px;
     }
-    .btn-end:hover { background: rgba(255,82,82,0.18); border-color: rgba(255,82,82,0.45); }
+    .link-mbox {
+      background: var(--bg3); border: 1px solid var(--hair2); border-radius: var(--r-md);
+      padding: 8px 6px; text-align: center;
+    }
+    .link-mbox-lbl {
+      font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--tx-mute); margin-bottom: 4px;
+    }
+    .link-mbox-val { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--tx-bright); }
+
+    /* Linked-state action row (Command Deck parity). Terminate carries the
+       same endCall() the old standalone .btn-end used to. Digital Voice/DATA
+       are disabled — genuinely unimplemented, matching the mockup's own
+       "Not yet supported" state, not a fake affordance. */
+    .call-actions {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 8px; margin: 0 10px 12px;
+    }
+    .callact-btn {
+      padding: 10px 4px;
+      background: var(--bg3); border: 1px solid var(--hair2); border-radius: var(--r-md);
+      color: var(--tx-muted);
+      font-family: var(--sans); font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: all 0.12s;
+    }
+    .callact-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-md); color: var(--tx); }
+    .callact-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .callact-btn.active {
+      background: rgba(79,131,196,0.14); border-color: var(--accent-dim); color: var(--tx-bright);
+    }
+    .callact-term {
+      background: rgba(255,82,82,0.10); border-color: rgba(255,82,82,0.28); color: var(--s-error);
+    }
+    .callact-term:hover { background: rgba(255,82,82,0.18); border-color: rgba(255,82,82,0.45); }
 
     /* ══════════════════════════════════════════════════════════════════════
        SIGNAL STRIP  (bottom — spans full width)
@@ -648,6 +824,17 @@
       overflow: hidden;
       background: var(--bg);
     }
+    /* Crisp dark outline (4-direction, not a blur) so every waterfall overlay
+       label stays readable regardless of what's directly behind it — a
+       bright/energetic waterfall pixel or the dark empty background alike.
+       A white glow (the previous approach) only helps against a dark
+       background; it does nothing against the waterfall's own bright colors,
+       which was the actual complaint. */
+    .wf-label, .wf-band-tone, .wf-band-cap, .wf-tick-lbl {
+      text-shadow:
+        -1px -1px 1.5px #000, 1px -1px 1.5px #000,
+        -1px  1px 1.5px #000, 1px  1px 1.5px #000;
+    }
     .wf-label {
       position: absolute;
       top: 3px; left: 0; right: 0;
@@ -656,26 +843,31 @@
       justify-content: space-between;
       font-family: var(--mono);
       font-size: 8px;
-      color: rgba(255,255,255,0.75);
+      color: var(--tx-bright);
       letter-spacing: 0.1em;
       pointer-events: none;
       z-index: 2;
     }
     /* ALE tone marker: each tone number is absolutely positioned at its TRUE
-       frequency (left set in JS from the same constants as the scale), with
-       en-dash separators in the gap midpoints. All transparent. */
+       frequency (left set in JS from the same constants as the scale). The
+       8 tones span only ~half the display width — alternating them across
+       two rows (-a/-b, set in JS) doubles the effective spacing between
+       same-row neighbours so the numbers don't run together. */
     .wf-band {
       position: absolute;
       top: 0; left: 0; right: 0;
-      height: 9px;
+      height: 19px;
     }
-    .wf-band-tone, .wf-band-sep {
+    .wf-band-tone {
       position: absolute;
-      top: 0;
       transform: translateX(-50%);
       white-space: nowrap;
+      font-family: var(--mono);
+      font-size: 8px;
+      color: var(--tx-bright);
     }
-    .wf-band-sep { opacity: 0.5; }
+    .wf-band-tone-a { top: 0; }
+    .wf-band-tone-b { top: 10px; }
     /* "ALE 8-FSK" caption pinned to the bottom edge of the band frame
        (left set in JS = band centre); subtly lifted off the waterfall. */
     .wf-band-cap {
@@ -686,8 +878,7 @@
       font-size: 8px;
       font-weight: 700;
       letter-spacing: 0.12em;
-      color: rgba(255,255,255,0.75);
-      text-shadow: 0 0 5px rgba(255,255,255,0.35);
+      color: var(--tx-bright);
       pointer-events: none;
       z-index: 2;
       white-space: nowrap;
@@ -724,7 +915,7 @@
       bottom: 0;
       font-family: var(--mono);
       font-size: 7px;
-      color: rgba(255,255,255,0.75);
+      color: var(--tx-bright);
       transform: translateX(-50%);
     }
 
@@ -757,43 +948,125 @@
     .mon-btn:hover { border-color: var(--border-hi); color: var(--tx); }
 
     /* ══════════════════════════════════════════════════════════════════════
-       HEARD STATIONS  (10-column table, same layout as Settings/LQA)
+       HEARD STATIONS  (app.js renders a <table>; restyled as a Command-Deck
+       card list via CSS grid placement on the existing <td> cells — no
+       markup/app.js change. Dense columns (Score/SINAD-TO/BER/MP/Age) are
+       kept in the DOM for data integrity but hidden; SINAD-FROM is promoted
+       to the big readout the mockup gives its "SINAD dB" figure.)
     ══════════════════════════════════════════════════════════════════════ */
-    .panel-heard  { height: 190px; flex-shrink: 0; }
-    #heardList    { overflow-y: auto; padding: 2px 6px; }
-    .heard-table  { width: 100%; border-collapse: collapse; margin: 0; }
-    .ch-table.heard-table th {
-      font-family: var(--mono); font-size: 8px; font-weight: 700;
-      letter-spacing: 0.06em; text-transform: uppercase;
-      color: var(--tx-dim); text-align: center;
-      padding: 3px 4px; border-bottom: 1px solid var(--border);
-      white-space: nowrap; position: sticky; top: 0; background: var(--bg2);
+    #heardList    { overflow-y: auto; padding: 2px 6px 6px; }
+    .heard-table  { display: block; width: 100%; border-collapse: collapse; margin: 0; }
+    .heard-table thead { display: none; }
+    .heard-table tbody { display: block; }
+    .heard-table tr {
+      display: grid;
+      grid-template-columns: auto 1fr auto auto;
+      grid-template-rows: auto auto;
+      column-gap: 10px;
+      align-items: center;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      padding: 9px 10px;
+      margin-bottom: 6px;
+      transition: border-color 0.12s, background 0.12s;
     }
-    .ch-table.heard-table th:first-child { text-align: left; }
-    .heard-table .lqa-cell { font-size: 10px; padding: 2px 4px; white-space: nowrap; }
-    .heard-actions { width: 34px; text-align: center; white-space: nowrap; }
+    .heard-table tr:hover { background: var(--bg-hover); border-color: var(--border-md); }
+    .heard-table td { padding: 0; border: none; white-space: nowrap; }
+    /* Callsign (col 1) */
+    .heard-table td:nth-child(1) {
+      grid-column: 1; grid-row: 1;
+      font-family: var(--mono); font-weight: 600; font-size: 13px; color: var(--tx-bright);
+      text-align: left !important;
+    }
+    /* Ch (freq) — meta line, right side next to the Avail pill's column
+       (swapped with the Received timestamp per user request). */
+    .heard-table td:nth-child(2) {
+      grid-column: 2; grid-row: 2; justify-self: start;
+      font-size: 10px; color: var(--tx-muted);
+    }
+    /* Avail pill — end of the callsign line */
+    .heard-table td:nth-child(3) { grid-column: 2; grid-row: 1; justify-self: start; }
+    /* Received timestamp — now the meta line directly under the callsign
+       (swapped with Ch/freq per user request). */
+    .heard-table td:nth-child(11) {
+      grid-column: 1; grid-row: 2;
+      font-size: 10px; color: var(--tx-muted);
+    }
+    /* SINAD FROM — big readout, right side, spans both rows */
+    .heard-table td:nth-child(5) {
+      grid-column: 3; grid-row: 1 / span 2; justify-self: end; text-align: right;
+      font-size: 16px; font-weight: 700;
+    }
+    .heard-table td:nth-child(5)::after {
+      content: "SINAD dB"; display: block;
+      font-family: var(--mono); font-size: 8px; font-weight: 400; letter-spacing: 0.04em;
+      color: var(--tx-mute); margin-top: 2px;
+    }
+    /* Actions — spans both rows, revealed on row hover */
+    .heard-table td.heard-actions {
+      grid-column: 4; grid-row: 1 / span 2; justify-self: end;
+      opacity: 0; transition: opacity 0.12s;
+    }
+    .heard-table tr:hover td.heard-actions { opacity: 1; }
+    /* Score / SINAD-TO / BER-FROM / BER-TO / MP / Age — kept in the DOM, not
+       shown in the card layout (SINAD-FROM + Received already tell the story
+       the mockup card shows; full detail remains in Settings ▸ LQA). */
+    .heard-table td:nth-child(4),
+    .heard-table td:nth-child(6),
+    .heard-table td:nth-child(7),
+    .heard-table td:nth-child(8),
+    .heard-table td:nth-child(9),
+    .heard-table td:nth-child(10) { display: none; }
+
+    .heard-actions { text-align: center; white-space: nowrap; }
     .heard-add { background: none; border: none; color: var(--tx-dim); cursor: pointer;
-                 font-size: 11px; padding: 0 1px; line-height: 1; vertical-align: middle;
+                 font-size: 12px; padding: 0 1px; line-height: 1; vertical-align: middle;
                  display: inline-flex; align-items: center; }
     .heard-add:hover { color: var(--s-linked); }
     .heard-add.heard-added { color: var(--s-linked); opacity: .6; cursor: default; }
-    .heard-avail  { font-size: 8px; font-weight: 700; min-width: 34px; text-align: center;
-                    padding: 1px 3px; border-radius: 2px; letter-spacing: .5px; }
-    .heard-avail.ha-yes { color: var(--s-linked); border: 1px solid var(--s-linked); }
-    .heard-avail.ha-no  { color: var(--s-error);  border: 1px solid var(--s-error); }
-    .heard-avail.ha-unk { color: var(--tx-dim);   border: 1px solid var(--border); }
+    .heard-avail  { font-size: 8.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+                    text-align: center; padding: 2px 7px; border-radius: 20px; white-space: nowrap; }
+    .heard-avail.ha-yes { color: var(--s-linked); background: rgba(40,214,122,0.12); border: 1px solid rgba(40,214,122,0.28); }
+    .heard-avail.ha-no  { color: var(--s-error);  background: rgba(255,82,82,0.12); border: 1px solid rgba(255,82,82,0.3); }
+    .heard-avail.ha-unk { color: var(--tx-dim);   background: transparent; border: 1px solid var(--border); }
     .heard-del    { background: none; border: none; color: var(--tx-dim); cursor: pointer;
-                    font-size: 11px; padding: 0 2px; line-height: 1; }
+                    font-size: 12px; padding: 0 2px; line-height: 1; }
     .heard-del:hover { color: var(--s-error); }
     .heard-empty  { color: var(--tx-dim); font-family: var(--mono); font-size: 10px; padding: 4px 2px; }
+
+    /* Empty-state pattern shared by Heard Stations / Messages / Contacts —
+       icon + title + hint, with a real CTA button where one exists (not just
+       descriptive text). See .inc-empty for the sibling pattern used by the
+       Active Link idle state. */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      padding: 26px 14px; text-align: center;
+    }
+    .empty-state svg { color: var(--tx-dim); opacity: 0.45; }
+    .empty-state-title { font-size: 12px; color: var(--tx-bright); }
+    .empty-state-hint { font-size: 11px; line-height: 1.5; color: var(--tx-muted); max-width: 220px; }
+    .empty-state-cta {
+      margin-top: 4px; padding: 6px 14px; border-radius: var(--r-sm);
+      border: 1px solid var(--accent-dim); background: var(--accent-glow); color: var(--accent);
+      font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; cursor: pointer;
+      transition: all 0.12s;
+    }
+    .empty-state-cta:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    /* Momentary highlight on the Contacts panel when an empty-state CTA
+       elsewhere (e.g. Messages) sends the operator here to pick a contact. */
+    .panel-flash { animation: panel-flash-pulse 0.9s ease; }
+    @keyframes panel-flash-pulse {
+      0%, 100% { box-shadow: none; }
+      30% { box-shadow: 0 0 0 2px var(--accent); }
+    }
 
     /* ══════════════════════════════════════════════════════════════════════
        ALE LOG
     ══════════════════════════════════════════════════════════════════════ */
     .ale-log {
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      border-radius: var(--r-lg);
+      background: transparent;
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
@@ -807,7 +1080,7 @@
       padding: 0 12px;
       height: 28px;
       min-height: 28px;
-      background: var(--bg);
+      background: transparent;
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
@@ -818,6 +1091,15 @@
       letter-spacing: 0.14em;
       text-transform: uppercase;
       color: var(--tx-dim);
+    }
+    /* "Console" is the umbrella label; the actual single-stream view (there
+       are no CAT Trace / LQA tabs — CAT trace lines flow into this same
+       stream when #cfgCatTrace is on, and LQA has its own Settings table)
+       stays honestly named next to it, echoing the Heard-panel "Heard
+       <em>STATIONS / LQA</em>" idiom used elsewhere in this header row. */
+    .ale-log-title em {
+      font-style: normal; font-weight: 400; text-transform: none;
+      letter-spacing: 0.02em; opacity: 0.65; margin-left: 5px;
     }
     .ale-log-count { font-family: var(--mono); font-size: 10px; color: var(--tx-muted); }
     .ale-log-body  { flex: 1; overflow-y: auto; padding: 3px 8px;
@@ -899,7 +1181,8 @@
       cursor: pointer;
       font-size: 14px;
       display: flex; align-items: center; justify-content: center;
-      transition: all 0.12s;
+      /* Enumerated (not `all`) — see .btn-sm above for why. */
+      transition: background-color 0.12s, color 0.12s;
     }
     .modal-close:hover { background: var(--bg3); color: var(--tx); }
 
@@ -1029,6 +1312,88 @@
     }
     .fselect option { background: var(--bg3); color: var(--tx); }
 
+    /* ══════════════════════════════════════════════════════════════════════
+       FIRST-RUN SETUP WIZARD  (#setupWizard)
+    ══════════════════════════════════════════════════════════════════════ */
+    .wz-nav { display: flex; align-items: center; gap: 6px; }
+    .wz-nav-btn {
+      background: transparent; border: none; color: var(--tx-dim);
+      font-size: 16px; line-height: 1; width: 20px; height: 20px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: var(--r-sm); cursor: pointer; transition: all 0.12s;
+    }
+    .wz-nav-btn:hover:not(:disabled) { color: var(--tx-bright); background: var(--bg3); }
+    .wz-nav-btn:disabled { opacity: 0.25; cursor: default; }
+
+    .wz-pips { display: flex; gap: 6px; margin: 0 10px; }
+    .wz-pip {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--border-md);
+      transition: background 0.2s, transform 0.2s;
+      flex-shrink: 0;
+    }
+    .wz-pip.active { background: var(--accent); transform: scale(1.25); }
+    .wz-pip.done   { background: var(--accent-dim); }
+
+    .wz-step { display: flex; flex-direction: column; padding: 24px 22px 20px; }
+    .wz-step.hidden { display: none; }
+
+    .wz-step-num {
+      font-family: var(--mono); font-size: 10px; color: var(--tx-dim);
+      text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 6px;
+    }
+    .wz-step-title { font-size: 18px; font-weight: 600; color: var(--tx-bright); margin-bottom: 8px; line-height: 1.2; }
+    .wz-step-desc  { font-size: 12px; color: var(--tx-muted); line-height: 1.55; }
+
+    .wz-cs-input {
+      margin-top: 18px; font-family: var(--mono); font-size: 26px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent); text-align: center;
+      padding: 14px 16px; background: var(--bg3); border: 1px solid var(--border-md);
+      border-radius: var(--r-md); width: 100%;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .wz-cs-input::placeholder { color: var(--tx-dim); font-weight: 400; }
+    .wz-cs-input:focus {
+      outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow-hi);
+    }
+
+    .wz-status { min-height: 18px; font-size: 11px; margin-top: 8px; color: var(--tx-muted); font-family: var(--mono); }
+    .wz-status.ok  { color: var(--s-scanning); }
+    .wz-status.err { color: var(--s-error); }
+
+    .wz-actions {
+      display: flex; justify-content: flex-end; align-items: center; gap: 12px;
+      margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);
+    }
+    .wz-btn-next {
+      background: var(--accent); color: #000; border: none; padding: 9px 22px;
+      border-radius: var(--r-md); font-family: var(--sans); font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: background 0.12s;
+    }
+    .wz-btn-next:hover { background: var(--accent-dim); }
+    .wz-btn-skip {
+      background: transparent; border: none; color: var(--tx-dim); font-family: var(--sans);
+      font-size: 12px; cursor: pointer; padding: 6px 4px; transition: color 0.12s;
+    }
+    .wz-btn-skip:hover { color: var(--tx-muted); }
+
+    /* Step 3 (Nets) — read-only summary rows, or the quick-create fallback */
+    .wz-nets-list { display: flex; flex-direction: column; gap: 6px; }
+    .wz-net-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 12px; background: var(--bg3); border: 1px solid var(--border);
+      border-radius: var(--r-md); font-family: var(--mono); font-size: 12px;
+    }
+    .wz-net-name  { color: var(--tx-bright); font-weight: 600; }
+    .wz-net-count { color: var(--tx-muted); }
+    .wz-net-empty { font-size: 12px; color: var(--tx-dim); font-style: italic; }
+    .wz-btn-quick {
+      width: 100%; padding: 10px 14px; background: var(--accent-glow); color: var(--accent);
+      border: 1px solid var(--accent-dim); border-radius: var(--r-md); font-family: var(--mono);
+      font-size: 12px; letter-spacing: 0.03em; cursor: pointer; transition: all 0.12s;
+    }
+    .wz-btn-quick:hover { background: var(--accent); color: #000; }
+
     .ftoggle-row {
       display: flex;
       align-items: center;
@@ -1059,7 +1424,8 @@
       background: var(--bg3);
       border: 1px solid var(--border-md);
       cursor: pointer;
-      transition: all 0.2s;
+      /* Enumerated (not `all`) — see .btn-sm above for why. */
+      transition: background-color 0.2s, border-color 0.2s;
     }
     .ftrack::after {
       content: '';
@@ -1068,7 +1434,9 @@
       width: 12px; height: 12px;
       border-radius: 50%;
       background: var(--tx-dim);
-      transition: all 0.2s;
+      /* Enumerated (not `all`) — see .btn-sm above for why; transform kept,
+         it drives the knob's slide on check/uncheck. */
+      transition: background-color 0.2s, transform 0.2s;
     }
     .ftoggle input:checked + .ftrack {
       background: var(--accent-glow-hi);
@@ -1089,7 +1457,8 @@
       border: 1px solid var(--border);
       border-radius: var(--r-md);
       cursor: pointer;
-      transition: all 0.12s;
+      /* Enumerated (not `all`) — see .btn-sm above for why. */
+      transition: background-color 0.12s, border-color 0.12s, color 0.12s;
       font-family: var(--mono);
       font-size: 11px;
       color: var(--tx-muted);
@@ -1141,13 +1510,20 @@
       padding: 6px 8px;
       border-bottom: 1px solid var(--border);
     }
-    .ch-table td {
+    /* :not(.heard-table) — the Heard Stations table also carries the
+       .ch-table class (shares its base width/border-collapse) but is a
+       card-list, not a plain data table (see the .heard-table block above):
+       these two rules used to leak in at equal specificity + later source
+       order, silently overriding .heard-table's own padding/border/hover
+       background — every cell showed a stray resting-color rectangle behind
+       its text on row hover, since only the <tr> was meant to change shade. */
+    .ch-table:not(.heard-table) td {
       padding: 5px 6px;
       border-bottom: 1px solid var(--border);
       vertical-align: middle;
     }
     .ch-table tr:last-child td { border-bottom: none; }
-    .ch-table tr:hover td { background: var(--bg3); }
+    .ch-table:not(.heard-table) tr:hover td { background: var(--bg3); }
     .tc-ok { color: var(--accent); }
     .tc-no { color: var(--tx-dim); }
 
@@ -1171,7 +1547,8 @@
       font-size: 11px;
       width: 100%;
       outline: none;
-      transition: all 0.10s;
+      /* Enumerated (not `all`) — see .btn-sm above for why. */
+      transition: background-color 0.10s, border-color 0.10s;
     }
     .ch-inp:focus {
       background: var(--bg3);
@@ -1185,7 +1562,8 @@
       font-size: 13px;
       padding: 2px 6px;
       border-radius: var(--r-sm);
-      transition: all 0.10s;
+      /* Enumerated (not `all`) — see .btn-sm above for why. */
+      transition: background-color 0.10s, color 0.10s;
     }
     .ch-del:hover { color: var(--s-error); background: rgba(255,82,82,0.10); }
 
@@ -1217,7 +1595,8 @@
       border: 1px solid var(--border); background: var(--bg2);
       border-radius: var(--r-sm); padding: 5px 6px; width: 100%;
       color: var(--tx); font-family: var(--mono); font-size: 11px;
-      outline: none; cursor: pointer; transition: all 0.10s;
+      /* Enumerated (not `all`) — see .btn-sm above for why. */
+      outline: none; cursor: pointer; transition: background-color 0.10s, border-color 0.10s;
     }
     .ch-sel:focus, .ch-sel:hover { border-color: rgba(0,220,140,0.28); background: var(--bg3); }
     .ch-sel option { background: var(--bg2); color: var(--tx); }
@@ -1239,7 +1618,11 @@
       font-family: var(--sans);
       font-size: 12px;
       cursor: pointer;
-      transition: all 0.12s;
+      /* Enumerated (not `all`) so this never picks up an inherited
+         `visibility` change from an ancestor like #settingsModal .modal —
+         `all` would silently try to transition visibility too, which Chrome
+         can't composite and kicks to the main thread (see .modal above). */
+      transition: background-color 0.12s, color 0.12s, border-color 0.12s;
       display: inline-flex;
       align-items: center;
       gap: 5px;
@@ -1324,7 +1707,8 @@
       font-family: var(--sans);
       font-size: 13px;
       cursor: pointer;
-      transition: all 0.12s;
+      /* Enumerated (not `all`) — see .btn-sm above for why. */
+      transition: background-color 0.12s, color 0.12s;
     }
     .btn-cancel:hover { background: var(--bg3); color: var(--tx); }
     .btn-save {
@@ -1338,9 +1722,86 @@
       font-weight: 700;
       cursor: pointer;
       letter-spacing: 0.04em;
-      transition: all 0.12s;
+      /* Enumerated (not `all`) — see .btn-sm above for why. */
+      transition: filter 0.12s;
     }
     .btn-save:hover { filter: brightness(1.08); }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       SETTINGS DRAWER — rail-anchored slide-out (Command Deck v2 parity)
+       Scoped to #settingsModal ONLY so the other .modal-overlay dialogs
+       (idleWarn / soundingWarn / testChannel / contact) remain centered modals.
+       Pure re-skin: the #settingsModal subtree, showSec/openSettings/
+       closeSettings/saveSettings and every field are untouched — app.js still
+       drives open/close via the .hidden class. The rail replaces the in-drawer
+       section nav.
+    ══════════════════════════════════════════════════════════════════════ */
+    /* Container: transparent, left-anchored strip just right of the 64px rail;
+       it never dims or blocks the live workspace (clicks pass through), and it
+       stays in layout even when .hidden so the panel slides rather than snaps. */
+    #settingsModal.modal-overlay {
+      inset: 0 auto 0 64px;
+      width: 470px;
+      padding: 0;
+      display: block;
+      background: transparent;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      z-index: 120;
+      pointer-events: none;
+    }
+    #settingsModal.hidden { display: block !important; } /* defeat .hidden util; visibility handled on .modal */
+
+    /* Panel: full-height drawer sliding in from the workspace's left edge.
+       will-change/contain promote this panel onto its own GPU compositing
+       layer. transition animates `transform` ONLY — Chrome's compositor
+       cannot run `visibility` on the compositor thread at all ("Unsupported
+       CSS property: visibility") and additionally rejects the zero-duration
+       delayed step ("Effect has unsupported timing parameters"), confirmed
+       via a DevTools Performance recording on the close transition. Bundling
+       that into the same transition knocked the whole animation onto the
+       main thread every frame, which is invisible on the mock's static demo
+       page but visibly stutters against production's actively-updating
+       background (waterfall/heard-stations/log). Visibility is instead
+       toggled by JS (openSettings/closeSettings, app.js) via a `.closing`
+       class + transitionend, so it never participates in the CSS transition
+       and the compositor only ever has to animate `transform`. contain:layout
+       also stops the panel's own internal reflows (settings form fields)
+       from ever being able to affect anything outside it. */
+    #settingsModal .modal {
+      pointer-events: auto;
+      width: 470px;
+      max-width: none;
+      height: 100%;
+      max-height: none;
+      border-radius: 0;
+      border: none;
+      border-right: 1px solid var(--border-md);
+      background: var(--bg2);
+      box-shadow: var(--shadow-xl);
+      transform: translateX(-103%);
+      visibility: hidden;
+      will-change: transform;
+      contain: layout style paint;
+      transition: transform 0.34s var(--ease);
+    }
+    #settingsModal:not(.hidden) .modal {
+      transform: translateX(0);
+      visibility: visible;
+    }
+    /* Applied by closeSettings() for the duration of the slide-out only, so
+       the panel stays visible/painted while it animates off-screen even
+       though #settingsModal already has .hidden reapplied (which is what
+       drives the transform back to -103%). Removed by the transitionend
+       listener the instant the real transform animation finishes. */
+    #settingsModal .modal.closing {
+      visibility: visible;
+    }
+
+    /* Rail is now the section selector — hide the in-drawer left nav and let
+       the settings content fill the panel width. */
+    #settingsModal .snav { display: none; }
+    #settingsModal .scontent { padding: 22px 24px; }
 
     /* ══════════════════════════════════════════════════════════════════════
        POLISH — clock, scan, message/contact actions, LQA
@@ -1463,7 +1924,10 @@
     .rk {
       background: var(--bg3); border: 1px solid var(--border); color: var(--tx);
       border-radius: var(--r-sm); font-family: var(--mono); font-size: 13px; font-weight: 600;
-      padding: 9px 0; text-align: center; cursor: pointer; transition: all 0.10s;
+      padding: 9px 0; text-align: center; cursor: pointer;
+      /* Enumerated (not `all`) — see .btn-sm above for why; transform kept,
+         it drives the :active press-down effect. */
+      transition: background-color 0.10s, border-color 0.10s, transform 0.10s;
     }
     .rk:hover  { background: var(--bg-hover); border-color: var(--border-md); }
     .rk:active { transform: translateY(1px); }
@@ -1767,3 +2231,230 @@
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border-md); border-radius: 2px; }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       COMMAND DECK v2 LAYOUT
+       Outer shell only — inner content blocks reuse the production component
+       classes above (.panel/.plabel/.pbody, .status-chip, .busy-chip,
+       .radio-panel, .sound-*, .net-*, .heard-*, .ale-log-*, .wf-*, forms,
+       modals). Every production ID/handler is preserved; this section just
+       relocates them into the rail + command-bar + 3-pane + console frame.
+    ══════════════════════════════════════════════════════════════════════ */
+
+    /* ── slim icon rail ── */
+    .rail {
+      background: var(--bg1);
+      border-right: 1px solid var(--hair);
+      display: flex; flex-direction: column; align-items: center;
+      padding: 12px 0 10px;
+      position: relative; z-index: 40;
+      min-height: 0;
+    }
+    .rail-logo {
+      width: 40px; height: 40px; border-radius: 11px; overflow: hidden;
+      display: grid; place-items: center;
+      font-family: var(--mono); font-weight: 700; font-size: 13px;
+      color: var(--tx-bright); letter-spacing: -0.03em;
+      background: linear-gradient(145deg, var(--bg4), var(--bg2));
+      box-shadow: var(--sh), inset 0 0 0 1px rgba(255,255,255,0.06);
+      flex: none; margin-bottom: 8px;
+    }
+    .rail-logo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .rail-nav {
+      flex: 1; width: 100%; min-height: 0;
+      /* Must be the single "visible" keyword (mockup parity), not split into
+         overflow-y:auto + overflow-x:visible — the CSS spec force-coerces
+         overflow-x to auto whenever overflow-y isn't visible, which makes the
+         absolutely-positioned .tip tooltips (they intentionally pop out past
+         the 64px rail) register as horizontal scroll content: a phantom
+         horizontal scrollbar renders as a stray grey rectangle bottom-left. */
+      overflow: visible;
+      display: flex; flex-direction: column; align-items: center;
+      padding-top: 2px;
+    }
+    .rail-nav::-webkit-scrollbar { width: 0; }
+    .rgrp { width: 100%; display: flex; flex-direction: column; align-items: center; }
+    .rgrp-lbl {
+      font-size: 7.5px; font-weight: 700; letter-spacing: 0.08em;
+      color: var(--tx-bright); text-transform: uppercase;
+      margin: 10px 0 4px; opacity: 0.8;
+    }
+    .rnav {
+      position: relative; width: 42px; height: 42px; border-radius: 11px;
+      display: grid; place-items: center; color: var(--tx-dim);
+      cursor: pointer;
+      /* Enumerated (not `all`) — see .btn-sm above for why. Note: unlike
+         that fix, this alone can't make the transition GPU-compositable —
+         color/background-color are never compositable in any browser. See
+         .rail.no-anim below for the part that actually matters: suppressing
+         this during the settings-drawer close so it doesn't compete with
+         the drawer's transform for the same frame. */
+      transition: background-color 0.16s var(--ease), color 0.16s var(--ease);
+      margin: 2px 0; background: transparent; border: none;
+    }
+    /* Applied briefly by railClick() (index.html) while closing the settings
+       drawer — resetRail() flips .on across every rail icon in the same
+       handler that starts the drawer's slide-out; since color/background-color
+       can never run on the compositor thread, letting them animate here would
+       add avoidable main-thread work in the exact frame the drawer needs its
+       budget most. The rail highlight snapping instantly is imperceptible —
+       attention is on the drawer, not the rail, during a close. */
+    .rail.no-anim .rnav { transition: none; }
+    .rnav svg { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-width: 2; }
+    .rnav:hover { background: var(--bg2); color: var(--tx-bright); }
+    .rnav.on { background: var(--bg3); color: var(--tx-bright); }
+    .rnav.on::before {
+      content: ''; position: absolute; left: -11px; top: 9px; bottom: 9px;
+      width: 3px; border-radius: 3px; background: var(--ac2); box-shadow: 0 0 9px var(--ac-glow);
+    }
+    .rnav .badge-i {
+      position: absolute; top: 4px; right: 4px; min-width: 14px; height: 14px;
+      padding: 0 3px; border-radius: 8px; background: var(--ac); color: #fff;
+      font-family: var(--mono); font-size: 8.5px; font-weight: 700;
+      display: grid; place-items: center; box-shadow: 0 0 0 2px var(--bg1);
+    }
+    .rnav .tip {
+      position: absolute; left: calc(100% + 12px); top: 50%;
+      transform: translateY(-50%) translateX(-6px);
+      width: max-content; max-width: 220px; text-align: left;
+      background: var(--bg4); border-radius: 8px; box-shadow: var(--sh-lg);
+      border: 1px solid var(--hair2); padding: 7px 12px;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.1s var(--ease), transform 0.1s var(--ease); z-index: 130; /* above settings drawer (120) */
+    }
+    .rnav .tip b { display: block; font-size: 12px; font-weight: 700; color: var(--tx-bright); }
+    .rnav .tip span { display: block; font-size: 10.5px; font-weight: 500; color: var(--tx-dim); margin-top: 2px; line-height: 1.4; }
+    .rnav .tip::before {
+      content: ''; position: absolute; right: 100%; top: 50%;
+      transform: translateY(-50%); border: 5px solid transparent; border-right-color: var(--bg4);
+    }
+    .rnav:hover .tip { opacity: 1; transform: translateY(-50%) translateX(0); }
+
+    /* ── workspace column ── */
+    .work { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+
+    /* row 1 : brand · Help · clock */
+    .wbar {
+      height: 56px; flex: none; display: flex; align-items: center; gap: 14px;
+      padding: 0 16px; border-bottom: 1px solid var(--hair);
+      background: var(--bg1); z-index: 20;
+    }
+    .hbrand { line-height: 1.05; }
+    .hbrand .wm { font-size: 16px; font-weight: 700; color: var(--tx-bright); letter-spacing: -0.01em; }
+    .hbrand .wm-img { height: 20px; width: auto; display: block; mix-blend-mode: screen; }
+    .hbrand .sub { font-size: 9px; color: var(--tx-mute); font-family: var(--mono); letter-spacing: 0.02em; margin-top: 2px; text-transform: uppercase; }
+    .hsep { width: 1px; height: 30px; background: var(--hair2); flex: none; }
+
+    /* Row 5 footer — same style/color as the row-1 .wbar header, half its
+       height (28px vs 56px), mirrored border (top instead of bottom). */
+    .wfoot {
+      height: 28px; flex: none; display: flex; align-items: center; gap: 10px;
+      padding: 0 16px; border-top: 1px solid var(--hair);
+      background: var(--bg1);
+      font-family: var(--mono); font-size: 9px; color: var(--tx-mute);
+      letter-spacing: 0.02em; text-transform: uppercase;
+    }
+    .wfoot-brand { color: var(--tx-dim); font-weight: 700; }
+    .wfoot-brand b { color: var(--tx-bright); }
+    .wfoot-sep { color: var(--hair2); }
+    .wfoot .sp { flex: 1; }
+    .wbar .sp { flex: 1; }
+
+    /* Self identity — the whole lane-1 width, clickable → Identity settings.
+       Replaces the old small pill (it no longer fit once Status moved out of
+       this lane, see .ctrl-lane-1 below): one prominent callsign readout. */
+    .self-id {
+      display: flex; align-items: center; gap: 10px;
+      height: 100%; padding: 0 12px; margin: 0 -12px;
+      cursor: pointer; border-radius: var(--r-md);
+      transition: background 0.16s var(--ease);
+    }
+    .self-id:hover { background: var(--bg2); }
+    .self-id-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      background: var(--s-linked); box-shadow: 0 0 8px var(--s-linked);
+    }
+    .self-id-cs {
+      font-family: var(--mono); font-size: 16px; font-weight: 700;
+      color: var(--tx-bright); letter-spacing: 0.05em;
+    }
+
+    /* row 2 : radio command bar (Self · Channel · Status · Transmit) — a
+       3-column grid using the SAME 340px/1fr/320px template as .grid below,
+       so the Status and Transmit separators land exactly on the
+       Heard|ActiveLink and ActiveLink|Contacts dividers ("rounder" look). */
+    .ctrl {
+      flex: none; display: grid; align-items: center;
+      grid-template-columns: 340px 1fr 320px;
+      padding: 10px 0; border-bottom: 1px solid var(--hair);
+      background: var(--bg);
+    }
+    /* Lane 1/3's OUTER edge gets breathing padding; each lane's edge that
+       carries a divider (lane-2's left = the Status .cl-sep.lead, lane-3's
+       left = the Transmit .cl-sep) is left unpadded so the divider sits
+       exactly on the grid column boundary, not offset by inner padding. */
+    .ctrl-lane { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .ctrl-lane-1 { padding-left: 16px; }
+    .ctrl-lane-2 { padding-right: 12px; }
+    .ctrl-lane-3 { padding-right: 16px; }
+    .cluster { display: flex; align-items: center; gap: 8px; }
+    /* Push the Channel cluster (last .cluster in lane-2) flush against the
+       lane-2/lane-3 boundary, so its last control (Radio) sits directly
+       adjacent to the Transmit "|" instead of floating with empty space
+       after it — Status stays left, anchored next to Self. */
+    .ctrl-lane-2 > .cluster:last-child { margin-left: auto; }
+    .cl-sep { width: 1px; height: 30px; background: var(--hair2); flex: none; }
+    .cl-lbl {
+      font-size: 8.5px; font-weight: 600; letter-spacing: 0.11em;
+      text-transform: uppercase; color: var(--tx-bright); white-space: nowrap;
+    }
+
+    /* channel-stepper icon button (also targeted bulk-disabled by app.js via .hdr-icon) */
+    .hdr-icon {
+      width: 30px; height: 30px; border-radius: var(--r-md);
+      background: var(--bg2); border: 1px solid var(--hair2); color: var(--tx-dim);
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+      transition: all 0.16s var(--ease);
+    }
+    .hdr-icon:hover { color: var(--ac2); border-color: var(--ac-dim); }
+    .hdr-icon:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* row 3 : operate grid  (Signals | Active-Link + Messages | Contacts)
+       Flat/divided table, mirroring the mockup's .grid/.pane: no gap, no
+       per-panel card — hairline borders between columns and between panels
+       stacked in the same column carry all the visual separation. */
+    .grid {
+      flex: 1; min-height: 0; display: grid;
+      grid-template-columns: 340px 1fr 320px;
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+    }
+    .gcol { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+    .grid > .gcol:not(:last-child) { border-right: 1px solid var(--border); }
+    .gcol > .panel { min-height: 0; }
+    .gcol > .panel:not(:last-child) { border-bottom: 1px solid var(--border); }
+    .gcol > .panel-heard,
+    .gcol > .panel-contacts,
+    .gcol > .panel-messages { flex: 1 1 auto; min-height: 0; }
+    .gcol > .panel-active { flex: none; }
+
+    /* row 4 : docked console  (ALE log | small waterfall) — mockup uses a
+       visibly-recessed flat dock (darker than the main pane background),
+       divided from row 3 and internally by hairlines, not boxed cards. */
+    /* Waterfall column is 320px (not 340px) — matches .grid's Contacts column
+       exactly, so this divider lines up with the Contacts|ActiveLink one above. */
+    .console {
+      flex: none; height: 190px; display: grid;
+      grid-template-columns: 1fr 320px;
+      background: #07080b;
+      border-top: 1px solid var(--border);
+    }
+    .console > .ale-log { grid-column: 1; grid-row: 1; min-height: 0; height: 100%; margin: 0;
+                           border-right: 1px solid var(--border); }
+    .console > .cwf { grid-column: 2; grid-row: 1; }
+    .cwf {
+      position: relative; min-height: 0; height: 100%;
+      background: #05070a;
+      overflow: hidden;
+    }
+    .cwf .strip-wf { position: absolute; inset: 0; height: auto; width: auto; }
