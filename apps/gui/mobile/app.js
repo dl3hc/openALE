@@ -3818,15 +3818,24 @@ function wzSetStatus(step, msg, cls) {
   el.className = 'wz-status' + (cls ? ' ' + cls : '');
 }
 
-// Step 2 (Nets) — read-only summary of nets[], usually already populated by
-// the .ale file's own NET: lines via the Channels step, or a one-click
-// "create one from everything just loaded" fallback when nets[] is empty.
+// Step 2 (Nets) — summary rows for nets[] (usually already populated by the
+// .ale file's own NET: lines via the Channels step, or a one-click
+// "create one from everything just loaded" fallback when nets[] is empty),
+// plus an inline Dwell input per net — reuses netPolicySet() so it behaves
+// identically to (and stays in sync with) Settings ▸ Nets.
 function wzRenderNets() {
   const el = document.getElementById('wzNetsList');
   if (!el) return;
   if (nets.length) {
-    el.innerHTML = nets.map(n =>
-      `<div class="wz-net-row"><span class="wz-net-name">${escapeHtml(n.name)}</span><span class="wz-net-count">${n.channelIds.length} channel${n.channelIds.length === 1 ? '' : 's'}</span></div>`
+    el.innerHTML = nets.map((n, i) =>
+      `<div class="wz-net-row">
+        <span class="wz-net-name">${escapeHtml(n.name)}</span>
+        <span class="wz-net-count">${n.channelIds.length} channel${n.channelIds.length === 1 ? '' : 's'}</span>
+        <label class="wz-net-dwell" title="Scan dwell time on each channel of this net">Dwell
+          <input type="number" value="${n.dwellMs}" min="200"
+            oninput="netPolicySet(${i},'dwellMs',+this.value)">ms
+        </label>
+      </div>`
     ).join('');
   } else if (channels.length) {
     el.innerHTML = `<button class="wz-btn-quick" onclick="wzQuickNet()">+ Create a net from all loaded channels</button>`;
