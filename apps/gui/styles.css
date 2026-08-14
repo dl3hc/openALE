@@ -1744,7 +1744,14 @@
     ══════════════════════════════════════════════════════════════════════ */
     /* Container: transparent, left-anchored strip just right of the 64px rail;
        it never dims or blocks the live workspace (clicks pass through), and it
-       stays in layout even when .hidden so the panel slides rather than snaps. */
+       stays in layout even when .hidden so the panel slides rather than snaps.
+       z-index deliberately BELOW .rail (40): the drawer's resting transform
+       (translateX(-103%)) leaves its right edge tucked a few px under the
+       rail's 64px strip, and while open/close is racing the compositor (see
+       the .modal comment below) that edge is where any residual stutter would
+       be visible. Keeping the rail's opaque background on top masks that
+       sliver for the whole animation instead of letting the panel draw over
+       the rail and expose it. */
     #settingsModal.modal-overlay {
       inset: 0 auto 0 64px;
       width: 470px;
@@ -1753,7 +1760,7 @@
       background: transparent;
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
-      z-index: 120;
+      z-index: 30;
       pointer-events: none;
     }
     #settingsModal.hidden { display: block !important; } /* defeat .hidden util; visibility handled on .modal */
@@ -2326,7 +2333,7 @@
       background: var(--bg4); border-radius: 8px; box-shadow: var(--sh-lg);
       border: 1px solid var(--hair2); padding: 7px 12px;
       opacity: 0; pointer-events: none;
-      transition: opacity 0.1s var(--ease), transform 0.1s var(--ease); z-index: 130; /* above settings drawer (120) */
+      transition: opacity 0.1s var(--ease), transform 0.1s var(--ease); z-index: 130; /* above the rail's own stacking context (40), which is now above the settings drawer (30) */
     }
     .rnav .tip b { display: block; font-size: 12px; font-weight: 700; color: var(--tx-bright); }
     .rnav .tip span { display: block; font-size: 10.5px; font-weight: 500; color: var(--tx-dim); margin-top: 2px; line-height: 1.4; }

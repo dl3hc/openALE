@@ -33,6 +33,8 @@
 #include "PAL/radios/hamlib_radio.h"
 #include "PAL/timer.h"
 #include "bridge/ws_server.h"
+#include "bridge/rigctld_server.h"
+#include "bridge/rigctld_protocol.h"
 #include "bridge/minijson.h"
 
 #ifdef _WIN32
@@ -331,6 +333,7 @@ struct BridgeCtx {
     // Dynamic audio-path owner (ALE-modem ↔ voice passthrough on the VAC).
     VoicePathManager* voice      = nullptr;
     bool              voice_armed = false;  ///< persisted in settings (voice_armed=)
+    bridge::RigctldServer* rigctld = nullptr;  ///< netrigctl-compat read-only frequency server
 };
 
 // ── Command dispatch ────────────────────────────────────────────────────────
@@ -393,6 +396,24 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
             });
         } else {
             pal::log_info("openALE", "SFI service: disabled");
+        }
+    }
+}
+
+// Restart the rigctld-compat server to match current config. Safe to call on
+// a fresh BridgeCtx (stop() on a never-started RigctldServer is a no-op).
+static void restart_rigctld_server(BridgeCtx& ctx, ALEController& ctrl) {
+    if (!ctx.rigctld) return;
+    ctx.rigctld->stop();
+    const auto& cfg = ctrl.get_config();
+    if (cfg.rigctld_server_enabled) {
+        if (ctx.rigctld->start(cfg.rigctld_server_port, cfg.rigctld_server_bind_remote)) {
+            pal::log_info("openALE", "rigctld-compat server: listening on %s:%u",
+                          cfg.rigctld_server_bind_remote ? "0.0.0.0" : "127.0.0.1",
+                          cfg.rigctld_server_port);
+        } else {
+            pal::log_error("openALE", "rigctld-compat server: failed to bind port %u",
+                           cfg.rigctld_server_port);
         }
     }
 }
@@ -921,6 +942,28 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(make_reply(msg, true));
     }
 
+    // ── Tuner (rigctld/netrigctl-compat read-only frequency server) ────────
+    if (cmd == "RIGCTLD_GET") {
+        mj::Value r = make_reply(msg, true);
+        const auto& cfg = ctrl.get_config();
+        r.set("enabled",     mj::Value::boolean(cfg.rigctld_server_enabled));
+        r.set("port",        mj::Value::number(cfg.rigctld_server_port));
+        r.set("bind_remote", mj::Value::boolean(cfg.rigctld_server_bind_remote));
+        r.set("running",     mj::Value::boolean(ctx.rigctld && ctx.rigctld->is_running()));
+        r.set("clients",     mj::Value::number(ctx.rigctld ? static_cast<double>(ctx.rigctld->client_count()) : 0));
+        return mj::dump(r);
+    }
+    if (cmd == "RIGCTLD_SET") {
+        ALEStationConfig cfg = ctrl.get_config();
+        if (msg.has("enabled"))     cfg.rigctld_server_enabled = msg.get_bool("enabled");
+        if (msg.has("port"))        cfg.rigctld_server_port = static_cast<uint16_t>(msg.get_number("port"));
+        if (msg.has("bind_remote")) cfg.rigctld_server_bind_remote = msg.get_bool("bind_remote");
+        ctrl.apply_config(cfg);
+        restart_rigctld_server(ctx, ctrl);
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
+        return mj::dump(make_reply(msg, true));
+    }
+
     // ── FEC ──────────────────────────────────────────────────────────────
     if (cmd == "FEC_SET") {
         if (msg.has("golay_mode"))          ctrl.set_golay_mode(static_cast<GolayMode>(static_cast<int>(msg.get_number("golay_mode"))));
@@ -1219,6 +1262,22 @@ int main(int argc, char* argv[]) {
     ctrl.load_state(state_path);
     pal::log_info("openALE", "Station state loaded from %s (auto-save armed)", state_path.c_str());
 
+    // ── rigctld/netrigctl-compat read-only frequency server (Tuner) ────────
+    // Opt-in (disabled by default); config loaded above via load_state().
+    // Never touches ALEController/pal::IRadio directly — see rigctld_server.h.
+    bridge::RigctldServer rigctld;
+    if (ctrl.get_config().rigctld_server_enabled) {
+        const auto& rcfg = ctrl.get_config();
+        if (rigctld.start(rcfg.rigctld_server_port, rcfg.rigctld_server_bind_remote)) {
+            pal::log_info("openALE", "rigctld-compat server: listening on %s:%u",
+                          rcfg.rigctld_server_bind_remote ? "0.0.0.0" : "127.0.0.1",
+                          rcfg.rigctld_server_port);
+        } else {
+            pal::log_error("openALE", "rigctld-compat server: failed to bind port %u",
+                           rcfg.rigctld_server_port);
+        }
+    }
+
     // GPS / SFI services — started on demand from STATION_LOC_SET
     GpsService       gps_svc;
     SfiService       sfi_svc;
@@ -1256,7 +1315,8 @@ int main(int argc, char* argv[]) {
                    /*audio_in*/"", /*audio_out*/"",
                    /*tx_volume*/0.25f,
                    &gps_svc, &sfi_svc, &pending, &ws,
-                   &voice_mgr, /*voice_armed*/false };
+                   &voice_mgr, /*voice_armed*/false,
+                   &rigctld };
 
     // ── Event bus subscriptions ──────────────────────────────────────────
     // All ALEController events arrive via the global PAL event handler.
@@ -1475,6 +1535,19 @@ int main(int argc, char* argv[]) {
             ws.send_text(dispatch_command(ctx, parsed));
         }
 
+        // rigctld-compat: drain pending requests, answer synchronously — main
+        // thread only (see rigctld_server.h for why ALEController/pal::IRadio
+        // are never touched from the server's own I/O thread).
+        {
+            uint64_t conn_id;
+            std::string line;
+            while (rigctld.pop_request(conn_id, line)) {
+                const bool attached = ctrl.has_radio();
+                const uint32_t freq = attached ? ctrl.get_current_frequency() : 0;
+                rigctld.send_reply(conn_id, bridge::handle_rigctld_command(line, attached, freq));
+            }
+        }
+
         ctrl.update(t);
         // Gate occupancy detection off during voice PTT: the VAC loopback of
         // our own TX would drive the detector BUSY just like ALE TX does.
@@ -1544,6 +1617,7 @@ int main(int argc, char* argv[]) {
     if (radio) radio->stop();
     if (audio) audio->close();
     ws.stop();
+    rigctld.stop();
     if (ctrl.save_lqa(lqa_path))
         pal::log_info("openALE", "LQA saved to %s", lqa_path.c_str());
     if (ctrl.save_state(state_path))

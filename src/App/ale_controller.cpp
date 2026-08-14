@@ -638,6 +638,11 @@ uint32_t ALEController::get_current_frequency() const
     return get_current_channel().rx_frequency_hz;
 }
 
+bool ALEController::has_radio() const
+{
+    return radio_ != nullptr;
+}
+
 std::string ALEController::get_current_mode() const
 {
     return get_current_channel().rx_mode;
@@ -879,6 +884,9 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.nmea_port                    = cfg.nmea_port;
     config_.nmea_baud                    = cfg.nmea_baud;
     config_.sfi_enabled                  = cfg.sfi_enabled;
+    config_.rigctld_server_enabled       = cfg.rigctld_server_enabled;
+    config_.rigctld_server_port          = cfg.rigctld_server_port;
+    config_.rigctld_server_bind_remote   = cfg.rigctld_server_bind_remote;
     update_propagation_context();
 }
 
@@ -3292,6 +3300,9 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "nmea_port=" << config_.nmea_port << "\n";
     f << "nmea_baud=" << config_.nmea_baud << "\n";
     f << "sfi_enabled=" << (config_.sfi_enabled ? 1 : 0) << "\n";
+    f << "rigctld_server_enabled=" << (config_.rigctld_server_enabled ? 1 : 0) << "\n";
+    f << "rigctld_server_port=" << config_.rigctld_server_port << "\n";
+    f << "rigctld_server_bind_remote=" << (config_.rigctld_server_bind_remote ? 1 : 0) << "\n";
     const auto& stations = sm_.get_address_book().all_stations();
     if (!stations.empty()) {
         f << "\n# ALE address export\n";
@@ -3410,6 +3421,12 @@ bool ALEController::import_settings(const std::string& path)
             cfg.nmea_baud = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "sfi_enabled") {
             cfg.sfi_enabled = (val == "1");
+        } else if (key == "rigctld_server_enabled") {
+            cfg.rigctld_server_enabled = (val == "1");
+        } else if (key == "rigctld_server_port") {
+            cfg.rigctld_server_port = static_cast<uint16_t>(std::stoul(val));
+        } else if (key == "rigctld_server_bind_remote") {
+            cfg.rigctld_server_bind_remote = (val == "1");
         } else if (key == "station" && !val.empty()) {
             // station=callsign|name  (new format)
             const auto sep = val.find('|');

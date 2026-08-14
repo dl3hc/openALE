@@ -64,6 +64,9 @@
         <div class="rnav" data-k="voice" onclick="railClick(this)">
           <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
           <span class="tip"><b>Voice Passthrough</b><span>Analog voice over an established link</span></span></div>
+        <div class="rnav" data-k="tuner" onclick="railClick(this)">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>
+          <span class="tip"><b>Tuner</b><span>netrigctl read-only frequency server</span></span></div>
       </div>
 
       <div class="rgrp">
@@ -502,7 +505,7 @@
     <!-- Row 5 : footer — same style/color as the row-1 header, half its height -->
     <div class="wfoot">
       <div class="sp"></div>
-      <span>v0.1.0</span>
+      <span>v0.0.2</span>
     </div>
 
   </div><!-- /work -->
@@ -534,6 +537,9 @@
         </div>
         <div class="snav-item" data-sec="location" onclick="showSec('location')">
           <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span><span class="snav-label">Location</span>
+        </div>
+        <div class="snav-item" data-sec="tuner" onclick="showSec('tuner')">
+          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg></span><span class="snav-label">Tuner</span>
         </div>
 
         <div class="snav-section-hdr">ALE</div>
@@ -802,6 +808,44 @@
             (VFO, channel step, PTT) are locked.
           </div>
         </div><!-- /radio -->
+
+        <!-- ── Tuner ── -->
+        <div class="ssec" data-sec="tuner">
+          <div class="ssec-title">Tuner</div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">netrigctl Server</div>
+              <div class="ftoggle-desc">Serves read-only frequency to external tools (e.g. auto-tuners) over the Hamlib netrigctl protocol — does not affect the radio connection.</div>
+            </div>
+            <label class="ftoggle">
+              <input type="checkbox" id="cfgRigctldEnabled">
+              <span class="ftrack"></span>
+            </label>
+          </div>
+
+          <div class="fg-row col2" style="margin-top:14px">
+            <div>
+              <label class="flabel" for="cfgRigctldPort">Port</label>
+              <input class="finput" id="cfgRigctldPort" type="number" min="1" max="65535" value="4532" placeholder="4532">
+            </div>
+            <div>
+              <label class="flabel" for="cfgRigctldBindRemote">Network Access</label>
+              <select class="fselect" id="cfgRigctldBindRemote">
+                <option value="0" selected>This machine only (127.0.0.1)</option>
+                <option value="1">LAN (0.0.0.0) — reachable from other devices</option>
+              </select>
+            </div>
+          </div>
+          <div class="fhint" style="margin-top:-6px">
+            Read-only (CMD 'f'). Example client: ck-netctrl via Hamlib Python bindings
+            (RIG_MODEL_NETRIGCTL, e.g. <code style="font-family:var(--mono);color:var(--accent)">localhost:4532</code>).
+          </div>
+
+          <div style="display:flex;gap:8px;align-items:center;margin-top:16px">
+            <button class="btn-sm accent" onclick="applyTunerToBridge()">Apply</button>
+          </div>
+        </div><!-- /tuner -->
 
         <!-- ── Location ── -->
         <div class="ssec" data-sec="location">

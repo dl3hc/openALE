@@ -747,6 +747,12 @@ public:
     /** Get current frequency in Hz (see get_current_channel()). */
     uint32_t get_current_frequency() const;
 
+    /** True if a pal::IRadio is currently attached (see set_radio()). Use
+     * this to distinguish "no radio" from "radio attached but at 0 Hz"
+     * before trusting get_current_frequency() in a context that must not
+     * silently treat 0 as a real reading (e.g. the rigctld-compat server). */
+    bool has_radio() const;
+
     /** Get current radio mode as string (see get_current_channel()). */
     std::string get_current_mode() const;
 
