@@ -1,4 +1,4 @@
-# Release Notes — openALE 0.1.0-pre-alpha
+# Release Notes — openALE 0.1.1-pre-alpha
 
 _Covering development work from 2026-08-12 to 2026-08-14._
 
@@ -38,7 +38,6 @@ Messages) now tell you what to do next instead of showing a blank list.
 
 ## Other
 
-- Project renamed from ALE-Clean-Room to **openALE**, version reset to **0.1.0-pre-alpha**.
 - Remaining German UI strings in the mobile GUI translated to English.
 
 ---
