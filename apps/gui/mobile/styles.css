@@ -788,6 +788,31 @@
     .heard-avail.ha-unk { color: var(--tx-dim);   border: 1px solid var(--border); }
     .heard-empty  { color: var(--tx-dim); font-family: var(--mono); font-size: 11px; padding: 10px 2px; text-align: center; }
 
+    /* Empty-state pattern shared by Heard Stations / Messages / Contacts —
+       icon + title + hint, with a real CTA button where one exists. */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      padding: 26px 14px; text-align: center;
+    }
+    .empty-state svg { color: var(--tx-dim); opacity: 0.45; }
+    .empty-state-title { font-size: 12px; color: var(--tx-bright); }
+    .empty-state-hint { font-size: 11px; line-height: 1.5; color: var(--tx-muted); max-width: 240px; }
+    .empty-state-cta {
+      margin-top: 4px; padding: 8px 16px; border-radius: var(--r-sm);
+      border: 1px solid var(--accent-dim); background: var(--accent-glow); color: var(--accent);
+      font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em; cursor: pointer;
+      transition: all 0.12s;
+    }
+    .empty-state-cta:active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    /* Momentary highlight on the Contacts panel when an empty-state CTA
+       elsewhere (e.g. Messages) sends the operator here to pick a contact. */
+    .panel-flash { animation: panel-flash-pulse 0.9s ease; }
+    @keyframes panel-flash-pulse {
+      0%, 100% { box-shadow: none; }
+      30% { box-shadow: 0 0 0 2px var(--accent); }
+    }
+
     /* Heard station cards — one station per card. Callsign, an availability
        badge and a quality label are the visible hierarchy; raw SINAD/BER/MP
        metrics collapse behind a Details toggle, and a per-card Call button
@@ -2686,6 +2711,30 @@
    FIRST-RUN WIZARD  (#setupWizard)
 ══════════════════════════════════════════════════════════════════════ */
 
+    .wz-nav {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .wz-nav-btn {
+      background: transparent;
+      border: none;
+      color: var(--tx-dim);
+      font-size: 18px;
+      line-height: 1;
+      width: 26px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--r-sm);
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: color 0.12s, background 0.12s;
+    }
+    .wz-nav-btn:active:not(:disabled) { color: var(--tx-bright); background: var(--bg3); }
+    .wz-nav-btn:disabled { opacity: 0.25; }
+
     .wz-pips {
       display: flex;
       gap: 6px;
@@ -2804,47 +2853,23 @@
     }
     .wz-btn-skip:hover { color: var(--tx-muted); }
 
-/* ══════════════════════════════════════════════════════════════════════
-   SETUP INCOMPLETE BANNER  (#setupBanner)
-   Lives at the top of .right-col on the CALL tab.
-   Dismissed by configuring callsign + channels.
-══════════════════════════════════════════════════════════════════════ */
-
-    .setup-banner {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 9px 12px;
-      background: rgba(255,202,40,0.07);
-      border: 1px solid rgba(255,202,40,0.22);
-      border-radius: var(--r-md);
-      margin-bottom: 6px;
-      cursor: pointer;
-      transition: background 0.15s;
-      -webkit-tap-highlight-color: transparent;
+    /* Step 3 (Nets) — read-only summary rows, or the quick-create fallback */
+    .wz-nets-list { display: flex; flex-direction: column; gap: 6px; }
+    .wz-net-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 12px; background: var(--bg3); border: 1px solid var(--border);
+      border-radius: var(--r-md); font-family: var(--mono); font-size: 12px;
     }
-    .setup-banner:hover { background: rgba(255,202,40,0.12); }
-    .setup-banner.hidden { display: none; }
-
-    .setup-banner-icon { flex-shrink: 0; }
-
-    .setup-banner-body {
-      flex: 1;
-      font-size: 11px;
-      color: var(--tx-muted);
-      line-height: 1.4;
+    .wz-net-name  { color: var(--tx-bright); font-weight: 600; }
+    .wz-net-count { color: var(--tx-muted); }
+    .wz-net-empty { font-size: 12px; color: var(--tx-dim); font-style: italic; }
+    .wz-btn-quick {
+      width: 100%; padding: 10px 14px; background: var(--accent-glow); color: var(--accent);
+      border: 1px solid var(--accent-dim); border-radius: var(--r-md); font-family: var(--mono);
+      font-size: 12px; letter-spacing: 0.03em; cursor: pointer; transition: all 0.12s;
+      touch-action: manipulation;
     }
-    .setup-banner-body strong { color: var(--tx); font-weight: 600; }
-
-    .setup-banner-btn {
-      flex-shrink: 0;
-      font-family: var(--mono);
-      font-size: 10px;
-      font-weight: 700;
-      color: var(--accent);
-      letter-spacing: 0.05em;
-      white-space: nowrap;
-    }
+    .wz-btn-quick:active { background: var(--accent); color: #000; }
 
 /* ══════════════════════════════════════════════════════════════════════
    SETTINGS NAV — Advanced collapse (mobile only)

@@ -12,6 +12,7 @@ const ICONS = {
   user:      '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   check:     '<polyline points="20 6 9 17 4 12"/>',
   userPlus:  '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>',
+  messageSquare: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   headphones:'<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
   layers:    '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
   share2:    '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
@@ -1076,7 +1077,11 @@ function renderHeard() {
   const el = document.getElementById('heardList');
   if (!el) return;
   if (!heardStations.length) {
-    el.innerHTML = '<div class="heard-empty">No stations heard yet — scanning will list them here</div>';
+    el.innerHTML = wfState === 'scanning'
+      ? `<div class="empty-state">${icon('radio',20)}<div class="empty-state-title">Scanning…</div><div class="empty-state-hint">Stations will appear here as they're heard.</div></div>`
+      : scanEnabled()
+        ? `<div class="empty-state">${icon('radio',20)}<div class="empty-state-title">No stations heard yet</div><div class="empty-state-hint">Start scanning to listen for traffic.</div><button class="empty-state-cta" onclick="toggleScan()">▶ Start scanning</button></div>`
+        : `<div class="empty-state">${icon('radio',20)}<div class="empty-state-title">No stations heard yet</div><div class="empty-state-hint">Scanning needs at least 2 channels.</div><button class="empty-state-cta" onclick="openSettings();showSec('channels')">Add channels</button></div>`;
     return;
   }
   // Sort by recency: most-recently-heard first. age_ms is the LQA-DB age
@@ -1577,7 +1582,21 @@ function renderContacts() {
         <button class="contact-edit" title="Edit" onclick="event.stopPropagation();openContactEditor(${idx})">${icon('pencil',12)}</button>
       </div>
     </div>`;
-  }).join('') : '<div class="msg-empty">No contacts yet — tap + Add to save a station</div>';
+  }).join('') : `<div class="empty-state">${icon('userPlus',20)}<div class="empty-state-title">No contacts yet</div><div class="empty-state-hint">Save a station's callsign to call or message it.</div><button class="empty-state-cta" onclick="openContactEditor()">+ Add a contact</button></div>`;
+}
+
+// Scrolls to the CALL tab and focuses Contacts' search box — the CTA target
+// for empty states elsewhere (e.g. Messages) that need the operator to pick
+// a contact first.
+function focusContactPicker() {
+  if (typeof mobSetTab === 'function') mobSetTab('call');
+  const panel = document.querySelector('.panel-contacts');
+  if (!panel) return;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  panel.classList.add('panel-flash');
+  setTimeout(() => panel.classList.remove('panel-flash'), 900);
+  const search = document.getElementById('contactSearch');
+  if (search) search.focus();
 }
 
 // Toggle membership of a contact in the multi-select set. One selected → 1:1
@@ -2563,32 +2582,32 @@ function delNet(i) {
 
 function loadAleFile() {
   const path = document.getElementById('cfgStationFile')?.value.trim() || 'station.ale';
-  if (!bridgeConnected) { aleLogInfo('Load: bridge not connected'); return; }
+  if (!bridgeConnected) { aleLogInfo('Import: bridge not connected'); return; }
   bridgeSend('STATION_LOAD', { path }, (r) => {
     if (r.ok) {
       syncAllFromBridge();
-      aleLogInfo('✓ Station file loaded ← ' + path);
+      aleLogInfo('✓ Channel file imported ← ' + path);
     } else {
-      aleLogInfo('✗ Failed to load station file: ' + path);
+      aleLogInfo('✗ Failed to import channel file: ' + path);
     }
   });
 }
 
 function saveAleFile() {
   const path = document.getElementById('cfgStationFile')?.value.trim() || 'station.ale';
-  if (!bridgeConnected) { aleLogInfo('Save: bridge not connected'); return; }
+  if (!bridgeConnected) { aleLogInfo('Export: bridge not connected'); return; }
   bridgeSend('STATION_SAVE', { path }, (r) => {
-    if (r.ok) aleLogInfo('✓ Station file saved → ' + path);
-    else      aleLogInfo('✗ Failed to save station file: ' + path);
+    if (r.ok) aleLogInfo('✓ Channel file exported → ' + path);
+    else      aleLogInfo('✗ Failed to export channel file: ' + path);
   });
 }
 function exportConf() {
   const path = document.getElementById('cfgFile').value.trim() || 'ale.conf';
   if (!bridgeConnected) { aleLogInfo('Export: bridge not connected'); return; }
-  if (!window.confirm('Konfiguration nach "' + path + '" exportieren?\nEine vorhandene Datei wird überschrieben.')) return;
+  if (!window.confirm('Export configuration to "' + path + '"?\nAn existing file will be overwritten.')) return;
   bridgeSend('SETTINGS_EXPORT', { path }, (r) => {
-    if (r.ok) aleLogInfo('✓ Konfiguration exportiert → ' + path);
-    else      aleLogInfo('Export fehlgeschlagen: ' + (r.error || '?'));
+    if (r.ok) aleLogInfo('✓ Configuration exported → ' + path);
+    else      aleLogInfo('✗ Export failed: ' + (r.error || '?'));
   });
 }
 function importConf() {
@@ -2598,9 +2617,9 @@ function importConf() {
     if (r.ok) {
       syncAllFromBridge();
       closeSettings();
-      aleLogInfo('✓ Konfiguration geladen ← ' + path);
+      aleLogInfo('✓ Configuration imported ← ' + path);
     } else {
-      aleLogInfo('Import fehlgeschlagen: ' + (r.error || '?'));
+      aleLogInfo('✗ Import failed: ' + (r.error || '?'));
     }
   });
 }
@@ -3571,7 +3590,13 @@ let messages = [];
 let linkedPeer = '';
 function renderMessages() {
   const el = document.getElementById('msgList');
-  if (!messages.length) { el.innerHTML = '<div class="msg-empty">No messages yet — type an AMD below and press Send</div>'; return; }
+  if (!messages.length) {
+    const target = linkedPeer || (selectedContacts.length === 1 ? selectedContacts[0].cs : '');
+    el.innerHTML = target
+      ? `<div class="empty-state">${icon('messageSquare',20)}<div class="empty-state-title">No messages yet</div><div class="empty-state-hint">Send an AMD to ${escapeHtml(target)} below.</div><button class="empty-state-cta" onclick="document.getElementById('msgInput').focus()">Write a message</button></div>`
+      : `<div class="empty-state">${icon('messageSquare',20)}<div class="empty-state-title">No messages yet</div><div class="empty-state-hint">Pick a contact first, or wait for a link.</div><button class="empty-state-cta" onclick="focusContactPicker()">Select a contact</button></div>`;
+    return;
+  }
   el.innerHTML = '<div class="msg-list">' + messages.map((m, i) => {
     // Direction = sender → receiver.  own: self → peer; incoming: peer → self.
     const from = m.own ? (m.self || '') : (m.peer || '');
@@ -3678,6 +3703,7 @@ function syncSelfAddrsFromBridge() {
     renderSelfAddrs();
     updateSelfHeader();
     renderChannels();
+    if (!wizardTriggered) { wizardTriggered = true; maybeShowWizard(); }
   });
 }
 
@@ -3689,6 +3715,222 @@ function delSelfAddr(i) {
   updateSelfHeader();
   renderChannels();
   if (bridgeConnected && addr) bridgeSend('SELF_ADDR_DEL', { addr }, () => syncSelfAddrsFromBridge());
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   FIRST-RUN WIZARD  (#setupWizard)
+   Fires once per session when the backend has no self addresses.
+   Five steps: Callsign → Channels → Nets → Radio (optional) → Audio (optional).
+   Callsign/Channels lead since scanning needs both; Nets is a reviewable
+   step (channel files embed NET: lines, usually already populated by the
+   time this step renders); Radio/Audio are hardware hookups that can be
+   skipped and finished later in Settings.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+let wizardTriggered = false;
+let wizardStep = 0;
+
+function maybeShowWizard() {
+  if (!selfAddrs.length) showWizard();
+}
+
+function showWizard() {
+  const el = document.getElementById('setupWizard');
+  if (!el) return;
+  wizardStep = 0;
+  el.classList.remove('hidden');
+  renderWizardStep();
+  enumDevices();         // populates #audioIn / #audioOut → mirrored to wizard selects
+  populateRigDropdown(); // populates #rigModel → mirrored to wizard selects
+}
+
+function closeWizard() {
+  const el = document.getElementById('setupWizard');
+  if (el) el.classList.add('hidden');
+}
+
+function renderWizardStep() {
+  for (let i = 0; i < 5; i++) {
+    const s = document.getElementById('wzStep' + i);
+    if (s) s.classList.toggle('hidden', i !== wizardStep);
+  }
+  document.querySelectorAll('.wz-pip').forEach((p, i) => {
+    p.classList.toggle('active', i === wizardStep);
+    p.classList.toggle('done',   i < wizardStep);
+  });
+  const prevBtn = document.getElementById('wzPrevBtn');
+  const nextBtn = document.getElementById('wzNextBtn');
+  if (prevBtn) prevBtn.disabled = wizardStep === 0;
+  if (nextBtn) nextBtn.disabled = wizardStep === 4;
+  if (wizardStep === 2) wzRenderNets();
+  if (wizardStep === 3) wzMirrorRig();
+  if (wizardStep === 4) wzMirrorAudio();
+}
+
+// Free step navigation via the header ‹/› buttons — pure browsing, no side
+// effects (unlike wzNext(), which saves/connects). Lets the operator jump
+// back to fix an earlier field, or peek ahead, without re-triggering saves.
+function wzGoto(step) {
+  if (step < 0 || step > 4) return;
+  wizardStep = step;
+  renderWizardStep();
+}
+
+// Re-mirrors options from the live Settings dropdown each time the step is
+// (re-)entered (device lists can change), but preserves whatever the
+// operator already picked in the wizard if they navigate away and back —
+// only falls back to mirroring Settings' current value on first visit.
+function wzMirrorAudio() {
+  ['In', 'Out'].forEach(dir => {
+    const src = document.getElementById('audio' + dir);
+    const dst = document.getElementById('wzAudio' + dir);
+    if (!src || !dst) return;
+    const prev = dst.value;
+    dst.innerHTML = src.innerHTML;
+    if (prev && [...dst.options].some(o => o.value === prev)) dst.value = prev;
+    else dst.value = src.value;
+  });
+}
+
+function wzMirrorRig() {
+  const src = document.getElementById('rigModel');
+  const dst = document.getElementById('wzRigModel');
+  if (!src || !dst) return;
+  const prev = dst.value;
+  dst.innerHTML = src.innerHTML;
+  if (prev && [...dst.options].some(o => o.value === prev)) dst.value = prev;
+  else dst.value = src.value;
+  wzOnRigModelChange();
+}
+
+function wzOnRigModelChange() {
+  const sel = document.getElementById('wzRigModel');
+  const ptype = rigPortTypeById[sel?.value ?? ''] || '';
+  const net = document.getElementById('wzRigNetFields');
+  const ser = document.getElementById('wzRigSerialFields');
+  if (net) net.style.display = ptype === 'network' ? '' : 'none';
+  if (ser) ser.style.display = ptype === 'serial'  ? '' : 'none';
+}
+
+function wzSetStatus(step, msg, cls) {
+  const el = document.getElementById('wzStep' + step + 'Status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'wz-status' + (cls ? ' ' + cls : '');
+}
+
+// Step 2 (Nets) — read-only summary of nets[], usually already populated by
+// the .ale file's own NET: lines via the Channels step, or a one-click
+// "create one from everything just loaded" fallback when nets[] is empty.
+function wzRenderNets() {
+  const el = document.getElementById('wzNetsList');
+  if (!el) return;
+  if (nets.length) {
+    el.innerHTML = nets.map(n =>
+      `<div class="wz-net-row"><span class="wz-net-name">${escapeHtml(n.name)}</span><span class="wz-net-count">${n.channelIds.length} channel${n.channelIds.length === 1 ? '' : 's'}</span></div>`
+    ).join('');
+  } else if (channels.length) {
+    el.innerHTML = `<button class="wz-btn-quick" onclick="wzQuickNet()">+ Create a net from all loaded channels</button>`;
+  } else {
+    el.innerHTML = `<div class="wz-net-empty">No channels loaded yet — nothing to group.</div>`;
+  }
+}
+
+function wzQuickNet() {
+  addNet();
+  const i = nets.length - 1;
+  channels.forEach(c => toggleNetChannel(i, c.id, true));
+  renderNets();
+  wzRenderNets();
+}
+
+function wzNext() {
+  if (wizardStep === 0) {
+    const cs = (document.getElementById('wzCallsign')?.value || '').trim().toUpperCase();
+    if (!cs) { document.getElementById('wzCallsign')?.focus(); return; }
+    if (!bridgeConnected) { wizardStep++; renderWizardStep(); return; }
+    wzSetStatus(0, 'Saving…');
+    bridgeSend('SELF_ADDR_ADD', { addr: cs, status: 'enabled', valid_channels: 'ALL' }, () => {
+      syncSelfAddrsFromBridge();
+      wizardStep++;
+      renderWizardStep();
+    });
+    return;
+  }
+
+  if (wizardStep === 1) {
+    const path = (document.getElementById('wzChannelPath')?.value || '').trim() || 'nets/USA.ale';
+    if (!bridgeConnected) { wizardStep++; renderWizardStep(); return; }
+    wzSetStatus(1, 'Loading channels…');
+    bridgeSend('STATION_LOAD', { path }, (r) => {
+      if (r.ok) {
+        syncAllFromBridge();
+        wzSetStatus(1, '✓ Channels loaded', 'ok');
+        setTimeout(() => { wizardStep++; renderWizardStep(); }, 600);
+      } else {
+        wzSetStatus(1, '✗ ' + (r.error || 'File not found — check path or Skip'), 'err');
+      }
+    });
+    return;
+  }
+
+  if (wizardStep === 2) { wizardStep++; renderWizardStep(); return; }
+
+  if (wizardStep === 3) {
+    const model  = document.getElementById('wzRigModel')?.value || '';
+    const ptype  = rigPortTypeById[model] || '';
+    const host   = document.getElementById('wzRigHost')?.value   || '127.0.0.1';
+    const port   = document.getElementById('wzRigPort')?.value   || '4532';
+    const serial = document.getElementById('wzRigSerial')?.value || '';
+    const baud   = document.getElementById('wzRigBaud')?.value   || '19200';
+    // Sync wizard selection into the settings form so rigArgs() picks it up
+    const rigModelEl = document.getElementById('rigModel');
+    if (rigModelEl) { rigModelEl.value = model; updateRigFields(); }
+    if (ptype === 'network') {
+      const h = document.getElementById('rigHost'); if (h) h.value = host;
+      const p = document.getElementById('rigPort'); if (p) p.value = port;
+    } else if (ptype === 'serial') {
+      const s = document.getElementById('rigSerial'); if (s) s.value = serial;
+      const b = document.getElementById('rigBaud');   if (b) b.value = baud;
+    }
+    if (!model || !bridgeConnected) { wizardStep++; renderWizardStep(); return; }
+    wzSetStatus(3, 'Connecting to radio…');
+    bridgeSend('RIG_CONNECT', rigArgs(), (r) => {
+      const ok = !!(r.ok && r.connected);
+      if (ok) applyRigState(true);
+      wzSetStatus(3, ok ? '✓ Radio connected' : '✗ ' + (r.error || r.status || 'Failed — you can Skip'), ok ? 'ok' : 'err');
+      if (ok) setTimeout(() => { wizardStep++; renderWizardStep(); }, 600);
+    });
+    return;
+  }
+
+  if (wizardStep === 4) {
+    const inName  = document.getElementById('wzAudioIn')?.value  || '';
+    const outName = document.getElementById('wzAudioOut')?.value || '';
+    const ainEl  = document.getElementById('audioIn');
+    const aoutEl = document.getElementById('audioOut');
+    if (ainEl  && inName)  ainEl.value  = inName;
+    if (aoutEl && outName) aoutEl.value = outName;
+    if (!bridgeConnected) { closeWizard(); return; }
+    wzSetStatus(4, 'Connecting audio…');
+    bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (r) => {
+      if (r.ok) {
+        audioOpen = true; audioInSelected = inName; audioOutSelected = outName;
+        const btn = document.getElementById('audioConnectBtn');
+        if (btn) { btn.innerHTML = icon('square', 12) + ' Close Audio'; btn.classList.add('scan-on'); }
+        wzSetStatus(4, '✓ Audio connected', 'ok');
+        setTimeout(closeWizard, 600);
+      } else {
+        wzSetStatus(4, '✗ ' + (r.error || 'Failed — check device selection or Skip'), 'err');
+      }
+    });
+    return;
+  }
+}
+
+function wzSkip() {
+  wizardStep++;
+  if (wizardStep >= 5) closeWizard();
+  else renderWizardStep();
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3941,6 +4183,7 @@ setInterval(updateClock, 1000);
 updateRadioDisplay();  // VFO display + mode/step highlight
 goIdle();              // boot idle (Scan off); real state arrives via syncAllFromBridge()/STATUS on connect
 updateScanBtn();       // reflect channel count on the Scan button (>=2 channels required)
+renderHeard();         // re-render the empty state now that wfState/channels have settled
 updateSelfHeader();
 updateAutoAcceptUi();  // reflect auto-accept checkbox state on the decision-window field
 renderSoundPanel();    // sounding dropdown's net list (populated when nets sync from the bridge)
