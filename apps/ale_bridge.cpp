@@ -120,6 +120,29 @@ static std::string resolve_web_root(bool mobile = false) {
     return "";
 }
 
+// Resolve a relative resource path (e.g. an .ale station/channel file) the
+// same way resolve_web_root() resolves apps/gui/: try it as given first (so
+// an already-correct relative or absolute path, e.g. "run from repo root",
+// keeps working unchanged), then walk up from the exe directory looking for
+// it — covers the common case of launching the built binary from build/ (or
+// build/Debug/), where a bare "nets/USA.ale" would otherwise only resolve
+// against build/, not the repo root where nets/ actually lives. Falls back
+// to the original path unchanged if nothing is found, so the caller's own
+// ifstream-open error handling still applies.
+static std::string resolve_data_path(const std::string& path) {
+    if (path.empty() || file_exists(path)) return path;
+    const std::string ed = exe_dir();
+    if (!ed.empty()) {
+        std::string up = ed;
+        for (int i = 0; i < 6; ++i) {       // exe dir + up to 5 parents
+            const std::string candidate = up + "/" + path;
+            if (file_exists(candidate)) return candidate;
+            up += "/..";
+        }
+    }
+    return path;
+}
+
 // ── Small helpers ───────────────────────────────────────────────────────────
 
 static std::vector<std::string> split_csv(const std::string& s) {
@@ -296,6 +319,7 @@ struct BridgeCtx {
     std::unique_ptr<AudioDevice>*  audio;
     std::unique_ptr<pal::IRadio>*  radio;
     std::string                    lqa_path;   ///< empty = persistence disabled
+    std::string                    state_path; ///< unified auto-save file (channels/nets/settings)
     std::string                    audio_in;   ///< last successfully opened RX device
     std::string                    audio_out;  ///< last successfully opened TX device
     float                          tx_volume = 0.25f; ///< persists across AUDIO_OPEN/CLOSE
@@ -494,6 +518,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             const std::string sel = msg.get_string("selector");
             if (!sel.empty()) ctrl.set_allcall_selector(sel[0]);
         }
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "ACCEPT")           { return pc(msg, ctrl, "CMD:ACCEPT"); }
@@ -533,6 +558,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "MANUAL_ACCEPT_MODE") {
         ctrl.set_manual_accept_mode(msg.get_bool("on"),
             static_cast<uint32_t>(msg.get_number("timeout_ms", 10000)));
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "MANUAL_ACCEPT_GET") {
@@ -577,7 +603,9 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             + msg.get_string("old_id") + " " + msg.get_string("new_id"));
     }
     if (cmd == "STATION_LOAD" || cmd == "CHANNELS_LOAD") {
-        const bool ok = ctrl.load_station_file(msg.get_string("path"));
+        const std::string resolved = resolve_data_path(msg.get_string("path"));
+        const bool ok = ctrl.load_station_file(resolved);
+        if (ok) pal::log_info("openALE", "Station file loaded from %s", resolved.c_str());
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "STATION_SAVE" || cmd == "CHANNELS_SAVE") {
@@ -680,6 +708,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         // sent during calling/handshake (A.5.4.2). false = EMCON/Debug.
         if (msg.has("lqa_exchange_enabled"))
             ctrl.set_lqa_exchange_enabled(msg.get_bool("lqa_exchange_enabled"));
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "LQA_GET") {
@@ -701,6 +730,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             ctrl.set_lbt_occupancy_enabled(msg.get_bool("occupancy_enabled"));
         if (msg.has("override"))
             ctrl.set_lbt_override(msg.get_bool("override"));
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "LBT_GET") {
@@ -721,6 +751,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             ctrl.set_scan_squelch_enabled(msg.get_bool("enabled"));
         if (msg.has("margin_db"))
             ctrl.set_scan_detect_margin_db(static_cast<float>(msg.get_number("margin_db")));
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "SCAN_DETECT_GET") {
@@ -744,6 +775,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             ctrl.set_relink_enabled(msg.get_bool("relink_enabled"));
         if (msg.has("relink_threshold"))
             ctrl.set_relink_threshold(static_cast<float>(msg.get_number("relink_threshold")));
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "RELINK_GET") {
@@ -761,6 +793,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "FREQ_SELECT_SET") {
         if (msg.has("enhanced_freq_select"))
             ctrl.set_enhanced_freq_select(msg.get_bool("enhanced_freq_select"));
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "FREQ_SELECT_GET") {
@@ -817,6 +850,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("sounding_use_twas"))          ctrl.set_sounding_use_twas(msg.get_bool("sounding_use_twas"));
         if (msg.has("sounding_warning_lead_sec"))        ctrl.set_sounding_warning_lead_sec(static_cast<uint32_t>(msg.get_number("sounding_warning_lead_sec")));
         if (msg.has("test_channel_link_hold_time"))      ctrl.set_test_channel_link_hold_time(static_cast<uint32_t>(msg.get_number("test_channel_link_hold_time")));
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "TIMING_GET") {
@@ -883,6 +917,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             ctrl.apply_config(cfg);
         }
         restart_location_services(ctx, ctrl);
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
 
@@ -891,6 +926,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("golay_mode"))          ctrl.set_golay_mode(static_cast<GolayMode>(static_cast<int>(msg.get_number("golay_mode"))));
         if (msg.has("min_unanimous_votes")) ctrl.set_min_unanimous_votes(static_cast<uint8_t>(msg.get_number("min_unanimous_votes")));
         if (msg.has("adaptive_fec"))        ctrl.set_adaptive_fec(msg.get_bool("adaptive_fec"));
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
     if (cmd == "FEC_GET") {
@@ -1087,7 +1123,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (ok) restart_location_services(ctx, ctrl);
         return mj::dump(make_reply(msg, ok));
     }
-    if (cmd == "DEBUG_RX")        { ctrl.set_debug_rx(msg.get_bool("on")); return mj::dump(make_reply(msg, true)); }
+    if (cmd == "DEBUG_RX")        { ctrl.set_debug_rx(msg.get_bool("on")); if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path); return mj::dump(make_reply(msg, true)); }
     if (cmd == "CAT_TRACE")       { ctrl.set_cat_trace(msg.get_bool("on")); return mj::dump(make_reply(msg, true)); }
 
     mj::Value r = make_reply(msg, false);
@@ -1176,6 +1212,13 @@ int main(int argc, char* argv[]) {
     if (ctrl.load_lqa(lqa_path))
         pal::log_info("openALE", "LQA loaded from %s", lqa_path.c_str());
 
+    // Unified auto-save file: channels/nets/contacts/rosters/allcall + all
+    // settings. Unconditional, like LQA above — arms auto-save for the rest
+    // of the session regardless of whether the file existed yet (first run).
+    const std::string state_path = "station.state";
+    ctrl.load_state(state_path);
+    pal::log_info("openALE", "Station state loaded from %s (auto-save armed)", state_path.c_str());
+
     // GPS / SFI services — started on demand from STATION_LOC_SET
     GpsService       gps_svc;
     SfiService       sfi_svc;
@@ -1209,7 +1252,7 @@ int main(int argc, char* argv[]) {
     transport.set_media_producer(&voice_mgr);
     transport.set_protocol_tx_query([&ctrl]() { return ctrl.is_tx_active(); });
 
-    BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path,
+    BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path, state_path,
                    /*audio_in*/"", /*audio_out*/"",
                    /*tx_volume*/0.25f,
                    &gps_svc, &sfi_svc, &pending, &ws,
@@ -1503,6 +1546,8 @@ int main(int argc, char* argv[]) {
     ws.stop();
     if (ctrl.save_lqa(lqa_path))
         pal::log_info("openALE", "LQA saved to %s", lqa_path.c_str());
+    if (ctrl.save_state(state_path))
+        pal::log_info("openALE", "Station state saved to %s", state_path.c_str());
     pal::log_info("openALE", "Exiting.");
     return 0;
 }
