@@ -2853,15 +2853,22 @@
     }
     .wz-btn-skip:hover { color: var(--tx-muted); }
 
-    /* Step 3 (Nets) — read-only summary rows, or the quick-create fallback */
+    /* Step 3 (Nets) — summary rows + inline Dwell input, or the quick-create fallback */
     .wz-nets-list { display: flex; flex-direction: column; gap: 6px; }
     .wz-net-row {
-      display: flex; justify-content: space-between; align-items: center;
+      display: flex; justify-content: flex-end; align-items: center; gap: 10px;
       padding: 8px 12px; background: var(--bg3); border: 1px solid var(--border);
       border-radius: var(--r-md); font-family: var(--mono); font-size: 12px;
     }
-    .wz-net-name  { color: var(--tx-bright); font-weight: 600; }
-    .wz-net-count { color: var(--tx-muted); }
+    .wz-net-name  { color: var(--tx-bright); font-weight: 600; flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wz-net-count { color: var(--tx-muted); flex-shrink: 0; }
+    .wz-net-dwell { color: var(--tx-muted); flex-shrink: 0; display: flex; align-items: center; gap: 5px; font-size: 11px; }
+    .wz-net-dwell input {
+      width: 58px; font-size: 11px; font-family: var(--mono);
+      background: var(--bg2); border: 1px solid var(--border-md);
+      border-radius: var(--r-sm); color: var(--tx); padding: 2px 5px; text-align: right;
+    }
     .wz-net-empty { font-size: 12px; color: var(--tx-dim); font-style: italic; }
     .wz-btn-quick {
       width: 100%; padding: 10px 14px; background: var(--accent-glow); color: var(--accent);
