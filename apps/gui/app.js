@@ -11,6 +11,7 @@ const ICONS = {
   settings:  '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
   user:      '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   userPlus:  '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>',
+  messageSquare: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   headphones:'<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
   layers:    '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
   share2:    '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
@@ -232,6 +233,10 @@ function pollSignalQuality() {
     const activeBars = q >= 30 ? 5 : Math.max(0, Math.floor(q / 6));
     const bars = document.querySelectorAll('#qbars .qbar');
     bars.forEach((b, i) => b.classList.toggle('inactive', i >= activeBars));
+    // Command-Deck metric grid — live refresh of the SINAD box only (this poll
+    // reply carries no BER/score/channel); those come from updateLinkQualityFromLqa().
+    const sinadBox = document.getElementById('linkSinad');
+    if (sinadBox) sinadBox.textContent = '+' + sinad;
   });
 }
 
@@ -256,6 +261,13 @@ function updateLinkQualityFromLqa(peerAddr) {
   const bars = q >= 30 ? 5 : Math.max(0, Math.floor(q / 6));
   document.querySelectorAll('#qbars .qbar')
     .forEach((b, i) => b.classList.toggle('inactive', i >= bars));
+  // Command-Deck metric grid — real per-peer LQA record, same fields already
+  // shown in the Heard Stations / Settings ▸ LQA tables (best.score/.ber/.ch).
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('linkSinad', sinad > 0 ? '+' + sinad : '—');
+  setTxt('linkBer',   best.ber ?? '—');
+  setTxt('linkScore', typeof best.score === 'number' ? best.score : '—');
+  setTxt('linkChan',  best.ch || '—');
 }
 
 function applyStatusReply(r) {
@@ -293,6 +305,11 @@ function onBridgeEvent(e) {
       // fully reassembled caller address.
       document.getElementById('incCs').textContent   = e.caller;
       document.getElementById('incName').textContent = 'accept connection to';
+      // Command-Deck parity: show the channel the call is arriving on — reuses
+      // the already-known #callFreqLbl text (freq · mode), not new data.
+      { const im = document.getElementById('incMeta');
+        const fl = document.getElementById('callFreqLbl');
+        if (im && fl) im.textContent = fl.textContent; }
       // Auto-accept: don't surface the Accept/Decline panel at all — the link
       // handler below completes the call without operator input. Showing it
       // here (even briefly, before link_established) would let the operator
@@ -586,6 +603,11 @@ function applyPttUi() {
 function applyVoicePathUi() {
   const badge = document.getElementById('voiceBadge');
   if (badge) badge.classList.toggle('hidden', !voicePassthrough);
+  // Linked-state "Analog Voice" button (Command Deck parity) reflects the
+  // real passthrough state; it doesn't toggle it directly (arming lives in
+  // Settings ▸ Voice) — same "active" look as the other .callact-btn states.
+  const av = document.getElementById('btnAnalogVoice');
+  if (av) av.classList.toggle('active', voicePassthrough);
   applyPttUi();
 }
 
@@ -682,16 +704,31 @@ const ALE_GUARD = 125;                // frame padding beyond the edge tones (Hz
 const AXIS_MAJOR = [0, 1000, 2000, 3000, 3500];  // labelled gridlines (Hz)
 const AXIS_MINOR = [500, 1500, 2500];             // unlabelled gridlines (Hz)
 
-let rows = [];
 let wfState  = 'scanning';
 let wfLabel  = 'Scanning';  // true underlying main-pill label (setStatus's `label` arg)
 let isDecoding = false;     // transient overlay: SIGNAL_QUALITY's `decoding` — see renderStatus()
 
+// Device-pixel-ratio scale for the waterfall bitmap (sharper on HiDPI displays,
+// capped at 2x so a 3x/4x display doesn't blow up memory/CPU for no visible
+// gain). #waterfallCanvas is CSS-sized (width/height:100%), so changing the
+// canvas.width/height *attributes* only changes bitmap sharpness, never the
+// on-screen size — see styles.css.
+let wfDpr = 1;
+// 1-row-tall offscreen canvas: scratch buffer for compositing just the newest
+// row's colors before it's blitted (scaled to wfDpr device px tall) onto the
+// main canvas. Reused every tick instead of allocating a full W×H image.
+const rowCanvas = document.createElement('canvas');
+rowCanvas.height = 1;
+const rowCtx = rowCanvas.getContext('2d');
+
 function resizeCanvas() {
   const el = canvas.parentElement;
-  canvas.width  = el.clientWidth;
-  canvas.height = el.clientHeight;
-  rows = [];
+  wfDpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cw = Math.max(1, el.clientWidth), ch = Math.max(1, el.clientHeight);
+  canvas.width  = Math.round(cw * wfDpr);
+  canvas.height = Math.round(ch * wfDpr);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = false;
   buildTicks();
 }
 
@@ -736,21 +773,19 @@ function buildTicks() {
   const bandR = (ALE_HI + ALE_GUARD - BW_LO) / span * 100;
   const region = document.getElementById('wfBandRegion');
   if (region) { region.style.left = bandL + '%'; region.style.width = (bandR - bandL) + '%'; }
-  // Tone marker: every ALE tone number sits at its true frequency, with en-dash
-  // separators filling every gap (continuous scale across the band).
+  // Tone marker: every ALE tone number sits at its true frequency. The 8
+  // tones span only ~half the display width, so at one row they'd overlap
+  // (750/1000/…/2500 packed into ~150px); alternating them across two rows
+  // (wf-band-tone-a/-b) doubles the effective spacing between same-row
+  // neighbours. En-dash separators were dropped — with staggered rows they'd
+  // sit ambiguously between two different-row numbers, and full tone labels
+  // already convey band coverage without them.
   const marker = document.getElementById('wfBandLabel');
   if (marker) {
     marker.innerHTML = '';
-    for (let i = 0; i < TONES.length - 1; i++) {
-      const sep = document.createElement('span');
-      sep.className = 'wf-band-sep';
-      sep.style.left = (((TONES[i] + TONES[i + 1]) / 2 - BW_LO) / span * 100) + '%';
-      sep.textContent = '–';
-      marker.appendChild(sep);
-    }
-    TONES.forEach(hz => {
+    TONES.forEach((hz, i) => {
       const s = document.createElement('span');
-      s.className = 'wf-band-tone';
+      s.className = 'wf-band-tone ' + (i % 2 === 0 ? 'wf-band-tone-a' : 'wf-band-tone-b');
       s.style.left = ((hz - BW_LO) / span * 100) + '%';
       s.textContent = hz;
       marker.appendChild(s);
@@ -828,35 +863,54 @@ function energy2rgb(v) {
   }
 }
 
+// Scrolling-waterfall renderer: each new row is composited once (O(W)) and
+// the existing bitmap is shifted down via a GPU-accelerated canvas self-blit
+// (O(1) regardless of history depth), instead of rebuilding the full W×H
+// image from a JS-side row history every animation frame. The heavy work
+// (color computation, blit) only runs on the ~100 ms data cadence
+// (nextRowAt), not on every requestAnimationFrame tick (~60 Hz) — that
+// mismatch was the previous version's main CPU cost (~6x redundant full-
+// canvas rebuilds per real data update) and the main lever for affording a
+// sharper (devicePixelRatio-scaled) bitmap at *lower* net CPU/memory than
+// before: no more per-row history array, and per-tick cost no longer scales
+// with canvas height.
 function drawWaterfall() {
   const W = canvas.width, H = canvas.height;
   if (W < 4 || H < 4) { requestAnimationFrame(drawWaterfall); return; }
 
   const now = performance.now();
   if (now >= nextRowAt) {
-    rows.unshift(genRow());
-    if (rows.length > H) rows.length = H;
     nextRowAt = now + 100;
-    for (const m of wfMarkers) m.age++;
-  }
+    const rowH = wfDpr;
 
-  const img = ctx.createImageData(W, H);
-  const d   = img.data;
-  for (let y = 0; y < rows.length; y++) {
-    const r = rows[y];
+    // Scroll existing content down by one row.
+    ctx.drawImage(canvas, 0, 0, W, H - rowH, 0, rowH, W, H - rowH);
+
+    // Composite just the new row's colors into the 1-row scratch canvas,
+    // then blit it (scaled to rowH device px tall) onto the top edge.
+    if (rowCanvas.width !== W) rowCanvas.width = W;
+    const rowImg = rowCtx.createImageData(W, 1);
+    const rowVals = genRow();
+    const d = rowImg.data;
     for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * 4;
-      const [rr, gg, bb] = energy2rgb(r[x]);
+      const [rr, gg, bb] = energy2rgb(rowVals[x]);
+      const i = x * 4;
       d[i] = rr; d[i+1] = gg; d[i+2] = bb; d[i+3] = 255;
     }
-  }
-  ctx.putImageData(img, 0, 0);
+    rowCtx.putImageData(rowImg, 0, 0);
+    ctx.drawImage(rowCanvas, 0, 0, W, 1, 0, 0, W, rowH);
 
-  // Draw frame markers as 4 px-wide colored ticks on the left edge
-  for (const m of wfMarkers) {
-    if (m.age >= H) continue;
-    ctx.fillStyle = m.color;
-    ctx.fillRect(0, m.age, 4, 3);
+    // Frame markers: bake in only newly-registered ones (age 0) as a small
+    // tick at the top of the new row — they then scroll down for free with
+    // everything else via the self-blit above, instead of every marker
+    // being redrawn from scratch on every frame.
+    for (const m of wfMarkers) {
+      if (m.age === 0) {
+        ctx.fillStyle = m.color;
+        ctx.fillRect(0, 0, 4 * wfDpr, Math.max(rowH, 3 * wfDpr));
+      }
+      m.age++;
+    }
   }
 
   requestAnimationFrame(drawWaterfall);
@@ -967,7 +1021,11 @@ function renderHeard() {
   const el = document.getElementById('heardList');
   if (!el) return;
   if (!heardStations.length) {
-    el.innerHTML = '<div class="heard-empty">No stations heard yet</div>';
+    el.innerHTML = wfState === 'scanning'
+      ? `<div class="empty-state">${icon('radio',20)}<div class="empty-state-title">Scanning…</div><div class="empty-state-hint">Stations will appear here as they're heard.</div></div>`
+      : scanEnabled()
+        ? `<div class="empty-state">${icon('radio',20)}<div class="empty-state-title">No stations heard yet</div><div class="empty-state-hint">Start scanning to listen for traffic.</div><button class="empty-state-cta" onclick="toggleScan()">▶ Start scanning</button></div>`
+        : `<div class="empty-state">${icon('radio',20)}<div class="empty-state-title">No stations heard yet</div><div class="empty-state-hint">Scanning needs at least 2 channels.</div><button class="empty-state-cta" onclick="openSettings();showSec('channels')">Add channels</button></div>`;
     return;
   }
   // Same column layout and gradient math as renderLqa() (Settings/LQA), so the
@@ -1169,10 +1227,12 @@ function setStatus(label, cls) {
   wfState = cls;
   renderStatus();
   // Keep the header Scan toggle in sync with whatever drove the state change.
+  // Label is a static Scan|Idle segmented pair in the markup (Command Deck
+  // parity) — only the .scan-on state class changes here; do not overwrite
+  // the button's content (it would wipe the two <span> segments).
   const b = document.getElementById('scanBtn');
   if (b) {
     const on = cls === 'scanning';
-    b.textContent = on ? '■ Stop' : '▶ Scan';
     b.classList.toggle('scan-on', on);
   }
   if (typeof updateScanBtn === 'function') updateScanBtn();  // keep disabled state in sync with wfState
@@ -1459,7 +1519,19 @@ function renderContacts() {
         <button class="contact-edit" title="Edit" onclick="event.stopPropagation();openContactEditor(${idx})">${icon('pencil',12)}</button>
       </div>
     </div>`;
-  }).join('') : '<div class="msg-empty">No contacts</div>';
+  }).join('') : `<div class="empty-state">${icon('userPlus',20)}<div class="empty-state-title">No contacts yet</div><div class="empty-state-hint">Save a station's callsign to call or message it.</div><button class="empty-state-cta" onclick="openContactEditor()">+ Add a contact</button></div>`;
+}
+
+// Scrolls/highlights the Contacts panel and focuses its search box — the CTA
+// target for empty states elsewhere that need the operator to pick a contact.
+function focusContactPicker() {
+  const panel = document.querySelector('.panel-contacts');
+  if (!panel) return;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  panel.classList.add('panel-flash');
+  setTimeout(() => panel.classList.remove('panel-flash'), 900);
+  const search = document.getElementById('contactSearch');
+  if (search) search.focus();
 }
 
 function pickContact(i) {
@@ -1639,10 +1711,37 @@ function openSettings() {
 // assignments are pushed live during editing; this sync guarantees the pill
 // matches core truth even if local state drifted).
 function closeSettings() {
-  document.getElementById('settingsModal').classList.add('hidden');
+  const modal = document.getElementById('settingsModal');
+  // Keep the panel visible/painted for the duration of the slide-out even
+  // though .hidden (added below) switches its resting visibility back to
+  // hidden — see styles.css `#settingsModal .modal.closing` for why this is
+  // JS-driven rather than part of the CSS transition (visibility can't be
+  // GPU-composited; animating it there forced the whole slide onto the main
+  // thread and was the actual cause of the reported close-stutter).
+  const panel = modal.querySelector('.modal');
+  if (panel) {
+    panel.classList.add('closing');
+    panel.addEventListener('transitionend', function onEnd(e) {
+      if (e.propertyName === 'transform') {
+        panel.classList.remove('closing');
+        panel.removeEventListener('transitionend', onEnd);
+      }
+    });
+  }
+  modal.classList.add('hidden');
   if (bridgeConnected) {
-    syncChannelsFromBridge();
-    syncNetsFromBridge();   // re-renders the network pill list from core truth
+    // Deferred past the drawer's slide-out transition (.modal's 0.34s
+    // transform, styles.css) — CHANNELS_LIST's reply can land mid-flight and
+    // its callback does several full renderChannels()/renderNets()/
+    // renderSoundPanel() DOM rebuilds; if that lands while the CSS transition
+    // is still animating, the rebuild's main-thread work competes with the
+    // transition's frame budget and the drawer visibly hangs/stutters as it
+    // closes. The eventual sync still happens, just after the animation is
+    // done rather than racing it.
+    setTimeout(() => {
+      syncChannelsFromBridge();
+      syncNetsFromBridge();   // re-renders the network pill list from core truth
+    }, 360);
   }
 }
 
@@ -1717,7 +1816,6 @@ function populateRigDropdown() {
       sel.value = '';
     }
     updateRigFields();
-    qsMirrorRig();
   });
 }
 
@@ -1754,7 +1852,6 @@ function enumDevices() {
       document.getElementById('audioIn').innerHTML  = (r.inputs  || []).map(mkOpt).join('')  || '<option value="">— none —</option>';
       document.getElementById('audioOut').innerHTML = (r.outputs || []).map(mkOpt).join('') || '<option value="">— none —</option>';
       restoreAudioSelection();
-      qsMirrorAudio();
     });
     return;
   }
@@ -2182,7 +2279,6 @@ function syncChannelsFromBridge() {
     renderNets();
     renderSoundPanel();   // net channel labels in the sounding dropdown
     updateScanBtn();   // channel count changed → refresh Scan button gating
-    updateSetupBanner();
   });
 }
 
@@ -2422,32 +2518,32 @@ function delNet(i) {
 
 function loadAleFile() {
   const path = document.getElementById('cfgStationFile')?.value.trim() || 'station.ale';
-  if (!bridgeConnected) { aleLogInfo('Load: bridge not connected'); return; }
+  if (!bridgeConnected) { aleLogInfo('Import: bridge not connected'); return; }
   bridgeSend('STATION_LOAD', { path }, (r) => {
     if (r.ok) {
       syncAllFromBridge();
-      aleLogInfo('✓ Station file loaded ← ' + path);
+      aleLogInfo('✓ Channel file imported ← ' + path);
     } else {
-      aleLogInfo('✗ Failed to load station file: ' + path);
+      aleLogInfo('✗ Failed to import channel file: ' + path);
     }
   });
 }
 
 function saveAleFile() {
   const path = document.getElementById('cfgStationFile')?.value.trim() || 'station.ale';
-  if (!bridgeConnected) { aleLogInfo('Save: bridge not connected'); return; }
+  if (!bridgeConnected) { aleLogInfo('Export: bridge not connected'); return; }
   bridgeSend('STATION_SAVE', { path }, (r) => {
-    if (r.ok) aleLogInfo('✓ Station file saved → ' + path);
-    else      aleLogInfo('✗ Failed to save station file: ' + path);
+    if (r.ok) aleLogInfo('✓ Channel file exported → ' + path);
+    else      aleLogInfo('✗ Failed to export channel file: ' + path);
   });
 }
 function exportConf() {
   const path = document.getElementById('cfgFile').value.trim() || 'ale.conf';
   if (!bridgeConnected) { aleLogInfo('Export: bridge not connected'); return; }
-  if (!window.confirm('Konfiguration nach "' + path + '" exportieren?\nEine vorhandene Datei wird überschrieben.')) return;
+  if (!window.confirm('Export configuration to "' + path + '"?\nAn existing file will be overwritten.')) return;
   bridgeSend('SETTINGS_EXPORT', { path }, (r) => {
-    if (r.ok) aleLogInfo('✓ Konfiguration exportiert → ' + path);
-    else      aleLogInfo('Export fehlgeschlagen: ' + (r.error || '?'));
+    if (r.ok) aleLogInfo('✓ Configuration exported → ' + path);
+    else      aleLogInfo('✗ Export failed: ' + (r.error || '?'));
   });
 }
 function importConf() {
@@ -2457,9 +2553,9 @@ function importConf() {
     if (r.ok) {
       syncAllFromBridge();
       closeSettings();
-      aleLogInfo('✓ Konfiguration geladen ← ' + path);
+      aleLogInfo('✓ Configuration imported ← ' + path);
     } else {
-      aleLogInfo('Import fehlgeschlagen: ' + (r.error || '?'));
+      aleLogInfo('✗ Import failed: ' + (r.error || '?'));
     }
   });
 }
@@ -3395,7 +3491,13 @@ let messages = [];
 let linkedPeer = '';
 function renderMessages() {
   const el = document.getElementById('msgList');
-  if (!messages.length) { el.innerHTML = '<div class="msg-empty">No messages</div>'; return; }
+  if (!messages.length) {
+    const target = linkedPeer || (selectedContact ? selectedContact.cs : '');
+    el.innerHTML = target
+      ? `<div class="empty-state">${icon('messageSquare',20)}<div class="empty-state-title">No messages yet</div><div class="empty-state-hint">Send an AMD to ${escapeHtml(target)} below.</div><button class="empty-state-cta" onclick="document.getElementById('msgInput').focus()">Write a message</button></div>`
+      : `<div class="empty-state">${icon('messageSquare',20)}<div class="empty-state-title">No messages yet</div><div class="empty-state-hint">Pick a contact first, or wait for a link.</div><button class="empty-state-cta" onclick="focusContactPicker()">Select a contact</button></div>`;
+    return;
+  }
   el.innerHTML = '<div class="msg-list">' + messages.map((m, i) => {
     // Direction = sender → receiver.  own: self → peer; incoming: peer → self.
     const from = m.own ? (m.self || '') : (m.peer || '');
@@ -3502,7 +3604,6 @@ function syncSelfAddrsFromBridge() {
     renderSelfAddrs();
     updateSelfHeader();
     renderChannels();
-    updateSetupBanner();
     if (!wizardTriggered) { wizardTriggered = true; maybeShowWizard(); }
   });
 }
@@ -3518,48 +3619,19 @@ function delSelfAddr(i) {
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   FIRST-RUN WIZARD + SETUP BANNER  (mobile/index.html #setupWizard)
+   FIRST-RUN WIZARD  (#setupWizard)
    Fires once per session when the backend has no self addresses.
-   Four steps: Callsign → Audio → Radio (optional, skippable) → Channels.
-   Banner persists on the CALL tab until callsign + channels are both set.
+   Five steps: Callsign → Channels → Nets → Radio (optional) → Audio (optional).
+   Callsign/Channels lead since scanning needs both; Nets is a reviewable
+   step (channel files embed NET: lines, usually already populated by the
+   time this step renders); Radio/Audio are hardware hookups that can be
+   skipped and finished later in Settings.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 let wizardTriggered = false;
 let wizardStep = 0;
 
-function updateSetupBanner() {
-  const hasCallsign = selfAddrs.some(a => a.addr && a.status === 'enabled');
-  const hasChannels = channels.length > 0;
-  const card = document.getElementById('quickSetupCard');
-  if (!card) return;
-  const sub = document.getElementById('qsSubtitle');
-  if (hasCallsign && hasChannels) {
-    if (sub) { sub.textContent = primarySelfAddr() + ' · ' + channels.length + ' ch'; sub.className = 'qs-subtitle ok'; }
-  } else {
-    const missing = [];
-    if (!hasCallsign) missing.push('callsign');
-    if (!hasChannels) missing.push('channels');
-    if (sub) { sub.textContent = 'Missing: ' + missing.join(' + '); sub.className = 'qs-subtitle warn'; }
-    // Auto-expand when setup is incomplete and the wizard is not already open
-    const wizardHidden = document.getElementById('setupWizard')?.classList.contains('hidden') ?? true;
-    if (wizardHidden && card.dataset.expanded !== 'true') {
-      card.dataset.expanded = 'true';
-      const icon = document.getElementById('qsToggleIcon');
-      if (icon) icon.textContent = '▾';
-      enumDevices();
-      populateRigDropdown();
-    }
-  }
-  // Pre-fill callsign field from current configured address if blank
-  const qsCs = document.getElementById('qsCallsign');
-  if (qsCs && !qsCs.value) {
-    const p = primarySelfAddr();
-    if (p && p !== '—') qsCs.value = p;
-  }
-}
-
 function maybeShowWizard() {
   if (!selfAddrs.length) showWizard();
-  else updateSetupBanner();
 }
 
 function showWizard() {
@@ -3575,11 +3647,10 @@ function showWizard() {
 function closeWizard() {
   const el = document.getElementById('setupWizard');
   if (el) el.classList.add('hidden');
-  updateSetupBanner();
 }
 
 function renderWizardStep() {
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     const s = document.getElementById('wzStep' + i);
     if (s) s.classList.toggle('hidden', i !== wizardStep);
   }
@@ -3587,29 +3658,58 @@ function renderWizardStep() {
     p.classList.toggle('active', i === wizardStep);
     p.classList.toggle('done',   i < wizardStep);
   });
-  if (wizardStep === 1) wzMirrorAudio();
-  if (wizardStep === 2) wzMirrorRig();
+  const prevBtn = document.getElementById('wzPrevBtn');
+  const nextBtn = document.getElementById('wzNextBtn');
+  if (prevBtn) prevBtn.disabled = wizardStep === 0;
+  if (nextBtn) nextBtn.disabled = wizardStep === 4;
+  if (wizardStep === 2) wzRenderNets();
+  if (wizardStep === 3) wzMirrorRig();
+  if (wizardStep === 4) wzMirrorAudio();
 }
 
+// Free step navigation via the header ‹/› buttons — pure browsing, no side
+// effects (unlike wzNext(), which saves/connects). Lets the operator jump
+// back to fix an earlier field, or peek ahead, without re-triggering saves.
+function wzGoto(step) {
+  if (step < 0 || step > 4) return;
+  wizardStep = step;
+  renderWizardStep();
+}
+
+// Re-mirrors options from the live Settings dropdown each time the step is
+// (re-)entered (device lists can change), but preserves whatever the
+// operator already picked in the wizard if they navigate away and back —
+// only falls back to mirroring Settings' current value on first visit.
 function wzMirrorAudio() {
   ['In', 'Out'].forEach(dir => {
     const src = document.getElementById('audio' + dir);
     const dst = document.getElementById('wzAudio' + dir);
-    if (src && dst) { dst.innerHTML = src.innerHTML; dst.value = src.value; }
+    if (!src || !dst) return;
+    const prev = dst.value;
+    dst.innerHTML = src.innerHTML;
+    if (prev && [...dst.options].some(o => o.value === prev)) dst.value = prev;
+    else dst.value = src.value;
   });
 }
 
 function wzMirrorRig() {
   const src = document.getElementById('rigModel');
   const dst = document.getElementById('wzRigModel');
-  if (src && dst) { dst.innerHTML = src.innerHTML; dst.value = src.value; wzOnRigModelChange(); }
+  if (!src || !dst) return;
+  const prev = dst.value;
+  dst.innerHTML = src.innerHTML;
+  if (prev && [...dst.options].some(o => o.value === prev)) dst.value = prev;
+  else dst.value = src.value;
+  wzOnRigModelChange();
 }
 
 function wzOnRigModelChange() {
   const sel = document.getElementById('wzRigModel');
   const ptype = rigPortTypeById[sel?.value ?? ''] || '';
-  const row = document.getElementById('wzRigNetFields');
-  if (row) row.style.display = ptype === 'network' ? '' : 'none';
+  const net = document.getElementById('wzRigNetFields');
+  const ser = document.getElementById('wzRigSerialFields');
+  if (net) net.style.display = ptype === 'network' ? '' : 'none';
+  if (ser) ser.style.display = ptype === 'serial'  ? '' : 'none';
 }
 
 function wzSetStatus(step, msg, cls) {
@@ -3617,6 +3717,31 @@ function wzSetStatus(step, msg, cls) {
   if (!el) return;
   el.textContent = msg;
   el.className = 'wz-status' + (cls ? ' ' + cls : '');
+}
+
+// Step 2 (Nets) — read-only summary of nets[], usually already populated by
+// the .ale file's own NET: lines via the Channels step, or a one-click
+// "create one from everything just loaded" fallback when nets[] is empty.
+function wzRenderNets() {
+  const el = document.getElementById('wzNetsList');
+  if (!el) return;
+  if (nets.length) {
+    el.innerHTML = nets.map(n =>
+      `<div class="wz-net-row"><span class="wz-net-name">${escapeHtml(n.name)}</span><span class="wz-net-count">${n.channelIds.length} channel${n.channelIds.length === 1 ? '' : 's'}</span></div>`
+    ).join('');
+  } else if (channels.length) {
+    el.innerHTML = `<button class="wz-btn-quick" onclick="wzQuickNet()">+ Create a net from all loaded channels</button>`;
+  } else {
+    el.innerHTML = `<div class="wz-net-empty">No channels loaded yet — nothing to group.</div>`;
+  }
+}
+
+function wzQuickNet() {
+  addNet();
+  const i = nets.length - 1;
+  channels.forEach(c => toggleNetChannel(i, c.id, true));
+  renderNets();
+  wzRenderNets();
 }
 
 function wzNext() {
@@ -3634,62 +3759,69 @@ function wzNext() {
   }
 
   if (wizardStep === 1) {
-    const inName  = document.getElementById('wzAudioIn')?.value  || '';
-    const outName = document.getElementById('wzAudioOut')?.value || '';
-    const ainEl  = document.getElementById('audioIn');
-    const aoutEl = document.getElementById('audioOut');
-    if (ainEl  && inName)  ainEl.value  = inName;
-    if (aoutEl && outName) aoutEl.value = outName;
+    const path = (document.getElementById('wzChannelPath')?.value || '').trim() || 'nets/USA.ale';
     if (!bridgeConnected) { wizardStep++; renderWizardStep(); return; }
-    wzSetStatus(1, 'Connecting audio…');
-    bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (r) => {
+    wzSetStatus(1, 'Loading channels…');
+    bridgeSend('STATION_LOAD', { path }, (r) => {
       if (r.ok) {
-        audioOpen = true; audioInSelected = inName; audioOutSelected = outName;
-        const btn = document.getElementById('audioConnectBtn');
-        if (btn) { btn.innerHTML = icon('square', 12) + ' Close Audio'; btn.classList.add('scan-on'); }
-        wzSetStatus(1, '✓ Audio connected', 'ok');
+        syncAllFromBridge();
+        wzSetStatus(1, '✓ Channels loaded', 'ok');
         setTimeout(() => { wizardStep++; renderWizardStep(); }, 600);
       } else {
-        wzSetStatus(1, '✗ ' + (r.error || 'Failed — check device selection or Skip'), 'err');
+        wzSetStatus(1, '✗ ' + (r.error || 'File not found — check path or Skip'), 'err');
       }
     });
     return;
   }
 
-  if (wizardStep === 2) {
-    const model = document.getElementById('wzRigModel')?.value || '';
-    const ptype = rigPortTypeById[model] || '';
-    const host  = document.getElementById('wzRigHost')?.value || '127.0.0.1';
-    const port  = document.getElementById('wzRigPort')?.value || '4532';
+  if (wizardStep === 2) { wizardStep++; renderWizardStep(); return; }
+
+  if (wizardStep === 3) {
+    const model  = document.getElementById('wzRigModel')?.value || '';
+    const ptype  = rigPortTypeById[model] || '';
+    const host   = document.getElementById('wzRigHost')?.value   || '127.0.0.1';
+    const port   = document.getElementById('wzRigPort')?.value   || '4532';
+    const serial = document.getElementById('wzRigSerial')?.value || '';
+    const baud   = document.getElementById('wzRigBaud')?.value   || '19200';
     // Sync wizard selection into the settings form so rigArgs() picks it up
     const rigModelEl = document.getElementById('rigModel');
     if (rigModelEl) { rigModelEl.value = model; updateRigFields(); }
     if (ptype === 'network') {
       const h = document.getElementById('rigHost'); if (h) h.value = host;
       const p = document.getElementById('rigPort'); if (p) p.value = port;
+    } else if (ptype === 'serial') {
+      const s = document.getElementById('rigSerial'); if (s) s.value = serial;
+      const b = document.getElementById('rigBaud');   if (b) b.value = baud;
     }
     if (!model || !bridgeConnected) { wizardStep++; renderWizardStep(); return; }
-    wzSetStatus(2, 'Connecting to radio…');
+    wzSetStatus(3, 'Connecting to radio…');
     bridgeSend('RIG_CONNECT', rigArgs(), (r) => {
       const ok = !!(r.ok && r.connected);
       if (ok) applyRigState(true);
-      wzSetStatus(2, ok ? '✓ Radio connected' : '✗ ' + (r.error || r.status || 'Failed — you can Skip'), ok ? 'ok' : 'err');
+      wzSetStatus(3, ok ? '✓ Radio connected' : '✗ ' + (r.error || r.status || 'Failed — you can Skip'), ok ? 'ok' : 'err');
       if (ok) setTimeout(() => { wizardStep++; renderWizardStep(); }, 600);
     });
     return;
   }
 
-  if (wizardStep === 3) {
-    const path = (document.getElementById('wzChannelPath')?.value || '').trim() || 'nets/hflink_usa.ale';
+  if (wizardStep === 4) {
+    const inName  = document.getElementById('wzAudioIn')?.value  || '';
+    const outName = document.getElementById('wzAudioOut')?.value || '';
+    const ainEl  = document.getElementById('audioIn');
+    const aoutEl = document.getElementById('audioOut');
+    if (ainEl  && inName)  ainEl.value  = inName;
+    if (aoutEl && outName) aoutEl.value = outName;
     if (!bridgeConnected) { closeWizard(); return; }
-    wzSetStatus(3, 'Loading channels…');
-    bridgeSend('STATION_LOAD', { path }, (r) => {
+    wzSetStatus(4, 'Connecting audio…');
+    bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (r) => {
       if (r.ok) {
-        syncAllFromBridge();
-        wzSetStatus(3, '✓ Channels loaded', 'ok');
-        setTimeout(closeWizard, 700);
+        audioOpen = true; audioInSelected = inName; audioOutSelected = outName;
+        const btn = document.getElementById('audioConnectBtn');
+        if (btn) { btn.innerHTML = icon('square', 12) + ' Close Audio'; btn.classList.add('scan-on'); }
+        wzSetStatus(4, '✓ Audio connected', 'ok');
+        setTimeout(closeWizard, 600);
       } else {
-        wzSetStatus(3, '✗ ' + (r.error || 'File not found — check path or Skip'), 'err');
+        wzSetStatus(4, '✗ ' + (r.error || 'Failed — check device selection or Skip'), 'err');
       }
     });
     return;
@@ -3698,103 +3830,8 @@ function wzNext() {
 
 function wzSkip() {
   wizardStep++;
-  if (wizardStep >= 4) closeWizard();
+  if (wizardStep >= 5) closeWizard();
   else renderWizardStep();
-}
-
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   QUICK SETUP CARD  (#quickSetupCard in mobile/index.html)
-   Inline collapsible card at top of CALL tab for fast reconfiguration.
-   Auto-expands when callsign or channels are missing.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-function toggleQuickSetup() {
-  const card = document.getElementById('quickSetupCard');
-  if (!card) return;
-  const expanding = card.dataset.expanded !== 'true';
-  card.dataset.expanded = expanding ? 'true' : 'false';
-  const icon = document.getElementById('qsToggleIcon');
-  if (icon) icon.textContent = expanding ? '▾' : '▸';
-  if (expanding) {
-    enumDevices();
-    populateRigDropdown();
-  }
-}
-
-function qsMirrorAudio() {
-  ['In', 'Out'].forEach(dir => {
-    const src = document.getElementById('audio' + dir);
-    const dst = document.getElementById('qsAudio' + dir);
-    if (!src || !dst) return;
-    if (src.options.length && src.options[0]?.textContent !== 'Loading…') {
-      const prev = dst.value;
-      dst.innerHTML = src.innerHTML;
-      if (prev && [...dst.options].some(o => o.value === prev)) dst.value = prev;
-    }
-  });
-}
-
-function qsMirrorRig() {
-  const src = document.getElementById('rigModel');
-  const dst = document.getElementById('qsRigModel');
-  if (!src || !dst || src.options.length <= 1) return;
-  const prev = dst.value;
-  dst.innerHTML = '<option value="">— None / Offline —</option>' + src.innerHTML;
-  if (prev && [...dst.options].some(o => o.value === prev)) dst.value = prev;
-}
-
-function qsSetStatus(msg, cls) {
-  const el = document.getElementById('qsStatus');
-  if (!el) return;
-  el.textContent = msg;
-  el.className = 'qs-status' + (cls ? ' ' + cls : '');
-}
-
-function qsApply() {
-  const cs = (document.getElementById('qsCallsign')?.value || '').trim().toUpperCase();
-  const inName   = document.getElementById('qsAudioIn')?.value  || '';
-  const outName  = document.getElementById('qsAudioOut')?.value || '';
-  const rigModel = document.getElementById('qsRigModel')?.value || '';
-
-  if (!cs) { document.getElementById('qsCallsign')?.focus(); qsSetStatus('Enter your callsign first', 'err'); return; }
-  if (!bridgeConnected) { qsSetStatus('Not connected to openALE bridge', 'err'); return; }
-
-  qsSetStatus('Saving callsign…');
-  bridgeSend('SELF_ADDR_ADD', { addr: cs, status: 'enabled', valid_channels: 'ALL' }, () => {
-    syncSelfAddrsFromBridge();
-
-    if (!inName || !outName) { qsSetStatus('✓ Callsign saved', 'ok'); return; }
-    qsSetStatus('Connecting audio…');
-    const ainEl  = document.getElementById('audioIn');  if (ainEl)  ainEl.value  = inName;
-    const aoutEl = document.getElementById('audioOut'); if (aoutEl) aoutEl.value = outName;
-
-    bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (ar) => {
-      if (ar.ok) { audioOpen = true; audioInSelected = inName; audioOutSelected = outName; }
-
-      if (!rigModel) {
-        qsSetStatus(ar.ok ? '✓ Setup applied' : '✓ Callsign saved (audio failed)', ar.ok ? 'ok' : 'err');
-        return;
-      }
-      qsSetStatus('Connecting radio…');
-      const rigModelEl = document.getElementById('rigModel');
-      if (rigModelEl) { rigModelEl.value = rigModel; updateRigFields(); }
-
-      bridgeSend('RIG_CONNECT', rigArgs(), (rr) => {
-        const ok = !!(rr.ok && rr.connected);
-        if (ok) applyRigState(true);
-        qsSetStatus(ok ? '✓ Setup applied' : '✓ Applied (radio connection failed)', ok ? 'ok' : 'err');
-      });
-    });
-  });
-}
-
-function qsLoadChannels() {
-  const path = (document.getElementById('qsChannelPath')?.value || '').trim() || 'nets/hflink_usa.ale';
-  if (!bridgeConnected) { qsSetStatus('Not connected to openALE bridge', 'err'); return; }
-  qsSetStatus('Loading channels…');
-  bridgeSend('STATION_LOAD', { path }, (r) => {
-    if (r.ok) { syncAllFromBridge(); qsSetStatus('✓ Channels loaded', 'ok'); }
-    else qsSetStatus('✗ ' + (r.error || 'File not found — check path'), 'err');
-  });
 }
 
 // Settings nav Advanced collapse — mobile only (CSS hides toggle on desktop)
@@ -4054,6 +4091,7 @@ setInterval(updateClock, 1000);
 updateRadioDisplay();  // VFO display + mode/step highlight
 goIdle();              // boot idle (Scan off); real state arrives via syncAllFromBridge()/STATUS on connect
 updateScanBtn();       // reflect channel count on the Scan button (>=2 channels required)
+renderHeard();         // re-render the empty state now that wfState/channels have settled
 updateSelfHeader();
 updateAutoAcceptUi();  // reflect auto-accept checkbox state on the decision-window field
 renderSoundPanel();    // sounding dropdown's net list (populated when nets sync from the bridge)
