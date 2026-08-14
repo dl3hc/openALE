@@ -1,6 +1,5 @@
 # Release Notes — openALE 0.1.1-pre-alpha
 
-_Covering development work from 2026-08-12 to 2026-08-14._
 
 ## Highlights
 
