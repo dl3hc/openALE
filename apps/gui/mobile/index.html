@@ -1181,17 +1181,17 @@
               <button class="btn-sm accent" onclick="exportConf()">↓ Export</button>
               <button class="btn-sm" onclick="importConf()">↑ Import</button>
             </div>
-            <div class="fhint">Exports all current settings as a portable configuration file.</div>
+            <div class="fhint">Export/import portable settings for moving between machines or backing up. Your live configuration is saved automatically — this is not required for normal use.</div>
           </div>
 
           <div class="fg">
             <label class="flabel">Channel File (.ale)</label>
             <div style="display:flex;gap:8px">
               <input class="finput" id="cfgStationFile" type="text" placeholder="station.ale" style="flex:1">
-              <button class="btn-sm" onclick="loadAleFile()">↑ Load</button>
-              <button class="btn-sm" onclick="saveAleFile()">↓ Save</button>
+              <button class="btn-sm" onclick="loadAleFile()">↑ Import</button>
+              <button class="btn-sm" onclick="saveAleFile()">↓ Export</button>
             </div>
-            <div class="fhint">Channel list loaded at startup; Load / Save operate on this path.</div>
+            <div class="fhint">Import a channel/net plan (e.g. a regional preset) or export your current channels to share. Your live configuration is saved automatically — this is not required for normal use.</div>
           </div>
 
           <div class="fg">
@@ -1272,6 +1272,7 @@
       </div><!-- /scontent -->
     </div><!-- /modal-body -->
 
+    <div class="fhint" style="text-align:center;padding:8px 22px 0">Settings and channels are saved automatically as you make changes.</div>
     <div class="modal-footer">
       <button class="btn-cancel" onclick="closeSettings()">Cancel</button>
       <button class="btn-save" onclick="saveSettings()">Save &amp; Apply</button>
@@ -1423,25 +1424,31 @@
 
 <!-- ══════ FIRST-RUN SETUP WIZARD ══════ -->
 <!-- Shown on first connect when no self address is configured.
-     Four sequential steps: Callsign → Audio → Radio (optional) → Channels.
-     Not dismissible via backdrop click — operator must complete or ✕. -->
+     Five sequential steps: Callsign → Channels → Nets → Radio (optional) →
+     Audio (optional). Not dismissible via backdrop click — operator must
+     complete or ✕. -->
 <div class="modal-overlay hidden" id="setupWizard">
   <div class="modal" style="max-width:400px;width:92vw">
 
     <div class="modal-hdr">
       <span class="modal-title">openALE Setup</span>
-      <div class="wz-pips">
-        <div class="wz-pip active"></div>
-        <div class="wz-pip"></div>
-        <div class="wz-pip"></div>
-        <div class="wz-pip"></div>
+      <div class="wz-nav">
+        <button class="wz-nav-btn" id="wzPrevBtn" onclick="wzGoto(wizardStep-1)" title="Previous step">‹</button>
+        <div class="wz-pips">
+          <div class="wz-pip active"></div>
+          <div class="wz-pip"></div>
+          <div class="wz-pip"></div>
+          <div class="wz-pip"></div>
+          <div class="wz-pip"></div>
+        </div>
+        <button class="wz-nav-btn" id="wzNextBtn" onclick="wzGoto(wizardStep+1)" title="Next step">›</button>
       </div>
-      <button class="modal-close" onclick="closeWizard()" title="Close — setup banner will remain until complete">✕</button>
+      <button class="modal-close" onclick="closeWizard()" title="Close — finish setup later in Settings ▸ Identity">✕</button>
     </div>
 
     <!-- Step 0: Callsign -->
     <div class="wz-step" id="wzStep0">
-      <div class="wz-step-num">Step 1 of 4</div>
+      <div class="wz-step-num">Step 1 of 5</div>
       <div class="wz-step-title">Station Callsign</div>
       <div class="wz-step-desc">Your ALE address — up to 15 characters. Other stations use this to call you. (MIL-STD-188-141B A.4.3.4)</div>
       <input class="wz-cs-input" id="wzCallsign" type="text" maxlength="15"
@@ -1454,25 +1461,41 @@
       </div>
     </div>
 
-    <!-- Step 1: Audio devices -->
+    <!-- Step 1: Channels -->
     <div class="wz-step hidden" id="wzStep1">
-      <div class="wz-step-num">Step 2 of 4</div>
-      <div class="wz-step-title">Audio Devices</div>
-      <div class="wz-step-desc">Select the sound device connected to your radio's audio in/out.</div>
-      <label class="flabel" style="margin-top:14px">RX Input — receiver audio</label>
-      <select class="fselect" id="wzAudioIn" style="margin-top:4px"><option>Loading…</option></select>
-      <label class="flabel" style="margin-top:10px">TX Output — radio TX line</label>
-      <select class="fselect" id="wzAudioOut" style="margin-top:4px"><option>Loading…</option></select>
+      <div class="wz-step-num">Step 2 of 5</div>
+      <div class="wz-step-title">Load Channels</div>
+      <div class="wz-step-desc">Load a <span style="font-family:var(--mono);color:var(--accent)">.ale</span> channel file. Presets ship in the <span style="font-family:var(--mono);color:var(--accent)">nets/</span> folder.</div>
+      <label class="flabel" style="margin-top:14px">File path</label>
+      <input class="finput" id="wzChannelPath" type="text"
+             value="nets/USA.ale" placeholder="nets/USA.ale"
+             style="margin-top:4px;font-family:var(--mono);font-size:12px"
+             onkeydown="if(event.key==='Enter')wzNext()">
+      <div class="fhint" style="margin-top:6px">Presets: <span style="font-family:var(--mono)">USA</span> · <span style="font-family:var(--mono)">EUR</span> · <span style="font-family:var(--mono)">EUR_cur</span> · <span style="font-family:var(--mono)">EUR_ale_only</span> · <span style="font-family:var(--mono)">UK</span> · <span style="font-family:var(--mono)">JA</span> · <span style="font-family:var(--mono)">AUS</span> · <span style="font-family:var(--mono)">ITU1</span> · <span style="font-family:var(--mono)">ITU2</span> · <span style="font-family:var(--mono)">ITU3</span> (add <span style="font-family:var(--mono)">.ale</span>)</div>
       <div id="wzStep1Status" class="wz-status"></div>
       <div class="wz-actions">
         <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
-        <button class="wz-btn-next" onclick="wzNext()">Connect &amp; Continue →</button>
+        <button class="wz-btn-next" onclick="wzNext()">Load &amp; Continue →</button>
       </div>
     </div>
 
-    <!-- Step 2: Radio / CAT (optional) -->
+    <!-- Step 2: Nets -->
     <div class="wz-step hidden" id="wzStep2">
-      <div class="wz-step-num">Step 3 of 4</div>
+      <div class="wz-step-num">Step 3 of 5</div>
+      <div class="wz-step-title">Nets</div>
+      <div class="wz-step-desc">Nets group channels for scanning, sounding, and calling.</div>
+      <div id="wzNetsList" class="wz-nets-list" style="margin-top:14px"></div>
+      <div class="fhint" style="margin-top:10px">Edit further anytime in Settings ▸ Nets.</div>
+      <div id="wzStep2Status" class="wz-status"></div>
+      <div class="wz-actions">
+        <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
+        <button class="wz-btn-next" onclick="wzNext()">Continue →</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Radio / CAT (optional) -->
+    <div class="wz-step hidden" id="wzStep3">
+      <div class="wz-step-num">Step 4 of 5</div>
       <div class="wz-step-title">Radio / CAT Control</div>
       <div class="wz-step-desc">Optional — connect a Hamlib-supported radio for automatic frequency management.</div>
       <label class="flabel" style="margin-top:14px">Hamlib Model</label>
@@ -1490,28 +1513,41 @@
           </div>
         </div>
       </div>
-      <div id="wzStep2Status" class="wz-status"></div>
+      <div id="wzRigSerialFields" style="display:none;margin-top:10px">
+        <div style="display:flex;gap:8px">
+          <div style="flex:1">
+            <label class="flabel">Serial Port</label>
+            <input class="finput" id="wzRigSerial" type="text" placeholder="COM3 or /dev/ttyUSB0" style="margin-top:4px">
+          </div>
+          <div style="width:110px">
+            <label class="flabel">Baud Rate</label>
+            <select class="fselect" id="wzRigBaud" style="margin-top:4px">
+              <option>4800</option><option>9600</option><option selected>19200</option>
+              <option>38400</option><option>57600</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div id="wzStep3Status" class="wz-status"></div>
       <div class="wz-actions">
         <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
         <button class="wz-btn-next" onclick="wzNext()">Connect &amp; Continue →</button>
       </div>
     </div>
 
-    <!-- Step 3: Load channels -->
-    <div class="wz-step hidden" id="wzStep3">
-      <div class="wz-step-num">Step 4 of 4</div>
-      <div class="wz-step-title">Load Channels</div>
-      <div class="wz-step-desc">Load a <span style="font-family:var(--mono);color:var(--accent)">.ale</span> channel file. HFLINK presets ship in the <span style="font-family:var(--mono);color:var(--accent)">nets/</span> folder.</div>
-      <label class="flabel" style="margin-top:14px">File path</label>
-      <input class="finput" id="wzChannelPath" type="text"
-             value="nets/hflink_usa.ale" placeholder="nets/hflink_usa.ale"
-             style="margin-top:4px;font-family:var(--mono);font-size:12px"
-             onkeydown="if(event.key==='Enter')wzNext()">
-      <div class="fhint" style="margin-top:6px">Presets: <span style="font-family:var(--mono)">hflink_usa</span> · <span style="font-family:var(--mono)">hflink_eur</span> · <span style="font-family:var(--mono)">hflink_uk</span> · <span style="font-family:var(--mono)">hflink_ja</span> · <span style="font-family:var(--mono)">hflink_aus</span> · <span style="font-family:var(--mono)">hflink_aus1</span> (add <span style="font-family:var(--mono)">.ale</span>)</div>
-      <div id="wzStep3Status" class="wz-status"></div>
+    <!-- Step 4: Audio devices -->
+    <div class="wz-step hidden" id="wzStep4">
+      <div class="wz-step-num">Step 5 of 5</div>
+      <div class="wz-step-title">Audio Devices</div>
+      <div class="wz-step-desc">Select the sound device connected to your radio's audio in/out.</div>
+      <label class="flabel" style="margin-top:14px">RX Input — receiver audio</label>
+      <select class="fselect" id="wzAudioIn" style="margin-top:4px"><option>Loading…</option></select>
+      <label class="flabel" style="margin-top:10px">TX Output — radio TX line</label>
+      <select class="fselect" id="wzAudioOut" style="margin-top:4px"><option>Loading…</option></select>
+      <div id="wzStep4Status" class="wz-status"></div>
       <div class="wz-actions">
         <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
-        <button class="wz-btn-next" onclick="wzNext()">Load &amp; Finish ✓</button>
+        <button class="wz-btn-next" onclick="wzNext()">Connect &amp; Finish ✓</button>
       </div>
     </div>
 
