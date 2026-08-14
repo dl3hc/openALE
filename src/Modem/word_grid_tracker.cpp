@@ -30,6 +30,16 @@ void WordGridTracker::process_candidate(const DecodedCandidate& c, uint32_t writ
     if (ref_.active && (write_pos - ref_.first_pos) >= SAMPLES_PER_SYMBOL)
         commit_refined_word_();
 
+    // Grid-loss timeout: no word has re-anchored the grid in GRID_TIMEOUT_SAMPLES
+    // — the transmission has ended (or faded past recovery). Release the lock
+    // here rather than relying solely on on_silence_gap(), so the grid also
+    // drops on the same channel once a transmission stops.
+    if (grid_locked_ && !ref_.active
+        && (write_pos - grid_anchor_) > GRID_TIMEOUT_SAMPLES) {
+        op_.restore_base();
+        grid_locked_ = false;
+    }
+
     if (c.decoded_ok && gate_word_(c, write_pos))
         try_emit_decoded_(c.word, c.word_energy, c.unanimous_votes, write_pos);
     else if (!c.decoded_ok && !ref_.active && grid_locked_
