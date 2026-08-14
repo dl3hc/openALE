@@ -126,6 +126,14 @@ private:
     static constexpr uint32_t WORD_SAMPLES  = SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL;
     static constexpr uint8_t  MIN_UNANIMOUS = 33;  // ~67 % of 49, A.5.2.6.3 criterion 1
 
+    // Grid-loss timeout: release the lock if no new word has anchored the grid
+    // for this many word periods. Backstops on_silence_gap(), whose raw-PCM
+    // amplitude gate (±SILENCE_THRESHOLD for 100 ms) never fires on real
+    // receive audio carrying any noise/hiss between transmissions — without
+    // this, grid_locked_ (and the GUI's "Sync" indicator) stays true
+    // indefinitely once a transmission ends, until the channel is changed.
+    static constexpr uint32_t GRID_TIMEOUT_SAMPLES = 3 * WORD_SAMPLES;
+
     // ── FEC / sync operating point ────────────────────────────────────────────
     struct OperatingPoint {
         GolayMode   base_mode          = GolayMode::Mode3_4;
