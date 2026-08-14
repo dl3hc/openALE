@@ -86,18 +86,23 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
     // stays backward-compatible with old `rx tx mode [label]` files).
     uint32_t rx_hz = 0, tx_hz = 0;
     size_t next = 1;  // index of the next unconsumed token
-    auto colon = toks[0].find(':');
-    if (colon != std::string::npos) {
-        rx_hz = static_cast<uint32_t>(std::stoul(toks[0].substr(0, colon)));
-        const std::string tx_str = toks[0].substr(colon + 1);
-        tx_hz = tx_str.empty() ? 0u : static_cast<uint32_t>(std::stoul(tx_str));
-    } else {
-        rx_hz = static_cast<uint32_t>(std::stoul(toks[0]));
-        if (toks.size() > 1 && !toks[1].empty()
-            && toks[1].find_first_not_of("0123456789") == std::string::npos) {
-            tx_hz = static_cast<uint32_t>(std::stoul(toks[1]));
-            next = 2;
+    try {
+        auto colon = toks[0].find(':');
+        if (colon != std::string::npos) {
+            rx_hz = static_cast<uint32_t>(std::stoul(toks[0].substr(0, colon)));
+            const std::string tx_str = toks[0].substr(colon + 1);
+            tx_hz = tx_str.empty() ? 0u : static_cast<uint32_t>(std::stoul(tx_str));
+        } else {
+            rx_hz = static_cast<uint32_t>(std::stoul(toks[0]));
+            if (toks.size() > 1 && !toks[1].empty()
+                && toks[1].find_first_not_of("0123456789") == std::string::npos) {
+                tx_hz = static_cast<uint32_t>(std::stoul(toks[1]));
+                next = 2;
+            }
         }
+    } catch (...) {
+        return std::nullopt;  // not a channel line (e.g. a key=value settings line
+                               // in a merged file) — skip it, don't crash the parser
     }
     if (rx_hz == 0) return std::nullopt;
 
@@ -3242,15 +3247,18 @@ void ALEController::set_current_sfi(float sfi) {
     update_propagation_context();
 }
 
-bool ALEController::export_settings(const std::string& path)
+void ALEController::write_settings_body(std::ostream& f) const
 {
-    std::ofstream f(path);
-    if (!f.is_open()) return false;
     f << "# ALE settings export\n";
     for (const auto& e : self_address_store_.all())
         f << "self_address=" << e.address << "\n";
-    if (!station_file_.empty())
-        f << "station_file=" << station_file_ << "\n";
+    // NOTE: station_file= is deliberately NOT written here — it is added only
+    // by export_settings() (a distinct external ale.conf pointing at a separate
+    // channel file). Composed into save_state()'s single merged file it would
+    // be self-referential: import_settings()'s legacy cascade would re-parse
+    // this same file as a pure station file, and any key=value settings line
+    // reached before a recognized NET:/CONTACT:/GROUP:/ALLCALL:/# prefix
+    // crashes parse_channel_spec()'s unguarded std::stoul().
     f << "assumed_scan_channels=" << config_.assumed_scan_channels << "\n";
     f << "golay_mode=" << static_cast<int>(config_.golay_mode) << "\n";
     f << "min_unanimous_votes=" << static_cast<int>(config_.min_unanimous_votes) << "\n";
@@ -3261,6 +3269,8 @@ bool ALEController::export_settings(const std::string& path)
     f << "scan_dwell_ms=" << config_.scan_dwell_ms << "\n";
     f << "scan_squelch_enabled=" << (scan_squelch_enabled() ? 1 : 0) << "\n";
     f << "scan_detect_margin_db=" << scan_detect_margin_db() << "\n";
+    f << "lbt_margin_db=" << lbt_margin_db() << "\n";
+    f << "lbt_occupancy_enabled=" << (lbt_occupancy_enabled() ? 1 : 0) << "\n";
     f << "sounding_interval_sec=" << config_.sounding_interval_sec << "\n";
     f << "sounding_use_twas=" << (config_.sounding_use_twas ? "1" : "0") << "\n";
     f << "sounding_warning_lead_sec=" << config_.sounding_warning_lead_sec << "\n";
@@ -3288,6 +3298,18 @@ bool ALEController::export_settings(const std::string& path)
         for (const auto& [addr, name] : stations)
             f << "station=" << addr << '|' << name << '\n';
     }
+}
+
+bool ALEController::export_settings(const std::string& path)
+{
+    std::ofstream f(path);
+    if (!f.is_open()) return false;
+    write_settings_body(f);
+    // See write_settings_body()'s note: only the standalone ale.conf export
+    // references an external channel file this way (safe — a distinct file
+    // that never contains key=value lines); save_state()'s merged file omits it.
+    if (!station_file_.empty())
+        f << "station_file=" << station_file_ << "\n";
     return f.good();
 }
 
@@ -3360,6 +3382,10 @@ bool ALEController::import_settings(const std::string& path)
             set_scan_squelch_enabled(val == "1");   // detector member, not in cfg
         } else if (key == "scan_detect_margin_db") {
             set_scan_detect_margin_db(std::stof(val));
+        } else if (key == "lbt_margin_db") {
+            set_lbt_margin_db(std::stof(val));      // occupancy_ member, not in cfg
+        } else if (key == "lbt_occupancy_enabled") {
+            set_lbt_occupancy_enabled(val == "1");  // controller member, not in cfg
         } else if (key == "relink_enabled") {
             cfg.relink_enabled = (val == "1");
         } else if (key == "relink_improvement_threshold") {
@@ -3402,7 +3428,7 @@ bool ALEController::import_settings(const std::string& path)
     apply_config(cfg);
     if (has_lqa_enabled) set_lqa_enabled(lqa_enabled_val);
     if (!station_file_to_load.empty())
-        load_station_file(station_file_to_load);  // sets station_file_ on success
+        load_station_file(station_file_to_load);  // legacy cascade; does not rearm auto-save
     // Populate address book from ale.conf stations (skip callsigns already loaded
     // from the station file to avoid duplicates).
     for (const auto& [cs, name] : conf_stations) {
@@ -3426,7 +3452,7 @@ bool ALEController::add_channel(const Channel& ch)
     calling_channels_.push_back(ch2);
 apply:
     sm_.set_calling_channels(calling_channels_);
-    if (!station_file_.empty()) save_channels(station_file_);
+    if (!station_file_.empty()) save_state(station_file_);
     return true;
 }
 
@@ -3445,7 +3471,7 @@ bool ALEController::del_channel(uint32_t rx_hz)
 
     if (!removed_id.empty()) net_store_.unassign_channel_everywhere(removed_id);
     sm_.set_calling_channels(calling_channels_);
-    if (!station_file_.empty()) save_channels(station_file_);
+    if (!station_file_.empty()) save_state(station_file_);
     return true;
 }
 
@@ -3468,7 +3494,7 @@ bool ALEController::rename_channel(const std::string& old_id, const std::string&
     net_store_.rename_channel(old_id, new_id);                       // propagate to nets
     sm_.set_calling_channels(calling_channels_);
     notify_channel_changed_(*it);                 // GUI readout follows rename
-    if (!station_file_.empty()) save_channels(station_file_);
+    if (!station_file_.empty()) save_state(station_file_);
     return true;
 }
 
@@ -3480,7 +3506,7 @@ bool ALEController::set_channel_enabled(const std::string& id, bool enabled)
     if (it->enabled == enabled) return true;                          // no-op if unchanged
     it->enabled = enabled;
     sm_.set_calling_channels(calling_channels_);
-    if (!station_file_.empty()) save_channels(station_file_);
+    if (!station_file_.empty()) save_state(station_file_);
     return true;
 }
 
@@ -3493,7 +3519,7 @@ bool ALEController::set_channel_mode(const std::string& id, const std::string& m
     it->rx_mode = mode;
     it->tx_mode = mode;
     sm_.set_calling_channels(calling_channels_);
-    if (!station_file_.empty()) save_channels(station_file_);
+    if (!station_file_.empty()) save_state(station_file_);
     // Re-assert on the radio if this is the currently-active channel so the
     // override takes effect immediately (freq-first/mode-last, set_vfo_channel).
     if (radio_) {
@@ -3593,14 +3619,14 @@ bool ALEController::load_station_file(const std::string& path)
         if (ch.id.empty()) ch.id = next_free_channel_id(loaded);
     calling_channels_ = std::move(loaded);
     sm_.set_calling_channels(calling_channels_);
-    station_file_ = path;
+    // Deliberately does NOT touch station_file_: loading a station file (e.g. a
+    // shared community preset from nets/) must not silently repoint auto-save
+    // at it. Auto-save is armed exclusively by load_state() at startup.
     return true;
 }
 
-bool ALEController::save_station_file(const std::string& path) const
+void ALEController::write_station_body(std::ostream& f) const
 {
-    std::ofstream f(path);
-    if (!f.is_open()) return false;
     f << "# openALE station file — MIL-STD-188-141B\n";
     f << "# ID:id rx_hz tx_hz mode [flags] [label]   flags=[OFF,RX,IC,IS,IR]\n";
     for (const auto& ch : calling_channels_)
@@ -3635,7 +3661,32 @@ bool ALEController::save_station_file(const std::string& path) const
     f << "# ALLCALL:key=val\n";
     f << "ALLCALL:selector=" << all_call_config_.selector << '\n';
     f << "ALLCALL:accept=" << (all_call_config_.accept ? '1' : '0') << '\n';
+}
+
+bool ALEController::save_station_file(const std::string& path) const
+{
+    std::ofstream f(path);
+    if (!f.is_open()) return false;
+    write_station_body(f);
     return f.good();
+}
+
+bool ALEController::save_state(const std::string& path) const
+{
+    std::ofstream f(path);
+    if (!f.is_open()) return false;
+    f << "# openALE-state version=1\n";
+    write_station_body(f);
+    write_settings_body(f);
+    return f.good();
+}
+
+bool ALEController::load_state(const std::string& path)
+{
+    load_station_file(path);   // best-effort; missing file just means nothing to load yet
+    import_settings(path);     // best-effort; same file, key=value lines only
+    station_file_ = path;      // always arm auto-save, whether or not anything was found
+    return true;
 }
 
 // ── Nets ─────────────────────────────────────────────────────────────────────
@@ -3643,28 +3694,28 @@ bool ALEController::save_station_file(const std::string& path) const
 bool ALEController::add_net(const std::string& name)
 {
     const bool added = net_store_.add_net(name);
-    if (added && !station_file_.empty()) save_channels(station_file_);
+    if (added && !station_file_.empty()) save_state(station_file_);
     return added;
 }
 
 bool ALEController::del_net(const std::string& name)
 {
     const bool removed = net_store_.remove_net(name);
-    if (removed && !station_file_.empty()) save_channels(station_file_);
+    if (removed && !station_file_.empty()) save_state(station_file_);
     return removed;
 }
 
 bool ALEController::assign_channel_to_net(const std::string& net_name, const std::string& channel_id)
 {
     const bool ok = net_store_.assign_channel(net_name, channel_id);
-    if (ok && !station_file_.empty()) save_channels(station_file_);
+    if (ok && !station_file_.empty()) save_state(station_file_);
     return ok;
 }
 
 bool ALEController::unassign_channel_from_net(const std::string& net_name, const std::string& channel_id)
 {
     const bool ok = net_store_.unassign_channel(net_name, channel_id);
-    if (ok && !station_file_.empty()) save_channels(station_file_);
+    if (ok && !station_file_.empty()) save_state(station_file_);
     return ok;
 }
 
@@ -3672,7 +3723,7 @@ bool ALEController::update_net(const Net& updated)
 {
     const bool ok = net_store_.update_net(updated);
     if (ok) {
-        if (!station_file_.empty()) save_channels(station_file_);
+        if (!station_file_.empty()) save_state(station_file_);
         // Live-update the sounding timer if the active sounding net was changed.
         if (updated.name == auto_sounding_net_) refresh_auto_sounding_interval();
     }
@@ -3700,7 +3751,7 @@ bool ALEController::rename_net(const std::string& old_name, const std::string& n
         contact_store_.add_or_update(updated);
     }
 
-    if (!station_file_.empty()) save_station_file(station_file_);
+    if (!station_file_.empty()) save_state(station_file_);
     return true;
 }
 
@@ -3709,28 +3760,28 @@ bool ALEController::rename_net(const std::string& old_name, const std::string& n
 bool ALEController::add_group_roster(const std::string& name)
 {
     const bool ok = group_call_store_.add_roster(name);
-    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    if (ok && !station_file_.empty()) save_state(station_file_);
     return ok;
 }
 
 bool ALEController::del_group_roster(const std::string& name)
 {
     const bool ok = group_call_store_.remove_roster(name);
-    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    if (ok && !station_file_.empty()) save_state(station_file_);
     return ok;
 }
 
 bool ALEController::add_group_member(const std::string& roster_name, const std::string& callsign)
 {
     const bool ok = group_call_store_.add_member(roster_name, callsign);
-    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    if (ok && !station_file_.empty()) save_state(station_file_);
     return ok;
 }
 
 bool ALEController::del_group_member(const std::string& roster_name, const std::string& callsign)
 {
     const bool ok = group_call_store_.remove_member(roster_name, callsign);
-    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    if (ok && !station_file_.empty()) save_state(station_file_);
     return ok;
 }
 
@@ -3767,7 +3818,7 @@ bool ALEController::add_contact(const std::string& callsign,
     c.all_channels = (valid_channels.empty() || valid_channels == "ALL");
     if (!c.all_channels) c.valid_channels = split_csv(valid_channels);
     const bool ok = contact_store_.add_or_update(c);
-    if (ok && !station_file_.empty()) save_station_file(station_file_);
+    if (ok && !station_file_.empty()) save_state(station_file_);
     return ok;
 }
 
@@ -3775,7 +3826,7 @@ bool ALEController::remove_contact(const std::string& callsign)
 {
     const bool removed = contact_store_.remove(callsign);
     if (removed && selected_contact_ == callsign) selected_contact_.clear();
-    if (removed && !station_file_.empty()) save_station_file(station_file_);
+    if (removed && !station_file_.empty()) save_state(station_file_);
     return removed;
 }
 
@@ -3818,12 +3869,15 @@ bool ALEController::add_self_address(const std::string& addr,
     const bool added = self_address_store_.add(e);
     // First entry ever added becomes primary (SelfAddressStore::add()) — apply it.
     if (added && self_address_store_.primary() == addr) set_primary_self_address(addr);
+    if (added && !station_file_.empty()) save_state(station_file_);
     return added;
 }
 
 bool ALEController::remove_self_address(const std::string& addr)
 {
-    return self_address_store_.remove(addr);
+    const bool removed = self_address_store_.remove(addr);
+    if (removed && !station_file_.empty()) save_state(station_file_);
+    return removed;
 }
 
 std::vector<std::string> ALEController::get_all_self_addresses() const
@@ -3841,6 +3895,7 @@ bool ALEController::set_primary_self_address(const std::string& addr)
 {
     if (!self_address_store_.set_primary(addr)) return false;
     if (!set_self_address(addr)) return false;  // validates + drives sm_
+    if (!station_file_.empty()) save_state(station_file_);
     return true;
 }
 
@@ -3939,7 +3994,7 @@ std::string ALEController::process_command(const std::string& raw)
     if (cmd == "CMD:CLEAR_CHANNELS") {
         calling_channels_.clear();
         sm_.set_calling_channels(calling_channels_);
-        if (!station_file_.empty()) save_channels(station_file_);
+        if (!station_file_.empty()) save_state(station_file_);
         return "OK: channel list cleared";
     }
     if (cmd.rfind("CMD:SAVE_CHANNELS", 0) == 0) {

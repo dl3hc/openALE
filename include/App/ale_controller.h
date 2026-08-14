@@ -49,6 +49,7 @@
 #include "App/sounding_identity_accumulator.h"
 #include "Stores/ale_data_store.h"
 #include <functional>
+#include <iosfwd>
 #include <string>
 #include <utility>
 #include <vector>
@@ -146,6 +147,8 @@ public:
     /**
      * Load a station file (.ale): channels, nets, contacts, group rosters, allcall config.
      * Lines starting with '#' are ignored.  Unknown tags are silently skipped (forward compat).
+     * Purely one-shot: does NOT arm auto-save (use load_state()/set_station_file() for that) —
+     * loading a shared preset must not silently repoint auto-save at the preset file.
      * \return false if the file cannot be opened (non-fatal; existing state kept).
      */
     bool load_station_file(const std::string& path);
@@ -164,6 +167,23 @@ public:
      */
     void set_station_file(const std::string& path) { station_file_ = path; }
     void set_channel_file(const std::string& path) { station_file_ = path; }  // compat alias
+
+    /**
+     * Load the unified auto-save state file: channels/nets/contacts/rosters/
+     * allcall (station-file body) plus all settings (export_settings body),
+     * from one file. Best-effort on both halves — a missing/partial file is
+     * not an error (e.g. first run). Unconditionally arms auto-save at \p path
+     * (every subsequent mutation and settings change is saved back here),
+     * regardless of whether anything was actually found to load.
+     */
+    bool load_state(const std::string& path);
+
+    /**
+     * Save the unified auto-save state file (see load_state()): a version
+     * header, then the station-file body, then the settings body, all in
+     * one file. \return false on I/O error.
+     */
+    bool save_state(const std::string& path) const;
 
     // ── Nets (A.5.5.4.3 group membership / scanning-call sizing) ───────────
     // A net is a named subset of channel IDs (see Channel::id). Used to derive
@@ -1475,6 +1495,12 @@ private:
     /// auto_sounding_interval_ms_. Called when the active net's policy is
     /// updated live so the running timer reflects the new value immediately.
     void refresh_auto_sounding_interval();
+
+    /// Body-writers shared between the standalone save_station_file()/
+    /// export_settings() and the composed save_state() — write into an
+    /// already-open stream so save_state() can concatenate both into one file.
+    void write_station_body(std::ostream& f) const;
+    void write_settings_body(std::ostream& f) const;
     void on_received_word(const ALEWord& word);
 
     // ── update() concern handlers ─────────────────────────────────────────────
