@@ -146,6 +146,7 @@ function syncAllFromBridge() {
   syncEnhFreqSelectFromBridge();    // pull Enhanced Freq-Select state from core
   syncVoiceFromBridge();            // pull voice-passthrough arm/mode state from core
   syncLocationFromBridge();         // pull Station Location & Propagation from core
+  syncTunerFromBridge();            // pull netrigctl server (Tuner) state from core
   pollRigStatus();   // establish initial radio-control lock state
   populateRigDropdown();
   // Always PULL core state into the GUI on connect — never push stale DOM
@@ -3114,6 +3115,27 @@ function applyLocationToBridge() {
   });
 }
 
+// ── Tuner (rigctld-compat read-only frequency server) ──────────────────────
+function syncTunerFromBridge() {
+  bridgeSend('RIGCTLD_GET', {}, (r) => {
+    if (!r.ok) return;
+    const en = document.getElementById('cfgRigctldEnabled');
+    const pt = document.getElementById('cfgRigctldPort');
+    const br = document.getElementById('cfgRigctldBindRemote');
+    if (en && typeof r.enabled === 'boolean') en.checked = r.enabled;
+    if (pt && typeof r.port === 'number') pt.value = r.port;
+    if (br && typeof r.bind_remote === 'boolean') br.value = r.bind_remote ? '1' : '0';
+  });
+}
+
+function applyTunerToBridge() {
+  if (!bridgeConnected) return;
+  const enabled = document.getElementById('cfgRigctldEnabled')?.checked ?? false;
+  const port = parseInt(document.getElementById('cfgRigctldPort')?.value || '4532', 10);
+  const bindRemote = document.getElementById('cfgRigctldBindRemote')?.value === '1';
+  bridgeSend('RIGCTLD_SET', { enabled, port, bind_remote: bindRemote });
+}
+
 function onPositionSourceChange() {
   const main = document.querySelector('input[name="posSource"]:checked')?.value || '0';
   const show = (id, vis) => { const el = document.getElementById(id); if (el) el.style.display = vis ? '' : 'none'; };
@@ -3647,6 +3669,10 @@ function showWizard() {
 function closeWizard() {
   const el = document.getElementById('setupWizard');
   if (el) el.classList.add('hidden');
+  // Leave the operator ready to go: if the wizard configured net(s) and none
+  // is active yet, adopt the first one — same selectNet() path as the header
+  // Network pill, so it tunes the radio and arms sounding/scan scope too.
+  if (!activeNet && nets.length) selectNet(nets[0].name);
 }
 
 function renderWizardStep() {

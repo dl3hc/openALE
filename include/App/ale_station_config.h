@@ -126,6 +126,19 @@ struct ALEStationConfig {
     std::string nmea_port           = "";         ///< "COM3" / "/dev/ttyUSB0"
     uint32_t    nmea_baud           = 4800;
     bool        sfi_enabled         = false;      ///< enable NOAA SFI background fetch
+
+    // ── rigctld/netrigctl-compatible read-only TCP server (Tuner) ─────────
+    /// true = accept local netrigctl clients (Hamlib RIG_MODEL_NETRIGCTL)
+    /// that poll the current RX frequency read-only (CMD 'f'). Does NOT open
+    /// a second CAT/serial connection to the radio — serves openALE's own
+    /// cached frequency. Disabled by default (opt-in), same tier as cat_trace.
+    bool        rigctld_server_enabled     = false;
+    /// TCP port for the read-only rigctld-compat listener.
+    /// Distinct from rig_port (the OUTBOUND port openALE connects to as a
+    /// rigctld/hamlib CLIENT) — do not confuse the two.
+    uint16_t    rigctld_server_port        = 4532;
+    /// false (default) = bind 127.0.0.1 only; true = bind 0.0.0.0 (LAN-reachable).
+    bool        rigctld_server_bind_remote = false;
 };
 
 } // namespace ale

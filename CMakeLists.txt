@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(openALE VERSION 0.1.0 LANGUAGES CXX)
+project(openALE VERSION 0.0.2 LANGUAGES CXX)
 set(OPENALE_VERSION_SUFFIX "-pre-alpha")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -432,9 +432,41 @@ if(HAMLIB_FOUND)
     endif()
 endif()
 
+# ── rigctld-compat protocol smoke tests ────────────────────────────────────────
+
+# Pure protocol function — no sockets, no Hamlib, no ALEController.
+add_executable(test_rigctld_protocol apps/test_rigctld_protocol.cpp)
+target_include_directories(test_rigctld_protocol PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/apps
+)
+
+# Real Hamlib RIG_MODEL_NETRIGCTL client against an in-process RigctldServer —
+# the \dump_state open()-handshake and write-rejection regression guard.
+if(HAMLIB_FOUND)
+    add_executable(test_rigctld_hamlib apps/test_rigctld_hamlib.cpp apps/bridge/rigctld_server.cpp src/PAL/logger.cpp)
+    if(MSVC)
+        target_include_directories(test_rigctld_hamlib PRIVATE
+            "${_pthread_compat_dir}"
+            "${_hamlib_inc}"
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/apps
+        )
+    else()
+        target_include_directories(test_rigctld_hamlib PRIVATE
+            "${_hamlib_inc}"
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/apps
+        )
+    endif()
+    target_link_libraries(test_rigctld_hamlib "${_hamlib_lib}")
+    if(WIN32)
+        target_link_libraries(test_rigctld_hamlib ws2_32)
+    endif()
+endif()
+
 # ── WebSocket bridge (GUI↔Core) ────────────────────────────────────────────────
 
-add_executable(openALE apps/ale_bridge.cpp apps/bridge/ws_server.cpp)
+add_executable(openALE apps/ale_bridge.cpp apps/bridge/ws_server.cpp apps/bridge/rigctld_server.cpp)
 
 target_include_directories(openALE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
