@@ -1,5 +1,4 @@
-# Release Notes — openALE 0.1.1-pre-alpha
-
+# Release Notes — openALE 0.0.3-pre-alpha
 
 ## Highlights
 
@@ -13,12 +12,21 @@ header. The main panel shows a clear Idle / Calling / Incoming / Linked state wi
 link-quality metrics (SINAD, BER, Score, Channel). The waterfall display is smoother and
 lighter on CPU/memory.
 
-**The mobile setup wizard is more complete.** First-run setup now walks through Channels
-and Nets, not just Callsign and Radio/Audio, and empty screens (Heard Stations, Contacts,
-Messages) now tell you what to do next instead of showing a blank list.
+**The setup wizard gets you further, faster.** First-run setup now walks through Channels
+and Nets (not just Callsign and Radio/Audio), lets you set each net's scan dwell time while
+you're already there, and — once you close it — automatically arms the first configured net
+so scanning, sounding, and calling are ready to go without an extra manual step.
+
+**A new opt-in Tuner server for auto-tuners.** openALE can now serve its current RX
+frequency read-only over the Hamlib `rigctld`/`netrigctl` protocol, so external tools like
+auto-tuners can follow along without opening a second, competing connection to the radio.
 
 ## New Features
 
+- **Tuner**: opt-in read-only rigctld/netrigctl-compatible TCP server for external
+  auto-tuner tools (Settings ▸ Tuner, both GUIs; disabled by default).
+- Setup wizard's Nets step gained an inline Dwell (ms) input, and now auto-selects the
+  first configured net when the wizard closes.
 - Transmitter power control via Hamlib/CAT — set RF power per channel, with a live manual
   override on the Radio Control panel (both GUIs).
 - Opt-in CAT/rig traffic view in the ALE Log, for diagnosing radio-control issues.
@@ -28,16 +36,23 @@ Messages) now tell you what to do next instead of showing a blank list.
 
 ## Fixes
 
+- The "Sync" pill no longer stays lit indefinitely after a transmission ends — it now
+  clears on a timeout instead of relying on true silence, which real receive noise rarely
+  produces.
 - Settings, channels, and nets no longer silently fail to save.
 - Net renames now actually take effect in the core, instead of being reverted on the next
   settings sync.
 - The Test Channel panel no longer shows stale results from a previous peer when reopened.
 - Heard Stations' expanded details no longer collapse every time the list refreshes (mobile).
 - The ALE log no longer gets spammed with repeated "sounding on/off" lines.
+- The Settings drawer no longer visibly paints over the icon rail while sliding open/closed
+  (desktop).
 
 ## Other
 
 - Remaining German UI strings in the mobile GUI translated to English.
+- Project renamed from ALE-Clean-Room to **openALE**; version line reset and now at
+  **0.0.3-pre-alpha**.
 
 ---
 
