@@ -1304,18 +1304,23 @@ std::string ALEController::send_amd(const std::string& target, const std::string
         return "ERROR: AMD requires message text (max 90 chars, Expanded-64)";
 
     // ── LINKED: send AMD over the established link as a single-burst ─────────
-    // orderwire frame.  TO[peer] (+DATA/REP ext) + CMD AMD + message + TIS self
+    // orderwire frame.  TO[peer] (+DATA/REP ext) ×2 + CMD AMD + message + TIS self
     // (the TIS:SELF conclusion is appended by trigger_linked_orderwire()).
     if (sm_.get_state() == ALEState::LINKED) {
         const std::string peer = active_peer();
         if (peer.empty())
             return "ERROR: LINKED but no active peer address available";
-        std::vector<ALEWord> words = AddressEncoder::encode(peer, PreambleType::TO);
+        const auto to_words = AddressEncoder::encode(peer, PreambleType::TO);
+        // A.5.5.3.1-style leading address: TO (+DATA/REP ext) sent twice, same
+        // as leading_call()/termination() — only the address portion doubles.
+        std::vector<ALEWord> words = to_words;
+        words.insert(words.end(), to_words.begin(), to_words.end());
         const auto amd = encode_amd(text);   // authoritative encoder (sanitise/truncate)
         if (amd.empty())
             return "ERROR: AMD text has no encodable characters";
         words.insert(words.end(), amd.begin(), amd.end());
-        // Single-burst (false): a doubled AMD frame would display the text twice.
+        // Single-burst (false): doubling the *whole* burst (double_burst=true)
+        // would also repeat the message text — only the address doubles above.
         sm_.trigger_linked_orderwire(words, /*double_burst=*/false);
         sm_.on_link_activity();   // reset Twa while the burst is queued
         return "OK: AMD sent over linked orderwire to " + peer;
@@ -2510,7 +2515,7 @@ void ALEController::rx_accumulate_caller_identity(const ALEWord& word)
 
 // ── Linked AMD orderwire RX (A.5.7.2 over an established link) ───────────────
 // Reassembles an AMD message that arrives in a linked-orderwire frame
-//   TO[peer] (+DATA/REP ext) + CMD AMD + message DATA/REP + TIS[peer]
+//   TO[peer] (+DATA/REP ext) ×2 + CMD AMD + message DATA/REP + TIS[peer]
 // We ignore the TO/address-extension prefix (the peer is already known from the
 // link state) and collect from the CMD AMD header onward.  A new CMD or the TIS
 // conclusion commits the message; Tdrw silence is the fallback (tick_frame_settle).
