@@ -31,6 +31,10 @@ auto-tuners can follow along without opening a second, competing connection to t
   editable in the channel editor or live from the Radio Control panel; either one updates
   the same saved value for that channel (both GUIs).
 - Opt-in CAT/rig traffic view in the ALE Log, for diagnosing radio-control issues.
+- All log output is now also written to `openALE.log` (auto-rotated once it grows past ~5 MB),
+  so it survives after the console window is gone. If openALE ever exits unexpectedly, a new
+  `crash.log` records what happened — both are there to check after the fact instead of losing
+  the trail.
 - Absolute "Received" timestamp shown on Heard Stations and the LQA table (both GUIs).
 - New in-app Help / setup-guide page, linked from both GUIs' Help buttons.
 - Word-lock ("Sync") indicator simplified to a single clear pill plus a "Decoding" overlay.
@@ -50,6 +54,8 @@ auto-tuners can follow along without opening a second, competing connection to t
   (desktop).
 - RF transmit power no longer resets to 100% on a channel hop, scan, or sounding cycle — the
   radio now applies each channel's own configured power instead.
+- A damaged or truncated `lqa.bin` could crash openALE on startup; it's now rejected cleanly
+  (with a clear reason logged) instead, and openALE just starts with an empty LQA table.
 
 ## Other
 
