@@ -1219,10 +1219,10 @@
             <label class="flabel">Configuration File</label>
             <div style="display:flex;gap:8px">
               <input class="finput" id="cfgFile" type="text" placeholder="ale.conf" style="flex:1">
-              <button class="btn-sm accent" onclick="exportConf()">↓ Export</button>
               <button class="btn-sm" onclick="importConf()">↑ Import</button>
+              <button class="btn-sm" onclick="exportConf()">↓ Export</button>
             </div>
-            <div class="fhint">Export/import portable settings for moving between machines or backing up. Your live configuration is saved automatically — this is not required for normal use.</div>
+            <div class="fhint">Import a saved configuration file, or export your current configuration to back it up or share it. Your live configuration is saved automatically — this isn't required for normal use.</div>
           </div>
 
           <div class="fg">
@@ -1232,16 +1232,17 @@
               <button class="btn-sm" onclick="loadAleFile()">↑ Import</button>
               <button class="btn-sm" onclick="saveAleFile()">↓ Export</button>
             </div>
-            <div class="fhint">Import a channel/net plan (e.g. a regional preset) or export your current channels to share. Your live configuration is saved automatically — this is not required for normal use.</div>
+            <div class="fhint">Import a channel/net plan (e.g. a regional preset), or export your current channels to back it up or share it. Your live configuration is saved automatically — this isn't required for normal use.</div>
           </div>
 
           <div class="fg">
             <label class="flabel">LQA Database File</label>
             <div style="display:flex;gap:8px">
               <input class="finput" id="cfgLqaFile" type="text" placeholder="lqa.bin" style="flex:1">
-              <button class="btn-sm">Browse…</button>
+              <button class="btn-sm" onclick="importLqa()">↑ Import</button>
+              <button class="btn-sm" onclick="exportLqa()">↓ Export</button>
             </div>
-            <div class="fhint">Channel quality history — restored on startup, saved on exit.</div>
+            <div class="fhint">Import a saved LQA database (channel quality history), or export the current one to back it up or share it. It's also restored automatically on startup and saved on exit — this isn't required for normal use.</div>
           </div>
         </div><!-- /files -->
 

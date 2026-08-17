@@ -2589,49 +2589,32 @@ function delNet(i) {
   if (bridgeConnected) bridgeSend('NET_DEL', { name }, () => syncNetsFromBridge());
 }
 
-function loadAleFile() {
-  const path = document.getElementById('cfgStationFile')?.value.trim() || 'station.ale';
-  if (!bridgeConnected) { aleLogInfo('Import: bridge not connected'); return; }
-  bridgeSend('STATION_LOAD', { path }, (r) => {
-    if (r.ok) {
-      syncAllFromBridge();
-      aleLogInfo('✓ Channel file imported ← ' + path);
-    } else {
-      aleLogInfo('✗ Failed to import channel file: ' + path);
-    }
-  });
-}
-
-function saveAleFile() {
-  const path = document.getElementById('cfgStationFile')?.value.trim() || 'station.ale';
+// Files tab: one shared implementation per direction so Configuration/Channel/LQA
+// rows can't drift into different confirm/error/refresh behavior again.
+function fileExport(cmd, inputId, defaultName, typeLabel) {
+  const path = document.getElementById(inputId)?.value.trim() || defaultName;
   if (!bridgeConnected) { aleLogInfo('Export: bridge not connected'); return; }
-  bridgeSend('STATION_SAVE', { path }, (r) => {
-    if (r.ok) aleLogInfo('✓ Channel file exported → ' + path);
-    else      aleLogInfo('✗ Failed to export channel file: ' + path);
+  if (!window.confirm(`Export ${typeLabel} to "${path}"?\nAn existing file will be overwritten.`)) return;
+  bridgeSend(cmd, { path }, (r) => {
+    if (r.ok) aleLogInfo(`✓ ${typeLabel} exported → ${path}`);
+    else      aleLogInfo(`✗ Export failed: ${r.error || '?'}`);
   });
 }
-function exportConf() {
-  const path = document.getElementById('cfgFile').value.trim() || 'ale.conf';
-  if (!bridgeConnected) { aleLogInfo('Export: bridge not connected'); return; }
-  if (!window.confirm('Export configuration to "' + path + '"?\nAn existing file will be overwritten.')) return;
-  bridgeSend('SETTINGS_EXPORT', { path }, (r) => {
-    if (r.ok) aleLogInfo('✓ Configuration exported → ' + path);
-    else      aleLogInfo('✗ Export failed: ' + (r.error || '?'));
-  });
-}
-function importConf() {
-  const path = document.getElementById('cfgFile').value.trim() || 'ale.conf';
+function fileImport(cmd, inputId, defaultName, typeLabel) {
+  const path = document.getElementById(inputId)?.value.trim() || defaultName;
   if (!bridgeConnected) { aleLogInfo('Import: bridge not connected'); return; }
-  bridgeSend('SETTINGS_IMPORT', { path }, (r) => {
-    if (r.ok) {
-      syncAllFromBridge();
-      closeSettings();
-      aleLogInfo('✓ Configuration imported ← ' + path);
-    } else {
-      aleLogInfo('✗ Import failed: ' + (r.error || '?'));
-    }
+  if (!window.confirm(`Import ${typeLabel} from "${path}"?\nThis replaces your current ${typeLabel.toLowerCase()}.`)) return;
+  bridgeSend(cmd, { path }, (r) => {
+    if (r.ok) { syncAllFromBridge(); aleLogInfo(`✓ ${typeLabel} imported ← ${path}`); }
+    else      aleLogInfo(`✗ Import failed: ${r.error || '?'}`);
   });
 }
+function exportConf()  { fileExport('SETTINGS_EXPORT', 'cfgFile',        'ale.conf',    'Configuration'); }
+function importConf()  { fileImport('SETTINGS_IMPORT', 'cfgFile',        'ale.conf',    'Configuration'); }
+function saveAleFile() { fileExport('STATION_SAVE',    'cfgStationFile', 'station.ale', 'Channel file'); }
+function loadAleFile() { fileImport('STATION_LOAD',    'cfgStationFile', 'station.ale', 'Channel file'); }
+function exportLqa()   { fileExport('LQA_EXPORT',      'cfgLqaFile',     'lqa.bin',     'LQA database'); }
+function importLqa()   { fileImport('LQA_IMPORT',      'cfgLqaFile',     'lqa.bin',     'LQA database'); }
 
 // Apply visible settings to the UI (real impl sends CMDs to WebSocket)
 // Auto-accept OFF ⇒ manual-accept gate ON (the SM pauses incoming calls in

@@ -633,11 +633,16 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         const std::string resolved = resolve_data_path(msg.get_string("path"));
         const bool ok = ctrl.load_station_file(resolved);
         if (ok) pal::log_info("openALE", "Station file loaded from %s", resolved.c_str());
-        return mj::dump(make_reply(msg, ok));
+        mj::Value r = make_reply(msg, ok);
+        if (!ok) r.set("error", mj::Value::string(
+            file_exists(resolved) ? "invalid or corrupt channel file" : "file not found"));
+        return mj::dump(r);
     }
     if (cmd == "STATION_SAVE" || cmd == "CHANNELS_SAVE") {
         const bool ok = ctrl.save_station_file(msg.get_string("path"));
-        return mj::dump(make_reply(msg, ok));
+        mj::Value r = make_reply(msg, ok);
+        if (!ok) r.set("error", mj::Value::string("could not write file (check path/permissions)"));
+        return mj::dump(r);
     }
 
     // ── Nets ─────────────────────────────────────────────────────────────
@@ -1140,10 +1145,12 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             fa << "audio_out=" << ctx.audio_out << "\n";
             fa << "voice_armed=" << (ctx.voice_armed ? "1" : "0") << "\n";
         }
-        return mj::dump(make_reply(msg, ok));
+        mj::Value r = make_reply(msg, ok);
+        if (!ok) r.set("error", mj::Value::string("could not write file (check path/permissions)"));
+        return mj::dump(r);
     }
     if (cmd == "SETTINGS_IMPORT") {
-        const std::string path = msg.get_string("path");
+        const std::string path = resolve_data_path(msg.get_string("path"));
         // Extract bridge-level keys (audio devices, voice arm) before handing off to controller.
         std::string audio_in, audio_out;
         bool voice_armed = false;
@@ -1170,7 +1177,27 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             if (ctx.voice) ctx.voice->arm(voice_armed);
         }
         if (ok) restart_location_services(ctx, ctrl);
-        return mj::dump(make_reply(msg, ok));
+        mj::Value r = make_reply(msg, ok);
+        if (!ok) r.set("error", mj::Value::string(
+            file_exists(path) ? "invalid or corrupt configuration file" : "file not found"));
+        return mj::dump(r);
+    }
+
+    // ── LQA database file ───────────────────────────────────────────────
+    if (cmd == "LQA_EXPORT") {
+        const std::string path = msg.get_string("path");
+        const bool ok = ctrl.save_lqa(path);
+        mj::Value r = make_reply(msg, ok);
+        if (!ok) r.set("error", mj::Value::string("could not write file (check path/permissions)"));
+        return mj::dump(r);
+    }
+    if (cmd == "LQA_IMPORT") {
+        const std::string path = resolve_data_path(msg.get_string("path"));
+        const bool ok = ctrl.load_lqa(path);
+        mj::Value r = make_reply(msg, ok);
+        if (!ok) r.set("error", mj::Value::string(
+            file_exists(path) ? "invalid or corrupt LQA file" : "file not found"));
+        return mj::dump(r);
     }
     if (cmd == "DEBUG_RX")        { ctrl.set_debug_rx(msg.get_bool("on")); if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path); return mj::dump(make_reply(msg, true)); }
     if (cmd == "CAT_TRACE")       { ctrl.set_cat_trace(msg.get_bool("on")); return mj::dump(make_reply(msg, true)); }
