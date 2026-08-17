@@ -39,6 +39,8 @@ auto-tuners can follow along without opening a second, competing connection to t
 - Absolute "Received" timestamp shown on Heard Stations and the LQA table (both GUIs).
 - New in-app Help / setup-guide page, linked from both GUIs' Help buttons.
 - Word-lock ("Sync") indicator simplified to a single clear pill plus a "Decoding" overlay.
+- Settings ▸ Files: the LQA database can now be exported/imported like the Configuration
+  and Channel files (previously a non-functional "Browse…" button).
 
 ## Fixes
 
@@ -66,6 +68,9 @@ auto-tuners can follow along without opening a second, competing connection to t
   background CAT read (used to catch external retunes) could still be in the radio's command
   queue when a hop was due, delaying that hop behind it. Channel hops, frequency/mode changes,
   and PTT now jump ahead of that background read instead of queuing behind it.
+- Settings ▸ Files: the Configuration, Channel, and LQA rows now behave identically (same
+  button order, confirmation prompts, and refresh behavior), and a failed import/export now
+  shows a real reason (e.g. "file not found") in the ALE Log instead of a bare "?".
 
 ## Other
 
