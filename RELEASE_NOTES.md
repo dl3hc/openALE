@@ -90,6 +90,9 @@ linked) and low-latency AudioWorklet-based audio under the hood.
 - Settings ▸ Files: the Configuration, Channel, and LQA rows now behave identically (same
   button order, confirmation prompts, and refresh behavior), and a failed import/export now
   shows a real reason (e.g. "file not found") in the ALE Log instead of a bare "?".
+- AMD messages sent over an established link now send the TO address preamble twice, as
+  MIL-STD-188-141B requires (matching leading calls, ACKs, and link termination) — previously
+  it was sent only once.
 
 ## Other
 
