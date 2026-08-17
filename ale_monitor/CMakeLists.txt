@@ -50,6 +50,10 @@ target_link_libraries(ale_monitor
 
 if(WIN32)
     target_link_libraries(ale_monitor ws2_32)
+else()
+    # Same reasoning as openALE's -rdynamic in the root CMakeLists.txt: needed
+    # for backtrace_symbols() to name in-executable frames in crash.log.
+    target_link_options(ale_monitor PRIVATE -rdynamic)
 endif()
 
 # Copy Hamlib DLLs next to the exe on Windows (same pattern as openALE in root
