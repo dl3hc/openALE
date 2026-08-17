@@ -275,6 +275,7 @@ endif()
 
 add_library(ale_pal
     src/PAL/logger.cpp
+    src/PAL/crash_handler.cpp
     src/PAL/events.cpp
     src/PAL/timer.cpp
     src/PAL/radio.cpp
@@ -285,7 +286,7 @@ target_include_directories(ale_pal PUBLIC
 )
 
 if(WIN32)
-    target_link_libraries(ale_pal winmm)
+    target_link_libraries(ale_pal winmm dbghelp)
 endif()
 
 if(HAMLIB_FOUND)

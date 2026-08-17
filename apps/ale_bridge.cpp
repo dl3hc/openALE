@@ -27,6 +27,7 @@
 #include "App/gps_service.h"
 #include "App/sfi_service.h"
 #include "App/voice_path_manager.h"
+#include "PAL/crash_handler.h"
 #include "PAL/events.h"
 #include "PAL/logger.h"
 #include "PAL/radio.h"
@@ -1202,6 +1203,7 @@ int main(int argc, char* argv[]) {
 #endif
 
     pal::set_logger(pal::create_logger());
+    pal::install_crash_handler();
     pal::set_event_handler(pal::create_event_handler());
 
     uint16_t    port        = 0;     // 0 = not set; --port is required
@@ -1258,7 +1260,10 @@ int main(int argc, char* argv[]) {
 
     const std::string lqa_path = "lqa.bin";
     if (ctrl.load_lqa(lqa_path))
-        pal::log_info("openALE", "LQA loaded from %s", lqa_path.c_str());
+        pal::log_info("openALE", "LQA loaded from %s (%zu entries)",
+                       lqa_path.c_str(), ctrl.get_all_lqa_entries().size());
+    // failure path (missing vs. corrupt file) is already logged inside
+    // ALEController::load_lqa() with the specific reason.
 
     // Unified auto-save file: channels/nets/contacts/rosters/allcall + all
     // settings. Unconditional, like LQA above — arms auto-save for the rest

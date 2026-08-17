@@ -2868,7 +2868,23 @@ void ALEController::emit_status(const std::string& msg)
 
 bool ALEController::load_lqa(const std::string& path)
 {
-    return lqa_database_.load_from_file(path);
+    const bool ok = lqa_database_.load_from_file(path);
+    if (!ok) {
+        // Distinguish "nothing to load yet" (first run / fresh install, not
+        // an error) from "a file is there but load_from_file() rejected it"
+        // (missing/corrupt header, truncated mid-record, unsupported version)
+        // — the latter previously vanished silently, leaving no trace of why
+        // the LQA table came up empty after a restart.
+        std::ifstream probe(path, std::ios::binary);
+        if (probe.is_open())
+            pal::log_warn("ALEController",
+                "LQA file '%s' exists but could not be loaded (corrupt, "
+                "truncated, or unsupported version) — starting with an empty "
+                "LQA database", path.c_str());
+        else
+            pal::log_info("ALEController", "No LQA file at '%s' yet", path.c_str());
+    }
+    return ok;
 }
 
 bool ALEController::save_lqa(const std::string& path) const
