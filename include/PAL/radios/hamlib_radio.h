@@ -9,7 +9,6 @@
 #include <future>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <thread>
 #include <variant>
@@ -199,7 +198,22 @@ private:
     using RadioCommand = std::variant<
         CmdSetChannel, CmdSetFrequency, CmdSetMode, CmdSetPower, CmdSetPtt, CmdSync, CmdFlush>;
 
-    void enqueue(RadioCommand cmd);    ///< thread-sicher; no-op wenn Worker nicht läuft
+    // Thread-safe; no-op if the worker isn't running. Time-critical commands
+    // (SetChannel/SetFrequency/SetMode/SetPtt — the ones a scan hop or the SM's
+    // TX timing is waiting on) jump the queue ahead of any already-queued but
+    // not-yet-started CmdSync/CmdSetPower, instead of sitting behind it. See the
+    // .cpp for why: without this, the ~400 ms background sync_from_radio() poll
+    // (2 blocking CAT round-trips) can occasionally still be queued when a scan
+    // hop's dwell timer expires, adding an unpredictable extra 1-2 round-trips of
+    // settle latency to that one hop — read by the operator as the configured
+    // dwell time randomly fluctuating.
+    void enqueue(RadioCommand cmd);
+
+    // SetChannel/SetFrequency/SetMode gate scan-hop readiness (tunes_in_flight_);
+    // SetPtt gates the SM's TX timing (Twt/Tt). CmdSync (background mode/freq
+    // readback) and CmdSetPower do not — nothing is waiting on them.
+    static bool is_urgent(const RadioCommand& cmd);
+
     void worker_main();
     void worker_dispatch(const RadioCommand& cmd);
     void stop_worker_();               ///< signalisiert Exit, joined, leert Queue
@@ -248,7 +262,7 @@ private:
 
     // ── Async Worker ──────────────────────────────────────────────────────────
     std::thread              worker_;
-    std::queue<RadioCommand> cmd_queue_;
+    std::deque<RadioCommand> cmd_queue_;
     std::mutex               queue_mtx_;
     std::condition_variable  queue_cv_;
     std::atomic<bool>        worker_running_{false};

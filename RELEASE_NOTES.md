@@ -62,6 +62,10 @@ auto-tuners can follow along without opening a second, competing connection to t
   rigs that don't support it.
 - The Settings drawer was too narrow for the LQA table, truncating columns and forcing a
   horizontal scrollbar (desktop). Widened to fit all columns without scrolling.
+- Scan dwell time on a real radio could occasionally run longer than configured: a periodic
+  background CAT read (used to catch external retunes) could still be in the radio's command
+  queue when a hop was due, delaying that hop behind it. Channel hops, frequency/mode changes,
+  and PTT now jump ahead of that background read instead of queuing behind it.
 
 ## Other
 

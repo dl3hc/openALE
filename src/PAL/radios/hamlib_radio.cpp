@@ -100,7 +100,7 @@ void HamlibRadio::stop_worker_() {
         auto& cmd = cmd_queue_.front();
         if (std::holds_alternative<CmdFlush>(cmd))
             std::get<CmdFlush>(cmd).done->set_value();
-        cmd_queue_.pop();
+        cmd_queue_.pop_front();
     }
 }
 
@@ -336,11 +336,30 @@ void HamlibRadio::trace_cat(const char* fmt, ...) {
 
 // ── Async worker ─────────────────────────────────────────────────────────────
 
+bool HamlibRadio::is_urgent(const RadioCommand& cmd) {
+    return std::holds_alternative<CmdSetChannel>(cmd)   ||
+           std::holds_alternative<CmdSetFrequency>(cmd) ||
+           std::holds_alternative<CmdSetMode>(cmd)      ||
+           std::holds_alternative<CmdSetPtt>(cmd);
+}
+
 void HamlibRadio::enqueue(RadioCommand cmd) {
     if (!worker_running_.load()) return;
     {
         std::lock_guard<std::mutex> lk(queue_mtx_);
-        cmd_queue_.push(std::move(cmd));
+        if (is_urgent(cmd)) {
+            // Insert after any already-queued urgent commands but ahead of the
+            // first non-urgent one (CmdSync/CmdSetPower), so a scan hop or PTT
+            // command never sits queued behind the ~400 ms background
+            // sync_from_radio() poll — see enqueue()'s header doc comment.
+            // Preserves relative order among urgent commands (no reordering of
+            // e.g. a PTT-off behind a PTT-on).
+            auto it = std::find_if(cmd_queue_.begin(), cmd_queue_.end(),
+                                    [](const RadioCommand& c) { return !is_urgent(c); });
+            cmd_queue_.insert(it, std::move(cmd));
+        } else {
+            cmd_queue_.push_back(std::move(cmd));
+        }
     }
     queue_cv_.notify_one();
 }
@@ -358,7 +377,7 @@ void HamlibRadio::worker_main() {
             });
             if (!worker_running_.load()) break;  // exit; stop_worker_() drains the queue
             cmd = std::move(cmd_queue_.front());
-            cmd_queue_.pop();
+            cmd_queue_.pop_front();
         }
         // Lock released before dispatch so the main thread can enqueue new
         // commands while Hamlib is blocking on the current one.
