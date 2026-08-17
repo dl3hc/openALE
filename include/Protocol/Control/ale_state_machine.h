@@ -665,6 +665,12 @@ private:
     // transition / abandons the burst once TX_DRAIN_TIMEOUT_MS elapses.
     // 0 = no drain in progress (not armed).
     uint32_t         tx_drain_start_ms_ = 0;
+    // Deadline paired with tx_drain_start_ms_ above. Defaults to
+    // TX_DRAIN_TIMEOUT_MS (sized for short bursts); orderwire bursts that can
+    // carry AMD text (up to Tm_max = 59×Trw ≈ 23.1s, A.5.7.2.3) rearm this to
+    // the burst's own word count × Trw + margin so a legitimately long message
+    // isn't aborted mid-transmission by a timeout sized for "a few words".
+    uint32_t         tx_drain_deadline_ms_ = ALETimingConstants::TX_DRAIN_TIMEOUT_MS;
 
     // ── Idle-warning (Twa) ────────────────────────────────────────────────
     // Fires on_idle_warning_cb_() once, IDLE_WARNING_LEAD_MS before Twa elapses.
