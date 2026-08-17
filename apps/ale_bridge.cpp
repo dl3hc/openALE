@@ -43,6 +43,7 @@
 #include <unistd.h>   // readlink — exe_dir() via /proc/self/exe
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -231,6 +232,7 @@ static mj::Value channel_to_json(const Channel& c) {
     v.set("inhibit_sounding",  mj::Value::boolean(c.inhibit_sounding));
     v.set("inhibit_reporting", mj::Value::boolean(c.inhibit_reporting));
     v.set("ale_only",          mj::Value::boolean(c.ale_only));
+    v.set("power_pct",         mj::Value::number(c.power_pct));
     return v;
 }
 
@@ -612,6 +614,9 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("inhibit_sounding"))  ch.inhibit_sounding  = msg.get_bool("inhibit_sounding", false);
         if (msg.has("inhibit_reporting")) ch.inhibit_reporting = msg.get_bool("inhibit_reporting", false);
         if (msg.has("ale_only"))          ch.ale_only          = msg.get_bool("ale_only", false);
+        if (msg.has("power_pct"))
+            ch.power_pct = static_cast<uint8_t>(
+                std::clamp(msg.get_number("power_pct", 100.0), 0.0, 100.0));
         const bool ok = ctrl.add_channel(ch);
         return mj::dump(make_reply(msg, ok));
     }

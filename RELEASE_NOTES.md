@@ -27,8 +27,9 @@ auto-tuners can follow along without opening a second, competing connection to t
   auto-tuner tools (Settings ▸ Tuner, both GUIs; disabled by default).
 - Setup wizard's Nets step gained an inline Dwell (ms) input, and now auto-selects the
   first configured net when the wizard closes.
-- Transmitter power control via Hamlib/CAT — set RF power per channel, with a live manual
-  override on the Radio Control panel (both GUIs).
+- Transmitter power control via Hamlib/CAT — TX power is now a real per-channel setting,
+  editable in the channel editor or live from the Radio Control panel; either one updates
+  the same saved value for that channel (both GUIs).
 - Opt-in CAT/rig traffic view in the ALE Log, for diagnosing radio-control issues.
 - Absolute "Received" timestamp shown on Heard Stations and the LQA table (both GUIs).
 - New in-app Help / setup-guide page, linked from both GUIs' Help buttons.
@@ -47,6 +48,8 @@ auto-tuners can follow along without opening a second, competing connection to t
 - The ALE log no longer gets spammed with repeated "sounding on/off" lines.
 - The Settings drawer no longer visibly paints over the icon rail while sliding open/closed
   (desktop).
+- RF transmit power no longer resets to 100% on a channel hop, scan, or sounding cycle — the
+  radio now applies each channel's own configured power instead.
 
 ## Other
 

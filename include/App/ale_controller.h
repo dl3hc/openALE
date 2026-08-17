@@ -797,11 +797,16 @@ public:
     bool set_mode(const std::string& mode);
 
     /**
-     * Set TX RF power (manual override, independent of any channel's
-     * configured power_pct). Clamped to [0,100]. On a radio backend that
-     * doesn't support power control (see power_control_supported()), the
-     * command is a no-op on the hardware — check power_control_supported()
-     * before presenting this as available (RF-safety requirement).
+     * Set TX RF power live, and persist it into the calling-channel entry the
+     * radio is currently tuned to (frequency match), so the value survives the
+     * next hop/scan back to this channel — power_pct is a real per-channel
+     * setting, not an override independent of it. Clamped to [0,100]. If the
+     * current frequency doesn't match any configured channel (e.g. free VFO
+     * tuning), the change is live-only — nothing to persist it on. On a radio
+     * backend that doesn't support power control (see
+     * power_control_supported()), the command is a no-op on the hardware —
+     * check power_control_supported() before presenting this as available
+     * (RF-safety requirement).
      * @param pct Power level 0-100%
      * @return false if no radio is attached
      */
