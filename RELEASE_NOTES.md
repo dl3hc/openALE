@@ -33,8 +33,9 @@ auto-tuners can follow along without opening a second, competing connection to t
 - Opt-in CAT/rig traffic view in the ALE Log, for diagnosing radio-control issues.
 - All log output is now also written to `openALE.log` (auto-rotated once it grows past ~5 MB),
   so it survives after the console window is gone. If openALE ever exits unexpectedly, a new
-  `crash.log` records what happened — both are there to check after the fact instead of losing
-  the trail.
+  `crash.log` records what happened, including a resolved stack trace (function/file/line where
+  available) on both Windows and Linux — both are there to check after the fact instead of
+  losing the trail.
 - Absolute "Received" timestamp shown on Heard Stations and the LQA table (both GUIs).
 - New in-app Help / setup-guide page, linked from both GUIs' Help buttons.
 - Word-lock ("Sync") indicator simplified to a single clear pill plus a "Decoding" overlay.
