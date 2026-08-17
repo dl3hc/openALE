@@ -2124,6 +2124,12 @@ function renderChannels() {
           <label>Self Address</label>
           <select class="ch-sel" onchange="chSet(${i},'self',this.value)">${selfAddrOpts(c.self)}</select>
         </div>
+        <div class="ch-field">
+          <label>Power %</label>
+          <input class="ch-inp" data-f="power" type="number" min="0" max="100" value="${escapeHtml(c.power)}"
+                 title="TX power for this channel (0-100%). Applied on every hop to this channel."
+                 oninput="chSet(${i},'power',this.value)" onblur="chCommit(${i})">
+        </div>
       </div>
       <div class="ch-card-inh">
         <label class="ch-check">
@@ -2199,6 +2205,7 @@ function chCommit(i) {
     inhibit_sounding: c.inhSnd,
     inhibit_reporting: c.inhRep,
     ale_only: c.aleOnly,
+    power_pct: Math.min(100, Math.max(0, parseInt(c.power, 10) || 100)),
   }, (r) => {
     if (r && r.ok) {
       aleLogInfo('✓ ' + c.id + ' saved — Dir: ' + c.dir
@@ -2275,6 +2282,7 @@ function syncChannelsFromBridge() {
       inhSnd:  c.inhibit_sounding,
       inhRep:  c.inhibit_reporting,
       aleOnly: c.ale_only,                        // A.5.4.7.1: short-LBT permission
+      power:   String(c.power_pct ?? 100),        // per-channel TX power; older bridge → default 100
     }));
     renderChannels();
     renderNets();
@@ -2284,7 +2292,7 @@ function syncChannelsFromBridge() {
 }
 
 function addCh() {
-  channels.push({ id:nextFreeChannelId(channels), rx:'', tx:'', mode:'USB', usage:'BOTH', dir:'RX/TX', self:'', label:'', inhCall:false, inhSnd:false, inhRep:false, aleOnly:false, txOnly:false });
+  channels.push({ id:nextFreeChannelId(channels), rx:'', tx:'', mode:'USB', usage:'BOTH', dir:'RX/TX', self:'', label:'', inhCall:false, inhSnd:false, inhRep:false, aleOnly:false, txOnly:false, power:'100' });
   renderChannels();
   renderNets();   // new channel id becomes selectable in net membership
   updateScanBtn();

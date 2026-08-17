@@ -136,8 +136,11 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
             code = code.substr(a, b - a + 1);
             codes.push_back(code);
             any_code = true;
+            const bool is_pwr = code.rfind("PWR:", 0) == 0
+                && code.size() > 4
+                && code.find_first_not_of("0123456789", 4) == std::string::npos;
             if (code != "OFF" && code != "RX" && code != "TX" && code != "IC"
-                && code != "IS" && code != "IR" && code != "AO")
+                && code != "IS" && code != "IR" && code != "AO" && !is_pwr)
                 all_recognized = false;
         }
         if (any_code && all_recognized) {
@@ -149,6 +152,9 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
                 else if (c == "IS")  ch.inhibit_sounding  = true;
                 else if (c == "IR")  ch.inhibit_reporting = true;
                 else if (c == "AO")  ch.ale_only          = true;  // A.5.4.7.1: short LBT ok
+                else if (c.rfind("PWR:", 0) == 0)
+                    ch.power_pct = static_cast<uint8_t>(
+                        std::clamp(std::stoi(c.substr(4)), 0, 100));
             }
             ++label_start;
         }
@@ -169,7 +175,8 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
 // where [flags] is a bracketed, comma-separated code list emitted only when any
 // per-channel flag is non-default (backward-compatible: old files have no token).
 // Codes: OFF (enabled=false), RX (rx_only), TX (tx_only), IC (inhibit_calling),
-//         IS (inhibit_sounding), IR (inhibit_reporting), AO (ale_only — short LBT).
+//         IS (inhibit_sounding), IR (inhibit_reporting), AO (ale_only — short LBT),
+//         PWR:<0-100> (power_pct, the one valued code — rest are bare flags).
 static std::string format_channel_line(const ale::Channel& ch)
 {
     char buf[64];
@@ -189,6 +196,7 @@ static std::string format_channel_line(const ale::Channel& ch)
     if (ch.inhibit_sounding)    flags += "IS,";
     if (ch.inhibit_reporting)   flags += "IR,";
     if (ch.ale_only)            flags += "AO,";
+    if (ch.power_pct != 100)    flags += "PWR:" + std::to_string(ch.power_pct) + ",";
     if (!flags.empty()) {
         flags.pop_back();  // drop trailing comma
         line += " [";
@@ -715,6 +723,24 @@ bool ALEController::set_power(int pct)
     if (!radio_) return false;
     pct = std::clamp(pct, 0, 100);
     radio_->set_power(pct);
+
+    // Persist into the calling-channel entry the radio is currently tuned to
+    // (frequency-match, same idiom as step_channel()'s position lookup) so a
+    // live power adjustment survives the next hop/scan back to this channel —
+    // makes power_pct a real per-channel setting instead of a channel-hop
+    // resetting it back to whatever was last configured (or the 100% default).
+    // No match (e.g. free VFO tuning off the channel list) → live-only, nothing
+    // to persist, which is correct: there is no channel to remember it on.
+    const pal::Channel cur = radio_->get_channel();
+    for (auto& c : calling_channels_) {
+        if (c.rx_frequency_hz != cur.rx_frequency) continue;
+        if (c.power_pct != static_cast<uint8_t>(pct)) {
+            c.power_pct = static_cast<uint8_t>(pct);
+            sm_.set_calling_channels(calling_channels_);
+            if (!station_file_.empty()) save_state(station_file_);
+        }
+        break;
+    }
     return true;
 }
 
