@@ -804,11 +804,13 @@ public:
      * current frequency doesn't match any configured channel (e.g. free VFO
      * tuning), the change is live-only — nothing to persist it on. On a radio
      * backend that doesn't support power control (see
-     * power_control_supported()), the command is a no-op on the hardware —
-     * check power_control_supported() before presenting this as available
-     * (RF-safety requirement).
+     * power_control_supported()), the command is rejected outright — check
+     * power_control_supported() before presenting this as available
+     * (RF-safety requirement). Either outcome (rejected as unsupported, or
+     * accepted and sent) is announced via emit_status() so the operator sees
+     * it in the ALE log, not just in the backend's CAT-level log/console output.
      * @param pct Power level 0-100%
-     * @return false if no radio is attached
+     * @return false if no radio is attached, or the radio doesn't support power control
      */
     bool set_power(int pct);
 

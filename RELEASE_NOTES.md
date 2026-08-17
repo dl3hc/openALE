@@ -57,6 +57,9 @@ auto-tuners can follow along without opening a second, competing connection to t
   radio now applies each channel's own configured power instead.
 - A damaged or truncated `lqa.bin` could crash openALE on startup; it's now rejected cleanly
   (with a clear reason logged) instead, and openALE just starts with an empty LQA table.
+- Setting TX power now tells you what happened: the ALE Log reports whether the connected
+  rig supports power control and what it was set to, instead of silently doing nothing on
+  rigs that don't support it.
 
 ## Other
 
