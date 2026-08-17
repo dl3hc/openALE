@@ -476,6 +476,11 @@ target_link_libraries(openALE ale_app_core ale_audio_device ale_stores ale_pal)
 
 if(WIN32)
     target_link_libraries(openALE ws2_32)
+else()
+    # Export symbols to the dynamic symbol table so backtrace_symbols() in
+    # src/PAL/crash_handler.cpp can actually name in-executable frames instead
+    # of just "openALE(+0x1234)".
+    target_link_options(openALE PRIVATE -rdynamic)
 endif()
 
 # DLL-Build: libhamlib-4.dll + Runtime-DLLs neben openALE.exe kopieren

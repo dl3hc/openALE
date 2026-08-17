@@ -10,6 +10,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <csignal>
 #include <ctime>
 #include <exception>
@@ -20,6 +21,9 @@
 #include <dbghelp.h>
 #include <malloc.h>   // _resetstkoflw
 #pragma comment(lib, "dbghelp.lib")
+#else
+#include <execinfo.h> // backtrace / backtrace_symbols (glibc + macOS libc)
+#include <unistd.h>   // readlink — self_exe_path() via /proc/self/exe
 #endif
 
 namespace pal {
@@ -77,8 +81,70 @@ void write_stack_trace(FILE* f) {
     if (syms_ok) SymCleanup(process);
 }
 #else
+// Resolves the running executable's own path via /proc/self/exe, so
+// addr2line_resolve() below can be pointed at it. Linux-only (no /proc on
+// macOS) — self_exe_path() returns "" there and callers degrade gracefully
+// to the un-annotated backtrace_symbols() output. Mirrors the technique
+// ale_monitor/src/ale_monitor.cpp's exe_dir() already uses for the same
+// reason (locating the binary regardless of CWD).
+std::string self_exe_path() {
+    char buf[4096];
+    const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return "";
+    buf[n] = '\0';
+    return buf;
+}
+
+// Best-effort "function at file:line" resolution for one return address via
+// the external `addr2line` tool (binutils — present on essentially every
+// Linux install), the closest POSIX equivalent to the Windows branch's
+// dbghelp SymGetLineFromAddr64 call. Appends nothing if addr2line is
+// missing, the binary has no debug info, or the frame can't be resolved —
+// the raw backtrace_symbols() line printed by the caller is always there as
+// a fallback either way.
+//
+// Not async-signal-safe in the strict POSIX sense (popen() forks/execs,
+// which can deadlock if the crash happened while malloc's internal lock was
+// already held) — same "best effort, not a hardened crash reporter"
+// tradeoff already accepted for the rest of this file; the alternative is no
+// location information at all.
+void addr2line_resolve(FILE* out, const std::string& exe, void* addr) {
+    char cmd[4224];
+    std::snprintf(cmd, sizeof(cmd), "addr2line -e \"%s\" -f -C -p %p 2>/dev/null",
+                  exe.c_str(), addr);
+    FILE* p = popen(cmd, "r");
+    if (!p) return;
+    char line[512];
+    if (std::fgets(line, sizeof(line), p)) {
+        const size_t len = std::strlen(line);
+        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+        // addr2line prints "?? ??:0" when it has no debug info for a frame —
+        // skip that noise rather than appending a useless "-- ?? ??:0".
+        if (std::strcmp(line, "?? ??:0") != 0)
+            std::fprintf(out, " -- %s", line);
+    }
+    pclose(p);
+}
+
 void write_stack_trace(FILE* f) {
-    std::fprintf(f, "  (stack trace not implemented on this platform)\n");
+    void* frames[64];
+    const int count = backtrace(frames, 64);
+    if (count <= 0) {
+        std::fprintf(f, "  (backtrace() returned no frames)\n");
+        return;
+    }
+    // Needs -rdynamic at link time (see CMakeLists.txt) to name frames inside
+    // the executable itself, not just shared libraries — without it every
+    // in-exe frame shows only "openALE(+0x1234)" instead of a function name.
+    char** symbols = backtrace_symbols(frames, count);
+    const std::string exe = self_exe_path();
+
+    for (int i = 0; i < count; ++i) {
+        std::fprintf(f, "  #%2d %s", i, symbols ? symbols[i] : "(unknown)");
+        if (!exe.empty()) addr2line_resolve(f, exe, frames[i]);
+        std::fprintf(f, "\n");
+    }
+    if (symbols) std::free(symbols);  // backtrace_symbols() malloc()s the array
 }
 #endif
 
