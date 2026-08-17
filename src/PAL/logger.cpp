@@ -2,6 +2,8 @@
 
 #include "PAL/logger.h"
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <memory>
 
 namespace pal {
@@ -20,18 +22,70 @@ static const char* level_prefix(LogLevel l) {
     }
 }
 
+// Fixed filename, same "just works, no config" convention as station.state/
+// lqa.bin — opened relative to the process's current working directory.
+constexpr const char* kLogFileName = "openALE.log";
+constexpr const char* kLogFileOld  = "openALE.log.old";
+constexpr long        kMaxLogBytes = 5 * 1024 * 1024;  // rotate past ~5 MB
+
+// If the existing log has grown past kMaxLogBytes, move it aside before
+// opening — "längere Verwendung" (long sessions) is exactly the scenario
+// that would otherwise let this grow unbounded. Best-effort: a failed
+// rotation (e.g. .old locked by another viewer) must not block logging.
+void rotate_if_large() {
+    FILE* probe = std::fopen(kLogFileName, "rb");
+    if (!probe) return;
+    std::fseek(probe, 0, SEEK_END);
+    const long size = std::ftell(probe);
+    std::fclose(probe);
+    if (size < kMaxLogBytes) return;
+    std::remove(kLogFileOld);
+    std::rename(kLogFileName, kLogFileOld);
+}
+
+std::string timestamp_now() {
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                  tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return buf;
+}
+
 class ConsoleLogger : public ILogger {
 public:
+    ConsoleLogger() {
+        rotate_if_large();
+        // append mode: never truncate — a crash right after this run needs
+        // the previous run's tail to still be on disk after a restart.
+        log_file_ = std::fopen(kLogFileName, "a");
+    }
+    ~ConsoleLogger() override {
+        if (log_file_) std::fclose(log_file_);
+    }
+
     void log(LogLevel level, const char* module, const char* message) override {
         if (level < min_level_) return;
         FILE* out = (level >= LogLevel::WARN) ? stderr : stdout;
         std::fprintf(out, "[%s][%s] %s\n", level_prefix(level), module, message);
+        if (log_file_) {
+            std::fprintf(log_file_, "%s [%s][%s] %s\n",
+                         timestamp_now().c_str(), level_prefix(level), module, message);
+            std::fflush(log_file_);  // durability over throughput — see file doc comment
+        }
     }
     void set_level(LogLevel l) override { min_level_ = l; }
     LogLevel get_level() const override { return min_level_; }
 
 private:
     LogLevel min_level_ = LogLevel::INFO;
+    FILE*    log_file_  = nullptr;
 };
 
 } // anonymous namespace

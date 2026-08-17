@@ -20,6 +20,7 @@
 #include "App/ale_controller.h"
 #include "App/audio_device.h"
 #include "PAL/events.h"
+#include "PAL/crash_handler.h"
 #include "PAL/logger.h"
 #include "PAL/radio.h"
 #include "PAL/radios/hamlib_radio.h"
@@ -736,6 +737,7 @@ int main(int argc, char* argv[]) {
 #endif
 
     pal::set_logger(pal::create_logger());
+    pal::install_crash_handler();
     pal::set_event_handler(pal::create_event_handler());
 
     // CLI overrides (applied on top of the config file below).
@@ -810,7 +812,10 @@ int main(int argc, char* argv[]) {
     ALEController ctrl;
 
     if (ctrl.load_lqa(cfg.lqa_file))
-        pal::log_info("ale_monitor", "LQA loaded from %s", cfg.lqa_file.c_str());
+        pal::log_info("ale_monitor", "LQA loaded from %s (%zu entries)",
+                       cfg.lqa_file.c_str(), ctrl.get_all_lqa_entries().size());
+    // failure path (missing vs. corrupt file) is already logged inside
+    // ALEController::load_lqa() with the specific reason.
 
     ctrl.set_lqa_history_config(cfg.history_retention_days, cfg.history_enabled);
     if (ctrl.load_lqa_history(cfg.lqa_history_file))

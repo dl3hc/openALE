@@ -547,28 +547,32 @@ bool LQADatabase::load_from_file(const std::string& filepath) {
     // Read and verify header
     char magic[10];
     file.read(magic, sizeof(magic));
-    if (std::string(magic) != "PCALE_LQA") {
+    if (!file.good() || std::string(magic) != "PCALE_LQA") {
         return false;
     }
-    
+
     uint32_t version;
     file.read(reinterpret_cast<char*>(&version), sizeof(version));
-    if (version < 2 || version > 3) {
+    if (!file.good() || version < 2 || version > 3) {
         return false;  // v1 files lack bilateral fields; only v2 and v3 supported
     }
 
     // Read config (sizeof(LQAConfig) unchanged between v2 and v3)
     file.read(reinterpret_cast<char*>(&config_), sizeof(config_));
+    if (!file.good()) return false;
 
     // v2 files were saved with max_age_ms = 3600000; upgrade to the new 25 h default
     // so old sessions benefit from the extended retention without a manual settings change.
     if (version < 3 && config_.max_age_ms < 90000000u)
         config_.max_age_ms = 90000000u;
-    
+
     // Read entry count
     uint32_t count;
     file.read(reinterpret_cast<char*>(&count), sizeof(count));
-    
+    // A truncated/corrupt file can hand back a garbage count here — reject
+    // anything past the store's own capacity outright rather than trusting it.
+    if (!file.good() || count > kCapacity) return false;
+
     // Clear existing entries
     entries_.clear();
     
@@ -577,15 +581,22 @@ bool LQADatabase::load_from_file(const std::string& filepath) {
         LQAEntry entry;
         
         // Read frequency
-        file.read(reinterpret_cast<char*>(&entry.frequency_hz), 
+        file.read(reinterpret_cast<char*>(&entry.frequency_hz),
                  sizeof(entry.frequency_hz));
-        
-        // Read station name (length-prefixed string)
+
+        // Read station name (length-prefixed string). A truncated file can
+        // hand back an arbitrary 32-bit garbage value here — without a sanity
+        // cap, resize() on it throws std::length_error/bad_alloc, uncaught,
+        // which crashes the process on the very next startup after any
+        // partial/corrupt lqa.bin. Station addresses are always short, so
+        // reject anything implausible instead of trusting the file blindly.
         uint32_t name_len;
         file.read(reinterpret_cast<char*>(&name_len), sizeof(name_len));
+        if (!file.good() || name_len > 256) return false;
         entry.remote_station.resize(name_len);
         file.read(&entry.remote_station[0], name_len);
-        
+        if (!file.good()) return false;
+
         // Read metrics
         file.read(reinterpret_cast<char*>(&entry.snr_db), sizeof(entry.snr_db));
         file.read(reinterpret_cast<char*>(&entry.ber), sizeof(entry.ber));
@@ -620,10 +631,15 @@ bool LQADatabase::load_from_file(const std::string& filepath) {
             file.read(reinterpret_cast<char*>(&entry.sfi_at_measurement), 4);
         }
 
+        // A truncated file mid-entry leaves the fixed-size reads above holding
+        // whatever the buffer already contained — catch it here rather than
+        // silently storing a partially-real entry.
+        if (!file.good()) return false;
+
         EntryKey key{entry.frequency_hz, entry.remote_station};
         entries_[key] = entry;
     }
-    
+
     file.close();
     return true;
 }
