@@ -1748,7 +1748,7 @@
        the rail and expose it. */
     #settingsModal.modal-overlay {
       inset: 0 auto 0 64px;
-      width: 470px;
+      width: 600px;
       padding: 0;
       display: block;
       background: transparent;
@@ -1777,7 +1777,7 @@
        from ever being able to affect anything outside it. */
     #settingsModal .modal {
       pointer-events: auto;
-      width: 470px;
+      width: 600px;
       max-width: none;
       height: 100%;
       max-height: none;
