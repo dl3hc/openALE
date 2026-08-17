@@ -175,8 +175,13 @@ constexpr uint32_t IDLE_WARNING_LEAD_MS = 30000u;  // 30 s
 // or a transmit_callback that doesn't arm the frame completion), the SM would
 // otherwise hang in LINKED with RX disabled.  handle_linked() force-completes
 // the termination (or abandons the orderwire burst) once this elapses, bounding
-// the hang instead of waiting forever.  Generous vs. any real burst (max
-// termination section Tx_max = 5×Trw ≈ 2 s; orderwire bursts are a few words).
+// the hang instead of waiting forever.  Generous vs. a short burst (max
+// termination section Tx_max = 5×Trw ≈ 2 s), but AMD/EFS orderwire bursts and
+// an AMD riding the ACK frame are NOT bounded to "a few words" — A.5.7.2.3's
+// Tm_max incl. AMD is 59×Trw ≈ 23.1 s.  The orderwire and SENDING_ACK arm
+// sites (ale_state_machine.cpp) scale ALEStateMachine::tx_drain_deadline_ms_
+// to the actual queued word count instead of using this constant directly;
+// this value remains the floor/default for bursts that can't carry AMD.
 constexpr uint32_t TX_DRAIN_TIMEOUT_MS = 10000u;  // 10 s
 
 // ────────────────────────────────────────────────────────────────────────────

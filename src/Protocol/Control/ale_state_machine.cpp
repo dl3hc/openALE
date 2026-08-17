@@ -261,7 +261,8 @@ void ALEStateMachine::enter_state(ALEState new_state) {
     words_pending        = 0;
     // Same invariant for the TX-drain deadline (terminate_link / orderwire /
     // SENDING_RESPONSE / SENDING_ACK): no TX burst is pending on a fresh state.
-    tx_drain_start_ms_   = 0;
+    tx_drain_start_ms_    = 0;
+    tx_drain_deadline_ms_ = ALETimingConstants::TX_DRAIN_TIMEOUT_MS;
 
     switch (new_state) {
         case ALEState::IDLE:
@@ -590,10 +591,12 @@ void ALEStateMachine::handle_calling() {
             if (words_pending > 0) {
                 // Waiting for the ACK frame to drain.  Bound the wait so an audio
                 // stall (or a transmit_callback that doesn't arm the completion)
-                // doesn't hang here until the 30 s Twa backstop.
+                // doesn't hang here until the 30 s Twa backstop.  The ACK frame can
+                // carry a pending AMD (A.5.7.2.2) — tx_drain_deadline_ms_ is scaled
+                // to the actual burst length at the arm site below, so a long
+                // message isn't cut off by a budget sized for the bare ACK.
                 if (tx_drain_start_ms_ != 0 &&
-                    (current_time_ms - tx_drain_start_ms_)
-                        >= ALETimingConstants::TX_DRAIN_TIMEOUT_MS) {
+                    (current_time_ms - tx_drain_start_ms_) >= tx_drain_deadline_ms_) {
                     SM_TRACE("[TRACE] handle_calling: SENDING_ACK drain timeout → LINK_TIMEOUT\n");
                     tx_drain_start_ms_ = 0;
                     process_event(ALEEvent::LINK_TIMEOUT);
@@ -819,13 +822,15 @@ void ALEStateMachine::handle_linked() {
     // transmit_callback that doesn't arm the frame completion), the SM would
     // hang in LINKED with RX disabled — the linked_terminating_ short-circuit
     // below and the orderwire_transmitting_ return suppress the Twa timer, so
-    // nothing else recovers it.  Bound the wait: once TX_DRAIN_TIMEOUT_MS
+    // nothing else recovers it.  Bound the wait: once tx_drain_deadline_ms_
     // has elapsed since the drain was armed, force the transition (termination)
-    // or abandon the burst (orderwire) and re-open RX.
+    // or abandon the burst (orderwire) and re-open RX.  The orderwire arm site
+    // below scales this deadline to the burst's own word count — AMD text can
+    // legitimately run up to Tm_max = 59×Trw ≈ 23.1 s (A.5.7.2.3), far past the
+    // flat TX_DRAIN_TIMEOUT_MS this safety net used to apply unconditionally.
     if ((linked_terminating_ || orderwire_transmitting_)
         && tx_drain_start_ms_ != 0
-        && (current_time_ms - tx_drain_start_ms_)
-               >= ALETimingConstants::TX_DRAIN_TIMEOUT_MS) {
+        && (current_time_ms - tx_drain_start_ms_) >= tx_drain_deadline_ms_) {
         if (linked_terminating_) {
             SM_TRACE("[TRACE] handle_linked: terminate drain timeout → LINK_TERMINATED (forced)\n");
             linked_terminating_       = false;
@@ -876,9 +881,17 @@ void ALEStateMachine::handle_linked() {
         }
         transmit_words(tx);
         // Arm the drain deadline (skipped harmlessly if nothing was enqueued —
-        // the words_pending == 0 branch above clears it next tick).
-        if (words_pending > 0)
-            tx_drain_start_ms_ = current_time_ms;
+        // the words_pending == 0 branch above clears it next tick).  Scale the
+        // deadline to the burst just queued (tx.size() == words_pending here,
+        // since it was 0 before transmit_words()) instead of the flat
+        // TX_DRAIN_TIMEOUT_MS — a full-length AMD/EFS burst can need up to
+        // 59×Trw ≈ 23.1 s (A.5.7.2.3 Tm_max incl. AMD) to legitimately drain.
+        if (words_pending > 0) {
+            tx_drain_start_ms_    = current_time_ms;
+            tx_drain_deadline_ms_ = std::max(
+                ALETimingConstants::TX_DRAIN_TIMEOUT_MS,
+                words_pending * ALETimingConstants::Trw_ms + 2u * ALETimingConstants::Trw_ms);
+        }
         return;
     }
 
@@ -1210,8 +1223,11 @@ void ALEStateMachine::terminate_link() {
     // Arm the TX-drain safety net: on_word_complete() normally fires
     // LINK_TERMINATED once the frame drains, but if the audio device stalls or
     // transmit_callback never armed the completion, handle_linked() force-fires
-    // it after TX_DRAIN_TIMEOUT_MS so the SM never hangs in LINKED.
-    tx_drain_start_ms_ = current_time_ms;
+    // it after tx_drain_deadline_ms_ so the SM never hangs in LINKED.  The
+    // termination frame (TO×2+TWAS) is always short, so reset the deadline to
+    // its default in case a prior orderwire burst left it scaled up.
+    tx_drain_start_ms_    = current_time_ms;
+    tx_drain_deadline_ms_ = ALETimingConstants::TX_DRAIN_TIMEOUT_MS;
 }
 
 void ALEStateMachine::emergency_manual_control() {
@@ -1405,9 +1421,16 @@ void ALEStateMachine::build_ack_words() {
     // Arm the TX-drain deadline: on_word_complete() normally fires
     // HANDSHAKE_COMPLETE once the frame drains; if the audio stalls or the
     // completion is never armed, handle_calling SENDING_ACK force-aborts after
-    // TX_DRAIN_TIMEOUT_MS instead of waiting the full Twa backstop.
-    if (words_pending > 0)
-        tx_drain_start_ms_ = current_time_ms;
+    // tx_drain_deadline_ms_ instead of waiting the full Twa backstop.  A max-
+    // length AMD embedded above can push this frame to 59×Trw ≈ 23.1 s
+    // (A.5.7.2.3 Tm_max incl. AMD) — scale the deadline to the words actually
+    // queued instead of the flat TX_DRAIN_TIMEOUT_MS sized for the bare ACK.
+    if (words_pending > 0) {
+        tx_drain_start_ms_    = current_time_ms;
+        tx_drain_deadline_ms_ = std::max(
+            ALETimingConstants::TX_DRAIN_TIMEOUT_MS,
+            words_pending * ALETimingConstants::Trw_ms + 2u * ALETimingConstants::Trw_ms);
+    }
 }
 
 void ALEStateMachine::build_response_words() {
@@ -1460,9 +1483,13 @@ void ALEStateMachine::build_response_words() {
     // Arm the TX-drain deadline: on_word_complete() normally fires WAIT_ACK /
     // the reject abort once the frame drains; if the audio stalls or the
     // completion is never armed, handle_handshake SENDING_RESPONSE force-aborts
-    // after TX_DRAIN_TIMEOUT_MS instead of waiting the full Twa backstop.
-    if (words_pending > 0)
-        tx_drain_start_ms_ = current_time_ms;
+    // after TX_DRAIN_TIMEOUT_MS instead of waiting the full Twa backstop.  This
+    // response frame never carries AMD, so reset the deadline to its default in
+    // case a prior linked-orderwire burst left it scaled up.
+    if (words_pending > 0) {
+        tx_drain_start_ms_    = current_time_ms;
+        tx_drain_deadline_ms_ = ALETimingConstants::TX_DRAIN_TIMEOUT_MS;
+    }
 }
 
 void ALEStateMachine::transmit_word(const ALEWord& word) {
