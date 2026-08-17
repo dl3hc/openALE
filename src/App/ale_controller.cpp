@@ -722,7 +722,15 @@ bool ALEController::set_power(int pct)
 {
     if (!radio_) return false;
     pct = std::clamp(pct, 0, 100);
+
+    if (!radio_->supports_power_control()) {
+        emit_status("RF power " + std::to_string(pct)
+                     + "% NOT sent — this rig does not support power control");
+        return false;
+    }
+
     radio_->set_power(pct);
+    emit_status("RF power set to " + std::to_string(pct) + "%");
 
     // Persist into the calling-channel entry the radio is currently tuned to
     // (frequency-match, same idiom as step_channel()'s position lookup) so a

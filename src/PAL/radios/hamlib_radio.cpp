@@ -741,6 +741,9 @@ int HamlibRadio::assert_mode(RadioMode mode) {
 // Worker-only.
 int HamlibRadio::assert_power(int pct) {
     if (!power_supported_.load()) {
+        pal::log_warn("HamlibRadio",
+                       "  assert_power: %d%% NOT sent — this rig has no RFPOWER level (unsupported)",
+                       pct);
         trace_cat("set_power(%d%%) -> UNSUPPORTED (rig has no RFPOWER level)", pct);
         return -RIG_ENAVAIL;
     }
