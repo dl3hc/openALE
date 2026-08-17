@@ -197,6 +197,13 @@ specifically to let the GUI be opened from another device on the LAN — not a s
 unchanged) whenever it's unavailable. Same-machine/localhost access gets the AudioWorklet path;
 remote-LAN-IP access keeps the pre-existing behavior.
 
+The same secure-context requirement blocks `getUserMedia`/`enumerateDevices` even harder —
+those have no non-secure-context fallback at all (unlike AudioWorklet's ScriptProcessorNode
+path), so mic capture and device *listing* simply don't work over plain-HTTP LAN access. `--tls`
+(see `docs/TLS_SETUP.md`) is the fix: it makes `https://<lan-ip>:port/` a genuine secure
+context, unlocking the full Operator Audio Interface — mic, device listing, and the
+AudioWorklet path — for remote access, not just localhost.
+
 ---
 
 ## 4. Threading model

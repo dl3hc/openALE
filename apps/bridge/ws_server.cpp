@@ -19,6 +19,7 @@
    // Poll abstraction: WSAPoll uses WSAPOLLFD + POLLRDNORM for readability
    using PollFd_t = WSAPOLLFD;
    static constexpr short kPollIn  = POLLRDNORM;
+   static constexpr short kPollOut = POLLWRNORM;
    static constexpr short kPollHup = POLLHUP;
    static constexpr short kPollErr = POLLERR;
    static int do_poll(PollFd_t* fds, int n, int ms) {
@@ -35,6 +36,7 @@
    static void close_sock(raw_sock_t s) { close(s); }
    using PollFd_t = struct pollfd;
    static constexpr short kPollIn  = POLLIN;
+   static constexpr short kPollOut = POLLOUT;
    static constexpr short kPollHup = POLLHUP;
    static constexpr short kPollErr = POLLERR;
    static int do_poll(PollFd_t* fds, int n, int ms) {
@@ -142,7 +144,9 @@ const char* mime_for(const std::string& path) {
     return "application/octet-stream";
 }
 
-bool send_raw(raw_sock_t s, const uint8_t* data, size_t len) {
+// ── Plaintext raw socket I/O (blocking; unchanged from before TLS support) ──
+
+bool send_raw_plain(raw_sock_t s, const uint8_t* data, size_t len) {
     size_t sent = 0;
     while (sent < len) {
 #ifdef _WIN32
@@ -158,35 +162,88 @@ bool send_raw(raw_sock_t s, const uint8_t* data, size_t len) {
     return true;
 }
 
-void send_http(raw_sock_t client, const char* status, const char* content_type,
+// ── TLS-aware connection I/O ─────────────────────────────────────────────────
+//
+// tls == nullptr → identical to the pre-TLS blocking-socket behavior above.
+// tls != nullptr → the socket was set non-blocking at accept() time (see
+// io_thread_main's accept handling); WANT_READ/WANT_WRITE are retried inline
+// with a bounded spin. This is no worse than the plaintext path's behavior
+// above, which already blocks the single I/O thread until fully sent or a
+// hard error with no cap at all — a LAN tool's message sizes (HTTP responses,
+// WS frames, at most tens of KB) resolve in one or two iterations on a
+// healthy connection either way.
+
+bool conn_send_raw(raw_sock_t s, TlsConn* tls, const uint8_t* data, size_t len) {
+    if (!tls) return send_raw_plain(s, data, len);
+
+    size_t sent = 0;
+    int stalls = 0;
+    while (sent < len) {
+        size_t n = 0;
+        const TlsIoResult r = tls->send(data + sent, len - sent, &n);
+        if (r == TlsIoResult::Ok) { sent += n; stalls = 0; continue; }
+        if (r == TlsIoResult::WantRead || r == TlsIoResult::WantWrite) {
+            if (++stalls > 100000) return false;  // peer genuinely stalled — give up
+            continue;
+        }
+        return false;  // Failed / Closed
+    }
+    return true;
+}
+
+enum class ConnRecvResult { Ok, NoData, Closed };
+
+// Uniform recv: NoData means "nothing ready this round, try again on the next
+// poll iteration" — the TLS equivalent of the plaintext path's "poll() said
+// readable but recv() would still block" case, which can't happen for a
+// blocking plaintext socket but is routine for a non-blocking TLS one (a
+// partial TLS record isn't enough to decrypt anything yet).
+ConnRecvResult conn_recv_raw(raw_sock_t s, TlsConn* tls, char* buf, size_t cap, size_t* out_n) {
+    if (!tls) {
+#ifdef _WIN32
+        const int n = recv(s, buf, static_cast<int>(cap), 0);
+#else
+        const ssize_t n = recv(s, buf, cap, 0);
+#endif
+        if (n > 0) { *out_n = static_cast<size_t>(n); return ConnRecvResult::Ok; }
+        return ConnRecvResult::Closed;
+    }
+    size_t n = 0;
+    const TlsIoResult r = tls->recv(reinterpret_cast<uint8_t*>(buf), cap, &n);
+    if (r == TlsIoResult::Ok) { *out_n = n; return ConnRecvResult::Ok; }
+    if (r == TlsIoResult::WantRead || r == TlsIoResult::WantWrite) return ConnRecvResult::NoData;
+    return ConnRecvResult::Closed;
+}
+
+void send_http(raw_sock_t client, TlsConn* tls, const char* status, const char* content_type,
                const std::string& body) {
     std::string resp = std::string("HTTP/1.1 ") + status + "\r\n";
     resp += std::string("Content-Type: ") + content_type + "\r\n";
     resp += "Content-Length: " + std::to_string(body.size()) + "\r\n";
     resp += "Connection: close\r\n\r\n";
     resp += body;
-    send_raw(client, reinterpret_cast<const uint8_t*>(resp.data()), resp.size());
+    conn_send_raw(client, tls, reinterpret_cast<const uint8_t*>(resp.data()), resp.size());
 }
 
-void serve_static(raw_sock_t client, const std::string& req, const std::string& web_root) {
+void serve_static(raw_sock_t client, TlsConn* tls, const std::string& req, const std::string& web_root) {
     std::string path = request_path(req);
     if (path == "/") path = "/index.html";
     if (path.find("..") != std::string::npos || web_root.empty()) {
-        send_http(client, "404 Not Found", "text/plain", "Not Found");
+        send_http(client, tls, "404 Not Found", "text/plain", "Not Found");
         return;
     }
     const std::string full = web_root + path;
     std::ifstream f(full, std::ios::binary);
     if (!f) {
-        send_http(client, "404 Not Found", "text/plain", "Not Found");
+        send_http(client, tls, "404 Not Found", "text/plain", "Not Found");
         return;
     }
     std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    send_http(client, "200 OK", mime_for(path), body);
+    send_http(client, tls, "200 OK", mime_for(path), body);
 }
 
 // Build and send one WS frame (unmasked, FIN=1).  I/O-thread only — no mutex.
-bool ioth_send_frame(raw_sock_t s, uint8_t opcode, const uint8_t* data, size_t len) {
+bool ioth_send_frame(raw_sock_t s, TlsConn* tls, uint8_t opcode, const uint8_t* data, size_t len) {
     std::string frame;
     frame.push_back(static_cast<char>(0x80 | opcode));
     if (len < 126) {
@@ -201,7 +258,7 @@ bool ioth_send_frame(raw_sock_t s, uint8_t opcode, const uint8_t* data, size_t l
             frame.push_back(static_cast<char>((static_cast<uint64_t>(len) >> (i * 8)) & 0xFF));
     }
     if (len > 0) frame.append(reinterpret_cast<const char*>(data), len);
-    return send_raw(s, reinterpret_cast<const uint8_t*>(frame.data()), frame.size());
+    return conn_send_raw(s, tls, reinterpret_cast<const uint8_t*>(frame.data()), frame.size());
 }
 
 } // namespace
@@ -210,7 +267,7 @@ bool ioth_send_frame(raw_sock_t s, uint8_t opcode, const uint8_t* data, size_t l
 
 WsServer::~WsServer() { stop(); }
 
-bool WsServer::start(uint16_t port, bool bind_remote) {
+bool WsServer::start(uint16_t port, bool bind_remote, TlsOptions tls) {
 #ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
@@ -218,6 +275,20 @@ bool WsServer::start(uint16_t port, bool bind_remote) {
         return false;
     }
 #endif
+    tls_enabled_ = tls.enabled;
+    if (tls_enabled_) {
+        tls_ctx_ = std::make_unique<TlsServerContext>();
+        if (!tls_ctx_->init(tls)) {
+            pal::log_error("ws_server", "TLS init failed — see above for details");
+            tls_ctx_.reset();
+            tls_enabled_ = false;
+#ifdef _WIN32
+            WSACleanup();
+#endif
+            return false;
+        }
+    }
+
     const raw_sock_t server = socket(AF_INET, SOCK_STREAM, 0);
     if (server == kRawInvalid) {
         pal::log_error("ws_server", "socket() failed");
@@ -254,6 +325,8 @@ void WsServer::stop() {
     if (io_thread_.joinable()) io_thread_.join();
     listen_sock_ = kInvalid;
     client_      = kInvalid;
+    client_tls_.reset();
+    tls_ctx_.reset();
 #ifdef _WIN32
     WSACleanup();
 #endif
@@ -264,6 +337,8 @@ void WsServer::stop() {
 // Handles three kinds of fds simultaneously:
 //   listen_sock_      — new incoming connections (HTTP or WS upgrade)
 //   pending_http_[]   — HTTP requests not yet completely received/served
+//                        (including, when TLS is enabled, connections still
+//                        mid-handshake — see tls_handshaking below)
 //   client_           — active WebSocket session
 //
 // send_queue_ is drained on every iteration (≤5 ms after push from main thread).
@@ -292,13 +367,17 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
             ws_slot = nfds++;
         }
 
-        // Remaining slots: pending HTTP connections
+        // Remaining slots: pending HTTP connections. A connection mid-TLS-
+        // handshake polls for both read AND write — the handshake can stall
+        // on either direction — everything else (plaintext or post-handshake
+        // TLS) only ever needs read-readiness, same as before TLS existed.
         int http_slots[kMaxPendingHttp];
         for (int i = 0; i < kMaxPendingHttp; ++i) {
             http_slots[i] = -1;
             if (pending_http_[i].fd != kInvalid) {
                 pfds[nfds].fd      = to_raw(pending_http_[i].fd);
-                pfds[nfds].events  = kPollIn;
+                pfds[nfds].events  = pending_http_[i].tls_handshaking
+                                          ? static_cast<short>(kPollIn | kPollOut) : kPollIn;
                 pfds[nfds].revents = 0;
                 http_slots[i] = nfds++;
             }
@@ -323,6 +402,15 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                     if (pending_http_[i].fd == kInvalid) {
                         pending_http_[i].fd = static_cast<SocketHandle>(fd);
                         pending_http_[i].buf.clear();
+                        if (tls_enabled_) {
+                            tls_set_nonblocking(static_cast<tls_sock_t>(fd));
+                            pending_http_[i].tls = std::make_unique<TlsConn>(*tls_ctx_);
+                            pending_http_[i].tls->attach(static_cast<tls_sock_t>(fd));
+                            pending_http_[i].tls_handshaking = true;
+                        } else {
+                            pending_http_[i].tls.reset();
+                            pending_http_[i].tls_handshaking = false;
+                        }
                         placed = true;
                         break;
                     }
@@ -340,24 +428,47 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                 close_sock(to_raw(pending_http_[i].fd));
                 pending_http_[i].fd = kInvalid;
                 pending_http_[i].buf.clear();
+                pending_http_[i].tls.reset();
+                pending_http_[i].tls_handshaking = false;
                 continue;
             }
+
+            // TLS handshake in progress: drive it forward one step. Needs
+            // either direction ready (the handshake itself may need to read
+            // or write next — that's exactly what WantRead/WantWrite means).
+            if (pending_http_[i].tls_handshaking) {
+                if (!(rev & (kPollIn | kPollOut))) continue;
+                const TlsIoResult r = pending_http_[i].tls->handshake();
+                if (r == TlsIoResult::Ok) {
+                    pending_http_[i].tls_handshaking = false;
+                    // Fall through to next iteration for the actual HTTP
+                    // request bytes — keeps this branch simple, costs at
+                    // most one extra ≤5 ms poll cycle.
+                } else if (r == TlsIoResult::WantRead || r == TlsIoResult::WantWrite) {
+                    continue;  // retry next iteration
+                } else {
+                    close_sock(to_raw(pending_http_[i].fd));
+                    pending_http_[i].fd = kInvalid;
+                    pending_http_[i].buf.clear();
+                    pending_http_[i].tls.reset();
+                    pending_http_[i].tls_handshaking = false;
+                }
+                continue;
+            }
+
             if (!(rev & kPollIn)) continue;
 
             char chunk[2048];
-#ifdef _WIN32
-            const int n = recv(to_raw(pending_http_[i].fd), chunk, sizeof(chunk), 0);
-            const bool recv_ok = (n > 0);
-            const size_t nbytes = recv_ok ? static_cast<size_t>(n) : 0;
-#else
-            const ssize_t n = recv(to_raw(pending_http_[i].fd), chunk, sizeof(chunk), 0);
-            const bool recv_ok = (n > 0);
-            const size_t nbytes = recv_ok ? static_cast<size_t>(n) : 0;
-#endif
-            if (!recv_ok) {
+            size_t nbytes = 0;
+            const ConnRecvResult rr = conn_recv_raw(to_raw(pending_http_[i].fd),
+                                                     pending_http_[i].tls.get(),
+                                                     chunk, sizeof(chunk), &nbytes);
+            if (rr == ConnRecvResult::NoData) continue;  // TLS: partial record, retry next iteration
+            if (rr == ConnRecvResult::Closed) {
                 close_sock(to_raw(pending_http_[i].fd));
                 pending_http_[i].fd = kInvalid;
                 pending_http_[i].buf.clear();
+                pending_http_[i].tls.reset();
                 continue;
             }
             pending_http_[i].buf.append(chunk, nbytes);
@@ -367,6 +478,7 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                 close_sock(to_raw(pending_http_[i].fd));
                 pending_http_[i].fd = kInvalid;
                 pending_http_[i].buf.clear();
+                pending_http_[i].tls.reset();
                 continue;
             }
 
@@ -375,6 +487,7 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
 
             const std::string& req = pending_http_[i].buf;
             const raw_sock_t   fd  = to_raw(pending_http_[i].fd);
+            TlsConn* const     tls = pending_http_[i].tls.get();
 
             // Localhost-only guard (active when !bind_remote_):
             //   Reject connections whose Host or Origin header does not refer to
@@ -385,10 +498,12 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                 const std::string host   = extract_header(req, "Host");
                 const std::string origin = extract_header(req, "Origin");
                 if ((!host.empty() && !is_loopback_host(host)) || !origin_is_local(origin)) {
-                    send_http(fd, "403 Forbidden", "text/plain", "Forbidden");
+                    send_http(fd, tls, "403 Forbidden", "text/plain", "Forbidden");
+                    if (tls) tls->close_notify();
                     close_sock(fd);
                     pending_http_[i].fd = kInvalid;
                     pending_http_[i].buf.clear();
+                    pending_http_[i].tls.reset();
                     continue;
                 }
             }
@@ -404,12 +519,13 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                         "Connection: Upgrade\r\n"
                         "Sec-WebSocket-Accept: " + accept_key + "\r\n"
                         "\r\n";
-                    send_raw(fd, reinterpret_cast<const uint8_t*>(response.data()), response.size());
+                    conn_send_raw(fd, tls, reinterpret_cast<const uint8_t*>(response.data()), response.size());
                     ws_recv_buf_.clear();
                     ws_frag_acc_.clear();
                     ws_frag_opcode_ = 0;
                     ws_reject_count_ = 0;
                     client_ = static_cast<SocketHandle>(fd);
+                    client_tls_ = std::move(pending_http_[i].tls);  // carry the negotiated TLS session forward
                     pal::log_info("ws_server", "client connected");
                     std::fflush(stdout);
                 } else {
@@ -421,7 +537,8 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                         "HTTP/1.1 503 Service Unavailable\r\n"
                         "Content-Length: 0\r\n"
                         "Connection: close\r\n\r\n";
-                    send_raw(fd, reinterpret_cast<const uint8_t*>(reject.data()), reject.size());
+                    conn_send_raw(fd, tls, reinterpret_cast<const uint8_t*>(reject.data()), reject.size());
+                    if (tls) tls->close_notify();
                     close_sock(fd);
                     ++ws_reject_count_;
                     if (ws_reject_count_ == 1 || ws_reject_count_ % 50 == 0) {
@@ -430,12 +547,14 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
                     }
                 }
             } else {
-                serve_static(fd, req, web_root_);
+                serve_static(fd, tls, req, web_root_);
+                if (tls) tls->close_notify();
                 close_sock(fd);
             }
 
             pending_http_[i].fd = kInvalid;
             pending_http_[i].buf.clear();
+            pending_http_[i].tls.reset();  // no-op if just moved-from above
         }
 
         // ③ WebSocket recv ─────────────────────────────────────────────────
@@ -446,22 +565,22 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
             if (!close_conn && (rev & kPollIn)) {
                 char chunk[4096];
                 const raw_sock_t wfd = to_raw(client_.load());
-#ifdef _WIN32
-                const int rn = recv(wfd, chunk, sizeof(chunk), 0);
-                if (rn <= 0) close_conn = true;
-#else
-                const ssize_t rn = recv(wfd, chunk, sizeof(chunk), 0);
-                if (rn <= 0) close_conn = true;
-#endif
-                else {
-                    ws_recv_buf_.append(chunk, static_cast<size_t>(rn));
-                    close_conn = parse_ws_frames_(client_.load());
+                size_t nbytes = 0;
+                const ConnRecvResult rr = conn_recv_raw(wfd, client_tls_.get(), chunk, sizeof(chunk), &nbytes);
+                if (rr == ConnRecvResult::Closed) {
+                    close_conn = true;
+                } else if (rr == ConnRecvResult::Ok) {
+                    ws_recv_buf_.append(chunk, nbytes);
+                    close_conn = parse_ws_frames_(client_.load(), client_tls_.get());
                 }
+                // NoData (TLS partial record): nothing to do this iteration.
             }
 
             if (close_conn) {
+                if (client_tls_) client_tls_->close_notify();
                 close_sock(to_raw(client_.load()));
                 client_ = kInvalid;
+                client_tls_.reset();
                 ws_recv_buf_.clear();
                 ws_frag_acc_.clear();
                 ws_frag_opcode_ = 0;
@@ -482,7 +601,7 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
             if (wfd != kRawInvalid) {
                 while (!local.empty()) {
                     const SendItem& item = local.front();
-                    ioth_send_frame(wfd, item.opcode, item.data.data(), item.data.size());
+                    ioth_send_frame(wfd, client_tls_.get(), item.opcode, item.data.data(), item.data.size());
                     local.pop();
                 }
             }
@@ -492,15 +611,19 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
     // ── Cleanup (running_ == false, called once) ──────────────────────────
     for (int i = 0; i < kMaxPendingHttp; ++i) {
         if (pending_http_[i].fd != kInvalid) {
+            if (pending_http_[i].tls) pending_http_[i].tls->close_notify();
             close_sock(to_raw(pending_http_[i].fd));
             pending_http_[i].fd = kInvalid;
+            pending_http_[i].tls.reset();
         }
     }
     {
         const raw_sock_t wfd = to_raw(client_.load());
         if (wfd != kRawInvalid) {
+            if (client_tls_) client_tls_->close_notify();
             close_sock(wfd);
             client_ = kInvalid;
+            client_tls_.reset();
         }
     }
     close_sock(listen_raw);
@@ -513,7 +636,7 @@ void WsServer::io_thread_main(uint16_t /*port*/) {
 // pong/close responses inline.  Returns true if a Close frame was received
 // (caller should then close and clear the WS session).
 
-bool WsServer::parse_ws_frames_(SocketHandle ws_handle) {
+bool WsServer::parse_ws_frames_(SocketHandle ws_handle, TlsConn* tls) {
     const raw_sock_t ws_sock = to_raw(ws_handle);
     std::string&     buf     = ws_recv_buf_;
 
@@ -587,10 +710,10 @@ bool WsServer::parse_ws_frames_(SocketHandle ws_handle) {
                 }
                 break;
             case 0x8:  // close → echo close frame and signal disconnect
-                ioth_send_frame(ws_sock, 0x8, nullptr, 0);
+                ioth_send_frame(ws_sock, tls, 0x8, nullptr, 0);
                 return true;
             case 0x9:  // ping → pong
-                ioth_send_frame(ws_sock, 0xA,
+                ioth_send_frame(ws_sock, tls, 0xA,
                     reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
                 break;
             case 0xA:  // pong — nothing to do

@@ -52,7 +52,10 @@ let locGpsLon = 0.0;
 let locSfi    = 0.0;     // last SFI value from sfi_update push events
 
 function bridgeWsUrl() {
-  return 'ws://' + window.location.host;
+  // Match the page's own scheme: served over https:// (TLS enabled server-side,
+  // see docs/TLS_SETUP.md) → wss://; plain http:// → ws://.
+  const secure = window.location.protocol === 'https:';
+  return (secure ? 'wss://' : 'ws://') + window.location.host;
 }
 
 function setBridgeOverlay(show) {

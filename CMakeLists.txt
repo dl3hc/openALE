@@ -273,6 +273,29 @@ if(NOT HAMLIB_FOUND)
         "HAMLIB_BUILD=OFF (no-radio build) is not currently supported.")
 endif()
 
+# ── mbedTLS (native TLS for the GUI bridge's HTTPS/WSS support) ───────────────
+#
+# Vendored via FetchContent, pinned to the 3.6.x LTS branch. Unlike Hamlib
+# above, mbedTLS ships its own CMake build, so it builds identically on
+# Windows (MSVC) and Linux from the same source — no prebuilt-binary
+# vendoring step required. ENABLE_PROGRAMS/ENABLE_TESTING are forced off so
+# only the three libraries (mbedtls, mbedx509, mbedcrypto) get built, not
+# mbedTLS's own sample programs/test suite — but its build still needs the
+# "framework" submodule at configure time (scripts/config.py imports from
+# it), so submodules must be fetched even though tests aren't built.
+include(FetchContent)
+set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    mbedtls
+    GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
+    GIT_TAG        mbedtls-3.6.7
+    GIT_SHALLOW    TRUE
+    GIT_SUBMODULES_RECURSE TRUE
+)
+FetchContent_MakeAvailable(mbedtls)
+
 add_library(ale_pal
     src/PAL/logger.cpp
     src/PAL/crash_handler.cpp
@@ -466,14 +489,14 @@ endif()
 
 # ── WebSocket bridge (GUI↔Core) ────────────────────────────────────────────────
 
-add_executable(openALE apps/ale_bridge.cpp apps/bridge/ws_server.cpp apps/bridge/rigctld_server.cpp)
+add_executable(openALE apps/ale_bridge.cpp apps/bridge/ws_server.cpp apps/bridge/rigctld_server.cpp apps/bridge/tls_support.cpp)
 
 target_include_directories(openALE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/apps
 )
 
-target_link_libraries(openALE ale_app_core ale_audio_device ale_stores ale_pal)
+target_link_libraries(openALE ale_app_core ale_audio_device ale_stores ale_pal mbedtls mbedx509 mbedcrypto)
 
 if(WIN32)
     target_link_libraries(openALE ws2_32)
