@@ -1260,6 +1260,20 @@
       border-bottom: 1px solid var(--border);
     }
 
+    /* Lighter-weight heading for a subsection within an .ssec (e.g. Modem vs.
+       Operator Audio Interface sharing one "Audio Devices" pane) — same mono/
+       uppercase treatment as .ssec-title but dimmer and without the divider,
+       so it reads as "inside" the section rather than a new one. */
+    .ssec-sub-title {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--tx-dim);
+      margin-bottom: 12px;
+    }
+
     /* Form controls */
     .fg { margin-bottom: 18px; }
     .fg-row { display: grid; gap: 14px; margin-bottom: 18px; }
@@ -1834,6 +1848,8 @@
 
     /* Header scan toggle (active state) */
     .hdr-btn.scan-on { background: var(--accent-glow); border-color: rgba(0,220,140,0.3); color: var(--accent); }
+    /* Header channel-monitor toggle (active state) — same "on" convention as scan-on */
+    .hdr-btn.mon-on { background: var(--accent-glow); border-color: rgba(0,220,140,0.3); color: var(--accent); }
 
     /* Header freq/SNR readout, beside the Scan controls. Fixed-width slots so
        the cluster never shifts with the number of frequency digits. */

@@ -5,6 +5,27 @@
 
 ---
 
+## 0. Terminology: Modem Audio Interface vs. Operator Audio Interface
+
+openALE has two distinct audio interfaces, configured on two potentially different machines:
+
+- **Modem Audio Interface** — the transceiver's VAC (`PAL::IAudioDriver`, `AudioDevice`),
+  opened server-side via `AUDIO_OPEN`/`AUDIO_DEVICES` (Settings ▸ Modem ▸ Audio Devices). This
+  is *always* configured on the machine running the controller/bridge — the device generating
+  and demodulating ALE waveforms at a fixed 8 kHz mono.
+- **Operator Audio Interface** — the browser mic/speaker path (`apps/gui/app.js` `Voice`
+  object, WS binary tag `0x01`), configured on *whichever device the GUI happens to be open
+  on* (Settings ▸ Operator Audio). Device selection is stored in that browser's `localStorage`
+  and never sent to the bridge — a mic/speaker `deviceId` is meaningless on any other machine.
+  The controller and the GUI may or may not be the same physical machine.
+
+The Operator Audio Interface is the shared foundation for everything the operator hears or
+speaks into from their own device: analog voice passthrough (§2), the link-independent channel
+monitor (§2.5), notification sounds (ring on incoming call, chime on message arrival — client
+side only, no backend involvement), and the future digital-voice codec seam (§6).
+
+---
+
 ## 1. Problem
 
 A single VAC bridges the ALE modem to the radio. The old `VoicePathManager`
@@ -112,6 +133,31 @@ drives the state machine back to `ALE_EXCLUSIVE`.
 The bridge pushes a `voice_session {state: "receiving"|"transmitting"|"protocol"|""}` event
 on every sub-state transition. `""` = not in a voice session.
 
+### 2.5 AudioMonitor — link-independent RX tap ("listen in")
+
+`include/App/audio_monitor.h` / `src/App/audio_monitor.cpp`
+
+Voice Passthrough (§2.2–2.3) only forwards RX audio while a voice link is up. The channel
+monitor lets the operator "listen in" on the transceiver's RX audio from the Operator Audio
+Interface **regardless of link state** — e.g. while scanning or idle — via a header toggle in
+the GUI (`#monitorBtn`, `toggleMonitor()`) backed by the `AUDIO_MONITOR {on}` /
+`AUDIO_MONITOR_GET` bridge commands.
+
+`AudioMonitor` is a second, much simpler `RxSink` than `VoicePathManager`: no mode machine, no
+mic ring, no PTT. `arm(true)` self-registers via `transport_->add_rx_sink(*this)`, `arm(false)`
+unregisters — the same self-registration idiom VPM uses for passthrough entry/exit.
+
+**Suppression, not exclusion.** Both `VoicePathManager` (during an active voice link) and
+`AudioMonitor` (while armed) can be registered with the transport at the same time — they are
+independent toggles. To avoid sending the same tick's PCM to the browser twice,
+`AudioMonitor::on_rx_audio()` checks `voice_->passthrough_active()` and skips forwarding
+whenever VoicePathManager is already streaming. The monitor is a superset of passthrough's RX
+behavior (if you're on a voice link, you're already "listening in"), so this is a no-op
+skip, not a feature loss.
+
+Session-only: `AUDIO_MONITOR` is never persisted to `station.state` — it always defaults off on
+bridge start/restart, like PTT.
+
 ---
 
 ## 3. Wire protocol
@@ -121,8 +167,35 @@ Binary WS frames carry a 1-byte stream tag:
 | Tag | Direction | Content |
 |---|---|---|
 | `0x00` | bridge → browser | Spectrum (float32 LE FFT bins) |
-| `0x01` | bridge → browser | Voice RX PCM (int16 LE, 8 kHz mono) |
+| `0x01` | bridge → browser | RX PCM (int16 LE, 8 kHz mono) — voice passthrough or channel monitor |
 | `0x01` | browser → bridge | Mic TX PCM (int16 LE, 8 kHz mono) |
+
+Both `VoicePathManager` (passthrough) and `AudioMonitor` (channel monitor, §2.5) frame their RX
+PCM identically and send it via the same tag — the browser plays whatever `0x01` frames arrive
+without needing to know which server-side sink produced them.
+
+### 3.1 Browser-side pipeline: AudioWorklet with ScriptProcessorNode fallback
+
+`apps/gui/audio-worklets.js` (mirrored at `apps/gui/mobile/audio-worklets.js`) implements the
+mic/speaker resampling as two `AudioWorkletProcessor`s (`speaker-processor`, `mic-processor`),
+registered via `audioContext.audioWorklet.addModule(...)` and driven from `app.js`
+(`voiceInitSpeaker()`/`voiceMicStart()`). This runs the resampling on the dedicated real-time
+audio thread with a fixed 128-sample quantum, instead of the main JS thread — the previous
+`ScriptProcessorNode` implementation was subject to main-thread jank and only ran in coarse
+1024–2048-sample callbacks, which was the dominant source of both latency and jitter. The
+resamplers were upgraded at the same time: cubic Hermite interpolation (RX upsample, replacing
+linear) and a two-pass box average (TX downsample, replacing a single boxcar pass) — both cheap,
+real-time-safe upgrades that reduce imaging/aliasing distortion versus the originals. The wire
+format is unchanged (still raw 8 kHz PCM, no codec) — the quality loss being fixed here was
+entirely in the device-rate ↔ 8 kHz resampling step, not the (nonexistent) encoding.
+
+`AudioWorklet` requires a secure context (HTTPS, or `localhost`/`127.0.0.1`, which browsers
+special-case as secure). Since the bridge serves plain HTTP and `--remote` (0.0.0.0 bind) exists
+specifically to let the GUI be opened from another device on the LAN — not a secure context —
+`app.js` feature-detects `audioContext.audioWorklet` and falls back to the original
+`ScriptProcessorNode` implementation (`voiceSpkProcess`/`voiceMicProcess`, still present
+unchanged) whenever it's unavailable. Same-machine/localhost access gets the AudioWorklet path;
+remote-LAN-IP access keeps the pre-existing behavior.
 
 ---
 
@@ -149,20 +222,26 @@ browser → WS ──▶ main loop: push_mic_pcm() ──▶ mic_ring_ [SPSC]
 ## 5. Bridge setup (summary)
 
 ```cpp
-// Transport (declared before VoicePathManager — destroyed after it)
+// Transport (declared before VoicePathManager/AudioMonitor — destroyed after them)
 AudioTransport   transport;
 VoicePathManager voice_mgr;
+AudioMonitor     audio_monitor;
 
 // Wire up
 transport.set_decoder_sink([&](const int16_t* buf, size_t n) {
     ctrl.feed_audio(buf, n);          // permanent, every tick
 });
-voice_mgr.on_speaker_pcm = [&](const int16_t* buf, size_t n) {
-    ws.send_binary(tagged_frame(0x01, buf, n));  // called by VPM's on_rx_audio
+auto send_rx_pcm_frame = [&](const int16_t* buf, size_t n) {
+    ws.send_binary(tagged_frame(0x01, buf, n));  // shared framing, see §3
 };
-voice_mgr.set_transport(&transport);  // enables self-registration
+voice_mgr.on_speaker_pcm = send_rx_pcm_frame;     // called by VPM's on_rx_audio
+voice_mgr.set_transport(&transport);              // enables self-registration
 transport.set_media_producer(&voice_mgr);
 transport.set_protocol_tx_query([&]() { return ctrl.is_tx_active(); });
+
+audio_monitor.attach(&transport);                 // enables self-registration
+audio_monitor.set_voice_manager(&voice_mgr);       // suppression guard, see §2.5
+audio_monitor.on_pcm = send_rx_pcm_frame;
 
 // Each main-loop tick:
 voice_mgr.attach(audio.get(), radio.get()); // no-op when unchanged

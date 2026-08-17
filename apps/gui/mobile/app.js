@@ -148,6 +148,7 @@ function syncAllFromBridge() {
   syncLocationFromBridge();         // pull Station Location & Propagation from core
   syncTunerFromBridge();            // pull netrigctl server (Tuner) state from core
   syncVoiceFromBridge();            // pull voice-passthrough arm/mode state from core
+  syncAudioMonitorFromBridge();     // pull channel-monitor ("listen in") state from core
   enumVoiceDevices();               // populate browser mic/speaker selectors
   pollRigStatus();   // establish initial radio-control lock state
   populateRigDropdown();
@@ -290,6 +291,7 @@ function onBridgeEvent(e) {
     case 'status': aleLogInfo(e.msg); break;
     case 'call_received':
       isIncomingCall = true;
+      notifyRingStart();
       stopTimer();
       // The pill is driven by the `state` push (INCOMING during WAIT_CYCLE_END /
       // AWAIT_ACCEPT, HANDSHAKE during the response exchange) — don't override
@@ -364,7 +366,7 @@ function onBridgeEvent(e) {
     case 'voice_path':
       // Bridge switched the VAC owner between ALE-modem and voice passthrough.
       voicePassthrough = (e.mode === 'voice');
-      if (!voicePassthrough) { Voice.pttMuted = false; voiceMicStop(); }
+      if (!voicePassthrough) { setSpeakerMute(false); voiceMicStop(); }
       applyVoicePathUi();
       break;
     case 'amd_received':
@@ -376,6 +378,7 @@ function onBridgeEvent(e) {
         updateNavBadges();
       }
       renderMessages();
+      notifyChime();
       break;
     case 'idle_warning':
       // SM fires this once, ~30s before the configured Twa elapses. Show a modal
@@ -450,12 +453,13 @@ function onSpectrumFrame(buf) {
    is silent while linked. */
 let voicePassthrough = false;   // mirror of bridge voice_path mode ("voice")
 let voiceArmed       = false;   // voice capability armed in the bridge
+let audioMonitor     = false;   // link-independent RX "listen in" tap armed in the bridge
 let voiceMicOn       = false;   // mic streaming active (PTT held)
 let voiceMicTestId   = null;    // mic-test timer
 const SPK_RING_N = 4096;        // ~0.5 s @ 8 kHz
 const Voice = {
   micCtx: null, micStream: null, micNode: null, micRate: 48000,
-  spkCtx: null, spkNode: null, spkRate: 48000,
+  spkCtx: null, spkNode: null, spkRate: 48000, spkInitializing: false,
   spkRing: null, spkRead: 0.0, spkAvail: 0,
   pttMuted: false,
 };
@@ -464,22 +468,125 @@ function _audioCtxCtor() {
   return window.AudioContext || window.webkitAudioContext || null;
 }
 
+// AudioWorklet requires a secure context (HTTPS, or localhost/127.0.0.1 which
+// browsers special-case as secure) — plain-HTTP LAN access (the --remote
+// flag's use case) does not qualify, so `ctx.audioWorklet` is undefined
+// there. Every worklet path below is paired with a ScriptProcessorNode
+// fallback for exactly that case. Module registration is per-AudioContext
+// instance (there are two: Voice.spkCtx and Voice.micCtx), so the loaded-
+// module promise is cached on the context object itself.
+function _ensureWorkletModule(ctx) {
+  if (!ctx.audioWorklet) return Promise.reject(new Error('AudioWorklet unavailable'));
+  if (!ctx._workletModule) ctx._workletModule = ctx.audioWorklet.addModule('audio-worklets.js');
+  return ctx._workletModule;
+}
+
+// ── Notifications (ring / chime) — synthesized tones played through the
+// Operator Audio Interface's selected speaker device. No bundled audio
+// assets: short OscillatorNode/GainNode envelopes, gated by the
+// Settings ▸ Audio Devices "Notifications" checkboxes + volume. ──────────
+let _notifyCtx   = null;
+let _ringTimer   = null;
+function _notifyCtxGet() {
+  if (_notifyCtx) return _notifyCtx;
+  const Ctx = _audioCtxCtor();
+  if (!Ctx) return null;
+  try {
+    _notifyCtx = new Ctx();
+    if (_voiceSpkSel && _notifyCtx.setSinkId) _notifyCtx.setSinkId(_voiceSpkSel).catch(() => {});
+  } catch (e) { return null; }
+  return _notifyCtx;
+}
+function _notifyTone(ctx, freq, startAt, dur, vol) {
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, startAt);
+  gain.gain.linearRampToValueAtTime(vol, startAt + 0.01);
+  gain.gain.linearRampToValueAtTime(0, startAt + dur);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(startAt);
+  osc.stop(startAt + dur + 0.02);
+}
+function operatorAudioNotify(kind) {
+  const vol = parseFloat(opAudioLoad(OPAUDIO_LS.notifyVol, '0.5')) || 0;
+  if (vol <= 0) return;
+  const ctx = _notifyCtxGet();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume();
+  const now = ctx.currentTime;
+  if (kind === 'chime') {
+    // Short pitch-drop blip ("plop") — message arrived.
+    _notifyTone(ctx, 880, now,        0.09, vol * 0.5);
+    _notifyTone(ctx, 660, now + 0.09, 0.12, vol * 0.5);
+  } else if (kind === 'ring') {
+    // Alternating two-tone — one repetition; notifyRingStart() loops it.
+    _notifyTone(ctx, 1000, now,       0.18, vol * 0.5);
+    _notifyTone(ctx, 800,  now + 0.2, 0.18, vol * 0.5);
+  }
+}
+function notifyRingStart() {
+  if (opAudioLoad(OPAUDIO_LS.notifyRing, '1') !== '1') return;
+  if (_ringTimer) return;  // already ringing
+  operatorAudioNotify('ring');
+  _ringTimer = setInterval(() => operatorAudioNotify('ring'), 1600);
+}
+function notifyRingStop() {
+  if (_ringTimer) { clearInterval(_ringTimer); _ringTimer = null; }
+}
+function notifyChime() {
+  if (opAudioLoad(OPAUDIO_LS.notifyChime, '1') !== '1') return;
+  operatorAudioNotify('chime');
+}
+
 // ── Speaker (radio RX → browser) ────────────────────────────────────────────
+// Preferred path: an AudioWorkletNode ('speaker-processor', audio-worklets.js)
+// running on the dedicated audio-render thread — low, consistent latency and
+// cubic-Hermite upsampling. Falls back to the ScriptProcessorNode path below
+// (voiceSpkProcess + Voice.spkRing) when AudioWorklet is unavailable.
 function voiceInitSpeaker() {
-  if (Voice.spkCtx) return;
+  if (Voice.spkCtx || Voice.spkInitializing) return;
   const Ctx = _audioCtxCtor();
   if (!Ctx) return;
+  Voice.spkInitializing = true;
   try {
-    Voice.spkCtx  = new Ctx();
-    Voice.spkRate = Voice.spkCtx.sampleRate;
-    Voice.spkRing = new Float32Array(SPK_RING_N);
-    Voice.spkRead = 0.0;
-    Voice.spkAvail = 0;
-    // 1024-frame output-only ScriptProcessor; input channel count 0.
-    Voice.spkNode = Voice.spkCtx.createScriptProcessor(1024, 0, 1);
-    Voice.spkNode.onaudioprocess = voiceSpkProcess;
-    Voice.spkNode.connect(Voice.spkCtx.destination);
-  } catch (e) { aleLogInfo('Voice speaker init failed: ' + e.message); }
+    const ctx = new Ctx();
+    Voice.spkCtx  = ctx;
+    Voice.spkRate = ctx.sampleRate;
+    if (ctx.audioWorklet) {
+      _ensureWorkletModule(ctx).then(() => {
+        const node = new AudioWorkletNode(ctx, 'speaker-processor',
+          { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+        node.connect(ctx.destination);
+        Voice.spkNode = node;
+        Voice.spkInitializing = false;
+        if (Voice.pttMuted) node.port.postMessage({ type: 'mute', on: true });
+      }).catch((e) => {
+        aleLogInfo('AudioWorklet speaker init failed, falling back: ' + e.message);
+        _initSpeakerFallback(ctx);
+        Voice.spkInitializing = false;
+      });
+    } else {
+      _initSpeakerFallback(ctx);
+      Voice.spkInitializing = false;
+    }
+  } catch (e) {
+    aleLogInfo('Voice speaker init failed: ' + e.message);
+    Voice.spkCtx = null;
+    Voice.spkInitializing = false;
+  }
+}
+
+function _initSpeakerFallback(ctx) {
+  Voice.spkRing = new Float32Array(SPK_RING_N);
+  Voice.spkRead = 0.0;
+  Voice.spkAvail = 0;
+  // 1024-frame output-only ScriptProcessor; input channel count 0.
+  const node = ctx.createScriptProcessor(1024, 0, 1);
+  node.onaudioprocess = voiceSpkProcess;
+  node.connect(ctx.destination);
+  Voice.spkNode = node;
 }
 
 function voiceSpkProcess(e) {
@@ -508,9 +615,17 @@ function voiceSpkProcess(e) {
 }
 
 function onVoiceRxFrame(payload) {
-  if (!voicePassthrough) return;
+  if (!voicePassthrough && !audioMonitor) return;
   voiceInitSpeaker();
   if (Voice.spkCtx && Voice.spkCtx.state === 'suspended') Voice.spkCtx.resume();
+  if (!Voice.spkNode) return;  // still loading the worklet module, or init failed
+  if (Voice.spkNode.port) {
+    // AudioWorklet path: hand the (already-copied, detachable) payload
+    // straight to the processor's own ring buffer — transferable, zero-copy.
+    Voice.spkNode.port.postMessage(payload, [payload]);
+    return;
+  }
+  // ScriptProcessorNode fallback path.
   if (!Voice.spkRing) return;
   const i16 = new Int16Array(payload);
   for (let k = 0; k < i16.length; ++k) {
@@ -521,6 +636,11 @@ function onVoiceRxFrame(payload) {
 }
 
 // ── Microphone (browser → radio TX) ─────────────────────────────────────────
+// Preferred path: an AudioWorkletNode ('mic-processor', audio-worklets.js)
+// that downsamples on the audio-render thread and posts already wire-framed
+// (tag byte + int16 LE PCM) buffers back — the main thread here is a pure
+// relay to the WebSocket, no per-sample work left on it. Falls back to the
+// ScriptProcessorNode path (voiceMicProcess) when AudioWorklet is unavailable.
 async function voiceMicStart() {
   if (voiceMicOn) return;
   const Ctx = _audioCtxCtor();
@@ -529,14 +649,33 @@ async function voiceMicStart() {
     const audioCfg = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
     if (_voiceMicSel) audioCfg.deviceId = { exact: _voiceMicSel };
     const stream = await navigator.mediaDevices.getUserMedia({ audio: audioCfg });
-    Voice.micCtx    = new Ctx();
-    Voice.micRate   = Voice.micCtx.sampleRate;
+    const ctx = new Ctx();
+    Voice.micCtx    = ctx;
+    Voice.micRate   = ctx.sampleRate;
     Voice.micStream = stream;
-    const src = Voice.micCtx.createMediaStreamSource(stream);
-    Voice.micNode   = Voice.micCtx.createScriptProcessor(2048, 1, 0);
-    Voice.micNode.onaudioprocess = voiceMicProcess;
-    src.connect(Voice.micNode);
-    Voice.micNode.connect(Voice.micCtx.destination);  // required for ScriptProcessor to fire
+    const src = ctx.createMediaStreamSource(stream);
+
+    let node = null;
+    if (ctx.audioWorklet) {
+      try {
+        await _ensureWorkletModule(ctx);
+        node = new AudioWorkletNode(ctx, 'mic-processor',
+          { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+        node.port.onmessage = (e) => {
+          if (bridgeWs && bridgeWs.readyState === 1) bridgeWs.send(e.data);
+        };
+      } catch (e) {
+        aleLogInfo('AudioWorklet mic init failed, falling back: ' + e.message);
+        node = null;
+      }
+    }
+    if (!node) {
+      node = ctx.createScriptProcessor(2048, 1, 0);
+      node.onaudioprocess = voiceMicProcess;
+    }
+    Voice.micNode = node;
+    src.connect(node);
+    node.connect(ctx.destination);  // required for {Script,Worklet}ProcessorNode to fire
     voiceMicOn = true;
   } catch (e) { aleLogInfo('Voice mic start failed: ' + e.message); }
 }
@@ -561,6 +700,15 @@ function voiceMicProcess(e) {
   u8[0] = BIN_TAG_VOICE;
   new Uint8Array(buf, 1).set(new Uint8Array(i16.buffer));
   bridgeWs.send(buf);
+}
+
+// Sets Voice.pttMuted (read directly by the ScriptProcessorNode fallback's
+// voiceSpkProcess) and, when the AudioWorklet speaker path is active, also
+// posts a mute message across the thread boundary — the worklet can't see
+// this main-thread variable directly.
+function setSpeakerMute(on) {
+  Voice.pttMuted = on;
+  if (Voice.spkNode && Voice.spkNode.port) Voice.spkNode.port.postMessage({ type: 'mute', on });
 }
 
 function voiceMicStop() {
@@ -653,14 +801,68 @@ function onVoiceArmChange(on) {
   if (bridgeConnected) bridgeSend('VOICE_ARM', { on });
 }
 
-let _voiceMicSel = '', _voiceSpkSel = '';
+// ── Channel Monitor ("listen in") — link-independent RX tap ─────────────────
+// Distinct from Voice Passthrough: streams RX audio to the Operator Audio
+// Interface regardless of ALE link state, so the operator can hear the
+// channel while scanning/idle. See AudioMonitor (App/audio_monitor.h).
+function applyMonitorUi() {
+  const b = document.getElementById('monitorBtn');
+  if (b) b.classList.toggle('mon-on', audioMonitor);
+}
+function toggleMonitor() {
+  audioMonitor = !audioMonitor;
+  applyMonitorUi();
+  if (bridgeConnected) bridgeSend('AUDIO_MONITOR', { on: audioMonitor });
+}
+function syncAudioMonitorFromBridge() {
+  bridgeSend('AUDIO_MONITOR_GET', {}, (r) => {
+    audioMonitor = !!r.on;
+    applyMonitorUi();
+  });
+}
+
+// ── Operator Audio Interface preferences (this browser only — never sent to
+// the bridge; mic/speaker device IDs are meaningless on any other machine). ──
+const OPAUDIO_LS = {
+  mic: 'ale.opaudio.mic', spk: 'ale.opaudio.spk',
+  notifyRing: 'ale.opaudio.notifyRing', notifyChime: 'ale.opaudio.notifyChime',
+  notifyVol: 'ale.opaudio.notifyVol',
+};
+function opAudioLoad(key, fallback) {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : v; } catch (_) { return fallback; }
+}
+function opAudioSave(key, val) {
+  try { localStorage.setItem(key, val); } catch (_) {}
+}
+
+function syncOpAudioNotifyUi() {
+  const ring  = document.getElementById('cfgNotifyRing');
+  const chime = document.getElementById('cfgNotifyChime');
+  const vol   = document.getElementById('cfgNotifyVol');
+  if (ring)  ring.checked  = opAudioLoad(OPAUDIO_LS.notifyRing, '1') === '1';
+  if (chime) chime.checked = opAudioLoad(OPAUDIO_LS.notifyChime, '1') === '1';
+  if (vol)   vol.value     = opAudioLoad(OPAUDIO_LS.notifyVol, '0.5');
+}
+function onNotifyPrefChange() {
+  const ring  = document.getElementById('cfgNotifyRing');
+  const chime = document.getElementById('cfgNotifyChime');
+  const vol   = document.getElementById('cfgNotifyVol');
+  if (ring)  opAudioSave(OPAUDIO_LS.notifyRing, ring.checked ? '1' : '0');
+  if (chime) opAudioSave(OPAUDIO_LS.notifyChime, chime.checked ? '1' : '0');
+  if (vol)   opAudioSave(OPAUDIO_LS.notifyVol, vol.value);
+}
+
+let _voiceMicSel = opAudioLoad(OPAUDIO_LS.mic, '');
+let _voiceSpkSel = opAudioLoad(OPAUDIO_LS.spk, '');
 function onVoiceMicChange() {
   _voiceMicSel = document.getElementById('voiceMic').value;
+  opAudioSave(OPAUDIO_LS.mic, _voiceMicSel);
   // sinkId for output is set on the speaker side; mic selection is applied on
   // next voiceMicStart via getUserMedia({deviceId:{exact:_voiceMicSel}}).
 }
 function onVoiceSpkChange() {
   _voiceSpkSel = document.getElementById('voiceSpk').value;
+  opAudioSave(OPAUDIO_LS.spk, _voiceSpkSel);
 }
 
 async function enumVoiceDevices() {
@@ -674,6 +876,9 @@ async function enumVoiceDevices() {
     const mkOpt = d => `<option value="${d.deviceId}">${d.label || (d.kind + ' ' + d.deviceId.slice(0,6))}</option>`;
     micSel.innerHTML  = '<option value="">— default —</option>' + devs.filter(d => d.kind === 'audioinput').map(mkOpt).join('');
     spkSel.innerHTML  = '<option value="">— default —</option>' + devs.filter(d => d.kind === 'audiooutput').map(mkOpt).join('');
+    // Restore this browser's remembered selection, if that device is still present.
+    if (_voiceMicSel && micSel.querySelector(`option[value="${_voiceMicSel}"]`)) micSel.value = _voiceMicSel;
+    if (_voiceSpkSel && spkSel.querySelector(`option[value="${_voiceSpkSel}"]`)) spkSel.value = _voiceSpkSel;
   } catch (e) { aleLogInfo('Voice device enum failed: ' + e.message); }
 }
 
@@ -1510,6 +1715,7 @@ function onTestChannelEvent(e) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 function goIdle() {
   pendingAccept = preClickedAccept = preClickedDecline = isIncomingCall = false;
+  notifyRingStop();
   stopTimer();
   setStatus('Idle', 'idle');
   showInc(false);
@@ -1518,6 +1724,7 @@ function goIdle() {
 
 function goScanning() {
   pendingAccept = preClickedAccept = preClickedDecline = isIncomingCall = false;
+  notifyRingStop();
   linkedPeer = '';
   stopTimer();
   setStatus('Scanning', 'scanning');
@@ -1791,6 +1998,7 @@ function openSettings() {
   document.getElementById('settingsModal').classList.remove('hidden');
   showSec('identity');
   enumDevices();
+  syncOpAudioNotifyUi();
   populateRigDropdown();
 }
 
@@ -3521,7 +3729,7 @@ function setPtt(on) {
   pttOn = on;
   if (voicePassthrough) {
     // Half-duplex voice: PTT on → mic up + mute speaker; PTT off → reverse.
-    Voice.pttMuted = on;
+    setSpeakerMute(on);
     if (on) voiceMicStart(); else voiceMicStop();
   }
   applyPttUi();

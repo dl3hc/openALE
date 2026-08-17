@@ -159,6 +159,8 @@
           <div class="dot busy-dot"></div>
           <span>FREQ CLEAR</span>
         </div>
+        <button class="hdr-btn" id="monitorBtn" onclick="toggleMonitor()"
+                title="Listen in on this channel's RX audio from the Operator Audio Interface — independent of link state"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg> Monitor</button>
       </div>
 
       <!-- Channel cluster — moved adjacent to Transmit (was adjacent to Self). -->
@@ -401,13 +403,13 @@
                 </div>
 
                 <!-- Analog Voice reflects the real voicePassthrough state (set by
-                     applyVoicePathUi()) and opens Settings ▸ Voice to arm/disarm it —
+                     applyVoicePathUi()) and opens Settings ▸ Audio Devices to arm/disarm it —
                      same "jump to the settings section that controls this" pattern
                      already used by the header Self pill. Digital Voice / DATA are
                      disabled — not implemented anywhere in the system, same as the
                      mockup's own "Not yet supported" state. -->
                 <div class="call-actions">
-                  <button class="callact-btn" id="btnAnalogVoice" onclick="openSettings();showSec('voice')" title="Voice passthrough — arm/disarm in Settings ▸ Voice">Analog Voice</button>
+                  <button class="callact-btn" id="btnAnalogVoice" onclick="openSettings();showSec('audio')" title="Voice passthrough — arm/disarm in Settings ▸ Audio Devices">Analog Voice</button>
                   <button class="callact-btn" disabled title="Not yet supported">Digital Voice</button>
                   <button class="callact-btn" disabled title="Not yet supported">DATA</button>
                   <button class="callact-btn callact-term" onclick="endCall()">Terminate</button>
@@ -529,9 +531,6 @@
         <div class="snav-item active" data-sec="identity" onclick="showSec('identity')">
           <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><span class="snav-label">Identity</span>
         </div>
-        <div class="snav-item" data-sec="voice" onclick="showSec('voice')">
-          <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 1 3 3v7a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg></span><span class="snav-label">Voice</span>
-        </div>
         <div class="snav-item" data-sec="radio" onclick="showSec('radio')">
           <span class="snav-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg></span><span class="snav-label">Radio / CAT</span>
         </div>
@@ -604,50 +603,19 @@
 
         </div><!-- /identity -->
 
-        <!-- ── Voice ── -->
-        <div class="ssec" data-sec="voice">
-          <div class="ssec-title">Operator Voice (Passthrough)</div>
-          <div class="fhint" style="margin-bottom:10px">
-            When armed, an active ALE link hands the radio audio path to a transparent
-            voice pipe between the radio and this device's mic/speaker. PTT selects
-            direction. The ALE modem stays silent while linked. See
-            <em>docs/VOICE_AUDIO_ROUTING.md</em>.
-          </div>
-
-          <div class="fg">
-            <label class="flabel">Microphone (this device)</label>
-            <select class="fselect" id="voiceMic" onchange="onVoiceMicChange()">
-              <option value="">— default —</option>
-            </select>
-            <div class="fhint">Browser input device used for transmit (PTT held).</div>
-          </div>
-
-          <div class="fg">
-            <label class="flabel">Speaker (this device)</label>
-            <select class="fselect" id="voiceSpk" onchange="onVoiceSpkChange()">
-              <option value="">— default —</option>
-            </select>
-            <div class="fhint">Browser output device for received radio audio.</div>
-          </div>
-
-          <div class="fg-row col2" style="align-items:center;margin-top:4px">
-            <label class="flabel" style="margin:0">Voice Passthrough</label>
-            <label class="fradio-opt" style="margin-left:auto">
-              <input type="checkbox" id="cfgVoiceArm" onchange="onVoiceArmChange(this.checked)">
-              <span style="margin-left:6px">Armed</span>
-            </label>
-          </div>
-
-          <div style="display:flex;gap:8px;margin-top:4px">
-            <button class="btn-sm" onclick="enumVoiceDevices()">↺ Refresh Devices</button>
-            <button class="btn-sm" onclick="voiceMicTest()">🎤 Mic Test</button>
-          </div>
-        </div><!-- /voice -->
-
-        <!-- ── Audio ── -->
+        <!-- ── Audio Devices (Modem + Operator interfaces) ── -->
         <div class="ssec" data-sec="audio">
           <div class="ssec-title">Audio Devices</div>
+          <div class="fhint" style="margin-bottom:14px">
+            Two distinct audio interfaces: the <strong>Modem Audio Interface</strong> below is
+            the transceiver's VAC, configured on the controller (this may or may not be the
+            device this GUI is open on). The <strong>Operator Audio Interface</strong> further
+            down is <em>this device's</em> mic/speaker — wherever this GUI happens to be open —
+            and its device selection is saved in this browser only, never sent to the
+            controller.
+          </div>
 
+          <div class="ssec-sub-title">Modem Audio Interface</div>
           <div class="fg">
             <label class="flabel">RX Input Device</label>
             <select class="fselect" id="audioIn" onchange="onAudioInChange()">
@@ -681,6 +649,77 @@
             <button class="btn-sm accent" id="audioConnectBtn" onclick="openAudioDevice()"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg> Connect Audio</button>
             <button class="btn-sm" onclick="testAudio()">▶ Level Test</button>
             <button class="btn-sm" onclick="enumDevices()">↺ Refresh List</button>
+          </div>
+
+          <div class="ssec-sub-title" style="margin-top:22px">Operator Audio Interface</div>
+          <div class="fhint" style="margin-bottom:10px">
+            Carries analog voice passthrough, the channel monitor, and audible notifications.
+            See <em>docs/VOICE_AUDIO_ROUTING.md</em>.
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Microphone (this device)</label>
+            <select class="fselect" id="voiceMic" onchange="onVoiceMicChange()">
+              <option value="">— default —</option>
+            </select>
+            <div class="fhint">Browser input device used for transmit (PTT held).</div>
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Speaker (this device)</label>
+            <select class="fselect" id="voiceSpk" onchange="onVoiceSpkChange()">
+              <option value="">— default —</option>
+            </select>
+            <div class="fhint">Browser output device for received radio audio and notifications.</div>
+          </div>
+
+          <div class="fg-row col2" style="align-items:center;margin-top:4px">
+            <label class="flabel" style="margin:0">Voice Passthrough</label>
+            <label class="fradio-opt" style="margin-left:auto">
+              <input type="checkbox" id="cfgVoiceArm" onchange="onVoiceArmChange(this.checked)">
+              <span style="margin-left:6px">Armed</span>
+            </label>
+          </div>
+          <div class="fhint">
+            When armed, an active ALE link hands the radio audio path to a transparent voice
+            pipe between the radio and this device's mic/speaker. PTT selects direction. The
+            ALE modem stays silent while linked.
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn-sm" onclick="enumVoiceDevices()">↺ Refresh Devices</button>
+            <button class="btn-sm" onclick="voiceMicTest()">🎤 Mic Test</button>
+          </div>
+
+          <div class="fg-row col2" style="align-items:center;margin-top:14px">
+            <label class="flabel" style="margin:0">Channel Monitor</label>
+          </div>
+          <div class="fhint">
+            "Listen in" toggle for the channel monitor lives in the header (next to Sync /
+            FREQ CLEAR) so it's reachable without opening Settings — it streams the
+            transceiver's RX audio here regardless of link state.
+          </div>
+
+          <div class="fg-row col2" style="align-items:center;margin-top:14px">
+            <label class="flabel" style="margin:0">Notifications</label>
+          </div>
+          <div class="fg-row col2" style="align-items:center">
+            <label class="fradio-opt">
+              <input type="checkbox" id="cfgNotifyRing" onchange="onNotifyPrefChange()">
+              <span style="margin-left:6px">Ring on incoming call</span>
+            </label>
+          </div>
+          <div class="fg-row col2" style="align-items:center">
+            <label class="fradio-opt">
+              <input type="checkbox" id="cfgNotifyChime" onchange="onNotifyPrefChange()">
+              <span style="margin-left:6px">Chime on message received</span>
+            </label>
+          </div>
+          <div class="fg">
+            <label class="flabel">Notification Volume</label>
+            <input type="range" id="cfgNotifyVol" min="0" max="1" step="0.05" value="0.5"
+                   oninput="onNotifyPrefChange()">
+            <div class="fhint">Played through the speaker device selected above.</div>
           </div>
         </div><!-- /audio -->
 

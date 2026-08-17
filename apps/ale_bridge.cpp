@@ -23,6 +23,7 @@
 
 #include "App/ale_controller.h"
 #include "App/audio_device.h"
+#include "App/audio_monitor.h"
 #include "App/audio_transport.h"
 #include "App/gps_service.h"
 #include "App/sfi_service.h"
@@ -336,6 +337,9 @@ struct BridgeCtx {
     // Dynamic audio-path owner (ALE-modem ↔ voice passthrough on the VAC).
     VoicePathManager* voice      = nullptr;
     bool              voice_armed = false;  ///< persisted in settings (voice_armed=)
+    // Link-independent RX monitor ("listen in" on the channel). Session-only —
+    // never persisted, always defaults off on bridge start/restart.
+    AudioMonitor*     audio_monitor = nullptr;
     bridge::RigctldServer* rigctld = nullptr;  ///< netrigctl-compat read-only frequency server
 };
 
@@ -1046,6 +1050,19 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         }
         return mj::dump(r);
     }
+    // AUDIO_MONITOR arms/disarms the link-independent RX "listen in" tap — lets
+    // the operator hear the channel from the Operator Audio Interface regardless
+    // of ALE link state or Voice Passthrough arm state. Session-only: never
+    // persisted, always defaults off on bridge start/restart (see AudioMonitor).
+    if (cmd == "AUDIO_MONITOR") {
+        if (ctx.audio_monitor) ctx.audio_monitor->arm(msg.get_bool("on", false));
+        return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "AUDIO_MONITOR_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("on", mj::Value::boolean(ctx.audio_monitor && ctx.audio_monitor->armed()));
+        return mj::dump(r);
+    }
     if (cmd == "AUDIO_SET_VOL") {
         float vol = static_cast<float>(msg.get_number("vol", 0.25));
         if (vol < 0.0f) vol = 0.0f;
@@ -1319,8 +1336,9 @@ int main(int argc, char* argv[]) {
     GpsService       gps_svc;
     SfiService       sfi_svc;
     PendingUpdate    pending;
-    AudioTransport   transport;   // declared first → destroyed after voice_mgr
+    AudioTransport   transport;   // declared first → destroyed after voice_mgr / audio_monitor
     VoicePathManager voice_mgr;   // declared second → destroyed before transport
+    AudioMonitor     audio_monitor; // link-independent RX "listen in" tap
 
     // Voice PTT counts as link activity: reset the SM idle (Twa) timer so a QSO
     // does not auto-terminate mid-conversation.
@@ -1333,26 +1351,39 @@ int main(int argc, char* argv[]) {
     transport.set_decoder_sink([&](const int16_t* buf, size_t n) {
         ctrl.feed_audio(buf, static_cast<uint32_t>(n));
     });
-    // Speaker: VoicePathManager self-registers as an RxSink on passthrough
-    // entry and delegates here. The transport gates TX suppression; VPM gates
-    // passthrough state via add/remove_rx_sink. One callback, no coupling.
-    voice_mgr.on_speaker_pcm = [&](const int16_t* buf, size_t n) {
+    // Both the voice-passthrough speaker path and the link-independent RX
+    // monitor forward captured RX PCM to the browser using the same wire
+    // framing (tag 0x01 + int16 LE PCM) — the GUI just plays whatever 0x01
+    // frames arrive, without needing to know which sink produced them.
+    auto send_rx_pcm_frame = [&](const int16_t* buf, size_t n) {
         std::vector<uint8_t> f;
         f.reserve(1 + n * sizeof(int16_t));
-        f.push_back(0x01);  // stream tag: voice PCM (int16 LE)
+        f.push_back(0x01);  // stream tag: voice/monitor PCM (int16 LE)
         const auto* p = reinterpret_cast<const uint8_t*>(buf);
         f.insert(f.end(), p, p + n * sizeof(int16_t));
         ws.send_binary(f.data(), f.size());
     };
+    // Speaker: VoicePathManager self-registers as an RxSink on passthrough
+    // entry and delegates here. The transport gates TX suppression; VPM gates
+    // passthrough state via add/remove_rx_sink. One callback, no coupling.
+    voice_mgr.on_speaker_pcm = send_rx_pcm_frame;
     voice_mgr.set_transport(&transport);
     transport.set_media_producer(&voice_mgr);
     transport.set_protocol_tx_query([&ctrl]() { return ctrl.is_tx_active(); });
+
+    // Monitor: independent RX tap, armed/disarmed via AUDIO_MONITOR regardless
+    // of link state. Suppresses itself while voice_mgr is already streaming
+    // (see AudioMonitor::on_rx_audio) so the browser never gets duplicate PCM.
+    audio_monitor.attach(&transport);
+    audio_monitor.set_voice_manager(&voice_mgr);
+    audio_monitor.on_pcm = send_rx_pcm_frame;
 
     BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path, state_path,
                    /*audio_in*/"", /*audio_out*/"",
                    /*tx_volume*/0.25f,
                    &gps_svc, &sfi_svc, &pending, &ws,
                    &voice_mgr, /*voice_armed*/false,
+                   &audio_monitor,
                    &rigctld };
 
     // ── Event bus subscriptions ──────────────────────────────────────────
