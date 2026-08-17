@@ -60,6 +60,8 @@ auto-tuners can follow along without opening a second, competing connection to t
 - Setting TX power now tells you what happened: the ALE Log reports whether the connected
   rig supports power control and what it was set to, instead of silently doing nothing on
   rigs that don't support it.
+- The Settings drawer was too narrow for the LQA table, truncating columns and forcing a
+  horizontal scrollbar (desktop). Widened to fit all columns without scrolling.
 
 ## Other
 
