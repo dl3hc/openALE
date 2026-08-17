@@ -21,8 +21,27 @@ so scanning, sounding, and calling are ready to go without an extra manual step.
 frequency read-only over the Hamlib `rigctld`/`netrigctl` protocol, so external tools like
 auto-tuners can follow along without opening a second, competing connection to the radio.
 
+**A dedicated Operator Audio Interface.** The audio on the device you're actually sitting at —
+mic, speaker, notifications — is now a first-class concept separate from the transceiver's own
+Modem Audio, with a header toggle to listen in on the channel at any time (not just once
+linked) and low-latency AudioWorklet-based audio under the hood.
+
 ## New Features
 
+- **Operator Audio Interface**: the browser's own mic/speaker path is now a named, distinct
+  interface from the transceiver's Modem Audio — configured entirely on whichever device the
+  GUI happens to be open on (device selection and notification preferences are saved in that
+  browser only, never sent to the controller). Settings ▸ Audio Devices now shows Modem Audio
+  and Operator Audio side by side. New capabilities built on it:
+  - **Channel Monitor**: a header toggle to "listen in" on the current channel's RX audio
+    regardless of ALE link state (previously voice passthrough only worked once a link was
+    already up).
+  - **Notifications**: an optional ring while a call is incoming and a chime when a message
+    arrives, synthesized locally and played through the selected speaker device.
+  - The browser's mic/speaker audio path now runs on a dedicated AudioWorklet audio thread
+    instead of the main JS thread, for lower and more consistent latency, with improved
+    upsampling/downsampling quality; it automatically falls back to the previous behavior when
+    accessed over a plain-HTTP remote/LAN connection.
 - **Tuner**: opt-in read-only rigctld/netrigctl-compatible TCP server for external
   auto-tuner tools (Settings ▸ Tuner, both GUIs; disabled by default).
 - Setup wizard's Nets step gained an inline Dwell (ms) input, and now auto-selects the

@@ -352,6 +352,7 @@ endif()
 
 add_library(ale_app_core
     src/App/ale_controller.cpp
+    src/App/audio_monitor.cpp
     src/App/audio_transport.cpp
     src/App/freq_select_manager.cpp
     src/App/gps_service.cpp

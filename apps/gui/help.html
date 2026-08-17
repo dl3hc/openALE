@@ -70,7 +70,6 @@
 
         <div class="snav-section-hdr">Station</div>
         <div class="snav-item" data-sec="identity" onclick="showSec('identity')"><span class="snav-icon">◆</span><span class="snav-label">Identity</span></div>
-        <div class="snav-item" data-sec="voice" onclick="showSec('voice')"><span class="snav-icon">◆</span><span class="snav-label">Voice</span></div>
         <div class="snav-item" data-sec="radio" onclick="showSec('radio')"><span class="snav-icon">◆</span><span class="snav-label">Radio / CAT</span></div>
         <div class="snav-item" data-sec="location" onclick="showSec('location')"><span class="snav-icon">◆</span><span class="snav-label">Location</span></div>
 
@@ -178,16 +177,6 @@
           </div>
         </section>
 
-        <section class="ssec" data-sec="voice">
-          <div class="help-kicker">Station</div>
-          <div class="help-h">Voice</div>
-          <p class="help-lead">Configures the browser-side microphone/speaker path used for voice passthrough once a link is established — independent from the modem's RX/TX audio devices under Settings → Audio.</p>
-          <div class="help-field"><span class="flabel">Microphone / Speaker device</span><p>Select the browser input/output devices used for voice once linked. Click <span class="help-btn-tag">Refresh Devices</span> if a newly-plugged device isn't listed.</p></div>
-          <div class="help-field"><span class="flabel">Armed</span><p>When on, voice passthrough activates automatically as soon as a link is established, rather than requiring a manual step.</p></div>
-          <div class="help-field"><span class="flabel">PTT Direction</span><p>Controls whether pressing the on-screen PTT keys the radio for voice, data, or both, depending on your operating procedure.</p></div>
-          <div class="help-field"><span class="flabel">Mic Test</span><p>Plays back your microphone locally so you can confirm levels before going on the air.</p></div>
-        </section>
-
         <section class="ssec" data-sec="radio">
           <div class="help-kicker">Station</div>
           <div class="help-h">Radio / CAT</div>
@@ -269,12 +258,26 @@
 
         <section class="ssec" data-sec="audio">
           <div class="help-kicker">Modem</div>
-          <div class="help-h">Audio</div>
-          <p class="help-lead">The sound-card devices the ALE modem itself uses to demodulate/modulate the waveform — separate from the Voice tab's passthrough devices.</p>
-          <div class="help-field"><span class="flabel">RX Input / TX Output</span><p>Select the audio interface connected to your radio's receive and transmit audio. On a typical setup this is a USB sound-card or interface, not your computer's built-in mic/speakers.</p></div>
-          <div class="help-field"><span class="flabel">Level meter</span><p>Shows live input level once a device is selected — use it to confirm the radio's audio is actually reaching openALE before trusting scan/decode results.</p></div>
-          <div class="help-field"><span class="flabel">TX Volume</span><p>Adjusts transmit audio output level — set with your radio's ALC in mind; too hot causes distortion the far station will fail to decode.</p></div>
-          <div class="help-field"><span class="flabel">Connect Audio / Level Test / Refresh List</span><p>Connect Audio opens the selected devices for use. Level Test runs a short local loopback/level check. Refresh List re-scans the system for newly attached devices.</p></div>
+          <div class="help-h">Audio Devices</div>
+          <p class="help-lead">Two distinct audio interfaces, configured on two potentially different machines: the Modem Audio Interface is the transceiver's own sound-card link, set up on whichever machine runs the controller/bridge. The Operator Audio Interface is this browser's own mic/speaker, saved locally and never sent to the controller — it may or may not be the same machine.</p>
+
+          <div class="help-fieldgroup">
+            <div class="ssec-sub-title" style="margin-bottom:8px">Modem Audio Interface</div>
+            <div class="help-field"><span class="flabel">RX Input / TX Output</span><p>Select the audio interface connected to your radio's receive and transmit audio. On a typical setup this is a USB sound-card or interface, not your computer's built-in mic/speakers.</p></div>
+            <div class="help-field"><span class="flabel">Level meter</span><p>Shows live input level once a device is selected — use it to confirm the radio's audio is actually reaching openALE before trusting scan/decode results.</p></div>
+            <div class="help-field"><span class="flabel">TX Volume</span><p>Adjusts transmit audio output level — set with your radio's ALC in mind; too hot causes distortion the far station will fail to decode.</p></div>
+            <div class="help-field"><span class="flabel">Connect Audio / Level Test / Refresh List</span><p>Connect Audio opens the selected devices for use. Level Test runs a short local loopback/level check. Refresh List re-scans the system for newly attached devices.</p></div>
+          </div>
+
+          <div class="help-fieldgroup">
+            <div class="ssec-sub-title" style="margin-bottom:8px">Operator Audio Interface</div>
+            <p class="help-lead" style="margin-bottom:14px">Carries analog voice passthrough, the channel monitor, and audible notifications — all on this browser's own device.</p>
+            <div class="help-field"><span class="flabel">Microphone / Speaker device</span><p>Select the browser input/output devices used for voice once linked. Click <span class="help-btn-tag">Refresh Devices</span> if a newly-plugged device isn't listed.</p></div>
+            <div class="help-field"><span class="flabel">Voice Passthrough — Armed</span><p>When on, voice passthrough activates automatically as soon as a link is established, rather than requiring a manual step.</p></div>
+            <div class="help-field"><span class="flabel">Mic Test</span><p>Plays back your microphone locally so you can confirm levels before going on the air.</p></div>
+            <div class="help-field"><span class="flabel">Channel Monitor</span><p>A "listen in" toggle in the main header (next to Sync / FREQ CLEAR) streams the transceiver's RX audio here regardless of link state — useful for listening to the channel while scanning or idle.</p></div>
+            <div class="help-field"><span class="flabel">Notifications — Ring / Chime / Volume</span><p>Optional audible tones played through the selected speaker device: a ring while a call is incoming, and a chime when a message arrives. Both are synthesized locally, so no bundled sound files are needed.</p></div>
+          </div>
         </section>
 
         <section class="ssec" data-sec="fec">
