@@ -1230,12 +1230,21 @@ static void print_usage(const char* prog) {
     std::fprintf(stderr, // NOLINT(pal-logger)
         "ALE 2G WebSocket bridge — connects apps/gui/ to a live ALEController\n"
         "\n"
-        "Usage: %s --port N [--remote] [--webroot DIR]\n"
+        "Usage: %s --port N [--remote] [--webroot DIR] [--tls [--cert FILE --key FILE]]\n"
         "\n"
         "  --port N     WebSocket listen port (required)\n"
         "  --remote     Bind to 0.0.0.0 (LAN-reachable)\n"
         "  --mobile     Serve apps/gui/mobile/ (for smartphones)\n"
-        "  --webroot D  Serve static files from DIR\n",
+        "  --webroot D  Serve static files from DIR\n"
+        "  --tls        Serve HTTPS/WSS instead of plain HTTP/WS (TLS-only on this\n"
+        "               port). Required for getUserMedia/AudioWorklet/device listing\n"
+        "               to work when the GUI is opened from another device (--remote) —\n"
+        "               browsers only grant those APIs on a secure context. A\n"
+        "               self-signed certificate is generated automatically on first\n"
+        "               run (openale_cert.pem/openale_key.pem) unless --cert/--key\n"
+        "               point at your own. See docs/TLS_SETUP.md.\n"
+        "  --cert FILE  Certificate PEM path (default: openale_cert.pem)\n"
+        "  --key FILE   Private key PEM path (default: openale_key.pem)\n",
         prog);
 }
 
@@ -1250,10 +1259,11 @@ int main(int argc, char* argv[]) {
     pal::install_crash_handler();
     pal::set_event_handler(pal::create_event_handler());
 
-    uint16_t    port        = 0;     // 0 = not set; --port is required
-    bool        bind_remote = false;
-    bool        serve_mobile = false;
-    std::string web_root;            // empty → auto-resolve below
+    uint16_t         port        = 0;     // 0 = not set; --port is required
+    bool             bind_remote = false;
+    bool             serve_mobile = false;
+    std::string      web_root;            // empty → auto-resolve below
+    bridge::TlsOptions tls_opts;           // enabled=false by default (plain HTTP/WS)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
@@ -1264,6 +1274,12 @@ int main(int argc, char* argv[]) {
             serve_mobile = true;
         } else if (std::strcmp(argv[i], "--webroot") == 0 && i + 1 < argc) {
             web_root = argv[++i];
+        } else if (std::strcmp(argv[i], "--tls") == 0) {
+            tls_opts.enabled = true;
+        } else if (std::strcmp(argv[i], "--cert") == 0 && i + 1 < argc) {
+            tls_opts.cert_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
+            tls_opts.key_path = argv[++i];
         } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -1291,7 +1307,7 @@ int main(int argc, char* argv[]) {
     // ── WebSocket server ─────────────────────────────────────────────────
     bridge::WsServer ws;
     ws.set_web_root(web_root);   // serve apps/gui/ over HTTP on the same port
-    if (!ws.start(port, bind_remote)) {
+    if (!ws.start(port, bind_remote, tls_opts)) {
         pal::log_error("openALE", "Failed to start WebSocket server on port %u.", port);
         return 1;
     }
@@ -1558,8 +1574,9 @@ int main(int argc, char* argv[]) {
     if (web_root.empty())
         pal::log_info("openALE", "(no GUI found — open via file:// or pass --webroot)");
     else
-        pal::log_info("openALE", "open GUI (%s):  http://localhost:%u/index.html",
-                      serve_mobile ? "mobile" : "desktop", port);
+        pal::log_info("openALE", "open GUI (%s):  %s://%s:%u/index.html",
+                      serve_mobile ? "mobile" : "desktop", tls_opts.enabled ? "https" : "http",
+                      (tls_opts.enabled && bind_remote) ? "<this-machine's-LAN-IP>" : "localhost", port);
 
     // Start in "available" (IDLE, RX enabled) rather than scanning: scanning
     // only makes sense once >=2 channels are configured from the GUI, and the

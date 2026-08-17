@@ -19,8 +19,11 @@
  */
 #pragma once
 
+#include "tls_support.h"
+
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -41,8 +44,11 @@ public:
      * Start listening on \p port and spawn the I/O thread.
      * \p bind_remote — false (default): bind to 127.0.0.1 (localhost only);
      *                  true: bind to 0.0.0.0 (all interfaces, LAN-reachable).
+     * \p tls — disabled by default (plain HTTP/WS, unchanged from before TLS
+     *          support existed). When enabled, the port becomes TLS-only —
+     *          see docs/TLS_SETUP.md.
      */
-    bool start(uint16_t port, bool bind_remote = false);
+    bool start(uint16_t port, bool bind_remote = false, TlsOptions tls = {});
 
     /**
      * Directory the I/O thread serves static files from for plain HTTP GETs.
@@ -80,19 +86,28 @@ private:
     };
 
     struct PendingHttp {
-        SocketHandle fd = kInvalid;
-        std::string  buf;              // accumulated HTTP request bytes
+        SocketHandle           fd = kInvalid;
+        std::string            buf;              // accumulated HTTP request bytes
+        std::unique_ptr<TlsConn> tls;             // null when TLS disabled
+        bool                    tls_handshaking = false;
     };
 
     void io_thread_main(uint16_t port);
-    bool parse_ws_frames_(SocketHandle ws_handle);  // I/O thread only
+    bool parse_ws_frames_(SocketHandle ws_handle, TlsConn* tls);  // I/O thread only
 
     std::string               web_root_;
     bool                      bind_remote_ = false;
     SocketHandle              listen_sock_ = kInvalid;
     std::atomic<SocketHandle> client_{kInvalid};   // kInvalid = not connected
+    std::unique_ptr<TlsConn>  client_tls_;          // moved from PendingHttp on WS promotion
     std::thread               io_thread_;
     std::atomic<bool>         running_{false};
+
+    // TLS (disabled unless start() was called with tls.enabled). tls_ctx_ is
+    // constructed once in start(); every PendingHttp/the WS client session
+    // gets its own TlsConn bound to it. See docs/TLS_SETUP.md.
+    bool                                  tls_enabled_ = false;
+    std::unique_ptr<TlsServerContext>     tls_ctx_;
 
     // Cross-thread queues (mutex-protected):
     std::mutex           send_queue_mtx_;

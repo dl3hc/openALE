@@ -26,6 +26,12 @@ mic, speaker, notifications — is now a first-class concept separate from the t
 Modem Audio, with a header toggle to listen in on the channel at any time (not just once
 linked) and low-latency AudioWorklet-based audio under the hood.
 
+**Optional TLS (`--tls`) for remote GUI access.** Browsers only grant microphone access and
+device listing on a secure connection, so opening the GUI from another device over plain HTTP
+(`--remote`) could never unlock the full Operator Audio Interface. `--tls` serves the GUI over
+HTTPS/WSS instead, with a self-signed certificate generated automatically on first run — see
+`docs/TLS_SETUP.md`.
+
 ## New Features
 
 - **Operator Audio Interface**: the browser's own mic/speaker path is now a named, distinct
@@ -42,6 +48,11 @@ linked) and low-latency AudioWorklet-based audio under the hood.
     instead of the main JS thread, for lower and more consistent latency, with improved
     upsampling/downsampling quality; it automatically falls back to the previous behavior when
     accessed over a plain-HTTP remote/LAN connection.
+- **`--tls`**: serves the GUI over HTTPS/WSS instead of plain HTTP/WS, using a self-signed
+  certificate generated automatically on first run (or your own via `--cert`/`--key`). This is
+  what makes `getUserMedia`/`enumerateDevices`/`AudioWorklet` actually work when the GUI is
+  opened from another device (`--remote`) — browsers only grant those APIs on a secure
+  connection. See `docs/TLS_SETUP.md`.
 - **Tuner**: opt-in read-only rigctld/netrigctl-compatible TCP server for external
   auto-tuner tools (Settings ▸ Tuner, both GUIs; disabled by default).
 - Setup wizard's Nets step gained an inline Dwell (ms) input, and now auto-selects the
