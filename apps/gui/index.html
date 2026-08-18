@@ -670,6 +670,18 @@
             <div class="fhint">Browser output device for received radio audio and notifications.</div>
           </div>
 
+          <div class="fg">
+            <label class="flabel">Monitor Volume</label>
+            <input type="range" id="cfgMonitorVol" min="0" max="1" step="0.05" value="1"
+                   oninput="onMonitorVolChange()">
+            <div class="fhint">
+              Playback level for both Voice Passthrough and the Channel Monitor — the received
+              radio audio is otherwise sent to the browser unattenuated, which can clip even
+              when the radio/soundcard level is set correctly. Turn down if audio sounds
+              distorted/overdriven.
+            </div>
+          </div>
+
           <div class="fg-row col2" style="align-items:center;margin-top:4px">
             <label class="flabel" style="margin:0">Voice Passthrough</label>
             <label class="fradio-opt" style="margin-left:auto">

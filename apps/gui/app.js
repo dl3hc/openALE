@@ -474,7 +474,7 @@ let voiceMicTestId   = null;    // mic-test timer
 const SPK_RING_N = 4096;        // ~0.5 s @ 8 kHz
 const Voice = {
   micCtx: null, micStream: null, micNode: null, micRate: 48000,
-  spkCtx: null, spkNode: null, spkRate: 48000, spkInitializing: false,
+  spkCtx: null, spkNode: null, spkGainNode: null, spkRate: 48000, spkInitializing: false,
   spkRing: null, spkRead: 0.0, spkAvail: 0,
   pttMuted: false,
 };
@@ -573,8 +573,11 @@ function voiceInitSpeaker() {
       _ensureWorkletModule(ctx).then(() => {
         const node = new AudioWorkletNode(ctx, 'speaker-processor',
           { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
-        node.connect(ctx.destination);
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = parseFloat(opAudioLoad(OPAUDIO_LS.monitorVol, '1')) || 0;
+        node.connect(gainNode).connect(ctx.destination);
         Voice.spkNode = node;
+        Voice.spkGainNode = gainNode;
         Voice.spkInitializing = false;
         if (Voice.pttMuted) node.port.postMessage({ type: 'mute', on: true });
       }).catch((e) => {
@@ -600,8 +603,11 @@ function _initSpeakerFallback(ctx) {
   // 1024-frame output-only ScriptProcessor; input channel count 0.
   const node = ctx.createScriptProcessor(1024, 0, 1);
   node.onaudioprocess = voiceSpkProcess;
-  node.connect(ctx.destination);
+  const gainNode = ctx.createGain();
+  gainNode.gain.value = parseFloat(opAudioLoad(OPAUDIO_LS.monitorVol, '1')) || 0;
+  node.connect(gainNode).connect(ctx.destination);
   Voice.spkNode = node;
+  Voice.spkGainNode = gainNode;
 }
 
 function voiceSpkProcess(e) {
@@ -819,6 +825,8 @@ function syncOpAudioNotifyUi() {
   if (ring)  ring.checked  = opAudioLoad(OPAUDIO_LS.notifyRing, '1') === '1';
   if (chime) chime.checked = opAudioLoad(OPAUDIO_LS.notifyChime, '1') === '1';
   if (vol)   vol.value     = opAudioLoad(OPAUDIO_LS.notifyVol, '0.5');
+  const mvol = document.getElementById('cfgMonitorVol');
+  if (mvol)  mvol.value    = opAudioLoad(OPAUDIO_LS.monitorVol, '1');
 }
 function onNotifyPrefChange() {
   const ring  = document.getElementById('cfgNotifyRing');
@@ -827,6 +835,19 @@ function onNotifyPrefChange() {
   if (ring)  opAudioSave(OPAUDIO_LS.notifyRing, ring.checked ? '1' : '0');
   if (chime) opAudioSave(OPAUDIO_LS.notifyChime, chime.checked ? '1' : '0');
   if (vol)   opAudioSave(OPAUDIO_LS.notifyVol, vol.value);
+}
+
+// Monitor / Voice Passthrough playback volume — the RX PCM path (both
+// features share the same speaker chain, see onVoiceRxFrame) is otherwise
+// unattenuated int16-full-scale audio straight to ctx.destination, so a
+// well-leveled radio/soundcard signal can still clip in the browser. Applied
+// live via Voice.spkGainNode when already initialized; read from storage on
+// next voiceInitSpeaker()/_initSpeakerFallback() call otherwise.
+function onMonitorVolChange() {
+  const mvol = document.getElementById('cfgMonitorVol');
+  if (!mvol) return;
+  opAudioSave(OPAUDIO_LS.monitorVol, mvol.value);
+  if (Voice.spkGainNode) Voice.spkGainNode.gain.value = parseFloat(mvol.value) || 0;
 }
 
 let _voiceMicSel = opAudioLoad(OPAUDIO_LS.mic, '');

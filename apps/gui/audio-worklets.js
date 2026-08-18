@@ -65,9 +65,14 @@ class SpeakerProcessor extends AudioWorkletProcessor {
     const ratio    = sampleRate / SRC_HZ;   // `sampleRate` is a worklet global
     const invRatio = 1 / ratio;
     const nFill = Math.min(out.length, Math.floor(this.avail * ratio));
+    // Clamp: cubic Hermite is not a convex combination, so it can overshoot
+    // past the input's own peak on transients close to full scale — audible
+    // as hard clipping at the WebAudio destination even though the source
+    // PCM itself never left [-1, 1].
     let pos = this.read;
     for (let i = 0; i < nFill; ++i) {
-      out[i] = cubicAt(this.ring, this.cap, pos);
+      const v = cubicAt(this.ring, this.cap, pos);
+      out[i] = v > 1 ? 1 : (v < -1 ? -1 : v);
       pos += invRatio;
     }
     for (let i = nFill; i < out.length; ++i) out[i] = 0;  // underrun → silence
