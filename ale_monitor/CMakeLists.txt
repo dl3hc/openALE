@@ -53,7 +53,7 @@ target_link_libraries(ale_monitor
 )
 
 if(WIN32)
-    target_link_libraries(ale_monitor ws2_32)
+    target_link_libraries(ale_monitor ws2_32 iphlpapi)
 else()
     # Same reasoning as openALE's -rdynamic in the root CMakeLists.txt: needed
     # for backtrace_symbols() to name in-executable frames in crash.log.

@@ -21,8 +21,22 @@ openALE --port 8080 --remote --tls
 On first run with `--tls` and no `--cert`/`--key`, a self-signed certificate
 and private key are generated automatically (`openale_cert.pem` /
 `openale_key.pem` in the working directory) and reused on every subsequent
-run. To supply your own certificate instead (e.g. one issued by an internal
-CA):
+run. The certificate's Subject Alternative Name (SAN) list is pre-populated
+with every local network interface's IP address, plus `localhost`,
+`127.0.0.1`, and `::1` — so it validates against whichever of those addresses
+the browser is pointed at (see "Common errors" below for why this matters).
+For an address that isn't a local interface IP (e.g. a reverse-proxy
+hostname), add it explicitly:
+
+```
+openALE --port 8080 --remote --tls --tls-san my-hostname.example
+```
+
+`--tls-san` is repeatable and only affects first-run generation — delete
+`openale_cert.pem`/`openale_key.pem` to regenerate with a new SAN list (e.g.
+after the machine's LAN IP changes).
+
+To supply your own certificate instead (e.g. one issued by an internal CA):
 
 ```
 openALE --port 8080 --remote --tls --cert mycert.pem --key mykey.pem
@@ -40,6 +54,21 @@ self-signed TLS, not a bug. Click through it once ("Advanced → Proceed to
 that origin afterward. There is no way to avoid this without either a
 CA-issued certificate (see `--cert`/`--key` above) or a browser-side flag
 like `chrome://flags/#unsafely-treat-insecure-origin-as-secure`.
+
+## Common errors
+
+**`NET::ERR_CERT_INVALID` with no "Advanced → Proceed" option, instead of
+the normal overridable warning above.** Chrome/Edge (since Chrome 58)
+verify the connection hostname exclusively against the certificate's SAN
+list, never its CN — a cert with no SAN entry matching the address in the
+address bar is rejected outright rather than shown as an overridable
+self-signed warning. This is why the auto-generated certificate's SAN list
+includes every detected local interface IP (see above); if you still hit
+this, the address you're connecting to isn't a local interface IP on this
+machine (e.g. it's reached through NAT/port-forwarding, or a different
+interface than the ones detected at cert-generation time) — add it with
+`--tls-san` and delete the existing `openale_cert.pem`/`openale_key.pem` to
+regenerate.
 
 ## Scope and known limitations
 

@@ -499,7 +499,7 @@ target_include_directories(openALE PRIVATE
 target_link_libraries(openALE ale_app_core ale_audio_device ale_stores ale_pal mbedtls mbedx509 mbedcrypto)
 
 if(WIN32)
-    target_link_libraries(openALE ws2_32)
+    target_link_libraries(openALE ws2_32 iphlpapi)
 else()
     # Export symbols to the dynamic symbol table so backtrace_symbols() in
     # src/PAL/crash_handler.cpp can actually name in-executable frames instead
