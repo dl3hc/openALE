@@ -20,7 +20,13 @@ LqaExchangeManager::LqaExchangeManager(
 
 void LqaExchangeManager::on_handshake_start()
 {
+    reset();
+}
+
+void LqaExchangeManager::reset()
+{
     pending_valid_ = false;
+    report_decoder_.reset();
 }
 
 LQACmdPayload LqaExchangeManager::build_payload(uint32_t freq_hz,
