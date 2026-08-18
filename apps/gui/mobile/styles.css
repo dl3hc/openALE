@@ -211,10 +211,12 @@
       text-transform: uppercase;
       letter-spacing: 0.1em;
     }
-    /* Main ALE-state label cycles through very different lengths ("Idle" ↔
-       "Linked · pending") — reserve width for the longest so the chip never
-       resizes and shoves whatever sits after it sideways. */
-    #statusText { display: inline-block; min-width: 128px; }
+    /* No reserved width — the chip hugs its actual text, same as the Sync
+       chip next to it. Longer labels ("Linked · pending", "Handshake…") will
+       once again shift the Sync/Freq-Clear pills sideways when they appear;
+       that's the explicit trade-off for the common "Idle"/"Scanning" states
+       staying visually as small as Sync instead of reserving worst-case width. */
+    #statusText { display: inline-block; white-space: nowrap; }
     /* Same reasoning for the FREQ CLEAR/FREQ BUSY label. */
     .freq-label { display: inline-block; min-width: 80px; }
 
@@ -1509,8 +1511,15 @@
        .hdr-stats by the flex gap (10px) — no shared border, no overlap. The panel
        drops below the button via .radio-panel, so it never intersects the freq pill. */
     .net-btn { min-width: 96px; justify-content: space-between; gap: 6px; }
-    .net-btn #netBtnLbl { font-family: var(--mono); font-size: 11px; color: var(--accent); }
-    .net-btn .caret { font-size: 9px; color: var(--tx-muted); margin-left: 2px; }
+    /* Compact mono label + small caret, shared by the Net/Sound/Radio header
+       buttons so they all render at the same height — a plain-text label at
+       the button's base 12px sans font measured ~3px taller than this. */
+    /* nowrap: without it, "No net" wraps to two lines inside the button's
+       constrained flex width — invisible in a quick look since the span is a
+       blockified flex item (one reported client rect either way), but it
+       silently doubled the Net button's height until measured directly. */
+    .hdr-btn-lbl { font-family: var(--mono); font-size: 11px; color: var(--accent); white-space: nowrap; }
+    .hdr-btn .caret { font-size: 9px; color: var(--tx-muted); margin-left: 2px; }
     #netWrap .radio-panel { width: 220px; }
     #netPillList { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
 

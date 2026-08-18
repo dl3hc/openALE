@@ -31,6 +31,29 @@ function icon(name, size) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 }
 
+// Header-button label + caret, same markup the Net button uses (.hdr-btn-lbl
+// mono/11px, .caret 9px) — a plain-text label at the button's base 12px sans
+// font renders ~3px taller, so any innerHTML rebuild of Sound/Radio must use
+// this instead of raw text to keep them the same height as the Net button.
+function hdrBtnLbl(text, open) {
+  return `<span class="hdr-btn-lbl">${text}</span><span class="caret">${open ? '▾' : '▸'}</span>`;
+}
+
+// Net/Sound/Radio dropdown panels are position:fixed (see .radio-panel in
+// styles.css) so .ctrl-lane-2's overflow-x:auto doesn't clip them. Fixed
+// positioning is viewport-relative, so — unlike the position:absolute panels
+// used to be — it needs the trigger's current rect recomputed every time a
+// panel opens, on resize while open, and (since .ctrl-lane-2 scrolls
+// horizontally) closed rather than re-anchored if the trigger scrolls away.
+function positionDropdownPanel(wrapId, panelId) {
+  const wrap = document.getElementById(wrapId);
+  const panel = document.getElementById(panelId);
+  if (!wrap || !panel) return;
+  const r = wrap.getBoundingClientRect();
+  panel.style.top = (r.bottom + 9) + 'px';
+  panel.style.right = (window.innerWidth - r.right) + 'px';
+}
+
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    BRIDGE CONNECTION  (apps/ale_bridge.cpp — WebSocket ↔ ALEController)
 
@@ -2254,7 +2277,7 @@ function setRadioCtrlEnabled(on) {
     const p = document.getElementById('radioPanel');
     if (p && p.classList.contains('open')) {
       p.classList.remove('open');
-      const t = document.getElementById('radioToggle'); if (t) t.innerHTML = `${icon('radio',14)} Radio ▸`;
+      const t = document.getElementById('radioToggle'); if (t) t.innerHTML = icon('radio',14) + hdrBtnLbl('Radio', false);
     }
   }
 }
@@ -2879,7 +2902,7 @@ function updateSoundBtn() {
   // periodic-sounding net (= activeNet) in the label.
   const autoOn = !!activeNet && !!(document.getElementById('cfgAutoSound')?.checked);
   b.disabled = false;
-  b.innerHTML = `${icon('volume2',14)} ` + (autoOn ? activeNet + ' ' : 'Sound ') + (soundPanelOpen() ? '▾' : '▸');
+  b.innerHTML = icon('volume2',14) + hdrBtnLbl(autoOn ? activeNet : 'Sound', soundPanelOpen());
   b.title = autoOn
     ? 'Periodic sounding on ' + activeNet + ' every ' + soundingIntervalSec() + ' s'
     : 'Transmit a sounding (LQA probe). Single channel, or periodic over a net.';
@@ -2900,8 +2923,8 @@ function toggleSoundPanel() {
   const open = p.classList.toggle('open');
   const autoOn = !!activeNet && !!(document.getElementById('cfgAutoSound')?.checked);
   document.getElementById('soundBtn').innerHTML =
-    `${icon('volume2',14)} ` + (autoOn ? activeNet + ' ' : 'Sound ') + (open ? '▾' : '▸');
-  if (open) renderSoundPanel();
+    icon('volume2',14) + hdrBtnLbl(autoOn ? activeNet : 'Sound', open);
+  if (open) { positionDropdownPanel('soundWrap', 'soundPanel'); renderSoundPanel(); }
 }
 
 // Build the per-net list from the configured nets + channels. Each row enables
@@ -3086,7 +3109,7 @@ function toggleNetPanel() {
   const open = p.classList.toggle('open');
   const caret = document.getElementById('netCaret');
   if (caret) caret.textContent = open ? '▾' : '▸';
-  if (open) renderNetPill();
+  if (open) { positionDropdownPanel('netWrap', 'netPanel'); renderNetPill(); }
 }
 
 function closeNetPanel() {
@@ -3578,8 +3601,8 @@ function updateRadioDisplay() {
 
 function toggleRadioPanel() {
   const open = document.getElementById('radioPanel').classList.toggle('open');
-  document.getElementById('radioToggle').innerHTML = open ? `${icon('radio',14)} Radio ▾` : `${icon('radio',14)} Radio ▸`;
-  if (open) updateRadioDisplay();
+  document.getElementById('radioToggle').innerHTML = icon('radio',14) + hdrBtnLbl('Radio', open);
+  if (open) { positionDropdownPanel('radioWrap', 'radioPanel'); updateRadioDisplay(); }
 }
 // dismiss the VFO / Sounding / Network panels on an outside click
 document.addEventListener('click', e => {
@@ -3587,7 +3610,7 @@ document.addEventListener('click', e => {
   const panel = document.getElementById('radioPanel');
   if (panel && panel.classList.contains('open') && wrap && !wrap.contains(e.target)) {
     panel.classList.remove('open');
-    document.getElementById('radioToggle').innerHTML = `${icon('radio',14)} Radio ▸`;
+    document.getElementById('radioToggle').innerHTML = icon('radio',14) + hdrBtnLbl('Radio', false);
   }
   const swrap = document.getElementById('soundWrap');
   const spanel = document.getElementById('soundPanel');
@@ -3602,6 +3625,16 @@ document.addEventListener('click', e => {
     const caret = document.getElementById('netCaret');
     if (caret) caret.textContent = '▸';
   }
+});
+
+// The dropdown panels above are position:fixed (see positionDropdownPanel),
+// so unlike position:absolute they don't move with their trigger anymore —
+// reposition any open one on resize (e.g. .ctrl-lane-2's own auto-scroll
+// realignment, see alignCtrlLane2() in index.html, shifts the triggers).
+window.addEventListener('resize', () => {
+  if (document.getElementById('radioPanel')?.classList.contains('open')) positionDropdownPanel('radioWrap', 'radioPanel');
+  if (document.getElementById('soundPanel')?.classList.contains('open')) positionDropdownPanel('soundWrap', 'soundPanel');
+  if (document.getElementById('netPanel')?.classList.contains('open')) positionDropdownPanel('netWrap', 'netPanel');
 });
 
 // Pull real freq/mode/tune-step/PTT from the bridge (ALEController::

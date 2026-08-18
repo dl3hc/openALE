@@ -253,10 +253,12 @@
       text-transform: uppercase;
       letter-spacing: 0.1em;
     }
-    /* Main ALE-state label cycles through very different lengths ("Idle" ↔
-       "Linked · pending") — reserve width for the longest so the chip never
-       resizes and shoves the Sync/Freq-Clear pills after it sideways. */
-    #statusText { display: inline-block; min-width: 128px; }
+    /* No reserved width — the chip hugs its actual text, same as the Sync
+       chip next to it. Longer labels ("Linked · pending", "Handshake…") will
+       once again shift the Sync/Freq-Clear pills sideways when they appear;
+       that's the explicit trade-off for the common "Idle"/"Scanning" states
+       staying visually as small as Sync instead of reserving worst-case width. */
+    #statusText { display: inline-block; white-space: nowrap; }
     /* Same reasoning for the FREQ CLEAR/FREQ BUSY label. */
     .freq-label { display: inline-block; min-width: 80px; }
 
@@ -1879,8 +1881,15 @@
        .hdr-stats by the flex gap (10px) — no shared border, no overlap. The panel
        drops below the button via .radio-panel, so it never intersects the freq pill. */
     .net-btn { min-width: 96px; justify-content: space-between; gap: 6px; }
-    .net-btn #netBtnLbl { font-family: var(--mono); font-size: 11px; color: var(--accent); }
-    .net-btn .caret { font-size: 9px; color: var(--tx-muted); margin-left: 2px; }
+    /* Compact mono label + small caret, shared by the Net/Sound/Radio header
+       buttons so they all render at the same height — a plain-text label at
+       the button's base 12px sans font measured ~3px taller than this. */
+    /* nowrap: without it, "No net" wraps to two lines inside the button's
+       constrained flex width — invisible in a quick look since the span is a
+       blockified flex item (one reported client rect either way), but it
+       silently doubled the Net button's height until measured directly. */
+    .hdr-btn-lbl { font-family: var(--mono); font-size: 11px; color: var(--accent); white-space: nowrap; }
+    .hdr-btn .caret { font-size: 9px; color: var(--tx-muted); margin-left: 2px; }
     #netWrap .radio-panel { width: 220px; }
     #netPillList { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
 
@@ -1906,10 +1915,17 @@
       color: var(--s-error); font-weight: 700; box-shadow: 0 0 10px rgba(255,82,82,0.25);
     }
 
-    /* Manual VFO control panel — drops down beneath its toggle */
+    /* Manual VFO control panel — drops down beneath its toggle.
+       position:fixed (not absolute) so it isn't clipped by .ctrl-lane-2's
+       overflow-x:auto — an overflow-x/-y pair that isn't fully "visible"
+       still clips position:absolute descendants that escape their trigger's
+       height, but position:fixed removes it from that containing-block
+       chain entirely. top/right are set from JS (positionDropdownPanel())
+       at open time, since fixed positioning is viewport-relative and can't
+       use the wrap's percentage-based `top: calc(100% + 9px)` anchor. */
     .radio-wrap { position: relative; }
     .radio-panel {
-      position: absolute; top: calc(100% + 9px); right: 0; z-index: 60;
+      position: fixed; z-index: 60;
       width: 320px; padding: 12px;
       background: var(--bg2); border: 1px solid var(--border-md);
       border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
@@ -2424,7 +2440,19 @@
        exactly on the grid column boundary, not offset by inner padding. */
     .ctrl-lane { display: flex; align-items: center; gap: 10px; min-width: 0; }
     .ctrl-lane-1 { padding-left: 16px; }
-    .ctrl-lane-2 { padding-right: 12px; }
+    /* Lane 2 (Status + Channel clusters) can outgrow its 1fr grid track on
+       narrower desktop widths. Grid cells don't clip overflowing content by
+       default, so without this the Radio button visually bled into lane 3
+       and sat underneath the Transmit PTT button — most of its clickable
+       area was silently swallowed by PTT (later in DOM, painted on top).
+       Contain and scroll instead of bleeding; scrollbar hidden, still
+       wheel/trackpad-scrollable. */
+    .ctrl-lane-2 {
+      padding-right: 12px;
+      overflow-x: auto; overflow-y: hidden;
+      scrollbar-width: none;
+    }
+    .ctrl-lane-2::-webkit-scrollbar { display: none; }
     .ctrl-lane-3 { padding-right: 16px; }
     .cluster { display: flex; align-items: center; gap: 8px; }
     /* Push the Channel cluster (last .cluster in lane-2) flush against the
