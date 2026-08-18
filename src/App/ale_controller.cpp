@@ -498,6 +498,19 @@ void ALEController::wire_callbacks()
         // timer (WAIT_ACK/LISTENING) happens to be live by then — surfacing as
         // PTT appearing to toggle several times for a single logical TX/RX
         // cycle (seen e.g. around AMD calls, which exercise both transitions).
+        //
+        // The redundant-false direction is the dangerous one this guard also
+        // swallows: it would mean a state entered TX without ever re-arming
+        // PTT/lead, so words go straight to the modulator with the radio
+        // still in RX. Today every in-state false is preceded by an in-state
+        // true (see enter_state() in ale_state_machine.cpp), so this is safe
+        // by invariant rather than by construction — log if that invariant
+        // is ever violated by a future SM change, instead of silently
+        // muting the transmitter.
+        if (!rx_on && !sm_rx_enabled_) {
+            pal::log_warn("ALEController",
+                "redundant rx_enabled(false) -- PTT/lead not re-armed, TX may go out silently");
+        }
         if (rx_on == sm_rx_enabled_) return;
         sm_rx_enabled_ = rx_on;
         if (manual_ptt_) {
