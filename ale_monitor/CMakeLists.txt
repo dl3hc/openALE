@@ -31,7 +31,8 @@ set(ALE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 
 add_executable(ale_monitor
     src/ale_monitor.cpp
-    "${ALE_ROOT}/apps/bridge/ws_server.cpp"   # reused directly — not copied
+    "${ALE_ROOT}/apps/bridge/ws_server.cpp"    # reused directly — not copied
+    "${ALE_ROOT}/apps/bridge/tls_support.cpp"  # TlsConn/TlsServerContext used by ws_server.cpp
 )
 
 target_include_directories(ale_monitor PRIVATE
@@ -46,6 +47,9 @@ target_link_libraries(ale_monitor
     ale_audio_device
     ale_stores
     ale_pal
+    mbedtls
+    mbedx509
+    mbedcrypto
 )
 
 if(WIN32)
