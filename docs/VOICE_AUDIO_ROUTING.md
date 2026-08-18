@@ -197,6 +197,19 @@ specifically to let the GUI be opened from another device on the LAN — not a s
 unchanged) whenever it's unavailable. Same-machine/localhost access gets the AudioWorklet path;
 remote-LAN-IP access keeps the pre-existing behavior.
 
+**Playback level.** The wire format carries raw, unattenuated int16 PCM straight from the VAC
+capture device — no server-side gain staging. `speaker-processor`'s ring buffer converts it to
+float via a straight `/32768` and, prior to the Monitor Volume control below, connected directly
+to `ctx.destination` at unity gain, so a correctly-leveled radio/soundcard signal could still
+clip in the browser. Two independent fixes: (1) a `GainNode` is now inserted between the
+speaker node (worklet or ScriptProcessorNode fallback) and `ctx.destination`, driven by the
+Settings ▸ Audio Devices ▸ **Monitor Volume** slider (persisted per-browser under
+`ale.opaudio.monitorVol`, applies to both Voice Passthrough and the Channel Monitor since they
+share this speaker chain); (2) `speaker-processor`'s cubic Hermite interpolation is not a convex
+combination and can overshoot past the input's own peak on transients close to full scale —
+`process()` now clamps its output to `[-1, 1]` so that overshoot no longer hard-clips at the
+WebAudio destination regardless of the Monitor Volume setting.
+
 The same secure-context requirement blocks `getUserMedia`/`enumerateDevices` even harder —
 those have no non-secure-context fallback at all (unlike AudioWorklet's ScriptProcessorNode
 path), so mic capture and device *listing* simply don't work over plain-HTTP LAN access. `--tls`
