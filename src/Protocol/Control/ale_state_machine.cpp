@@ -734,11 +734,13 @@ void ALEStateMachine::handle_handshake() {
         // transitions to WAIT_ACK when all words have been sent.  If the audio
         // stalls (or the frame completion is never armed) the phase would hang
         // until the 30 s Twa backstop — bound it with the TX-drain deadline so
-        // the SM aborts to pre_link_state promptly.
+        // the SM aborts to pre_link_state promptly.  tx_drain_deadline_ms_ is
+        // scaled to the actual burst length at the arm site (build_response_
+        // words()) — a response frame carrying a full bilateral LQA report
+        // isn't cut off by a budget sized for the bare response.
         case HandshakePhase::SENDING_RESPONSE: {
             if (tx_drain_start_ms_ != 0 &&
-                (current_time_ms - tx_drain_start_ms_)
-                    >= ALETimingConstants::TX_DRAIN_TIMEOUT_MS) {
+                (current_time_ms - tx_drain_start_ms_) >= tx_drain_deadline_ms_) {
                 SM_TRACE("[TRACE] handle_handshake: SENDING_RESPONSE drain timeout → LINK_TIMEOUT\n");
                 tx_drain_start_ms_ = 0;
                 process_event(ALEEvent::LINK_TIMEOUT);
@@ -1483,12 +1485,16 @@ void ALEStateMachine::build_response_words() {
     // Arm the TX-drain deadline: on_word_complete() normally fires WAIT_ACK /
     // the reject abort once the frame drains; if the audio stalls or the
     // completion is never armed, handle_handshake SENDING_RESPONSE force-aborts
-    // after TX_DRAIN_TIMEOUT_MS instead of waiting the full Twa backstop.  This
-    // response frame never carries AMD, so reset the deadline to its default in
-    // case a prior linked-orderwire burst left it scaled up.
+    // after tx_drain_deadline_ms_ instead of waiting the full Twa backstop.
+    // This response frame never carries AMD, but it can carry a bilateral LQA
+    // CMD 'a'/'r' report (lqa_seq/report_seq above) — scale the deadline to
+    // the words actually queued instead of the flat TX_DRAIN_TIMEOUT_MS sized
+    // for the bare response, same as build_ack_words() does for AMD.
     if (words_pending > 0) {
         tx_drain_start_ms_    = current_time_ms;
-        tx_drain_deadline_ms_ = ALETimingConstants::TX_DRAIN_TIMEOUT_MS;
+        tx_drain_deadline_ms_ = std::max(
+            ALETimingConstants::TX_DRAIN_TIMEOUT_MS,
+            words_pending * ALETimingConstants::Trw_ms + 2u * ALETimingConstants::Trw_ms);
     }
 }
 
