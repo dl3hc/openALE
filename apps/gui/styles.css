@@ -253,6 +253,12 @@
       text-transform: uppercase;
       letter-spacing: 0.1em;
     }
+    /* Main ALE-state label cycles through very different lengths ("Idle" ↔
+       "Linked · pending") — reserve width for the longest so the chip never
+       resizes and shoves the Sync/Freq-Clear pills after it sideways. */
+    #statusText { display: inline-block; min-width: 128px; }
+    /* Same reasoning for the FREQ CLEAR/FREQ BUSY label. */
+    .freq-label { display: inline-block; min-width: 80px; }
 
     /* ══════════════════════════════════════════════════════════════════════
        MAIN GRID  (left col | right col)
