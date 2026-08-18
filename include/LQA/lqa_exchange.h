@@ -41,13 +41,18 @@ public:
     void on_handshake_start();
 
     // Discard any incomplete inbound CMD 'a' / Block C5 report state. Called at
-    // the start of every new handshake AND every new outgoing call (on_handshake_start()
-    // covers the responder role; ALEController also calls this directly when entering
-    // CALLING for the caller role). Without this, an interrupted Block C5 report
-    // (dropped/corrupted DATA word, e.g. on a marginal Test-Channel sweep channel)
-    // leaves report_decoder_ stuck active_=true, and every later unrelated DATA word
-    // received (in ANY subsequent call) gets spliced into the stale buffer and
-    // eventually decoded as bogus LQA data.
+    // the start of every new handshake, every new outgoing call, and on
+    // entering LINKED (on_handshake_start() covers the responder role;
+    // ALEController also calls this directly on entering CALLING for the
+    // caller role, which never goes through HANDSHAKE — and again on
+    // entering LINKED, since the RX path that feeds report_decoder_ has no
+    // state gate and keeps running through the whole linked session).
+    // Without this, an interrupted Block C5 report (dropped/corrupted DATA
+    // word, e.g. on a marginal Test-Channel sweep channel) leaves
+    // report_decoder_ stuck active_=true, and every later unrelated DATA
+    // word received (in ANY subsequent call, including AMD during LINKED)
+    // gets spliced into the stale buffer and eventually decoded as bogus
+    // LQA data.
     void reset();
 
     // Encode outgoing CMD 'a': read DB for (freq_hz, target), encode, queue via

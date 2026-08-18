@@ -2309,6 +2309,15 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         lqa_exchange_.reset();
     }
 
+    // The Block C5 report-RX path has no state gate and keeps running
+    // through the whole LINKED session (AMD/EFS DATA words are routine
+    // there). Reset on entry so a report interrupted during the preceding
+    // HANDSHAKE/CALLING doesn't stay stuck active_=true and splice later
+    // unrelated DATA words into a stale buffer.
+    if (to == ALEState::LINKED) {
+        lqa_exchange_.reset();
+    }
+
     // Entering SOUNDING = we are about to *transmit* our own sounding. Per
     // A.5.4.1.1/A.5.4.1.2 a transmitted sounding produces no received words and
     // MUST NOT create an LQA entry (only stations that *receive* a sounding
