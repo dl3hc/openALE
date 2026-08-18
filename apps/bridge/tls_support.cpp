@@ -17,13 +17,22 @@
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  include <iphlpapi.h>
+#  pragma comment(lib, "iphlpapi.lib")
 #else
 #  include <sys/socket.h>
+#  include <netinet/in.h>
+#  include <arpa/inet.h>
+#  include <ifaddrs.h>
+#  include <net/if.h>
 #  include <cerrno>
 #  include <fcntl.h>
 #endif
 
+#include <algorithm>
 #include <cstring>
+#include <deque>
 #include <fstream>
 
 namespace bridge {
@@ -85,13 +94,87 @@ void set_nonblocking_impl(tls_sock_t sock) {
 
 void tls_set_nonblocking(tls_sock_t sock) { set_nonblocking_impl(sock); }
 
+// ── Local interface enumeration (for certificate SANs) ──────────────────────
+
+namespace {
+
+// Every up, non-loopback IPv4/IPv6 address bound to a local interface — used
+// to pre-populate the self-signed cert's SAN list so it validates against
+// whatever LAN IP a browser is pointed at, without requiring the caller to
+// know it in advance.
+std::vector<std::string> local_ip_addresses() {
+    std::vector<std::string> out;
+#ifdef _WIN32
+    ULONG buf_len = 15000;
+    std::vector<unsigned char> buf(buf_len);
+    auto* addrs = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data());
+    const ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    ULONG ret = GetAdaptersAddresses(AF_UNSPEC, flags, nullptr, addrs, &buf_len);
+    if (ret == ERROR_BUFFER_OVERFLOW) {
+        buf.resize(buf_len);
+        addrs = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data());
+        ret = GetAdaptersAddresses(AF_UNSPEC, flags, nullptr, addrs, &buf_len);
+    }
+    if (ret != NO_ERROR) return out;
+    for (auto* a = addrs; a != nullptr; a = a->Next) {
+        if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+        for (auto* ua = a->FirstUnicastAddress; ua != nullptr; ua = ua->Next) {
+            char ip[INET6_ADDRSTRLEN] = {0};
+            const sockaddr* sa = ua->Address.lpSockaddr;
+            const void* addr_ptr = nullptr;
+            if (sa->sa_family == AF_INET)
+                addr_ptr = &reinterpret_cast<const sockaddr_in*>(sa)->sin_addr;
+            else if (sa->sa_family == AF_INET6)
+                addr_ptr = &reinterpret_cast<const sockaddr_in6*>(sa)->sin6_addr;
+            else
+                continue;
+            if (inet_ntop(sa->sa_family, addr_ptr, ip, sizeof(ip))) out.emplace_back(ip);
+        }
+    }
+#else
+    struct ifaddrs* ifap = nullptr;
+    if (getifaddrs(&ifap) != 0) return out;
+    for (auto* a = ifap; a != nullptr; a = a->ifa_next) {
+        if (a->ifa_addr == nullptr) continue;
+        if (!(a->ifa_flags & IFF_UP) || (a->ifa_flags & IFF_LOOPBACK)) continue;
+        char ip[INET6_ADDRSTRLEN] = {0};
+        if (a->ifa_addr->sa_family == AF_INET) {
+            const auto* sa = reinterpret_cast<const sockaddr_in*>(a->ifa_addr);
+            if (inet_ntop(AF_INET, &sa->sin_addr, ip, sizeof(ip))) out.emplace_back(ip);
+        } else if (a->ifa_addr->sa_family == AF_INET6) {
+            const auto* sa = reinterpret_cast<const sockaddr_in6*>(a->ifa_addr);
+            if (inet_ntop(AF_INET6, &sa->sin6_addr, ip, sizeof(ip))) out.emplace_back(ip);
+        }
+    }
+    freeifaddrs(ifap);
+#endif
+    return out;
+}
+
+// Raw address bytes (4 for IPv4, 16 for IPv6) if \p s is an IP literal, else
+// empty — used to decide whether a SAN entry is an IP-address or DNS-name
+// type, and to supply the DER-encoded value the former requires.
+std::string ip_literal_bytes(const std::string& s) {
+    unsigned char buf[16];
+    if (inet_pton(AF_INET, s.c_str(), buf) == 1) return std::string(reinterpret_cast<char*>(buf), 4);
+    if (inet_pton(AF_INET6, s.c_str(), buf) == 1) return std::string(reinterpret_cast<char*>(buf), 16);
+    return {};
+}
+
+void add_unique(std::vector<std::string>& names, const std::string& name) {
+    if (std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
+}
+
+} // namespace
+
 // ── Self-signed certificate generation ──────────────────────────────────────
 //
 // EC (P-256) rather than RSA: generation is near-instant and the key/cert are
 // small — plenty for a LAN tool's self-signed use, and universally supported
 // by every browser this GUI targets.
 
-bool ensure_self_signed_cert(const std::string& cert_path, const std::string& key_path) {
+bool ensure_self_signed_cert(const std::string& cert_path, const std::string& key_path,
+                              const std::vector<std::string>& extra_san) {
     {
         std::ifstream cert_check(cert_path), key_check(key_path);
         if (cert_check.good() && key_check.good()) return true;  // already present
@@ -108,6 +191,7 @@ bool ensure_self_signed_cert(const std::string& cert_path, const std::string& ke
 
     bool ok = false;
     unsigned char pem[4096];
+    std::string san_log;
     do {
         const char* pers = "openALE-cert-gen";
         if (mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
@@ -134,6 +218,44 @@ bool ensure_self_signed_cert(const std::string& cert_path, const std::string& ke
         // surprising anyone who already saved a trust exception for it.
         if (mbedtls_x509write_crt_set_validity(&crt, "20250101000000", "20350101000000") != 0) break;
 
+        // Subject Alternative Names: browsers (Chrome/Edge since v58) verify
+        // the connection hostname exclusively against SAN entries, never CN
+        // above — a cert without a SAN matching the browser's address bar
+        // (e.g. a LAN IP) is rejected outright (NET::ERR_CERT_INVALID)
+        // instead of showing the normal overridable self-signed warning.
+        std::vector<std::string> san_names = {"localhost", "127.0.0.1", "::1"};
+        for (const auto& ip : local_ip_addresses()) add_unique(san_names, ip);
+        for (const auto& s : extra_san) add_unique(san_names, s);
+        for (const auto& n : san_names) { if (!san_log.empty()) san_log += ", "; san_log += n; }
+
+        // mbedtls_x509_san_list/mbedtls_x509_buf only store pointer+len, so
+        // the backing bytes must outlive mbedtls_x509write_crt_pem below —
+        // std::deque so push_back never invalidates earlier elements' addresses
+        // (the SAN list nodes point at each other via raw `next` pointers).
+        std::deque<std::string> san_storage;
+        std::deque<mbedtls_x509_san_list> san_nodes;
+        mbedtls_x509_san_list* san_head = nullptr;
+        mbedtls_x509_san_list* san_tail = nullptr;
+        for (const auto& name : san_names) {
+            const std::string ip_bytes = ip_literal_bytes(name);
+            const bool is_ip = !ip_bytes.empty();
+            san_storage.push_back(is_ip ? ip_bytes : name);
+            const std::string& stored = san_storage.back();
+
+            mbedtls_x509_san_list node{};
+            node.node.type = is_ip ? MBEDTLS_X509_SAN_IP_ADDRESS : MBEDTLS_X509_SAN_DNS_NAME;
+            node.node.san.unstructured_name.p =
+                reinterpret_cast<unsigned char*>(const_cast<char*>(stored.data()));
+            node.node.san.unstructured_name.len = stored.size();
+            node.next = nullptr;
+            san_nodes.push_back(node);
+
+            if (san_tail) san_tail->next = &san_nodes.back();
+            else san_head = &san_nodes.back();
+            san_tail = &san_nodes.back();
+        }
+        if (mbedtls_x509write_crt_set_subject_alternative_name(&crt, san_head) != 0) break;
+
         if (mbedtls_x509write_crt_pem(&crt, pem, sizeof(pem), mbedtls_ctr_drbg_random, &ctr_drbg) != 0) break;
         {
             std::ofstream out(cert_path, std::ios::binary | std::ios::trunc);
@@ -159,8 +281,8 @@ bool ensure_self_signed_cert(const std::string& cert_path, const std::string& ke
     mbedtls_entropy_free(&entropy);
 
     if (ok) {
-        pal::log_info("tls", "generated self-signed certificate: %s / %s",
-                       cert_path.c_str(), key_path.c_str());
+        pal::log_info("tls", "generated self-signed certificate: %s / %s (SAN: %s)",
+                       cert_path.c_str(), key_path.c_str(), san_log.c_str());
     }
     return ok;
 }
@@ -197,7 +319,7 @@ bool TlsServerContext::init(const TlsOptions& opts) {
     const std::string cert_path = opts.cert_path.empty() ? "openale_cert.pem" : opts.cert_path;
     const std::string key_path  = opts.key_path.empty()  ? "openale_key.pem"  : opts.key_path;
 
-    if (!ensure_self_signed_cert(cert_path, key_path)) {
+    if (!ensure_self_signed_cert(cert_path, key_path, opts.extra_san)) {
         pal::log_error("tls", "failed to generate self-signed certificate at %s / %s",
                         cert_path.c_str(), key_path.c_str());
         return false;

@@ -1230,7 +1230,8 @@ static void print_usage(const char* prog) {
     std::fprintf(stderr, // NOLINT(pal-logger)
         "ALE 2G WebSocket bridge — connects apps/gui/ to a live ALEController\n"
         "\n"
-        "Usage: %s --port N [--remote] [--webroot DIR] [--tls [--cert FILE --key FILE]]\n"
+        "Usage: %s --port N [--remote] [--webroot DIR]\n"
+        "                    [--tls [--cert FILE --key FILE] [--tls-san HOST]...]\n"
         "\n"
         "  --port N     WebSocket listen port (required)\n"
         "  --remote     Bind to 0.0.0.0 (LAN-reachable)\n"
@@ -1244,7 +1245,13 @@ static void print_usage(const char* prog) {
         "               run (openale_cert.pem/openale_key.pem) unless --cert/--key\n"
         "               point at your own. See docs/TLS_SETUP.md.\n"
         "  --cert FILE  Certificate PEM path (default: openale_cert.pem)\n"
-        "  --key FILE   Private key PEM path (default: openale_key.pem)\n",
+        "  --key FILE   Private key PEM path (default: openale_key.pem)\n"
+        "  --tls-san H  Extra hostname/IP to embed as a certificate Subject\n"
+        "               Alternative Name (repeatable). All local interface IPs plus\n"
+        "               localhost/127.0.0.1/::1 are already included automatically —\n"
+        "               only needed for addresses not visible as a local interface\n"
+        "               (e.g. a reverse-proxy hostname). Only affects first-run\n"
+        "               generation; ignored once cert/key files already exist.\n",
         prog);
 }
 
@@ -1280,6 +1287,8 @@ int main(int argc, char* argv[]) {
             tls_opts.cert_path = argv[++i];
         } else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
             tls_opts.key_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--tls-san") == 0 && i + 1 < argc) {
+            tls_opts.extra_san.emplace_back(argv[++i]);
         } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;

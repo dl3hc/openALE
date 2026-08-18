@@ -49,8 +49,11 @@ HTTPS/WSS instead, with a self-signed certificate generated automatically on fir
     upsampling/downsampling quality; it automatically falls back to the previous behavior when
     accessed over a plain-HTTP remote/LAN connection.
 - **`--tls`**: serves the GUI over HTTPS/WSS instead of plain HTTP/WS, using a self-signed
-  certificate generated automatically on first run (or your own via `--cert`/`--key`). This is
-  what makes `getUserMedia`/`enumerateDevices`/`AudioWorklet` actually work when the GUI is
+  certificate generated automatically on first run (or your own via `--cert`/`--key`), with its
+  Subject Alternative Names auto-populated from every local network interface's IP address
+  (plus `localhost`/`127.0.0.1`/`::1`) so browsers accept it without a certificate error;
+  `--tls-san HOST` adds an extra hostname/IP for addresses that aren't a local interface. This
+  is what makes `getUserMedia`/`enumerateDevices`/`AudioWorklet` actually work when the GUI is
   opened from another device (`--remote`) — browsers only grant those APIs on a secure
   connection. See `docs/TLS_SETUP.md`.
 - **Tuner**: opt-in read-only rigctld/netrigctl-compatible TCP server for external

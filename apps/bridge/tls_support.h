@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace bridge {
 
@@ -34,6 +35,12 @@ struct TlsOptions {
     bool        enabled = false;
     std::string cert_path;  // empty → "openale_cert.pem" next to the executable
     std::string key_path;   // empty → "openale_key.pem" next to the executable
+
+    // Extra hostnames/IP literals to embed as certificate Subject Alternative
+    // Names, on top of the auto-detected local interface IPs and localhost/
+    // 127.0.0.1/::1 (see ensure_self_signed_cert). Only used the first time
+    // the cert/key files are generated — populated from --tls-san.
+    std::vector<std::string> extra_san;
 };
 
 /// Result of a non-blocking mbedTLS handshake/send/recv step.
@@ -49,7 +56,16 @@ void tls_set_nonblocking(tls_sock_t sock);
 /// exist. A no-op returning true if they're already present — callers don't
 /// need to check existence themselves. Returns false only on a genuine
 /// generation/write failure.
-bool ensure_self_signed_cert(const std::string& cert_path, const std::string& key_path);
+///
+/// The certificate's Subject Alternative Name extension is populated with
+/// every local network interface's IP address (auto-detected), "localhost",
+/// 127.0.0.1, ::1, and \p extra_san — required because browsers (Chrome/Edge
+/// since v58) verify the connection hostname exclusively against SAN
+/// entries, never the CN. Without a matching SAN, browsers reject the
+/// connection outright (NET::ERR_CERT_INVALID) instead of showing the usual
+/// overridable self-signed warning.
+bool ensure_self_signed_cert(const std::string& cert_path, const std::string& key_path,
+                              const std::vector<std::string>& extra_san = {});
 
 /// Owns the mbedTLS server-wide state (RNG, loaded cert/key, ssl_config)
 /// shared by every connection. One instance per WsServer, constructed only
