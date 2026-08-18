@@ -83,24 +83,20 @@ CallType MessageAssembler::determine_call_type(const std::vector<ALEWord>& words
 bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
     if (words.empty()) return false;
 
-    bool has_to   = false;
-    bool has_twas = false;
-    bool has_tis  = false;
-    bool has_from = false;
-
+    // A.5.2.3 / A.5.5.4.4: a frame concludes only on TIS or TWAS. FROM is a
+    // mid-frame quick-ID (e.g. an AllCall/AnyCall's "address beginning with a
+    // FROM word immediately after the calling cycle"), never a terminator —
+    // a prior `has_to && has_from` fallback treated it as one and finalized
+    // the frame the instant a FROM word appeared, mid-frame, before any
+    // CMD/DATA/REP message content (notably AMD payloads, A.5.7.2.2) or the
+    // real conclusion had arrived. That split single frames into two bogus
+    // fragments (e.g. an AMD-in-calling-frame got misclassified as
+    // INDIVIDUAL + SOUNDING instead of AMD). Removed; add_word()'s existing
+    // timeout/reset already reclaims a frame that never concludes.
     for (const auto& w : words) {
-        switch (w.type) {
-            case PreambleType::TO:   has_to   = true; break;
-            case PreambleType::TWAS: has_twas = true; break;
-            case PreambleType::TIS:  has_tis  = true; break;
-            case PreambleType::FROM: has_from = true; break;
-            default: break;
-        }
+        if (w.type == PreambleType::TIS || w.type == PreambleType::TWAS)
+            return true;
     }
-
-    if (has_tis)            return true;  // TIS concludes any frame
-    if (has_twas)           return true;  // TWAS concludes rejection / termination / announcement
-    if (has_to && has_from) return true;  // legacy FROM-based conclusion (older implementations)
     return false;
 }
 

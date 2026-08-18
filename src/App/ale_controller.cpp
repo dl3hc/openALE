@@ -1601,7 +1601,7 @@ void ALEController::tick_frame_settle(uint32_t now_ms)
     // Linked AMD RX fallback: if a CMD AMD was seen but no TIS conclusion
     // arrived (corrupted/missed), commit after Tdrw silence.  The TIS path in
     // rx_accumulate_linked_amd() is the primary commit; this is belt-and-suspenders.
-    if (linked_amd_collecting_ && linked_amd_settle_ms_ > 0
+    if (linked_amd_.collecting && linked_amd_settle_ms_ > 0
         && (now_ms - linked_amd_settle_ms_) >= ALETimingConstants::Tdrw_ms) {
         commit_linked_amd();
     }
@@ -2237,6 +2237,21 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
 
     // Reset caller tracking when leaving HANDSHAKE
     if (from == ALEState::HANDSHAKE) {
+        // Calling-frame AMD (A.5.7.2.2): dispatch here, not at TIS receipt,
+        // because display must not depend on whether the handshake goes on to
+        // link (A.5.7.2.3 — "upon arrival", regardless of outcome). By this
+        // point sm_.get_caller_address() already holds the fully-settled
+        // address (populated word-by-word during WAIT_CYCLE_END, well before
+        // this transition fires) for both the normal call→response→ACK path
+        // and the AllCall/AnyCall direct-to-LINKED path.
+        {
+            std::string tail = amd_flush(call_amd_);   // in-progress text, if any (e.g. TIS never arrived)
+            if (!tail.empty()) call_amd_pending_.push_back(std::move(tail));
+            const std::string caller = sm_.get_caller_address();
+            if (!caller.empty() && !self_address_store_.matches_self(caller))
+                for (const auto& text : call_amd_pending_) amd_dispatch(caller, text);
+            call_amd_pending_.clear();
+        }
         last_caller_.clear();
         call_alert_fired_ = false;
         // Safety-net: discard any calling-frame accumulation that never fired an alert
@@ -2248,13 +2263,31 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     if (to == ALEState::HANDSHAKE) {
         hs_call_acc_.reset();
         hs_call_freq_hz_ = 0;
+        call_amd_ = {};
+        call_amd_pending_.clear();
         lqa_exchange_.on_handshake_start();
+    }
+
+    // Response-frame AMD (A.5.7.2.2): same rationale as the calling-frame
+    // dispatch above — display must not depend on whether the call goes on to
+    // link. sm_.get_to_address()/get_caller_address() are settled by now (the
+    // response's own conclusion was fully processed before this transition).
+    if (from == ALEState::CALLING) {
+        std::string tail = amd_flush(resp_amd_);
+        if (!tail.empty()) resp_amd_pending_.push_back(std::move(tail));
+        const std::string peer = !sm_.get_to_address().empty()
+            ? sm_.get_to_address() : sm_.get_caller_address();
+        if (!peer.empty() && !self_address_store_.matches_self(peer))
+            for (const auto& text : resp_amd_pending_) amd_dispatch(peer, text);
+        resp_amd_pending_.clear();
     }
 
     // Fresh response-frame accumulator for each new outgoing call.
     if (to == ALEState::CALLING) {
         hs_resp_acc_.reset();
         hs_resp_freq_hz_ = 0;
+        resp_amd_ = {};
+        resp_amd_pending_.clear();
     }
 
     // Entering SOUNDING = we are about to *transmit* our own sounding. Per
@@ -2441,6 +2474,8 @@ void ALEController::on_received_word(const ALEWord& word)
     rx_handle_freq_select(word);
     rx_accumulate_sounding(word);
     rx_accumulate_frame_ber(word);
+    rx_accumulate_call_amd(word);
+    rx_accumulate_resp_amd(word);
     rx_accumulate_linked_amd(word);
     rx_accumulate_ack_amd(word);
     sm_.process_received_word(word);
@@ -2499,8 +2534,10 @@ void ALEController::rx_accumulate_caller_identity(const ALEWord& word)
         return;
 
     // ── Caller identity (gated on word.valid) ──────────────────────────
-    // AMD no longer rides in the calling frame — A.5.7.2.2 places it in the
-    // ACK frame, which the responder decodes in rx_accumulate_ack_amd().
+    // AMD content (CMD…DATA/REP…) may also ride in this frame (A.5.7.2.2) —
+    // rx_accumulate_call_amd() reassembles it separately. No conflict: this
+    // accumulator only extends last_caller_ once TIS has already been seen,
+    // so it never picks up AMD payload words (which always precede TIS).
     if (word.valid) {
         const std::string chunk = trim_ale_address(word.address);
 
@@ -2513,87 +2550,139 @@ void ALEController::rx_accumulate_caller_identity(const ALEWord& word)
     }
 }
 
+// ── Shared AMD core (A.5.7.2.2) ───────────────────────────────────────────────
+// One CMD-discrimination + accumulate state machine, reused by all four
+// standard-mandated AMD windows (calling frame, response frame, ACK frame,
+// linked orderwire — see AmdAccumulator in ale_controller.h). AMD has no fixed
+// CMD identifier (its first 3 chars are message content, Expanded-64), so we
+// exclude CMD words owned by other protocols — EFS 'f', LQA 'a'/'n'/'r'
+// (handled by rx_handle_lqa_exchange / rx_handle_freq_select) and the DTM/DBM
+// identifiers ("DTM"/"DBM", decoded as Basic-38). This mirrors the inherent
+// A.5.7.2.3 ambiguity: an AMD whose text begins with "DTM"/"DBM" is
+// misclassified — documented limitation, TX remains correct.
+std::string ALEController::amd_flush(AmdAccumulator& st)
+{
+    if (!st.collecting) return {};
+    st.collecting = false;
+    const auto p = st.acc.find_last_not_of(" @");
+    std::string out = (p != std::string::npos) ? st.acc.substr(0, p + 1) : st.acc;
+    st.acc.clear();
+    return out;
+}
+
+std::string ALEController::amd_step(AmdAccumulator& st, const ALEWord& word)
+{
+    if (word.type == PreambleType::CMD) {
+        const uint8_t cc = cmd_char_code(word);
+        if (cc == 'f' || cc == 'a' || cc == 'n' || cc == 'r')
+            return amd_flush(st);   // owned by EFS/LQA — ends but doesn't start AMD
+
+        char basic38[4] = {};
+        if (WordParser::decode_ascii(word.raw_payload, PreambleType::CMD, basic38)
+            && (std::string(basic38, 3) == "DTM" || std::string(basic38, 3) == "DBM"))
+            return amd_flush(st);   // DTM/DBM identifier — not AMD
+
+        // AMD CMD header — commit any prior message (A.5.7.2.2: "multiple AMD
+        // messages may be sent within a frame, but they each shall start with
+        // their own CMD AMD"), then begin the new one.
+        std::string prior = amd_flush(st);
+        char exp64[4];
+        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64)) {
+            st.collecting = true;
+            st.acc        = std::string(exp64, 3);
+        }
+        return prior;
+    }
+
+    if (!st.collecting)
+        return {};   // pre-CMD TO/address-extension or stray word — ignore
+
+    if (word.type == PreambleType::DATA || word.type == PreambleType::REP) {
+        char exp64[4];
+        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64))
+            st.acc += std::string(exp64, 3);
+        return {};
+    }
+
+    // TIS/TWAS conclusion = frame end → commit immediately.
+    if (word.type == PreambleType::TIS || word.type == PreambleType::TWAS)
+        return amd_flush(st);
+
+    return {};
+}
+
+void ALEController::amd_dispatch(const std::string& peer, const std::string& text)
+{
+    if (text.empty() || peer.empty()) return;
+    const std::string self = get_primary_self_address();
+    ale::AmdData ad{ self.c_str(), peer.c_str(), text.c_str() };
+    dispatch(pal::EventType::ALE_AMD_RECEIVED, "", 0, &ad, sizeof(ad));
+}
+
+// ── Calling-frame AMD RX (A.5.7.2.2, called-station side) ───────────────────
+// DC7SU-style AMD: TO[self] FROM[peer] CMD AMD DATA/REP…(text) TIS[peer] — the
+// message is embedded in the very first (calling) frame, the primary place
+// A.5.7.1 puts it. Active while HANDSHAKE/WAIT_CYCLE_END (also covers AllCall/
+// AnyCall message sections — A.5.5.4.4/4.5 — same window). The peer address is
+// often not fully known until the TIS conclusion settles (multi-word
+// addresses), so completed messages are buffered in call_amd_pending_ and
+// dispatched centrally from on_sm_state_change() once HANDSHAKE is left —
+// deliberately independent of whether the handshake goes on to link or times
+// out (A.5.7.2.3 requires display "upon arrival", not upon link success).
+void ALEController::rx_accumulate_call_amd(const ALEWord& word)
+{
+    if (sm_.get_state() != ALEState::HANDSHAKE
+        || sm_.get_handshake_phase() != HandshakePhase::WAIT_CYCLE_END)
+        return;   // dispatch (success or abort) happens in on_sm_state_change()
+
+    const std::string done = amd_step(call_amd_, word);
+    if (!done.empty()) call_amd_pending_.push_back(done);
+}
+
+// ── Response-frame AMD RX (A.5.7.2.2, calling-station side) ─────────────────
+// JOE may embed AMD in its response frame: TO[SAM] CMD AMD DATA/REP… TIS[JOE].
+// Active while CALLING/LISTENING. The peer isn't confirmed until JOE's own
+// TIS is processed by the SM (after this function runs — see the field
+// comment in ale_controller.h), so completed messages are buffered and
+// dispatched centrally in on_sm_state_change() when CALLING is left.
+void ALEController::rx_accumulate_resp_amd(const ALEWord& word)
+{
+    if (sm_.get_state() != ALEState::CALLING
+        || sm_.get_calling_phase() != CallingPhase::LISTENING)
+        return;   // dispatch (success or abort) happens in on_sm_state_change()
+
+    const std::string done = amd_step(resp_amd_, word);
+    if (!done.empty()) resp_amd_pending_.push_back(done);
+}
+
 // ── Linked AMD orderwire RX (A.5.7.2 over an established link) ───────────────
 // Reassembles an AMD message that arrives in a linked-orderwire frame
 //   TO[peer] (+DATA/REP ext) ×2 + CMD AMD + message DATA/REP + TIS[peer]
 // We ignore the TO/address-extension prefix (the peer is already known from the
 // link state) and collect from the CMD AMD header onward.  A new CMD or the TIS
 // conclusion commits the message; Tdrw silence is the fallback (tick_frame_settle).
-//
-// CMD discrimination: AMD has no fixed identifier (its first 3 chars are message
-// content, Expanded-64).  We exclude CMD words owned by other protocols — EFS 'f',
-// LQA 'a'/'n'/'r' (handled by rx_handle_lqa_exchange / rx_handle_freq_select) and
-// the DTM/DBM identifiers ("DTM"/"DBM", decoded as Basic-38).  This mirrors the
-// inherent A.5.7.2.3 ambiguity: an AMD whose text begins with "DTM"/"DBM" is
-// misclassified — documented limitation, TX remains correct.
 void ALEController::rx_accumulate_linked_amd(const ALEWord& word)
 {
     if (sm_.get_state() != ALEState::LINKED) {
-        if (linked_amd_collecting_) commit_linked_amd();   // best-effort on exit
+        amd_dispatch(linked_amd_peer_, amd_flush(linked_amd_));   // best-effort on exit
         return;
     }
 
-    // Any received word while collecting refreshes the settle deadline.
-    if (linked_amd_collecting_)
+    const bool was_collecting = linked_amd_.collecting;
+    const std::string done = amd_step(linked_amd_, word);
+    if (!was_collecting && linked_amd_.collecting)
+        linked_amd_peer_ = active_peer();
+    // Any word that started or continued an in-progress accumulation refreshes
+    // the settle deadline (Tdrw-silence fallback in tick_frame_settle).
+    if (linked_amd_.collecting)
         linked_amd_settle_ms_ = now_ms_;
-
-    if (word.type == PreambleType::CMD) {
-        const uint8_t cc = cmd_char_code(word);
-        // CMD 'f'/'a'/'n'/'r' belong to EFS/LQA handlers — they end an in-progress
-        // AMD but are not consumed here.
-        if (cc == 'f' || cc == 'a' || cc == 'n' || cc == 'r') {
-            if (linked_amd_collecting_) commit_linked_amd();
-            return;
-        }
-        // DTM/DBM identifiers (Basic-38) — not AMD.
-        char basic38[4] = {};
-        if (WordParser::decode_ascii(word.raw_payload, PreambleType::CMD, basic38)
-            && (std::string(basic38, 3) == "DTM"
-                || std::string(basic38, 3) == "DBM")) {
-            if (linked_amd_collecting_) commit_linked_amd();
-            return;
-        }
-        // AMD CMD header — begin a new message (commit any prior first).
-        if (linked_amd_collecting_) commit_linked_amd();
-        char exp64[4];
-        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64)) {
-            linked_amd_collecting_ = true;
-            linked_amd_acc_        = std::string(exp64, 3);
-            linked_amd_peer_       = active_peer();
-            linked_amd_settle_ms_  = now_ms_;
-        }
-        return;
-    }
-
-    if (!linked_amd_collecting_)
-        return;   // pre-CMD TO/address-extension or stray word — ignore
-
-    if (word.type == PreambleType::DATA || word.type == PreambleType::REP) {
-        char exp64[4];
-        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64))
-            linked_amd_acc_ += std::string(exp64, 3);
-        linked_amd_settle_ms_ = now_ms_;
-        return;
-    }
-
-    // TIS/TWAS conclusion = frame end → commit immediately.
-    if (word.type == PreambleType::TIS || word.type == PreambleType::TWAS)
-        commit_linked_amd();
+    amd_dispatch(linked_amd_peer_, done);
 }
 
 void ALEController::commit_linked_amd()
 {
-    if (!linked_amd_collecting_) return;
-    linked_amd_collecting_ = false;
     linked_amd_settle_ms_ = 0;
-    const auto p = linked_amd_acc_.find_last_not_of(" @");
-    if (p != std::string::npos) linked_amd_acc_ = linked_amd_acc_.substr(0, p + 1);
-    if (!linked_amd_acc_.empty()) {
-        const std::string self = get_primary_self_address();
-        ale::AmdData ad{ self.c_str(), linked_amd_peer_.c_str(), linked_amd_acc_.c_str() };
-        dispatch(pal::EventType::ALE_AMD_RECEIVED, "", 0, &ad, sizeof(ad));
-    }
-    linked_amd_acc_.clear();
+    amd_dispatch(linked_amd_peer_, amd_flush(linked_amd_));
     linked_amd_peer_.clear();
 }
 
@@ -2603,70 +2692,24 @@ void ALEController::commit_linked_amd()
 // We receive that frame while in HANDSHAKE/WAIT_ACK.  The leading TO[self] words
 // are ignored (the caller identity is already known from WAIT_CYCLE_END); we
 // reassemble from the CMD AMD header onward and commit at the TIS conclusion.
-// CMD discrimination mirrors rx_accumulate_linked_amd: skip EFS 'f' and LQA
-// 'a'/'n'/'r' (handled by rx_handle_lqa_exchange) and DTM/DBM identifiers.
 void ALEController::rx_accumulate_ack_amd(const ALEWord& word)
 {
     if (sm_.get_state() != ALEState::HANDSHAKE
         || sm_.get_handshake_phase() != HandshakePhase::WAIT_ACK) {
-        if (ack_amd_collecting_) commit_ack_amd();   // best-effort on exit
+        amd_dispatch(ack_amd_peer_, amd_flush(ack_amd_));   // best-effort on exit
         return;
     }
 
-    if (word.type == PreambleType::CMD) {
-        const uint8_t cc = cmd_char_code(word);
-        // CMD 'f'/'a'/'n'/'r' belong to EFS/LQA handlers — they end an in-progress
-        // AMD but are not consumed here.
-        if (cc == 'f' || cc == 'a' || cc == 'n' || cc == 'r') {
-            if (ack_amd_collecting_) commit_ack_amd();
-            return;
-        }
-        // DTM/DBM identifiers (Basic-38) — not AMD.
-        char basic38[4] = {};
-        if (WordParser::decode_ascii(word.raw_payload, PreambleType::CMD, basic38)
-            && (std::string(basic38, 3) == "DTM"
-                || std::string(basic38, 3) == "DBM")) {
-            if (ack_amd_collecting_) commit_ack_amd();
-            return;
-        }
-        // AMD CMD header — begin a new message (commit any prior first).
-        if (ack_amd_collecting_) commit_ack_amd();
-        char exp64[4];
-        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64)) {
-            ack_amd_collecting_ = true;
-            ack_amd_acc_        = std::string(exp64, 3);
-            ack_amd_peer_       = sm_.get_caller_address();
-        }
-        return;
-    }
-
-    if (!ack_amd_collecting_)
-        return;   // pre-CMD TO[self]/address-extension or stray word — ignore
-
-    if (word.type == PreambleType::DATA || word.type == PreambleType::REP) {
-        char exp64[4];
-        if (WordParser::decode_ascii(word.raw_payload, PreambleType::DATA, exp64))
-            ack_amd_acc_ += std::string(exp64, 3);
-        return;
-    }
-
-    // TIS/TWAS conclusion = ACK frame end → commit immediately.
-    if (word.type == PreambleType::TIS || word.type == PreambleType::TWAS)
-        commit_ack_amd();
+    const bool was_collecting = ack_amd_.collecting;
+    const std::string done = amd_step(ack_amd_, word);
+    if (!was_collecting && ack_amd_.collecting)
+        ack_amd_peer_ = sm_.get_caller_address();
+    amd_dispatch(ack_amd_peer_, done);
 }
 
 void ALEController::commit_ack_amd()
 {
-    if (!ack_amd_collecting_) return;
-    ack_amd_collecting_ = false;
-    const auto p = ack_amd_acc_.find_last_not_of(" @");
-    if (p != std::string::npos) ack_amd_acc_ = ack_amd_acc_.substr(0, p + 1);
-    if (!ack_amd_acc_.empty()) {
-        const std::string self = get_primary_self_address();
-        ale::AmdData ad{ self.c_str(), ack_amd_peer_.c_str(), ack_amd_acc_.c_str() };
-        dispatch(pal::EventType::ALE_AMD_RECEIVED, "", 0, &ad, sizeof(ad));
-    }
-    ack_amd_acc_.clear();
+    amd_dispatch(ack_amd_peer_, amd_flush(ack_amd_));
     ack_amd_peer_.clear();
 }
 
