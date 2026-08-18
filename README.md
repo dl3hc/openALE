@@ -42,6 +42,25 @@ for attribution.
 
 ---
 
+## Implementation Status
+
+openALE currently implements the core, basic **2G ALE** functions: scanning, sounding,
+individual calling, linking/handshake, LQA (link quality assessment), and AMD orderwire
+messaging.
+
+The following are **not yet implemented** and remain open items:
+
+- **AQC-ALE** extensions (Data Elements, traffic classes, slotted response)
+- **ALLCALL / ANYCALL / NETCALL** — group and broadcast call types
+- **DBM** (Data Block Message) and **DTM** (Data Text Message)
+- Advanced ALE commands (extended command set beyond basic calling/linking)
+- **Digital Voice** modes
+- The **FS-1052 M110A** ARQ modem
+
+Contributions implementing any of these are very welcome — see [Contributing](#contributing).
+
+---
+
 ## Build
 
 Requires a C++17 compiler, CMake ≥ 3.15, and **Hamlib** (mandatory — the build fails with a
@@ -135,3 +154,7 @@ Alex Pennington (AAM402/KY4OLB); the platform-abstraction interfaces originate f
 [PC-ALE-PAL](https://github.com/Alex-Pennington/PC-ALE-PAL). The codebase has since diverged
 substantially from the original. Built against the public **MIL-STD-188-141B** and
 **FED-STD-1052** specifications.
+
+Radio control (CAT/PTT) is provided by [Hamlib](https://github.com/Hamlib/Hamlib), the
+open-source amateur/commercial radio control library — a required dependency, without which
+openALE cannot control a transceiver.
