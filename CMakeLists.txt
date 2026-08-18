@@ -620,6 +620,11 @@ target_link_libraries(test_amd_send ale_app_core ale_link ale_modem ale_protocol
 target_include_directories(test_amd_send PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME AMDSend COMMAND test_amd_send)
 
+add_executable(test_amd_calling_frame tests/gen/unit/test_amd_calling_frame.cpp)
+target_link_libraries(test_amd_calling_frame ale_app_core ale_link ale_modem ale_protocol ale_fsk_core ale_fec ale_pal)
+target_include_directories(test_amd_calling_frame PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME AMDCallingFrame COMMAND test_amd_calling_frame)
+
 add_executable(test_dtm_orderwire_tx tests/gen/unit/test_dtm_orderwire_tx.cpp)
 target_link_libraries(test_dtm_orderwire_tx ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_dtm_orderwire_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

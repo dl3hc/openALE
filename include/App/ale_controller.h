@@ -460,6 +460,12 @@ public:
      */
     void update(uint32_t now_ms);
 
+    /// TEST-ONLY: feed a decoded word into the RX pipeline as if it had just
+    /// arrived from the demodulator, bypassing audio/FEC. Lets unit tests
+    /// drive the controller's RX-side accumulators (AMD, LQA, caller identity,
+    /// …) without a real audio device. Not used by production code paths.
+    void test_inject_rx_word(const ALEWord& word) { on_received_word(word); }
+
     /**
      * Feed PCM audio captured from the sound card (8 kHz, mono, 16-bit).
      * Passes samples to the RX pipeline; may trigger word_cb_ → SM word receive.
@@ -1196,6 +1202,7 @@ public:
     // ── Inspection ──────────────────────────────────────────────────────────
     ALEState    state() const { return sm_.get_state(); }
     std::string self()  const { return self_addr_; }
+    CallingPhase get_calling_phase() const { return sm_.get_calling_phase(); } ///< TEST-ONLY inspection (mirrors state())
 
     /**
      * Per-instance display state for the operator UI, derived from THIS station's
@@ -1228,20 +1235,49 @@ private:
     // it (normal LINKED); reject calls terminate_link() (TWAS → AVAILABLE).
     bool                     pending_operator_accept_ = false;
 
-    // ACK-frame AMD orderwire RX — active while in HANDSHAKE/WAIT_ACK (A.5.7.2.2,
+    // Shared AMD accumulator core (A.5.7.2.2): CMD discrimination + accumulate,
+    // instantiated once per standard-mandated AMD window below. See amd_step()/
+    // amd_flush()/amd_dispatch(). A.5.7.2.2: "The receiving station shall be
+    // capable of receiving an AMD message contained in any ALE frame, including
+    // calls, responses, and acknowledgments" — hence four windows, not two.
+    struct AmdAccumulator {
+        bool        collecting = false;  // true between CMD AMD and TIS/next CMD
+        std::string acc;                 // Expanded-64 chars (3 per word, untrimmed)
+    };
+
+    // Calling-frame AMD RX — active while HANDSHAKE/WAIT_CYCLE_END (A.5.7.2.2,
+    // called-station side; also covers AllCall/AnyCall message sections, same
+    // window). The peer isn't reliably known until the caller's TIS conclusion
+    // settles (multi-word addresses), so completed messages are buffered here
+    // and dispatched once, in on_sm_state_change() when HANDSHAKE is left —
+    // independent of whether the handshake goes on to link or times out
+    // (A.5.7.2.3 requires display "upon arrival", not upon link success).
+    AmdAccumulator           call_amd_;
+    std::vector<std::string> call_amd_pending_;
+
+    // Response-frame AMD RX — active while CALLING/LISTENING (A.5.7.2.2,
+    // calling-station side, receiving JOE's response). Like the calling-frame
+    // window, the peer isn't reliably known until the responder's own TIS is
+    // processed by the SM (sm_.get_to_address(), populated in react_calling_'s
+    // TIS_CALLER case) — which happens *after* this accumulator sees the same
+    // word (rx_accumulate_resp_amd runs before sm_.process_received_word() in
+    // on_received_word()). So completed messages are buffered here and
+    // dispatched once, in on_sm_state_change() when CALLING is left.
+    AmdAccumulator           resp_amd_;
+    std::vector<std::string> resp_amd_pending_;
+
+    // ACK-frame AMD RX — active while in HANDSHAKE/WAIT_ACK (A.5.7.2.2,
     // responder side).  The caller's ACK frame is TO[self]×2 + CMD AMD + DATA/REP
     // + TIS[caller]; we ignore the TO prefix and reassemble from CMD AMD onward.
-    bool        ack_amd_collecting_ = false;  // true between CMD AMD and TIS/next CMD
-    std::string ack_amd_acc_;                 // Expanded-64 chars (3 per word, untrimmed)
-    std::string ack_amd_peer_;                // caller to attribute the message to
+    AmdAccumulator ack_amd_;
+    std::string    ack_amd_peer_;                // caller to attribute the message to
 
     // Linked AMD orderwire RX — active while LINKED (A.5.7.2 over an established link).
     // The peer's linked-orderwire frame is TO[peer]+CMD AMD+DATA/REP+TIS[self-peer];
     // we ignore the TO/address-extension prefix and reassemble from CMD AMD onward.
-    bool        linked_amd_collecting_ = false;  // true between CMD AMD and TIS/next CMD
-    std::string linked_amd_acc_;                 // Expanded-64 chars (3 per word, untrimmed)
-    uint32_t    linked_amd_settle_ms_ = 0;        // last-word time; Tdrw-silence commit deadline
-    std::string linked_amd_peer_;                // peer to attribute the message to
+    AmdAccumulator linked_amd_;
+    std::string    linked_amd_peer_;              // peer to attribute the message to
+    uint32_t       linked_amd_settle_ms_ = 0;      // last-word time; Tdrw-silence commit deadline
 
     // LQA
     LQADatabase              lqa_database_;
@@ -1543,10 +1579,17 @@ private:
     void rx_handle_freq_select(const ALEWord& word);         ///< CMD 'f' EFS sequence
     void rx_accumulate_sounding(const ALEWord& word);        ///< TIS/TWAS sounding while SCANNING/IDLE
     void rx_accumulate_frame_ber(const ALEWord& word);       ///< LINKED/CALLING/HANDSHAKE BER paths
+    // Shared AMD core (A.5.7.2.2) — see AmdAccumulator above.
+    std::string amd_step(AmdAccumulator& st, const ALEWord& word);            ///< CMD discrimination + accumulate; returns trimmed text when a message just concluded (TIS/TWAS or a superseding CMD)
+    std::string amd_flush(AmdAccumulator& st);                                ///< force-conclude an in-progress accumulation (best-effort exit / silence fallback)
+    void        amd_dispatch(const std::string& peer, const std::string& text); ///< fires ALE_AMD_RECEIVED iff both are non-empty
+
+    void rx_accumulate_call_amd(const ALEWord& word);        ///< calling-frame AMD reassembly (A.5.7.2.2, called-station side); dispatch deferred to on_sm_state_change()
+    void rx_accumulate_resp_amd(const ALEWord& word);        ///< response-frame AMD reassembly (A.5.7.2.2, calling-station side); dispatch deferred to on_sm_state_change()
     void rx_accumulate_linked_amd(const ALEWord& word);      ///< LINKED-state AMD reassembly (A.5.7.2)
-    void commit_linked_amd();                               ///< trim + fire on_amd_received, reset
+    void commit_linked_amd();                               ///< amd_dispatch(linked_amd_peer_, amd_flush(linked_amd_)) — Tdrw-silence fallback call site
     void rx_accumulate_ack_amd(const ALEWord& word);         ///< ACK-frame AMD reassembly (A.5.7.2.2, responder)
-    void commit_ack_amd();                                  ///< trim + fire on_amd_received, reset
+    void commit_ack_amd();                                  ///< amd_dispatch(ack_amd_peer_, amd_flush(ack_amd_))
 
     /**
      * Emit the incoming-call alert (on_call_received / ALE_CALL_RECEIVED) and any

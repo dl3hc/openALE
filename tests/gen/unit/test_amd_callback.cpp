@@ -7,10 +7,13 @@
  * notification.
  *
  * AMD frame wire format (encode_amd / ale_orderwire_protocols.cpp):
- *   [TO dest × N] [CMD msg_1-3] [DATA msg_4-6]? [REP msg_7-9]? ... [TIS/FROM src]
+ *   [TO dest × N] [CMD msg_1-3] [DATA msg_4-6]? [REP msg_7-9]? ... [TIS src]
  *
  * The CMD preamble word is mandatory and distinguishes AMD from individual
  * calls that carry DATA words only for address extension (long callsigns).
+ * A frame concludes only on TIS/TWAS (A.5.2.3/A.5.5.4.4) — FROM is a mid-frame
+ * quick-ID, never a terminator, so every assembled-frame test below closes
+ * with TIS.
  *
  * Verifies:
  *   TEST 1  CallTypeDetector::is_amd() — TO+FROM+CMD detected as AMD
@@ -100,16 +103,16 @@ void test_assembler_amd_call_type()
 
     MessageAssembler asm_;
 
-    // AMD frame: TO dest + CMD message-start + FROM conclusion
-    // (FROM triggers completion via has_to && has_from)
+    // AMD frame: TO dest + CMD message-start + TIS conclusion (A.5.2.3: a
+    // frame concludes only on TIS/TWAS).
     asm_.add_word(make_word(PreambleType::TO,   "BOB", 100));
     asm_.add_word(make_word(PreambleType::CMD,  "HEL", 110));
-    bool complete = asm_.add_word(make_word(PreambleType::FROM, "SAM", 120));
+    bool complete = asm_.add_word(make_word(PreambleType::TIS, "SAM", 120));
 
     ALEMessage msg;
     bool got = asm_.get_message(msg);
 
-    assert(complete && "Assembler must signal completion at TO+FROM");
+    assert(complete && "Assembler must signal completion at TIS");
     (void)complete;
     assert(got      && "get_message must return true after completion");
     (void)got;
@@ -126,7 +129,7 @@ void test_assembler_amd_data_content()
     MessageAssembler asm_;
     asm_.add_word(make_word(PreambleType::TO,   "BOB", 100));
     asm_.add_word(make_word(PreambleType::CMD,  "HEL", 110));
-    asm_.add_word(make_word(PreambleType::FROM, "SAM", 120));
+    asm_.add_word(make_word(PreambleType::TIS,  "SAM", 120));
 
     ALEMessage msg;
     asm_.get_message(msg);
@@ -145,7 +148,7 @@ void test_assembler_amd_multi_word_data()
     asm_.add_word(make_word(PreambleType::TO,   "BOB", 100));
     asm_.add_word(make_word(PreambleType::CMD,  "HEL", 110));  // first AMD word
     asm_.add_word(make_word(PreambleType::DATA, "LO@", 120));  // continuation
-    asm_.add_word(make_word(PreambleType::FROM, "SAM", 130));
+    asm_.add_word(make_word(PreambleType::TIS,  "SAM", 130));
 
     ALEMessage msg;
     asm_.get_message(msg);
@@ -170,7 +173,7 @@ void test_no_crash_without_callback()
     MessageAssembler asm_;
     asm_.add_word(make_word(PreambleType::TO,   "BOB", 0));
     asm_.add_word(make_word(PreambleType::CMD,  "HI!", 1));
-    asm_.add_word(make_word(PreambleType::FROM, "SAM", 2));
+    asm_.add_word(make_word(PreambleType::TIS,  "SAM", 2));
 
     ALEMessage msg;
     bool ok = asm_.get_message(msg);

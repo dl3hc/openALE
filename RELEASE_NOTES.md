@@ -107,6 +107,11 @@ HTTPS/WSS instead, with a self-signed certificate generated automatically on fir
 - AMD messages sent over an established link now send the TO address preamble twice, as
   MIL-STD-188-141B requires (matching leading calls, ACKs, and link termination) — previously
   it was sent only once.
+- Incoming AMD messages embedded in the calling frame or the response frame (the way most
+  other ALE stations send them) were silently dropped instead of being displayed — only AMD
+  sent in the ACK frame or over an established link was received. openALE now listens for AMD
+  in all four frames MIL-STD-188-141B allows, and displays it immediately, independent of
+  whether the resulting handshake goes on to link or times out.
 
 ## Other
 
