@@ -3911,9 +3911,40 @@ function renderWizardStep() {
   const nextBtn = document.getElementById('wzNextBtn');
   if (prevBtn) prevBtn.disabled = wizardStep === 0;
   if (nextBtn) nextBtn.disabled = wizardStep === 4;
+  if (wizardStep === 1) wzLoadNetFiles();
   if (wizardStep === 2) wzRenderNets();
   if (wizardStep === 3) wzMirrorRig();
   if (wizardStep === 4) wzMirrorAudio();
+}
+
+// Fallback list shown when the bridge can't be asked what's actually on disk
+// (not yet connected, or NETS_FILES_LIST comes back empty) — mirrors the
+// presets that ship in nets/.
+const WZ_DEFAULT_NET_FILES = [
+  'nets/USA.ale', 'nets/EUR.ale', 'nets/EUR_cur.ale', 'nets/EUR_ale_only.ale',
+  'nets/UK.ale', 'nets/JA.ale', 'nets/AUS.ale',
+  'nets/ITU1.ale', 'nets/ITU2.ale', 'nets/ITU3.ale',
+];
+
+// Populates the Step 1 channel-file dropdown, preserving the operator's
+// current selection across re-populates (e.g. re-entering the step) when it
+// still appears in the new list.
+function wzFillNetFiles(files) {
+  const el = document.getElementById('wzChannelPath');
+  if (!el) return;
+  const prev = el.value;
+  el.innerHTML = files.map(f => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join('');
+  if (prev && files.includes(prev)) el.value = prev;
+}
+
+// Asks the bridge which *.ale files actually exist in nets/ so the dropdown
+// only ever offers files that will really load.
+function wzLoadNetFiles() {
+  if (!bridgeConnected) { wzFillNetFiles(WZ_DEFAULT_NET_FILES); return; }
+  bridgeSend('NETS_FILES_LIST', {}, (r) => {
+    const files = (r.ok && Array.isArray(r.data) && r.data.length) ? r.data : WZ_DEFAULT_NET_FILES;
+    wzFillNetFiles(files);
+  });
 }
 
 // Free step navigation via the header ‹/› buttons — pure browsing, no side

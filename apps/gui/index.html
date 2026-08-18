@@ -1624,12 +1624,11 @@
       <div class="wz-step-num">Step 2 of 5</div>
       <div class="wz-step-title">Load Channels</div>
       <div class="wz-step-desc">Load a <span style="font-family:var(--mono);color:var(--accent)">.ale</span> channel file. Presets ship in the <span style="font-family:var(--mono);color:var(--accent)">nets/</span> folder.</div>
-      <label class="flabel" style="margin-top:14px">File path</label>
-      <input class="finput" id="wzChannelPath" type="text"
-             value="nets/USA.ale" placeholder="nets/USA.ale"
-             style="margin-top:4px;font-family:var(--mono);font-size:12px"
-             onkeydown="if(event.key==='Enter')wzNext()">
-      <div class="fhint" style="margin-top:6px">Presets: <span style="font-family:var(--mono)">USA</span> · <span style="font-family:var(--mono)">EUR</span> · <span style="font-family:var(--mono)">EUR_cur</span> · <span style="font-family:var(--mono)">EUR_ale_only</span> · <span style="font-family:var(--mono)">UK</span> · <span style="font-family:var(--mono)">JA</span> · <span style="font-family:var(--mono)">AUS</span> · <span style="font-family:var(--mono)">ITU1</span> · <span style="font-family:var(--mono)">ITU2</span> · <span style="font-family:var(--mono)">ITU3</span> (add <span style="font-family:var(--mono)">.ale</span>)</div>
+      <label class="flabel" style="margin-top:14px">Channel file</label>
+      <select class="fselect" id="wzChannelPath"
+              style="margin-top:4px;font-family:var(--mono);font-size:12px">
+        <option value="nets/USA.ale">nets/USA.ale</option>
+      </select>
       <div id="wzStep1Status" class="wz-status"></div>
       <div class="wz-actions">
         <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
