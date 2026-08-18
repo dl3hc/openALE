@@ -47,10 +47,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -146,6 +148,44 @@ static std::string resolve_data_path(const std::string& path) {
         }
     }
     return path;
+}
+
+// Lists the "nets/<name>.ale" files available to STATION_LOAD, for the setup
+// wizard's channel-file dropdown. Walks the same candidate roots as
+// resolve_data_path()/resolve_web_root() (exe dir + up to 5 parents, then
+// CWD) so it finds the real nets/ directory regardless of whether openALE is
+// launched from the repo root or a build/ subdirectory, then stops at the
+// first root that actually contains a nets/ directory.
+static std::vector<std::string> list_net_files() {
+    std::vector<std::string> roots;
+    const std::string ed = exe_dir();
+    if (!ed.empty()) {
+        std::string up = ed;
+        for (int i = 0; i < 6; ++i) {       // exe dir + up to 5 parents
+            roots.push_back(up + "/nets");
+            up += "/..";
+        }
+    }
+    roots.push_back("nets");
+    roots.push_back("./nets");
+
+    std::vector<std::string> out;
+    for (const auto& dir : roots) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec) || ec) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (ec) break;
+            if (!entry.is_regular_file()) continue;
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext != ".ale") continue;
+            out.push_back("nets/" + entry.path().filename().string());
+        }
+        if (!out.empty()) break;
+    }
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 // ── Small helpers ───────────────────────────────────────────────────────────
@@ -646,6 +686,11 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         const bool ok = ctrl.save_station_file(msg.get_string("path"));
         mj::Value r = make_reply(msg, ok);
         if (!ok) r.set("error", mj::Value::string("could not write file (check path/permissions)"));
+        return mj::dump(r);
+    }
+    if (cmd == "NETS_FILES_LIST") {
+        mj::Value r = make_reply(msg, true);
+        r.set("data", string_array(list_net_files()));
         return mj::dump(r);
     }
 
