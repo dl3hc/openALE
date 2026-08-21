@@ -214,6 +214,7 @@
           <div class="help-kicker">ALE</div>
           <div class="help-h">Nets</div>
           <p class="help-lead">A Net groups one or more Channels under a shared scanning/sounding schedule and a common name shown in the header's Net picker.</p>
+          <div class="help-field"><span class="flabel">Automatic Sounding</span><p>Enable periodic multi-channel sounding on the active net. Each net's Sounding Interval (below) sets how often its channels are sounded, keeping the LQA database current for automatic channel selection.</p></div>
           <div class="help-field"><span class="flabel">Dwell Time</span><p>How long the scanner listens on each member channel per pass before moving on.</p></div>
           <div class="help-field"><span class="flabel">Sounding Interval</span><p>How often this net's channels are sounded, in minutes — keeps the LQA database current for automatic channel selection.</p></div>
           <div class="help-field"><span class="flabel">Calling Length override</span><p>Overrides the global calling-segment duration (Timing tab) for this net specifically, useful for nets with unusually congested or clean channels.</p></div>
@@ -317,9 +318,8 @@
         <section class="ssec" data-sec="misc">
           <div class="help-kicker">Advanced</div>
           <div class="help-h">Misc / Sounding</div>
-          <p class="help-lead">Miscellaneous behavior that doesn't fit elsewhere: automatic sounding, channel-busy detection, and scan squelch calibration.</p>
+          <p class="help-lead">Miscellaneous behavior that doesn't fit elsewhere: channel-busy detection and scan squelch calibration.</p>
           <div class="help-field"><span class="flabel">Auto-save LQA on Exit</span><p>When on, the LQA database is written to <code>lqa.bin</code> automatically on shutdown, in addition to its automatic load at startup.</p></div>
-          <div class="help-field"><span class="flabel">Automatic Sounding</span><p>Lets openALE transmit scheduled soundings across a net's channels on its own, per each net's Sounding Interval, without operator action.</p></div>
           <div class="help-field"><span class="flabel">LBT Busy Detection + margin</span><p>Enables a Listen-Before-Transmit check immediately before keying up; the margin sets how far above the noise floor a signal must be to count as "busy."</p></div>
           <div class="help-field"><span class="flabel">LBT Override</span><p>Allows transmitting even when LBT reports the channel busy — use with care, as this can step on another station.</p></div>
           <div class="help-field"><span class="flabel">Scan Stop Squelch + margin / Calibrate</span><p>Sets the signal threshold that pauses the scanner on a channel with activity. Click Calibrate to have openALE sample the current noise floor and suggest a margin automatically.</p></div>

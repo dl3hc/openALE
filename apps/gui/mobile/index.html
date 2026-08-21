@@ -1165,6 +1165,19 @@
         <div class="ssec" data-sec="nets">
           <div class="ssec-title">Net Membership</div>
 
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Automatic Sounding</div>
+              <div class="ftoggle-desc">Enable periodic multi-channel sounding on the active net (interval configured per net in the list below).</div>
+            </div>
+            <label class="ftoggle">
+              <input type="checkbox" id="cfgAutoSound" onchange="applySoundAuto()">
+              <span class="ftrack"></span>
+            </label>
+          </div>
+
+          <hr class="fsep">
+
           <div class="fg">
             <label class="flabel">Nets</label>
             <div id="netList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
@@ -1555,17 +1568,6 @@
             </div>
             <label class="ftoggle">
               <input type="checkbox" id="cfgAutoLqa" checked>
-              <span class="ftrack"></span>
-            </label>
-          </div>
-
-          <div class="ftoggle-row">
-            <div class="ftoggle-info">
-              <div class="ftoggle-name">Automatic Sounding</div>
-              <div class="ftoggle-desc">Enable periodic multi-channel sounding on the active net (interval configured per net in the Nets panel).</div>
-            </div>
-            <label class="ftoggle">
-              <input type="checkbox" id="cfgAutoSound" onchange="applySoundAuto()">
               <span class="ftrack"></span>
             </label>
           </div>
