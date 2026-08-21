@@ -51,19 +51,35 @@ public:
     double lat()     const;
     double lon()     const;
 
+    /** Thread-safe: true if the current fix carries an altitude (GGA field 9 / gpsd TPV "alt").
+     *  Scoped to feed ALE-GPR's altitude field only — not used in LQA/propagation scoring. */
+    bool   has_altitude() const;
+    double alt()          const;  ///< Meters. Only meaningful if has_altitude() is true.
+
+    /** Thread-safe: the last successfully parsed raw $GPGGA/$GNGGA sentence
+     *  (empty if the source is gpsd, or no GGA line has been seen yet). Feeds
+     *  ALE-GPR's optional raw-NMEA passthrough report format — only ever
+     *  available for a live NMEA-serial fix, never gpsd/manual/grid. */
+    std::string raw_gga() const;
+
     // ── Static parsers (public for unit testing) ─────────────────────────────
     static bool   parse_tpv_json(const std::string& json,
-                                 double& lat, double& lon, bool& fix_ok);
-    static bool   parse_gpgga(const std::string& s, double& lat, double& lon);
+                                 double& lat, double& lon, bool& fix_ok,
+                                 bool& has_alt, double& alt);
+    static bool   parse_gpgga(const std::string& s, double& lat, double& lon,
+                              bool& has_alt, double& alt);
     static bool   parse_gprmc(const std::string& s, double& lat, double& lon, bool& active);
     static double nmea_coord(const std::string& coord, const std::string& hemi);
 
 private:
     // Shared fix state (protected by fix_mtx_)
     mutable std::mutex fix_mtx_;
-    double             fix_lat_   = 0.0;
-    double             fix_lon_   = 0.0;
-    bool               fix_valid_ = false;
+    double             fix_lat_       = 0.0;
+    double             fix_lon_       = 0.0;
+    bool               fix_valid_     = false;
+    double             fix_alt_       = 0.0;
+    bool               fix_has_alt_   = false;
+    std::string        raw_gga_;
 
     std::atomic<bool> running_{false};
     std::thread       gpsd_thread_;
@@ -72,7 +88,7 @@ private:
     FixCallback  on_fix_;
     std::mutex   cb_mtx_;
 
-    void update_fix(bool valid, double lat, double lon);
+    void update_fix(bool valid, double lat, double lon, bool has_alt = false, double alt = 0.0);
     void gpsd_loop(Config cfg);
     void nmea_loop(Config cfg);
 };
