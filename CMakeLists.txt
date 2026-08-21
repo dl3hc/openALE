@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(openALE VERSION 0.0.3 LANGUAGES CXX)
+project(openALE VERSION 0.0.4 LANGUAGES CXX)
 set(OPENALE_VERSION_SUFFIX "-pre-alpha")
 
 set(CMAKE_CXX_STANDARD 17)
