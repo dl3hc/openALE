@@ -1,0 +1,3 @@
+location-relay.sqlite
+location-relay.sqlite-*
+.env

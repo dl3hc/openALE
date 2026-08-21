@@ -1,0 +1,102 @@
+# Location Relay Server (Phase D)
+
+External companion service for openALE's Location Relay client
+(`docs/LOCATION_SHARING_CONCEPT.md`). This is the piece the concept doc
+explicitly keeps **out** of openALE's C++ core — a small ingest API plus a
+live map — deliberately separate so openALE never depends on it to build,
+run, or link normally.
+
+Zero npm dependencies: plain `node:http` + the built-in `node:sqlite` module
+(Node 22.5+). `npm install` is not required.
+
+## Run
+
+```sh
+cp .env.example .env
+# edit .env — set LOCATION_API_TOKEN to the same token you put in openALE's
+# Location Relay settings (Privacy/Network card)
+
+node server.js
+```
+
+Then point openALE's **Location Relay → API Endpoint** at
+`https://your-host:PORT/api/v1/locations` (or `http://127.0.0.1:8766/...` for
+local testing — openALE's client only allows plain `http://` for
+`127.0.0.1`/`localhost`, everything else must be HTTPS; put this behind a
+reverse proxy such as Caddy/nginx/Traefik for TLS termination in production).
+
+Open `http://your-host:PORT/` in a browser for the live map.
+
+## API
+
+Matches `docs/LOCATION_SHARING_CONCEPT.md` §9 exactly.
+
+- `POST /api/v1/locations` — ingest. Requires `Authorization: Bearer <token>`.
+  Body is the JSON payload openALE's `LocationRelayService` already sends
+  (`observer`, `source`, `relay`, `source_type`, `raw_gpr`, `latitude`/
+  `longitude` (nullable), `altitude`/`altitude_unit` (nullable), `timestamp`
+  (nullable), `received_at`, `call_type`). Response codes follow §9's table:
+  `201` accepted, `409` exact duplicate (same observer+source+timestamp seen
+  before — not an error, just already stored), `422` malformed/missing
+  required fields, `401` bad/missing token.
+- `GET /api/v1/locations` — public, no auth. Returns a GeoJSON
+  `FeatureCollection` of every station with a known position — this is what
+  the map frontend polls every 15s. Stations that have only ever sent
+  position-less/manual GPRs (§17a: "heard, position unknown") are tracked
+  server-side but never appear here, since GeoJSON requires coordinates —
+  see `/api/v1/stations` for those.
+- `GET /api/v1/stations` — public. Flat JSON list of every known station
+  (mapped or not), with computed `state`.
+- `GET /api/v1/stations/:callsign` — public. Full detail: position, altitude,
+  comment, raw GPR text, and the list of observers who have heard this
+  station (§14 — "mehrere Observer erzeugen keinen Mehrfachmarker").
+- `GET /healthz` — liveness probe.
+
+## Station state / TTL (§14)
+
+Computed from `last_seen_at`, thresholds configurable via env:
+
+| State   | Age                          |
+|---------|-------------------------------|
+| ONLINE  | ≤ `LOCATION_TTL_ONLINE_MIN` (default 15 min) |
+| RECENT  | ≤ `LOCATION_TTL_RECENT_MIN` (default 60 min) |
+| STALE   | ≤ `LOCATION_TTL_STALE_MIN` (default 1440 min / 24 h) |
+| OFFLINE | older than that |
+
+## Storage
+
+A single SQLite file (`LOCATION_DB_PATH`, default `./location-relay.sqlite`),
+created automatically on first run. Three tables: `reports` (full append-only
+log, one row per accepted POST — this is what the dedup UNIQUE index sits on),
+`stations` (materialized latest-state-per-callsign, what the map/list
+endpoints actually query), `station_observers` (per-station "heard by"
+roster). No server-side dedup window job is needed — the UNIQUE
+`(observer, source, timestamp)` index on `reports` rejects an exact
+resubmission inline, at insert time (§9/§11).
+
+## Multiple observers, one marker (§14)
+
+A station heard by several openALE instances is **one** row in `stations`,
+not one per observer — every accepted report just updates that row's
+`last_seen_at`/`last_observer`/`report_count` and upserts a
+`station_observers` entry. `GET /api/v1/stations/:callsign` lists all of them.
+
+## Map frontend
+
+`public/index.html` — a single self-contained page (Leaflet + OpenStreetMap
+tiles, both loaded from a CDN, no build step). Polls `GET /api/v1/locations`
+every 15s, colors markers by state, click for details. Swappable for a
+different map provider (Google Maps, etc.) — the concept doc is explicit that
+openALE-side and this server's API are provider-agnostic (§15/16); nothing
+else here depends on Leaflet specifically.
+
+## Security notes
+
+- The bearer token is required to start the server at all (no accidental
+  open-ingest mode). Compared with `crypto.timingSafeEqual`.
+- Read endpoints (`GET /api/v1/*`) are intentionally public/unauthenticated —
+  the map is meant to be viewable without a credential. If that's not wanted,
+  put the whole thing behind a reverse-proxy auth layer.
+- TLS is not handled here — terminate it at a reverse proxy in production.
+  openALE's client itself refuses plaintext `http://` except to
+  `127.0.0.1`/`localhost` (see `include/App/http_poster.h`).

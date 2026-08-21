@@ -380,6 +380,8 @@ add_library(ale_app_core
     src/App/audio_transport.cpp
     src/App/freq_select_manager.cpp
     src/App/gps_service.cpp
+    src/App/http_poster.cpp
+    src/App/location_relay_service.cpp
     src/App/sfi_service.cpp
     src/App/sounding_identity_accumulator.cpp
     src/App/voice_path_manager.cpp

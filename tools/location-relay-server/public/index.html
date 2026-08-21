@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openALE — Location Relay Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #10161d; --border: #1e2733; --text: #cfe3f2; --mute: #7c93a6;
+    --accent: #4f83c4; --online: #37c26a; --recent: #d8b34a; --stale: #d8703f; --offline: #5a6572;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+               font: 13px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  #hud { position: absolute; top: 12px; left: 12px; z-index: 1000; background: var(--panel);
+         border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 220px; }
+  #hud h1 { font-size: 14px; margin: 0 0 6px; color: var(--text); }
+  #hud .row { display: flex; align-items: center; gap: 6px; margin: 3px 0; color: var(--mute); }
+  #hud .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  #hud .count { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
+  #hud .meta { margin-top: 8px; font-size: 11px; color: var(--mute); border-top: 1px solid var(--border); padding-top: 6px; }
+  .leaflet-popup-content-wrapper { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+  .leaflet-popup-tip { background: var(--panel); }
+  .pop h2 { font-size: 13px; margin: 0 0 4px; color: var(--accent); }
+  .pop .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-size: 12px; }
+  .pop .kv b { color: var(--mute); font-weight: 400; }
+  .pop .raw { margin-top: 6px; font-family: ui-monospace, Consolas, monospace; font-size: 11px;
+              color: var(--mute); word-break: break-all; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="hud">
+  <h1>openALE Location Relay</h1>
+  <div class="row"><span class="dot" style="background:var(--online)"></span>Online (&le;15m)<span class="count" id="cOnline">0</span></div>
+  <div class="row"><span class="dot" style="background:var(--recent)"></span>Recent (&le;60m)<span class="count" id="cRecent">0</span></div>
+  <div class="row"><span class="dot" style="background:var(--stale)"></span>Stale (&le;24h)<span class="count" id="cStale">0</span></div>
+  <div class="row"><span class="dot" style="background:var(--offline)"></span>Offline (&gt;24h)<span class="count" id="cOffline">0</span></div>
+  <div class="meta" id="meta">loading…</div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+'use strict';
+const STATE_COLOR = { ONLINE: '#37c26a', RECENT: '#d8b34a', STALE: '#d8703f', OFFLINE: '#5a6572' };
+const REFRESH_MS = 15000;
+
+const map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 19,
+}).addTo(map);
+
+const markers = new Map();  // callsign -> L.CircleMarker
+
+function popupHtml(p) {
+  const lines = [
+    ['Last seen', new Date(p.last_seen_at).toLocaleString()],
+    ['Heard via', p.last_observer],
+    ['Reports', p.report_count],
+  ];
+  if (p.altitude !== undefined && p.altitude !== null) lines.push(['Altitude', `${p.altitude} ${p.altitude_unit || ''}`]);
+  if (p.position_timestamp) lines.push(['Position time', p.position_timestamp]);
+  return `<div class="pop"><h2>${escapeHtml(p.callsign)}</h2>
+    <div class="kv">${lines.map(([k, v]) => `<b>${k}</b><span>${escapeHtml(String(v))}</span>`).join('')}</div>
+  </div>`;
+}
+function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function refresh() {
+  let data;
+  try {
+    const r = await fetch('/api/v1/locations', { cache: 'no-store' });
+    data = await r.json();
+  } catch (e) {
+    document.getElementById('meta').textContent = 'Fetch failed: ' + e.message;
+    return;
+  }
+  const counts = { ONLINE: 0, RECENT: 0, STALE: 0, OFFLINE: 0 };
+  const seen = new Set();
+
+  for (const f of data.features || []) {
+    const p = f.properties;
+    const [lon, lat] = f.geometry.coordinates;
+    counts[p.state] = (counts[p.state] || 0) + 1;
+    seen.add(p.callsign);
+
+    let m = markers.get(p.callsign);
+    const color = STATE_COLOR[p.state] || STATE_COLOR.OFFLINE;
+    if (!m) {
+      m = L.circleMarker([lat, lon], { radius: 7, weight: 2, color, fillColor: color, fillOpacity: 0.6 }).addTo(map);
+      markers.set(p.callsign, m);
+    } else {
+      m.setLatLng([lat, lon]);
+      m.setStyle({ color, fillColor: color });
+    }
+    m.bindPopup(popupHtml(p));
+  }
+
+  // Drop markers for stations no longer returned (shouldn't normally happen —
+  // /api/v1/locations returns every station with a known position regardless
+  // of state — but keeps the map correct if the server ever filters OFFLINE out).
+  for (const [callsign, m] of markers) {
+    if (!seen.has(callsign)) { map.removeLayer(m); markers.delete(callsign); }
+  }
+
+  document.getElementById('cOnline').textContent  = counts.ONLINE;
+  document.getElementById('cRecent').textContent  = counts.RECENT;
+  document.getElementById('cStale').textContent   = counts.STALE;
+  document.getElementById('cOffline').textContent = counts.OFFLINE;
+  document.getElementById('meta').textContent =
+    `${data.features.length} station(s) · updated ${new Date().toLocaleTimeString()}`;
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

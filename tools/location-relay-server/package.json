@@ -1,0 +1,13 @@
+{
+  "name": "location-relay-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Phase D companion service for docs/LOCATION_SHARING_CONCEPT.md — ingest API + map frontend for openALE's Location Relay client. Zero npm dependencies (Node's built-in http + node:sqlite).",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
