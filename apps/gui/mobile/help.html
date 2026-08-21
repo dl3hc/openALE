@@ -190,6 +190,7 @@
           <div class="help-kicker">Essential</div>
           <div class="help-h">Nets</div>
           <p class="help-lead">Groups Channels under a shared scanning/sounding schedule, selectable from the header's Net picker.</p>
+          <div class="help-field"><span class="flabel">Automatic Sounding</span><p>Enable periodic multi-channel sounding on the active net. Each net's Sounding Interval (below) sets how often its channels are sounded.</p></div>
           <div class="help-field"><span class="flabel">Dwell Time</span><p>How long the scanner listens on each member channel per pass.</p></div>
           <div class="help-field"><span class="flabel">Sounding Interval</span><p>How often this net's channels are sounded, in minutes.</p></div>
           <div class="help-field"><span class="flabel">Calling Length override</span><p>Overrides the global calling-segment duration for this net.</p></div>
@@ -291,9 +292,8 @@
         <section class="ssec" data-sec="misc">
           <div class="help-kicker">Modem / System</div>
           <div class="help-h">Misc / Sounding</div>
-          <p class="help-lead">Automatic sounding, channel-busy detection, and scan squelch calibration.</p>
+          <p class="help-lead">Channel-busy detection and scan squelch calibration.</p>
           <div class="help-field"><span class="flabel">Auto-save LQA on Exit</span><p>Writes <code>lqa.bin</code> automatically on shutdown.</p></div>
-          <div class="help-field"><span class="flabel">Automatic Sounding</span><p>Transmits scheduled soundings across a net's channels per its Sounding Interval, unattended.</p></div>
           <div class="help-field"><span class="flabel">LBT Busy Detection + margin / Override</span><p>Checks the channel before keying up; Override transmits regardless — use with care.</p></div>
           <div class="help-field"><span class="flabel">Scan Stop Squelch + margin / Calibrate</span><p>Signal threshold that pauses scanning on activity; Calibrate samples the noise floor to suggest a margin.</p></div>
         </section>
