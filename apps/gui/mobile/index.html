@@ -237,6 +237,10 @@
           <textarea class="msg-input" id="msgInput" rows="2" placeholder="AMD message — max 90 chars, caps…" maxlength="90"
             oninput="updateMsgCount()"
             onkeydown="if(event.key==='Enter'){event.preventDefault();sendAmd();}"></textarea>
+          <label class="msg-link-toggle" title="Keep the link established after this message is delivered">
+            <input type="checkbox" id="msgLinkAfterSend">
+            Link
+          </label>
           <button class="btn-send" onclick="sendAmd()">Send</button>
           <span class="msg-count" id="msgCount">0/90</span>
         </div>
@@ -930,6 +934,216 @@
           <div style="display:flex;gap:8px;align-items:center;margin-top:16px">
             <button class="btn-sm accent" onclick="applyLocationToBridge()">Apply</button>
           </div>
+
+          <hr class="fsep">
+
+          <div class="ssec-title" style="margin-top:4px">Position Reports</div>
+          <div class="fhint" style="margin-top:-6px;margin-bottom:14px">
+            Send an ALE-GPR (or raw-GGA) position report as an AMD message. Uses the
+            live GPS fix above when available, otherwise the configured station position.
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Destination</label>
+            <div class="fradio-group">
+              <label class="fradio-opt">
+                <input type="radio" name="posReportDest" value="direct" checked onchange="onPosReportDestChange()">
+                <span class="fradio-dot"></span> Direct Address
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="posReportDest" value="allcall" onchange="onPosReportDestChange()">
+                <span class="fradio-dot"></span> ALLCALL (broadcast)
+              </label>
+            </div>
+          </div>
+          <div id="posReportDirectRow" class="fg">
+            <label class="flabel" for="cfgPosReportTarget">Destination Address</label>
+            <input class="finput" type="text" id="cfgPosReportTarget" maxlength="15"
+              placeholder="Selected contact / linked peer if left blank" style="text-transform:uppercase">
+          </div>
+          <div class="fhint" style="margin-top:-10px;margin-bottom:14px">
+            ALLCALL is a one-shot, unacknowledged broadcast (MIL-STD-188-141B A.5.5.4.4) —
+            no reply is expected or waited for.
+          </div>
+
+          <div class="fg">
+            <label class="flabel" for="cfgPosReportNet">Network (channel selection)</label>
+            <select class="fselect" id="cfgPosReportNet"><option value="">— any / active net —</option></select>
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Automatic Reporting</label>
+            <div class="fradio-group">
+              <label class="fradio-opt">
+                <input type="radio" name="posReportMode" value="0" checked onchange="onPosReportModeChange()">
+                <span class="fradio-dot"></span> Manual only
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="posReportMode" value="1" onchange="onPosReportModeChange()">
+                <span class="fradio-dot"></span> On Change
+              </label>
+              <label class="fradio-opt">
+                <input type="radio" name="posReportMode" value="2" onchange="onPosReportModeChange()">
+                <span class="fradio-dot"></span> Interval
+              </label>
+            </div>
+          </div>
+          <div id="posReportChangeRow" class="fg" style="display:none">
+            <label class="flabel" for="cfgPosReportChangeM">Report when moved at least</label>
+            <select class="fselect" id="cfgPosReportChangeM">
+              <option value="100">100 m</option>
+              <option value="250">250 m</option>
+              <option value="500">500 m</option>
+              <option value="1000" selected>1 km</option>
+              <option value="2000">2 km</option>
+              <option value="5000">5 km</option>
+              <option value="10000">10 km</option>
+              <option value="25000">25 km</option>
+              <option value="50000">50 km</option>
+              <option value="100000">100 km</option>
+            </select>
+            <div class="fhint">
+              A small threshold means frequent broadcasts as ordinary GPS jitter keeps
+              re-crossing it — this can congest the channel. A fixed 60 s minimum
+              always applies regardless of this setting.
+            </div>
+          </div>
+          <div id="posReportIntervalRow" class="fg" style="display:none">
+            <label class="flabel" for="cfgPosReportIntervalMin">Report every (minutes)</label>
+            <input class="finput" type="number" id="cfgPosReportIntervalMin" min="1" max="1440" value="15">
+          </div>
+
+          <div class="fg">
+            <label class="flabel">Format</label>
+            <div class="fradio-group">
+              <label class="fradio-opt">
+                <input type="radio" name="posReportFormat" value="0" checked>
+                <span class="fradio-dot"></span> ALE-GPR
+              </label>
+              <label class="fradio-opt" id="posReportFormatGgaOpt">
+                <input type="radio" name="posReportFormat" value="1" disabled>
+                <span class="fradio-dot"></span> Raw NMEA GGA
+              </label>
+            </div>
+            <div class="fhint">Raw GGA passthrough needs a live NMEA-serial GPS fix (above) — unavailable for gpsd, manual, or grid-derived positions.</div>
+          </div>
+
+          <div class="fg">
+            <label class="flabel" for="cfgPosReportStandingComment">Standing Comment (automatic reports)</label>
+            <input class="finput" type="text" id="cfgPosReportStandingComment" maxlength="25"
+              placeholder="MOBILE STATION">
+            <div class="fhint">Used verbatim by on-change/interval sends. The manual comment below pre-fills from this.</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:4px;margin-bottom:16px">
+            <button class="btn-sm accent" onclick="applyPositionReportToBridge()">Apply</button>
+          </div>
+
+          <hr class="fsep">
+
+          <div class="fg">
+            <label class="flabel" for="cfgPosReportComment">Send Position Now — Comment</label>
+            <input class="finput" type="text" id="cfgPosReportComment" maxlength="25"
+              placeholder="EVERYTHING FINE" oninput="updatePosReportCount()">
+            <div class="fhint" style="display:flex;justify-content:flex-end;margin-top:2px">
+              <span id="posReportCount">0/25</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+            <button class="btn-sm accent" onclick="sendPositionReport()">Send Position</button>
+            <span class="loc-status" id="posReportStatus"></span>
+          </div>
+
+          <hr class="fsep">
+
+          <div class="ssec-title" style="margin-top:4px">Known Positions <span style="font-weight:400;font-size:11px;color:var(--tx-mute)">(from received reports)</span></div>
+          <div class="pbody" id="gprPositionsList" style="padding:0"></div>
+
+          <hr class="fsep">
+
+          <div class="ssec-title" style="margin-top:4px">Privacy / Network — Location Relay</div>
+          <div class="fhint" style="margin-top:-6px;margin-bottom:14px">
+            Off by default. When enabled, ALE-GPR positions received from other stations are
+            forwarded to the configured HTTPS endpoint. Your own transmitted positions are never
+            forwarded. No effect on ALE/audio/radio.
+          </div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Enable Location Relay</div>
+              <div class="ftoggle-desc">Forward received positions to the configured web API</div>
+            </div>
+            <label class="ftoggle">
+              <input type="checkbox" id="cfgLocShareEnabled" onchange="onLocShareEnabledChange()">
+              <span class="ftrack"></span>
+            </label>
+          </div>
+
+          <div id="locShareBody">
+            <div class="fg" style="margin-top:14px">
+              <label class="flabel" for="cfgLocShareUrl">API Endpoint</label>
+              <input class="finput" type="text" id="cfgLocShareUrl"
+                placeholder="https://example.com/api/v1/locations">
+            </div>
+            <div class="fg">
+              <label class="flabel" for="cfgLocShareToken">Bearer Token</label>
+              <input class="finput" type="password" id="cfgLocShareToken"
+                placeholder="(leave blank to keep the stored token)">
+              <div class="fhint" id="locShareTokenHint"></div>
+            </div>
+
+            <div class="fg">
+              <label class="flabel">Forward positions received via</label>
+              <div class="fradio-group">
+                <label class="fradio-opt">
+                  <input type="checkbox" id="cfgLocShareAllcall">
+                  <span class="fradio-dot"></span> ALLCALL
+                </label>
+                <label class="fradio-opt">
+                  <input type="checkbox" id="cfgLocShareIndividual">
+                  <span class="fradio-dot"></span> Individual Call
+                </label>
+                <label class="fradio-opt">
+                  <input type="checkbox" id="cfgLocShareNet">
+                  <span class="fradio-dot"></span> Net Call
+                </label>
+                <label class="fradio-opt">
+                  <input type="checkbox" id="cfgLocShareGroup">
+                  <span class="fradio-dot"></span> Group Call
+                </label>
+                <label class="fradio-opt">
+                  <input type="checkbox" id="cfgLocShareLinked">
+                  <span class="fradio-dot"></span> Linked (established connection)
+                </label>
+              </div>
+            </div>
+
+            <div class="fg-row col2">
+              <div>
+                <label class="flabel" for="cfgLocShareMinInterval">Min. interval per source (s)</label>
+                <input class="finput" type="number" id="cfgLocShareMinInterval" min="1" max="3600" value="30">
+              </div>
+              <div>
+                <label class="flabel" for="cfgLocShareRoundDigits">Position rounding (digits)</label>
+                <input class="finput" type="number" id="cfgLocShareRoundDigits" min="0" max="6" value="2">
+              </div>
+            </div>
+            <div class="fhint" style="margin-top:-6px">
+              Rounding reduces position resolution for privacy (2 digits ≈ 1 km) and also
+              stabilizes deduplication.
+            </div>
+
+            <div class="fg">
+              <label class="fradio-opt" style="display:inline-flex">
+                <input type="checkbox" id="cfgLocShareIncludeComment">
+                <span class="fradio-dot"></span> Forward the GPR comment field
+              </label>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+            <button class="btn-sm accent" onclick="applyLocationSharingToBridge()">Apply</button>
+            <span class="loc-status" id="locShareStatus"></span>
+          </div>
         </div><!-- /location -->
 
         <!-- ── Channels ── -->
@@ -981,6 +1195,11 @@
               <label class="flabel">Link Idle Timeout (s)</label>
               <input class="finput" id="cfgLinkIdle" type="number" value="360" min="10">
               <div class="fhint">Terminate link after inactivity.</div>
+            </div>
+            <div>
+              <label class="flabel">AMD Send Attempts</label>
+              <input class="finput" id="cfgAmdMaxAttempts" type="number" value="3" min="1">
+              <div class="fhint">Retries before "not heard" notification.</div>
             </div>
           </div>
 
