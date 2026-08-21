@@ -71,6 +71,7 @@ add_library(ale_protocol
     src/Protocol/Message/ale_message.cpp
     src/Protocol/Message/frame_validator.cpp
     src/Protocol/Message/ale_orderwire_protocols.cpp
+    src/Protocol/Message/ale_gpr.cpp
     src/LQA/lqa_report.cpp
 )
 
