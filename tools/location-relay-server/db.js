@@ -42,16 +42,33 @@ function openDb(path) {
       created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     )
   `);
-  // Exact-duplicate guard (Konzept §9's Idempotency-Key intent, enforced
-  // server-side too): the same observer reporting the same source at the
-  // same GPR timestamp twice (e.g. a client retry after a lost response) is
-  // one report, not two. NULL timestamps never collide in a UNIQUE index
-  // (SQLite/ANSI semantics), which is correct here — position-less/no-time
-  // reports (§20.5's manual_or_invalid_position) always insert.
-  db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS ix_reports_dedup
-      ON reports(observer, source, timestamp)
-  `);
+  // Dedup guard. Two modes:
+  //  - default (LOCATION_COLLAPSE_BROADCASTS unset): one row per
+  //    (observer, source, timestamp) — Konzept §9 idempotency intent (a client
+  //    retry after a lost response is one report, not two). A broadcast heard
+  //    by N observers stores N rows (distinct observers never collide).
+  //  - collapse (LOCATION_COLLAPSE_BROADCASTS=1): one row per
+  //    (source, timestamp, latitude, longitude) — all N observers of one
+  //    broadcast collapse to a single report row (the other N-1 get 409),
+  //    shrinking the append-only reports table hundreds×. The "who heard it"
+  //    fan-in is still preserved in station_observers.
+  // NULL lat/lon/timestamp never collide (SQLite UNIQUE semantics), so
+  // position-less/no-time reports always insert in both modes. Collapse needs
+  // a fresh (or already-deduped) DB: if existing rows violate the new key,
+  // creating the UNIQUE index throws — fall back to per-observer dedup and
+  // log so the operator knows to reset the DB to enable collapse.
+  const COLLAPSE = process.env.LOCATION_COLLAPSE_BROADCASTS === '1';
+  if (COLLAPSE) {
+    try {
+      db.exec(`DROP INDEX IF EXISTS ix_reports_dedup`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ix_reports_collapse ON reports(source, timestamp, latitude, longitude)`);
+    } catch (e) {
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ix_reports_dedup ON reports(observer, source, timestamp)`);
+      console.error('[db] LOCATION_COLLAPSE_BROADCASTS=1 but duplicate reports exist under the (source,timestamp,position) key; collapse unavailable until the DB is reset. Falling back to per-observer dedup.');
+    }
+  } else {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ix_reports_dedup ON reports(observer, source, timestamp)`);
+  }
   db.exec(`CREATE INDEX IF NOT EXISTS ix_reports_source ON reports(source)`);
 
   db.exec(`
@@ -75,6 +92,10 @@ function openDb(path) {
   // Upgrade pre-frequency DBs in place (no-op on fresh/already-migrated DBs).
   addColumnIfMissing('reports', 'frequency_hz', 'INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing('stations', 'last_frequency_hz', 'INTEGER NOT NULL DEFAULT 0');
+
+  // listAllStations / listMappedStations ORDER BY last_seen_at DESC — without
+  // this index the query does a filesort, which gets slow at ~10k station rows.
+  db.exec(`CREATE INDEX IF NOT EXISTS ix_stations_last_seen ON stations(last_seen_at)`);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS station_observers (
@@ -152,6 +173,15 @@ function openDb(path) {
       ORDER BY last_seen_at DESC
     `),
     getStation: db.prepare(`SELECT * FROM stations WHERE source = ?`),
+    // Bounded "who heard this station" — the most-recent N + a total count, so
+    // a station heard by thousands of observers doesn't return a thousands-row
+    // list to the map / detail API. LIMIT is parameterized (? placeholder).
+    getRecentObservers: db.prepare(`
+      SELECT observer, first_seen_at, last_seen_at, report_count
+      FROM station_observers WHERE source = ?
+      ORDER BY last_seen_at DESC LIMIT ?
+    `),
+    countObservers: db.prepare(`SELECT COUNT(*) AS n FROM station_observers WHERE source = ?`),
     getObservers: db.prepare(`
       SELECT observer, first_seen_at, last_seen_at, report_count
       FROM station_observers WHERE source = ?
@@ -160,24 +190,30 @@ function openDb(path) {
   };
 
   // Retention decay: drop stations whose last sighting is older than the given
-  // cutoff ISO timestamp, cascading to their reports + per-observer rollups so
-  // no orphan rows remain for a deleted source. Runs as three synchronous
-  // statements (Node + node:sqlite are single-threaded, so the subquery result
-  // is stable across them — no async can interleave). Reports + observers are
-  // deleted first, while the stations rows still identify the stale sources.
+  // cutoff ISO timestamp, AND age-prune the append-only reports +
+  // station_observers tables to the same window. The append-only tables are
+  // write-only history (no endpoint reads them); age-pruning bounds growth at
+  // scale (~10k stations) while preserving in-window fresh-resubmit dedup via
+  // the reports UNIQUE index. Synchronous statements — Node + node:sqlite are
+  // single-threaded so the subquery result is stable across them.
   function decayOlderThan(cutoffIso) {
-    const before = db.prepare(
+    const reportsPruned = db.prepare(
+      `DELETE FROM reports WHERE received_at < ?`
+    ).run(cutoffIso).changes;
+    db.prepare(
+      `DELETE FROM station_observers WHERE last_seen_at < ?`
+    ).run(cutoffIso);
+    const stations = db.prepare(
       `SELECT COUNT(*) AS n FROM stations WHERE last_seen_at < ?`
     ).get(cutoffIso).n;
-    if (!before) return 0;
-    db.prepare(
-      `DELETE FROM reports WHERE source IN (SELECT source FROM stations WHERE last_seen_at < ?)`
-    ).run(cutoffIso);
-    db.prepare(
-      `DELETE FROM station_observers WHERE source IN (SELECT source FROM stations WHERE last_seen_at < ?)`
-    ).run(cutoffIso);
-    db.prepare(`DELETE FROM stations WHERE last_seen_at < ?`).run(cutoffIso);
-    return before;
+    if (stations) {
+      // Observer rollups for a fully-decayed source are gone with it.
+      db.prepare(
+        `DELETE FROM station_observers WHERE source IN (SELECT source FROM stations WHERE last_seen_at < ?)`
+      ).run(cutoffIso);
+      db.prepare(`DELETE FROM stations WHERE last_seen_at < ?`).run(cutoffIso);
+    }
+    return { stations, reportsPruned };
   }
 
   return { db, stmts, decayOlderThan };
