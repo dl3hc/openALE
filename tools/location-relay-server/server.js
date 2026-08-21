@@ -15,6 +15,8 @@
 //   LOCATION_TTL_ONLINE_MIN  default 15   (Konzept §14)
 //   LOCATION_TTL_RECENT_MIN  default 60
 //   LOCATION_TTL_STALE_MIN   default 1440
+//   LOCATION_RETENTION_DAYS  default 2    (stations not seen in N days are decayed)
+//   LOCATION_DECAY_INTERVAL_MIN default 60 (how often the decay sweep runs)
 
 const http = require('node:http');
 const crypto = require('node:crypto');
@@ -28,6 +30,8 @@ const TOKEN = process.env.LOCATION_API_TOKEN || '';
 const TTL_ONLINE_MIN = parseInt(process.env.LOCATION_TTL_ONLINE_MIN || '15', 10);
 const TTL_RECENT_MIN = parseInt(process.env.LOCATION_TTL_RECENT_MIN || '60', 10);
 const TTL_STALE_MIN  = parseInt(process.env.LOCATION_TTL_STALE_MIN  || '1440', 10);
+const RETENTION_DAYS = parseInt(process.env.LOCATION_RETENTION_DAYS || '2', 10);
+const DECAY_INTERVAL_MIN = parseInt(process.env.LOCATION_DECAY_INTERVAL_MIN || '60', 10);
 const MAX_BODY_BYTES = 16 * 1024;  // reports are small (Konzept: AMD-sized payloads)
 
 if (!TOKEN) {
@@ -36,8 +40,28 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-const { stmts } = openDb(DB_PATH);
+const { stmts, decayOlderThan } = openDb(DB_PATH);
 const PUBLIC_DIR = path.join(__dirname, 'public');
+
+// ── Retention decay ─────────────────────────────────────────────────────────
+// Stations not heard within RETENTION_DAYS are dropped (with their reports +
+// observer rollups) so the map and DB stay bounded. ISO timestamps are all
+// UTC 'Z'-suffixed in one fixed format, so lexical comparison == chronological.
+function runDecay() {
+  const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
+  let removed = 0;
+  try {
+    removed = decayOlderThan(cutoff);
+  } catch (e) {
+    console.error('[decay] failed:', e);
+    return;
+  }
+  if (removed) {
+    console.log(`[decay] removed ${removed} station(s) not seen in ${RETENTION_DAYS}d (cutoff ${cutoff})`);
+  }
+}
+runDecay();  // sweep once on boot before serving
+setInterval(runDecay, DECAY_INTERVAL_MIN * 60000);
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -103,6 +127,7 @@ function stationToFeature(row) {
       position_timestamp: row.last_position_timestamp,
       last_seen_at: row.last_seen_at,
       last_observer: row.last_observer,
+      frequency_hz: row.last_frequency_hz,
       report_count: row.report_count,
       state: stationState(row.last_seen_at),
     },
@@ -155,6 +180,11 @@ function handleIngest(req, res) {
     const receivedAt = typeof body.received_at === 'string' ? body.received_at : nowIso();
     const callType = typeof body.call_type === 'string' && body.call_type ? body.call_type : 'UNKNOWN';
     const comment = typeof body.comment === 'string' ? body.comment : '';
+    // RX frequency the report arrived on (openALE sends ctrl current-channel
+    // rx_frequency_hz). Coerce to a non-negative integer; 0 = unknown/none.
+    const frequencyHz = (typeof body.frequency_hz === 'number' && Number.isFinite(body.frequency_hz))
+      ? Math.max(0, Math.floor(body.frequency_hz))
+      : 0;
 
     let info;
     try {
@@ -162,6 +192,7 @@ function handleIngest(req, res) {
         observer, source, relay, sourceType, rawGpr,
         hasLat ? body.latitude : null, hasLon ? body.longitude : null,
         altitude, altitudeUnit, timestamp, receivedAt, callType, comment,
+        frequencyHz,
       );
     } catch (e) {
       // UNIQUE(observer, source, timestamp) violation — Konzept §9's 409
@@ -180,12 +211,12 @@ function handleIngest(req, res) {
     if (hasLat && hasLon) {
       stmts.upsertStationWithPosition.run(
         source, body.latitude, body.longitude, altitude, altitudeUnit,
-        timestamp, comment, rawGpr, callType, receivedAt, observer,
+        timestamp, comment, rawGpr, callType, receivedAt, observer, frequencyHz,
       );
     } else {
       // Konzept §17a: "Station gehört, Position unbekannt" — still tracked
       // (heard), just never placed on the map (see stationToFeature()).
-      stmts.upsertStationHeardOnly.run(source, comment, rawGpr, callType, receivedAt, observer);
+      stmts.upsertStationHeardOnly.run(source, comment, rawGpr, callType, receivedAt, observer, frequencyHz);
     }
     stmts.upsertObserver.run(source, observer, receivedAt, receivedAt);
 
@@ -209,6 +240,7 @@ function handleListStations(_req, res) {
     longitude: r.last_lon,
     last_seen_at: r.last_seen_at,
     last_observer: r.last_observer,
+    frequency_hz: r.last_frequency_hz,
     report_count: r.report_count,
     state: stationState(r.last_seen_at),
   })));
@@ -230,6 +262,7 @@ function handleStationDetail(res, id) {
     call_type: row.last_call_type,
     last_seen_at: row.last_seen_at,
     last_observer: row.last_observer,
+    frequency_hz: row.last_frequency_hz,
     report_count: row.report_count,
     state: stationState(row.last_seen_at),
     observers,
@@ -288,4 +321,5 @@ server.listen(PORT, () => {
   console.log(`  Ingest:  POST http://localhost:${PORT}/api/v1/locations  (Bearer token required)`);
   console.log(`  Map:     http://localhost:${PORT}/`);
   console.log(`  DB:      ${DB_PATH}`);
+  console.log(`  Decay:   stations not seen in ${RETENTION_DAYS}d removed every ${DECAY_INTERVAL_MIN}min`);
 });

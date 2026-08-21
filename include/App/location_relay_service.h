@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <deque>
 #include <mutex>
@@ -48,6 +49,7 @@ struct LocationReport {
     // Context
     std::string call_context;                ///< ALLCALL|INDIVIDUAL|NET|GROUP|LINKED
     std::time_t received_at = 0;              ///< UTC receive time
+    uint32_t    frequency_hz = 0;             ///< RX channel freq the report arrived on (0 = unknown)
 
     // Dedup anchor (Konzept §11) — computed by the caller via make_dedup_key()
     // before enqueue(); enqueue() only looks it up.

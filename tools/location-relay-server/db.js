@@ -11,6 +11,17 @@ function openDb(path) {
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
 
+  // Additive column migrations: CREATE TABLE IF NOT EXISTS never adds columns
+  // to an existing table, so older relay DBs (created before frequency_hz was
+  // captured) get upgraded in place here. Idempotent — checks PRAGMA table_info
+  // first so a fresh or already-migrated DB is a no-op.
+  function addColumnIfMissing(table, column, decl) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!cols.some((c) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+    }
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS reports (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +38,7 @@ function openDb(path) {
       received_at     TEXT NOT NULL,
       call_type       TEXT NOT NULL DEFAULT 'UNKNOWN',
       comment         TEXT NOT NULL DEFAULT '',
+      frequency_hz    INTEGER NOT NULL DEFAULT 0,
       created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     )
   `);
@@ -55,9 +67,14 @@ function openDb(path) {
       last_call_type          TEXT NOT NULL DEFAULT 'UNKNOWN',
       last_seen_at            TEXT NOT NULL,
       last_observer           TEXT NOT NULL,
+      last_frequency_hz       INTEGER NOT NULL DEFAULT 0,
       report_count            INTEGER NOT NULL DEFAULT 0
     )
   `);
+
+  // Upgrade pre-frequency DBs in place (no-op on fresh/already-migrated DBs).
+  addColumnIfMissing('reports', 'frequency_hz', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('stations', 'last_frequency_hz', 'INTEGER NOT NULL DEFAULT 0');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS station_observers (
@@ -74,8 +91,9 @@ function openDb(path) {
     insertReport: db.prepare(`
       INSERT INTO reports
         (observer, source, relay, source_type, raw_gpr, latitude, longitude,
-         altitude, altitude_unit, timestamp, received_at, call_type, comment)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         altitude, altitude_unit, timestamp, received_at, call_type, comment,
+         frequency_hz)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     // has_position gate: only overwrite last_lat/lon/etc. when this report
     // actually carries a position (Konzept §17a — a valid_position=false
@@ -84,8 +102,8 @@ function openDb(path) {
       INSERT INTO stations
         (source, last_lat, last_lon, last_altitude, last_altitude_unit,
          last_position_timestamp, last_comment, last_raw_gpr, last_call_type,
-         last_seen_at, last_observer, report_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+         last_seen_at, last_observer, last_frequency_hz, report_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       ON CONFLICT(source) DO UPDATE SET
         last_lat = excluded.last_lat,
         last_lon = excluded.last_lon,
@@ -97,19 +115,21 @@ function openDb(path) {
         last_call_type = excluded.last_call_type,
         last_seen_at = excluded.last_seen_at,
         last_observer = excluded.last_observer,
+        last_frequency_hz = excluded.last_frequency_hz,
         report_count = report_count + 1
     `),
     upsertStationHeardOnly: db.prepare(`
       INSERT INTO stations
         (source, last_comment, last_raw_gpr, last_call_type, last_seen_at,
-         last_observer, report_count)
-      VALUES (?, ?, ?, ?, ?, ?, 1)
+         last_observer, last_frequency_hz, report_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1)
       ON CONFLICT(source) DO UPDATE SET
         last_comment = excluded.last_comment,
         last_raw_gpr = excluded.last_raw_gpr,
         last_call_type = excluded.last_call_type,
         last_seen_at = excluded.last_seen_at,
         last_observer = excluded.last_observer,
+        last_frequency_hz = excluded.last_frequency_hz,
         report_count = report_count + 1
     `),
     upsertObserver: db.prepare(`
@@ -121,13 +141,13 @@ function openDb(path) {
     `),
     listMappedStations: db.prepare(`
       SELECT source, last_lat, last_lon, last_altitude, last_altitude_unit,
-             last_position_timestamp, last_seen_at, last_observer, report_count
+             last_position_timestamp, last_seen_at, last_observer, last_frequency_hz, report_count
       FROM stations
       WHERE last_lat IS NOT NULL AND last_lon IS NOT NULL
       ORDER BY last_seen_at DESC
     `),
     listAllStations: db.prepare(`
-      SELECT source, last_lat, last_lon, last_seen_at, last_observer, report_count
+      SELECT source, last_lat, last_lon, last_seen_at, last_observer, last_frequency_hz, report_count
       FROM stations
       ORDER BY last_seen_at DESC
     `),
@@ -139,7 +159,28 @@ function openDb(path) {
     `),
   };
 
-  return { db, stmts };
+  // Retention decay: drop stations whose last sighting is older than the given
+  // cutoff ISO timestamp, cascading to their reports + per-observer rollups so
+  // no orphan rows remain for a deleted source. Runs as three synchronous
+  // statements (Node + node:sqlite are single-threaded, so the subquery result
+  // is stable across them — no async can interleave). Reports + observers are
+  // deleted first, while the stations rows still identify the stale sources.
+  function decayOlderThan(cutoffIso) {
+    const before = db.prepare(
+      `SELECT COUNT(*) AS n FROM stations WHERE last_seen_at < ?`
+    ).get(cutoffIso).n;
+    if (!before) return 0;
+    db.prepare(
+      `DELETE FROM reports WHERE source IN (SELECT source FROM stations WHERE last_seen_at < ?)`
+    ).run(cutoffIso);
+    db.prepare(
+      `DELETE FROM station_observers WHERE source IN (SELECT source FROM stations WHERE last_seen_at < ?)`
+    ).run(cutoffIso);
+    db.prepare(`DELETE FROM stations WHERE last_seen_at < ?`).run(cutoffIso);
+    return before;
+  }
+
+  return { db, stmts, decayOlderThan };
 }
 
 module.exports = { openDb };
