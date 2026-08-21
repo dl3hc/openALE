@@ -272,19 +272,26 @@ struct CallingBudgetParams {
     uint32_t target_scan_channels; // channels in the target's scan list
     uint32_t leading_seq_words;    // already-doubled leading seq size (→ Tlc)
     uint32_t conclusion_words;     // conclusion seq size (→ Tx)
+    uint32_t message_words = 0;    // calling-frame MESSAGE section (FROM self-ID +
+                                    // LQA CMD/report + AMD CMD/DATA/REP) — re-sent on
+                                    // every channel retry alongside leading_seq_, so
+                                    // it belongs in per_ch, not the one-shot tack term.
+                                    // Default 0 preserves the exact prior budget for
+                                    // any call with nothing queued in that section.
 };
 
 constexpr uint32_t calc_calling_timeout_ms(const CallingBudgetParams& p) {
     const uint32_t tsc    = p.target_scan_channels * 2u * TRW_MS;
     const uint32_t tlc    = p.leading_seq_words    * TRW_MS;
     const uint32_t tx     = p.conclusion_words     * TRW_MS;
+    const uint32_t msg    = p.message_words        * TRW_MS;
     const uint32_t listen = static_cast<uint32_t>(0.5 + Twrt_slow_ms)   // 1960
                           + static_cast<uint32_t>(Tdrw_ms)              // + 784
                           + 5u * TRW_MS                                 // + 1960
                           + Tlww_ms;                                    // +  392
     const uint32_t per_ch = Twt_ale_ms
                           + static_cast<uint32_t>(TT_BLIND_MS + 0.5)
-                          + tsc + tlc + tx + listen;
+                          + tsc + tlc + msg + tx + listen;
     // SENDING_ACK frame (TO peer ×2 + TIS self) — transmitted once on the
     // linking channel after LISTENING settles.  Added once (not per channel):
     // without it the n_channels=1 budget fired mid-ACK and single-channel

@@ -273,12 +273,65 @@ void ALECallProcessor::react_handshake_(ALEStateMachine& sm, const WordRole& r, 
                 sm.hs_ack_to_ms = sm.current_time_ms;
             sm.hs_tlww_start_ms = sm.current_time_ms;
             break;
-        case WordRole::TWAS_WORD:  // TWAS instead of ACK → abort
-            sm.process_event(ALEEvent::LINK_TIMEOUT);
+        case WordRole::TWAS_WORD:
+            // TWAS instead of TIS as frame 3's conclusion, Ion2G-style: the
+            // caller sent an AMD (already delivered to us from the calling
+            // frame via rx_accumulate_call_amd()) and declined to link
+            // (link_after_send=false on their side). This is a graceful
+            // outcome, not a failure — a plain call always concludes frame 3
+            // with TIS, so caller-side TWAS-as-frame-3 only ever happens here.
+            if (sm.operator_callback)
+                sm.operator_callback(OperatorEvent::AMD_RECEIVED_NO_LINK);
+            sm.process_event(ALEEvent::AMD_DECLINED_LINK);
             break;
         default:
             break;
         }
+    }
+}
+
+// ── LINKED-state AMD delivery confirmation RX detection ──────────────────────
+// Mirrors react_calling_ (LISTENING) for the sender waiting on the peer Response,
+// and react_handshake_ WAIT_ACK for the receiver waiting on the sender ACK. Only
+// sets timing flags the SM's handle_linked_amd_* drivers consume; never consumes
+// or blocks the word (rx_accumulate_linked_amd etc. still see it).
+void ALECallProcessor::react_linked_amd_confirm_(ALEStateMachine& sm, const WordRole& r)
+{
+    switch (sm.linked_amd_phase_) {
+    case LinkedAmdPhase::LISTENING:              // sender: peer's Response frame
+        switch (r.type) {
+        case WordRole::TO_SELF:
+            if (!sm.linked_amd_resp_detected_) sm.linked_amd_resp_detected_ = true;
+            break;
+        case WordRole::TIS_CALLER:
+            if (sm.linked_amd_resp_detected_ && sm.linked_amd_resp_tlww_ms_ == 0)
+                sm.linked_amd_resp_tlww_ms_ = sm.current_time_ms;
+            break;
+        case WordRole::DATA_EXTENSION:           // multi-word peer conclusion — re-arm settle
+            if (sm.linked_amd_resp_tlww_ms_ != 0)
+                sm.linked_amd_resp_tlww_ms_ = sm.current_time_ms;
+            break;
+        default: break;
+        }
+        break;
+    case LinkedAmdPhase::WAIT_ACK:               // receiver: sender's ACK frame
+        switch (r.type) {
+        case WordRole::TO_SELF:
+            if (!sm.linked_amd_ack_to_detected_) sm.linked_amd_ack_to_detected_ = true;
+            break;
+        case WordRole::TIS_CALLER:
+            if (!sm.linked_amd_ack_tis_rcvd_) {
+                sm.linked_amd_ack_tis_rcvd_ = true;
+                sm.linked_amd_ack_tlww_ms_  = sm.current_time_ms;
+            }
+            break;
+        case WordRole::DATA_EXTENSION:
+            if (sm.linked_amd_ack_tis_rcvd_) sm.linked_amd_ack_tlww_ms_ = sm.current_time_ms;
+            break;
+        default: break;
+        }
+        break;
+    default: break;                              // NONE / RESPONDING / SENDING_ACK — TX phases
     }
 }
 
@@ -357,6 +410,9 @@ void ALECallProcessor::process_received_word(ALEStateMachine& sm, const ALEWord&
             // T-03: TWAS termination from peer → end link immediately (A.5.5.3.5)
             if (r.type == WordRole::TWAS_WORD)
                 sm.process_event(ALEEvent::LINK_TERMINATED);
+            else
+                // AMD delivery-confirmation Response/ACK detection (no-op if idle).
+                react_linked_amd_confirm_(sm, r);
             break;
         case ALEState::SOUNDING:
             if (r.type == WordRole::CHANNEL_BUSY) {

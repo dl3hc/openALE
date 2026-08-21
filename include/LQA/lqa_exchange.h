@@ -60,6 +60,22 @@ public:
     // on_call_concluded can call mark_bilateral_attempted on failure.
     void encode_outgoing(uint32_t freq_hz, const std::string& target, bool request_report);
 
+    // Build the raw CMD 'a' word directly and RETURN it, for a hand-built frame
+    // that bypasses the SM's own call/response builders (e.g. the LINKED-state
+    // AMD delivery-confirmation Response frame, which ALEController assembles at
+    // the controller level). Unlike encode_outgoing(), this neither queues via a
+    // callback nor touches the sent_ka1_/last_call_target_ bookkeeping (that is
+    // specific to the normal call-cycle bilateral-exchange lifecycle, not this
+    // one-off Response). request_report=false (the default) does NOT set KA1 —
+    // the confirmation Response carries the CMD LQA word itself, not a Block C5
+    // report request.
+    uint32_t build_cmd_a_word(uint32_t freq_hz, const std::string& target,
+                              bool request_report = false) const {
+        LQACmdPayload p = build_payload(freq_hz, target);
+        p.ka1           = request_report;
+        return encode_lqa_cmd(p);   // free fn, LQA/lqa_metrics.h
+    }
+
     // Capture an incoming CMD 'a' word. Caller must have verified that the SM
     // state/phase is a valid bilateral-exchange window before calling.
     void on_word_lqa_cmd(uint32_t raw_payload, uint32_t freq_hz);
