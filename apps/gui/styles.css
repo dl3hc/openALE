@@ -437,49 +437,73 @@
       color: var(--s-error);
     }
 
-    /* ── Messages ── */
+    /* ── Messages ──────────────────────────────────────────────────────────
+       Direction is signaled three independent ways at once (never color
+       alone): alignment (incoming left / own right), a 3px edge stripe, and
+       the peer-callsign color — incoming reuses --s-incoming (the same
+       orange already meaning "incoming" on the call panel), own uses accent
+       blue (the app's "self" color throughout the header/pills). */
     .panel-messages { flex: 1; min-height: 0; }
 
-    .msg-list { display: flex; flex-direction: column; gap: 5px; }
+    /* align-items: flex-start (not the flex default of stretch) so each
+       bubble shrink-wraps its own text width (up to max-width below) instead
+       of always stretching to fill the column — a short incoming message
+       used to render as a full-width bar for exactly this reason. */
+    .msg-list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 
     .msg-item {
       position: relative;
       max-width: 82%;
-      background: var(--bg3);
+      background: linear-gradient(180deg, rgba(221,129,88,0.10), var(--bg3));
       border: 1px solid var(--border);
+      border-left: 3px solid var(--s-incoming);
       border-radius: var(--r-md);
-      padding: 9px 34px 9px 12px;
+      padding: 8px 30px 7px 11px;
       transition: border-color 0.12s;
     }
+    /* The hover border-color reset is same-specificity as .msg-own/:not() below
+       (one class + one pseudo-class each) — these two rules must stay AFTER it
+       in source order to win the tie and keep each stripe's own color on hover. */
     .msg-item:hover { border-color: var(--border-md); }
-    /* Own (outgoing) messages: right-aligned chat bubble, tinted toward accent
-       — mirrors the mockup's .msg.own without touching renderMessages()'s
-       own/incoming class contract. */
+    .msg-item:hover:not(.msg-own) { border-left-color: var(--s-incoming); }
+    .msg-own:hover { border-right-color: var(--accent); }
+    /* Own (outgoing) messages: right-aligned chat bubble, tinted toward
+       accent, stripe on the outward (right) edge instead of the left. */
     .msg-own {
       margin-left: auto;
       background: linear-gradient(180deg, rgba(79,131,196,0.14), var(--bg3));
       border-color: var(--accent-dim);
+      border-left-color: var(--accent-dim);
+      border-right: 3px solid var(--accent);
     }
 
     .msg-hdr {
       display: flex;
-      justify-content: space-between;
-      margin-bottom: 4px;
-      padding-right: 46px;
+      align-items: baseline;
+      gap: 6px;
+      margin-bottom: 3px;
     }
-    .msg-from {
-      font-family: var(--mono);
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--accent);
-    }
-    .msg-time {
-      position: absolute;
-      top: 9px; right: 34px;
+    .msg-dir {
       font-family: var(--mono);
       font-size: 9px;
-      color: var(--tx-mute);
-      margin-top: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--tx-dim);
+    }
+    /* Peer callsign leads every bubble — the thing an operator actually
+       scans for is "who", not their own address repeated on every line. */
+    .msg-peer {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--s-incoming);
+    }
+    .msg-own .msg-peer { color: var(--accent); }
+    .msg-selftag {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--tx-dim);
     }
     .msg-text {
       font-family: var(--mono);
@@ -488,6 +512,46 @@
       line-height: 1.4;
       letter-spacing: 0.02em;
     }
+    /* Parsed ALE-GPR position-report summary — raw "GPR*..." text stays
+       available via the title tooltip (spec §15 "preserve raw for display"). */
+    .msg-gpr {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: help;
+    }
+    .msg-gpr svg { flex-shrink: 0; color: var(--accent); }
+
+    .msg-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 5px;
+    }
+    .msg-time {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--tx-mute);
+    }
+
+    /* AMD delivery-confirm tick, WhatsApp/iMessage-style: one check = sent
+       (gone out, no response yet), two overlapping checks = delivered (peer
+       responded). This idiom is widely understood on sight — no label text
+       needed. "Not delivered" isn't part of that vocabulary in any messenger
+       (ticks mean progress toward success), so it stays a plain ✕ instead of
+       a tick variant. Absent (no status field) for not-yet-linked sends
+       whose success is silent by design — see the JS side. */
+    .msg-tick {
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .msg-tick svg { width: 11px; height: 11px; display: block; }
+    .msg-tick-delivered svg:last-child { margin-left: -6px; }
+    .msg-tick-pending   { color: var(--tx-dim); }
+    .msg-tick-delivered { color: var(--s-linked); }
+    .msg-tick-failed    { color: var(--s-error); font-family: var(--mono); font-size: 11px; font-weight: 700; }
 
     /* Fixed height (matches .call-zone below) — the compact input+Send row
        is naturally shorter than the Call button's footer, which misaligned
@@ -546,6 +610,18 @@
       text-align: right;
     }
     .msg-count.msg-count-full { color: #ff8a65; }
+    .msg-link-toggle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--tx-dim);
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+    .msg-link-toggle input { margin: 0; cursor: pointer; }
 
     /* ── Contacts ── */
     .panel-contacts { flex: 1; min-height: 0; }
@@ -2058,7 +2134,6 @@
     }
     .msg-item:hover .msg-del { opacity: 1; }
     .msg-del:hover { color: var(--s-error); background: rgba(255,82,82,0.1); }
-    .msg-own .msg-from { color: var(--tx-muted); }
     .msg-empty { color: var(--tx-dim); font-size: 12px; padding: 14px 4px; text-align: center; }
 
     /* Contacts edit / actions */

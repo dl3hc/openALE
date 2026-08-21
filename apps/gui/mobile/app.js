@@ -17,6 +17,7 @@ const ICONS = {
   layers:    '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
   share2:    '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
   clock:     '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  check:     '<polyline points="20 6 9 17 4 12"/>',
   shield:    '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
   barChart2: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
   zap:       '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
@@ -24,6 +25,7 @@ const ICONS = {
   pencil:    '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
   square:    '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>',
   wifi:      '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>',
+  mapPin:    '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>',
 };
 
 function icon(name, size) {
@@ -158,6 +160,8 @@ function syncAllFromBridge() {
   syncEnhFreqSelectFromBridge();    // pull Enhanced Freq-Select state from core
   syncLocationFromBridge();         // pull Station Location & Propagation from core
   syncTunerFromBridge();            // pull netrigctl server (Tuner) state from core
+  syncPositionReportFromBridge();   // pull automatic Position Reports config from core
+  syncLocationSharingFromBridge();  // pull Location Relay (privacy/network) config from core
   syncVoiceFromBridge();            // pull voice-passthrough arm/mode state from core
   syncAudioMonitorFromBridge();     // pull channel-monitor ("listen in") state from core
   enumVoiceDevices();               // populate browser mic/speaker selectors
@@ -322,11 +326,18 @@ function onBridgeEvent(e) {
     case 'link_established':
       hideIdleWarn();   // fresh link — clear any stale idle-warning popup
       linkedPeer = e.peer;
+      // Not-yet-linked AMD confirm, link_after_send=true outcome: the handshake's
+      // frame 3 concluded with TIS (link persists) — that response IS the delivery
+      // confirmation. No-op if there's no pending message to this peer (a plain
+      // call with no queued AMD, or the callee side).
+      markAmdStatus(e.peer, 'delivered');
       document.getElementById('callCs').textContent = e.peer;
       updateLinkQualityFromLqa(e.peer);
       pollSignalQuality();
       if (autoAcceptOn()) {
         // Auto-accept: the link is live — show the active-call panel + timer.
+        // No operator gate, so the incoming-call ring stops right here.
+        notifyRingStop();
         stopTimer();
         setStatus('Linked', 'linked');
         showInc(false);
@@ -339,6 +350,7 @@ function onBridgeEvent(e) {
         // Manual mode: operator already decided during the INCOMING phase?
         if (preClickedAccept) {
           preClickedAccept = false;
+          notifyRingStop();   // operator already accepted — link just came up
           showInc(false); showCallPanel(true);
           setStatus('Linked', 'linked');
           callStart = Date.now();
@@ -374,6 +386,37 @@ function onBridgeEvent(e) {
       stopTimer();
       goScanning();
       break;
+    case 'amd_no_link':
+      // Ion2G-style AMD handshake concluded without linking (frame-3 TWAS) —
+      // same state cleanup as link_terminated. Fires on BOTH sides (caller's
+      // own "delivered, no link by request" success, and the callee's "caller
+      // declined link" notice); markAmdStatus is a no-op unless there's a
+      // matching own pending message (the caller side). No separate log line:
+      // the controller's own 'status' event (emit_status, same moment) already
+      // logged this — a second line here would just duplicate it.
+      markAmdStatus(e.peer, 'delivered');
+      hideIdleWarn();
+      stopTimer();
+      goScanning();
+      break;
+    case 'amd_not_sent':
+      // Delivery confirmation exhausted all attempts with no response (not-linked
+      // or linked path) — chime + mark the message failed. No separate log line:
+      // the controller's own 'status' event (emit_status, same moment) already
+      // logged the fuller "AMD not sent — X not heard after N attempts" — a
+      // second, shorter line here would just duplicate it. No state change: the
+      // SM has already returned itself to IDLE/SCANNING (not-linked) or stayed
+      // LINKED (linked path).
+      notifyChime();
+      markAmdStatus(e.peer, 'failed');
+      break;
+    case 'amd_delivered':
+      // LINKED-state Call→Response→ACK confirm closed: the peer's Response was
+      // received and our ACK went out. Mark the sent message bubble delivered —
+      // silent otherwise (mirrors the plain 'status' log line the controller
+      // also emits for this; no chime, matches the not-linked silent-success path).
+      markAmdStatus(e.peer, 'delivered');
+      break;
     case 'voice_path':
       // Bridge switched the VAC owner between ALE-modem and voice passthrough.
       voicePassthrough = (e.mode === 'voice');
@@ -382,7 +425,16 @@ function onBridgeEvent(e) {
       break;
     case 'amd_received':
       messages.unshift({ self: e.self || primarySelfAddr(), peer: e.peer,
-                         time: nowZulu(), text: e.text, own: false });
+                         time: nowZulu(), text: e.text, own: false, gpr: e.gpr || null });
+      if (e.gpr && e.gpr.valid_structure && e.gpr.object) {
+        gprPositions[e.gpr.object] = {
+          object: e.gpr.object, peer: e.peer,
+          lat: e.gpr.lat_deg, lon: e.gpr.lon_deg,
+          alt: e.gpr.altitude, altUnit: e.gpr.altitude_unit,
+          comment: e.gpr.comment, raw: e.text, receivedMs: Date.now(),
+        };
+        renderGprPositions();
+      }
       // Unread badge: count only while the operator isn't looking at MSG.
       if (document.querySelector('.app')?.dataset.mobTab !== 'msg') {
         unreadMsg++;
@@ -429,6 +481,7 @@ function onBridgeEvent(e) {
       locGpsFix = !!e.acquired;
       if (e.acquired) { locGpsLat = e.lat || 0; locGpsLon = e.lon || 0; }
       updateLocStatus(locGpsFix, locGpsLat, locGpsLon, locSfi);
+      gatePosReportGgaOption();
       break;
     case 'sfi_update':
       locSfi = e.sfi || 0;
@@ -1992,6 +2045,7 @@ function answerCall() {
   if (pendingAccept) {
     // Post-link: operator confirmed "Linked — accept?"
     pendingAccept = false;
+    notifyRingStop();
     if (bridgeConnected) bridgeSend('ACCEPT', {});
     showInc(false);
     setStatus('Linked', 'linked');
@@ -2642,6 +2696,7 @@ function toggleNetChannelSection(name) {
 }
 
 function renderNets() {
+  renderPosReportNetOptions();
   const el = document.getElementById('netList');
   if (!el) return;
   if (!nets.length) {
@@ -3189,6 +3244,7 @@ function applyTimingToBridge() {
   const args = {};
   const s  = num('cfgSounding');    if (s)  args.sounding_interval_sec = s;
   const li = num('cfgLinkIdle');    if (li) args.link_idle_timeout_sec = li;
+  const ama = num('cfgAmdMaxAttempts'); if (ama) args.amd_send_max_attempts = ama;
   const mt = num('cfgMaxTune');     if (mt) args.max_tune_time_ms = mt;
   // ptt_lead/tail accept 0 (disabled), so bypass the v>0 guard
   const numZ = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v >= 0 ? v : null; };
@@ -3421,12 +3477,191 @@ function applyTunerToBridge() {
   bridgeSend('RIGCTLD_SET', { enabled, port, bind_remote: bindRemote });
 }
 
+// ── Position Reports — automatic on-change/interval + destination/format ───
+// (docs/ALE_GPR_SPEC.md; Phase 1 = manual send, this is Phase 2/3 = automatic
+// reporting, ALLCALL broadcast destination, known-positions list)
+function onPosReportDestChange() {
+  const dest = document.querySelector('input[name="posReportDest"]:checked')?.value || 'direct';
+  const el = document.getElementById('posReportDirectRow');
+  if (el) el.style.display = (dest === 'direct') ? '' : 'none';
+}
+function onPosReportModeChange() {
+  const mode = document.querySelector('input[name="posReportMode"]:checked')?.value || '0';
+  const show = (id, vis) => { const el = document.getElementById(id); if (el) el.style.display = vis ? '' : 'none'; };
+  show('posReportChangeRow',   mode === '1');
+  show('posReportIntervalRow', mode === '2');
+}
+// Raw-GGA passthrough only exists for a live NMEA-serial fix (GpsService only
+// ever populates the raw sentence from that source, not gpsd) — gate the
+// format radio accordingly, mirroring onGpsMethodChange()'s visibility pattern.
+// Call whenever GPS fix/source status changes.
+function gatePosReportGgaOption() {
+  const isGps = document.querySelector('input[name="posSource"]:checked')?.value === 'gps';
+  const gpsMethod = isGps ? (document.querySelector('input[name="gpsMethod"]:checked')?.value || '3') : '0';
+  const available = locGpsFix && gpsMethod === '4';  // NMEA_SERIAL only, not gpsd
+  const radio = document.querySelector('input[name="posReportFormat"][value="1"]');
+  if (radio) {
+    radio.disabled = !available;
+    if (!available && radio.checked) {
+      const gpr = document.querySelector('input[name="posReportFormat"][value="0"]');
+      if (gpr) gpr.checked = true;
+    }
+  }
+}
+function renderPosReportNetOptions() {
+  const sel = document.getElementById('cfgPosReportNet');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— any / active net —</option>' +
+    nets.map(n => `<option value="${escapeHtml(n.name)}">${escapeHtml(n.name)}</option>`).join('');
+  if (nets.some(n => n.name === current)) sel.value = current;
+}
+function syncPositionReportFromBridge() {
+  bridgeSend('POSITION_REPORT_GET', {}, (r) => {
+    if (!r.ok) return;
+    if (typeof r.mode === 'number') {
+      const radio = document.querySelector(`input[name="posReportMode"][value="${r.mode}"]`);
+      if (radio) { radio.checked = true; onPosReportModeChange(); }
+    }
+    if (typeof r.target === 'string') {
+      const isAllcall = r.target === 'ALLCALL';
+      const destRadio = document.querySelector(`input[name="posReportDest"][value="${isAllcall ? 'allcall' : 'direct'}"]`);
+      if (destRadio) { destRadio.checked = true; onPosReportDestChange(); }
+      const inp = document.getElementById('cfgPosReportTarget');
+      if (inp && !isAllcall) inp.value = r.target;
+    }
+    const netSel = document.getElementById('cfgPosReportNet');
+    if (netSel && typeof r.net === 'string') netSel.value = r.net;
+    const changeSel = document.getElementById('cfgPosReportChangeM');
+    if (changeSel && typeof r.change_m === 'number') changeSel.value = String(r.change_m);
+    const intervalInp = document.getElementById('cfgPosReportIntervalMin');
+    if (intervalInp && typeof r.interval_min === 'number') intervalInp.value = r.interval_min;
+    gatePosReportGgaOption();
+    if (typeof r.format === 'number') {
+      const radio = document.querySelector(`input[name="posReportFormat"][value="${r.format}"]`);
+      if (radio && !radio.disabled) radio.checked = true;
+    }
+    const standing = document.getElementById('cfgPosReportStandingComment');
+    if (standing && typeof r.comment === 'string') {
+      standing.value = r.comment;
+      // Pre-fill the manual per-click comment box from the standing comment —
+      // only if the operator hasn't already typed something in this session.
+      const manual = document.getElementById('cfgPosReportComment');
+      if (manual && !manual.value) { manual.value = r.comment; updatePosReportCount(); }
+    }
+  });
+}
+function applyPositionReportToBridge() {
+  if (!bridgeConnected) return;
+  const mode = parseInt(document.querySelector('input[name="posReportMode"]:checked')?.value || '0', 10);
+  const dest = document.querySelector('input[name="posReportDest"]:checked')?.value || 'direct';
+  const target = (dest === 'allcall') ? 'ALLCALL'
+    : ((document.getElementById('cfgPosReportTarget')?.value || '').toUpperCase().trim());
+  const net = document.getElementById('cfgPosReportNet')?.value || '';
+  const changeM = parseInt(document.getElementById('cfgPosReportChangeM')?.value || '1000', 10);
+  const intervalMin = parseInt(document.getElementById('cfgPosReportIntervalMin')?.value || '15', 10);
+  const format = parseInt(document.querySelector('input[name="posReportFormat"]:checked')?.value || '0', 10);
+  const comment = (document.getElementById('cfgPosReportStandingComment')?.value || '').toUpperCase().trim();
+  bridgeSend('POSITION_REPORT_SET', {
+    mode, target, net, change_m: changeM, interval_min: intervalMin, format, comment,
+  });
+}
+
+// ── Location Relay (docs/LOCATION_SHARING_CONCEPT.md) — forward received ─────
+// ALE-GPR positions to a configured web API. Off by default; core-side gate +
+// dedup/throttle/retry live in LocationRelayService, this is config plumbing.
+function onLocShareEnabledChange() {
+  const enabled = !!document.getElementById('cfgLocShareEnabled')?.checked;
+  const body = document.getElementById('locShareBody');
+  if (body) body.style.opacity = enabled ? '1' : '0.5';
+}
+function syncLocationSharingFromBridge() {
+  bridgeSend('LOCATION_SHARING_GET', {}, (r) => {
+    if (!r.ok) return;
+    const setChecked = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+    setChecked('cfgLocShareEnabled',        r.enabled);
+    setChecked('cfgLocShareAllcall',        r.allcall);
+    setChecked('cfgLocShareIndividual',     r.individual);
+    setChecked('cfgLocShareNet',            r.net);
+    setChecked('cfgLocShareGroup',          r.group);
+    setChecked('cfgLocShareLinked',         r.linked);
+    setChecked('cfgLocShareIncludeComment', r.include_comment);
+    const urlInp = document.getElementById('cfgLocShareUrl');
+    if (urlInp && typeof r.url === 'string') urlInp.value = r.url;
+    const minInp = document.getElementById('cfgLocShareMinInterval');
+    if (minInp && typeof r.min_interval_sec === 'number') minInp.value = r.min_interval_sec;
+    const roundInp = document.getElementById('cfgLocShareRoundDigits');
+    if (roundInp && typeof r.round_digits === 'number') roundInp.value = r.round_digits;
+    // Token is never echoed back (core-side privacy — see LOCATION_SHARING_GET);
+    // the hint just reflects whether one is already stored.
+    const tokenHint = document.getElementById('locShareTokenHint');
+    if (tokenHint) tokenHint.textContent = r.token_set ? 'A token is currently stored.' : 'No token stored.';
+    const statusEl = document.getElementById('locShareStatus');
+    if (statusEl) statusEl.textContent = r.enabled ? (r.running ? 'Running' : 'Enabled, not running') : '';
+    onLocShareEnabledChange();
+  });
+}
+function applyLocationSharingToBridge() {
+  if (!bridgeConnected) return;
+  const statusEl = document.getElementById('locShareStatus');
+  bridgeSend('LOCATION_SHARING_SET', {
+    enabled:          !!document.getElementById('cfgLocShareEnabled')?.checked,
+    url:              (document.getElementById('cfgLocShareUrl')?.value || '').trim(),
+    token:            document.getElementById('cfgLocShareToken')?.value || '',
+    allcall:          !!document.getElementById('cfgLocShareAllcall')?.checked,
+    individual:       !!document.getElementById('cfgLocShareIndividual')?.checked,
+    net:              !!document.getElementById('cfgLocShareNet')?.checked,
+    group:            !!document.getElementById('cfgLocShareGroup')?.checked,
+    linked:           !!document.getElementById('cfgLocShareLinked')?.checked,
+    min_interval_sec: parseInt(document.getElementById('cfgLocShareMinInterval')?.value || '30', 10),
+    round_digits:     parseInt(document.getElementById('cfgLocShareRoundDigits')?.value || '2', 10),
+    include_comment:  !!document.getElementById('cfgLocShareIncludeComment')?.checked,
+  }, (r) => {
+    const tokenInp = document.getElementById('cfgLocShareToken');
+    if (tokenInp) tokenInp.value = '';   // never keep the token in the DOM after sending it
+    if (!r || !r.ok) {
+      if (statusEl) statusEl.textContent = 'Failed: ' + ((r && r.error) || 'apply error');
+      return;
+    }
+    syncLocationSharingFromBridge();
+  });
+}
+
+// Session-only "known positions" cache from received GPR reports, keyed by the
+// GPR payload's own OBJECT field — which may differ from the AMD sender (spec
+// §4, e.g. a relayed report) — NOT looked up against the Contacts address book.
+let gprPositions = {};
+function renderGprPositions() {
+  const el = document.getElementById('gprPositionsList');
+  if (!el) return;
+  const entries = Object.values(gprPositions).sort((a, b) => b.receivedMs - a.receivedMs);
+  if (!entries.length) {
+    el.innerHTML = '<div class="fhint" style="margin:8px 0">No position reports received yet.</div>';
+    return;
+  }
+  el.innerHTML = entries.map(p => {
+    const ageSec = Math.max(0, Math.round((Date.now() - p.receivedMs) / 1000));
+    const age = ageSec < 60 ? (ageSec + 's ago') : (Math.round(ageSec / 60) + 'm ago');
+    const pos = (typeof p.lat === 'number' && typeof p.lon === 'number')
+      ? p.lat.toFixed(4) + '°, ' + p.lon.toFixed(4) + '°' : 'position unavailable';
+    return `<div class="msg-item" style="margin-bottom:6px">
+      <div class="msg-hdr">
+        <span class="msg-peer">${escapeHtml(p.object)}</span>
+        <span class="msg-selftag">via ${escapeHtml(p.peer)}</span>
+      </div>
+      <div class="msg-text">${escapeHtml(pos)}${p.comment ? ' · ' + escapeHtml(p.comment) : ''}</div>
+      <div class="msg-foot"><span class="msg-time">${age}</span></div>
+    </div>`;
+  }).join('');
+}
+
 function onPositionSourceChange() {
   const main = document.querySelector('input[name="posSource"]:checked')?.value || '0';
   const show = (id, vis) => { const el = document.getElementById(id); if (el) el.style.display = vis ? '' : 'none'; };
   show('locManualRow', main === '1');
   show('locGridRow',   main === '2');
   show('locGpsRow',    main === 'gps');
+  gatePosReportGgaOption();
 }
 
 function onGpsMethodChange() {
@@ -3434,6 +3669,7 @@ function onGpsMethodChange() {
   const show = (id, vis) => { const el = document.getElementById(id); if (el) el.style.display = vis ? '' : 'none'; };
   show('locGpsdFields', method === '3');
   show('locNmeaFields', method === '4');
+  gatePosReportGgaOption();
 }
 
 function getPositionSource() {
@@ -3516,6 +3752,7 @@ function syncTimingFromBridge() {
     setNum('cfgSounding',       r.sounding_interval_sec);
     setNum('cfgSoundingLead',   r.sounding_warning_lead_sec);
     setNum('cfgLinkIdle',       r.link_idle_timeout_sec);
+    setNum('cfgAmdMaxAttempts', r.amd_send_max_attempts);
     setNum('cfgMaxTune',        r.max_tune_time_ms);
     setNum('cfgPttLead',             r.ptt_lead_ms);
     setNum('cfgPttTail',             r.ptt_tail_ms);
@@ -3842,6 +4079,39 @@ let messages = [];
 // Linked peer address (set on link_established, cleared on link_terminated /
 // goScanning, recovered from the STATUS poll). Drives AMD target selection.
 let linkedPeer = '';
+// Delivery-status tick for a sent (own) AMD message — WhatsApp/iMessage
+// idiom: one check = sent, two = delivered (peer responded). undefined
+// status (not linked at send time — silent-success by design) renders
+// nothing, same as before this feature existed.
+function amdStatusBadge(status) {
+  if (status === 'pending')   return `<span class="msg-tick msg-tick-pending" title="Sent — waiting for the peer's response">${icon('check',11)}</span>`;
+  if (status === 'delivered') return `<span class="msg-tick msg-tick-delivered" title="Delivered — response received">${icon('check',11)}${icon('check',11)}</span>`;
+  if (status === 'failed')    return `<span class="msg-tick msg-tick-failed" title="Not delivered — no response after all retries">✕</span>`;
+  return '';
+}
+// Correlate an 'amd_delivered'/'amd_not_sent' confirm event back to the sent
+// message bubble it resolves. Only one LINKED-state AMD confirm is ever in
+// flight at a time (single shared retry budget in the controller), so "most
+// recent own 'pending' message to this peer" is an unambiguous match.
+function markAmdStatus(peer, status) {
+  const m = messages.find(x => x.own && x.peer === peer && x.status === 'pending');
+  if (!m) return;
+  m.status = status;
+  renderMessages();
+}
+// Compact one-line summary for a parsed ALE-GPR position report (see the
+// nested "gpr" object ale_bridge.cpp attaches to amd_received when
+// ale::is_gpr(text) — docs/ALE_GPR_SPEC.md). Raw text stays available via the
+// bubble's title tooltip (spec §15 "preserve raw for display").
+function gprSummaryLine(g) {
+  const parts = [g.object || '?'];
+  parts.push((typeof g.lat_deg === 'number' && typeof g.lon_deg === 'number')
+    ? g.lat_deg.toFixed(4) + '°, ' + g.lon_deg.toFixed(4) + '°'
+    : (g.manual_or_invalid ? 'position unavailable' : '—'));
+  if (typeof g.altitude === 'number') parts.push(Math.round(g.altitude) + (g.altitude_unit || 'M'));
+  if (g.comment) parts.push(g.comment);
+  return parts.map(escapeHtml).join(' · ');
+}
 function renderMessages() {
   const el = document.getElementById('msgList');
   if (!messages.length) {
@@ -3852,17 +4122,29 @@ function renderMessages() {
     return;
   }
   el.innerHTML = '<div class="msg-list">' + messages.map((m, i) => {
-    // Direction = sender → receiver.  own: self → peer; incoming: peer → self.
-    const from = m.own ? (m.self || '') : (m.peer || '');
-    const to   = m.own ? (m.peer || '') : (m.self || '');
+    // Peer callsign leads (bold, direction-colored) — the thing an operator
+    // scans for — with a plain "to"/"from" read naturally against it ("to
+    // JOE", "from JOE"). Self address is secondary context in parentheses,
+    // not the headline (it matters only for multi-self-address setups).
+    const peer = m.peer || '';
+    const self = m.self || '';
     return `
     <div class="msg-item${m.own?' msg-own':''}">
       <button class="msg-del" title="Delete" onclick="deleteMessage(${i})">✕</button>
       <div class="msg-hdr">
-        <span class="msg-from">${escapeHtml(from)} → ${escapeHtml(to)}</span>
+        <span class="msg-dir">${m.own?'to':'from'}</span>
+        <span class="msg-peer">${escapeHtml(peer)}</span>
+        <span class="msg-selftag">(${escapeHtml(self)})</span>
       </div>
-      <div class="msg-text">${escapeHtml(m.text)}</div>
-      <span class="msg-time">${m.time}</span>
+      <div class="msg-text">${
+        (m.gpr && m.gpr.valid_structure)
+          ? `<span class="msg-gpr" title="${escapeHtml(m.text)}">${icon('mapPin',12)} ${gprSummaryLine(m.gpr)}</span>`
+          : escapeHtml(m.text)
+      }</div>
+      <div class="msg-foot">
+        <span class="msg-time">${m.time}</span>
+        ${amdStatusBadge(m.status)}
+      </div>
     </div>`;
   }).join('') + '</div>';
 }
@@ -3881,8 +4163,11 @@ function updateMsgCount() {
 // AMD orderwire send: if a link is active, the message rides the linked-orderwire
 // frame (TO[peer] + CMD AMD + message + TIS) to the connected peer; otherwise it is
 // queued and a call is placed to the selected contact, carrying the AMD in the
-// handshake's ACK frame (MIL-STD-188-141B A.5.7.2.2). Target = active linked
-// peer if any, else the selected contact.
+// calling frame itself (Ion2G-style — delivered before the handshake even
+// completes). Target = active linked peer if any, else the selected contact.
+// The "Link" checkbox (unchecked by default) controls whether, in the
+// not-yet-linked case, the handshake's third frame concludes with TIS (link
+// persists) or TWAS (message delivered, no link) — see docs/AMD_ORDERWIRE.md.
 function sendAmd() {
   const inp = document.getElementById('msgInput');
   let txt = (inp.value || '').toUpperCase().trim();
@@ -3896,15 +4181,70 @@ function sendAmd() {
     aleLogInfo('AMD: no target — select exactly one contact or establish a link first');
     return;
   }
+  const linkCb = document.getElementById('msgLinkAfterSend');
+  const link   = !!(linkCb && linkCb.checked);
   const self = primarySelfAddr();
-  messages.unshift({ self, peer: to, time: nowZulu(), text: txt, own: true });
+  // Every send gets a delivery-confirm badge now — both paths resolve it:
+  // LINKED path -> 'amd_delivered'/'amd_not_sent'; not-yet-linked path ->
+  // 'link_established' (TIS, link kept) / 'amd_no_link' (TWAS, no link) /
+  // 'amd_not_sent' (no response after retries). See markAmdStatus().
+  const msg = { self, peer: to, time: nowZulu(), text: txt, own: true, status: 'pending' };
+  messages.unshift(msg);
   inp.value = '';
   updateMsgCount();
   renderMessages();
-  if (bridgeConnected) { bridgeSend('AMD', { to, text: txt }); return; }
+  if (bridgeConnected) { bridgeSend('AMD', { to, text: txt, link }); return; }
   aleLogInfo('AMD demo: TO:' + to.slice(0,3) + ' DATA:AMD TIS:' + self.slice(0, 3));
 }
 function nowZulu() { return new Date().toISOString().slice(11,16) + 'Z'; }
+
+// Live comment char counter (max 25 chars, ALE-GPR spec §9) — mirrors updateMsgCount().
+function updatePosReportCount() {
+  const inp = document.getElementById('cfgPosReportComment');
+  const el  = document.getElementById('posReportCount');
+  if (!inp || !el) return;
+  el.textContent = (inp.value || '').length + '/25';
+}
+// Manual "Send Position": GPR_BUILD (read-only bridge command) resolves the
+// current position (live GPS fix, else the configured station position) and
+// returns the ALE-GPR payload text; the actual transmission reuses the
+// existing AMD send path (link=false — a position ping, not a link request).
+function sendPositionReport() {
+  const commentInp = document.getElementById('cfgPosReportComment');
+  const statusEl   = document.getElementById('posReportStatus');
+  const dest = document.querySelector('input[name="posReportDest"]:checked')?.value || 'direct';
+  let to;
+  if (dest === 'allcall') {
+    to = 'ALLCALL';
+  } else {
+    const targetInp = document.getElementById('cfgPosReportTarget');
+    to = ((targetInp && targetInp.value) || linkedPeer ||
+          (selectedContacts.length === 1 ? selectedContacts[0].cs : '')).toUpperCase().trim();
+    if (!to) {
+      if (statusEl) statusEl.textContent = 'No destination — enter an address or select exactly one contact.';
+      return;
+    }
+  }
+  const comment = ((commentInp && commentInp.value) || '').toUpperCase().trim();
+  if (statusEl) statusEl.textContent = 'Building report…';
+  if (!bridgeConnected) { if (statusEl) statusEl.textContent = 'Bridge not connected.'; return; }
+  bridgeSend('GPR_BUILD', { comment }, (r) => {
+    if (!r || !r.ok) {
+      if (statusEl) statusEl.textContent = 'Failed: ' + ((r && r.msg) || 'no position available');
+      return;
+    }
+    const text = r.gpr_text;
+    // ALLCALL is a one-shot broadcast with no response — no delivery-confirm
+    // event will ever arrive for it, so it gets no 'pending' tick (matches
+    // amdStatusBadge()'s documented "absent = silent success" convention).
+    const msg = { self: primarySelfAddr(), peer: to, time: nowZulu(), text, own: true,
+                  status: (to === 'ALLCALL') ? undefined : 'pending' };
+    messages.unshift(msg);
+    renderMessages();
+    bridgeSend('AMD', { to, text, link: false });
+    if (statusEl) statusEl.textContent = (to === 'ALLCALL') ? 'Broadcast sent' : ('Sent to ' + to);
+  });
+}
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    SELF ADDRESS TABLE  (SelfAddr* — A.4.3.4)
