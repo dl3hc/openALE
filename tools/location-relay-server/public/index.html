@@ -102,11 +102,15 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 const markers = new Map();
 let lastData = null;
 
-// Filter state — a station is shown iff its state toggle AND its band toggle
-// are both on. Default: all on (show everything). Clicking a row/chip flips it;
-// the "reset" link turns everything back on.
-const hiddenStates = new Set();   // e.g. { 'OFFLINE' }
-const hiddenFreqs  = new Set();   // band keys ('160m'..'10m') + OTHER_KEY
+// Filter state — a select-to-show allowlist. Each axis has an active set; a
+// station is shown iff (its state is in activeStates OR activeStates is empty)
+// AND (its band is in activeFreqs OR activeFreqs is empty). Empty = show all
+// (the default). Clicking a row/chip toggles its membership in the set, so the
+// first click (empty -> {A}) shows only A ("turn on A, turn off all others"),
+// the next click (-> {A,B}) adds B (two filters), and removing the last member
+// returns to show-all. "reset" clears the set back to show-all.
+const activeStates = new Set();   // e.g. { 'ONLINE', 'RECENT' }
+const activeFreqs  = new Set();   // band keys ('160m'..'10m') + OTHER_KEY
 
 function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -139,7 +143,9 @@ function popupHtml(p) {
 
 // ── Filter application ─────────────────────────────────────────────────────
 function isVisible(entry) {
-  return !hiddenStates.has(entry.state) && !hiddenFreqs.has(entry.bandKey);
+  const stateOk = !activeStates.size || activeStates.has(entry.state);
+  const bandOk  = !activeFreqs.size  || activeFreqs.has(entry.bandKey);
+  return stateOk && bandOk;
 }
 
 function applyFilters() {
@@ -156,7 +162,7 @@ function applyFilters() {
   }
   const meta = document.getElementById('meta');
   if (total === 0) { meta.textContent = 'no stations'; return; }
-  const filt = (hiddenStates.size || hiddenFreqs.size) ? ` · ${shown}/${total} shown` : '';
+  const filt = (activeStates.size || activeFreqs.size) ? ` · ${shown}/${total} shown` : '';
   meta.textContent = `${total} station(s)${filt} · updated ${new Date().toLocaleTimeString()}`;
 }
 
@@ -167,15 +173,18 @@ function buildFreqChips() {
   const tally = new Map();
   for (const e of markers.values()) tally.set(e.bandKey, (tally.get(e.bandKey) || 0) + 1);
   // Bands are always shown (fixed legend); 'Other' only when something
-  // actually falls outside the named HF bands.
+  // actually falls outside the named HF bands. A chip is 'off' (dimmed) only
+  // when filtering is active AND that band is not selected; with no active
+  // selection (show-all) every chip reads as 'on'.
+  const freqFiltering = activeFreqs.size > 0;
   const parts = BANDS.map((b) => {
-    const on = !hiddenFreqs.has(b.key);
+    const on = !freqFiltering || activeFreqs.has(b.key);
     const cnt = tally.get(b.key) || 0;
     return `<span class="chip ${on ? 'on' : 'off'}" data-freq="${b.key}">${b.label}<span class="cnt">${cnt}</span></span>`;
   });
   const otherCnt = tally.get(OTHER_KEY) || 0;
   if (otherCnt) {
-    const on = !hiddenFreqs.has(OTHER_KEY);
+    const on = !freqFiltering || activeFreqs.has(OTHER_KEY);
     parts.push(`<span class="chip ${on ? 'on' : 'off'}" data-freq="${OTHER_KEY}">Other<span class="cnt">${otherCnt}</span></span>`);
   }
   container.innerHTML = parts.join('');
@@ -233,9 +242,10 @@ async function refresh() {
 
 // ── Filter UI wiring ───────────────────────────────────────────────────────
 function refreshStateToggles() {
+  const stateFiltering = activeStates.size > 0;
   document.querySelectorAll('#hud .row.tog').forEach((row) => {
     const st = row.dataset.state;
-    row.classList.toggle('off', hiddenStates.has(st));
+    row.classList.toggle('off', stateFiltering && !activeStates.has(st));
   });
 }
 
@@ -243,7 +253,7 @@ document.getElementById('hud').addEventListener('click', (ev) => {
   const row = ev.target.closest('.row.tog');
   if (row) {
     const st = row.dataset.state;
-    if (hiddenStates.has(st)) hiddenStates.delete(st); else hiddenStates.add(st);
+    if (activeStates.has(st)) activeStates.delete(st); else activeStates.add(st);
     refreshStateToggles();
     applyFilters();
     return;
@@ -251,7 +261,7 @@ document.getElementById('hud').addEventListener('click', (ev) => {
   const chip = ev.target.closest('.chip');
   if (chip) {
     const k = chip.dataset.freq;
-    if (hiddenFreqs.has(k)) hiddenFreqs.delete(k); else hiddenFreqs.add(k);
+    if (activeFreqs.has(k)) activeFreqs.delete(k); else activeFreqs.add(k);
     buildFreqChips();   // re-render on/off classes
     applyFilters();
     return;
@@ -260,13 +270,13 @@ document.getElementById('hud').addEventListener('click', (ev) => {
 
 document.getElementById('rstTime').addEventListener('click', (e) => {
   e.stopPropagation();
-  hiddenStates.clear();
+  activeStates.clear();
   refreshStateToggles();
   applyFilters();
 });
 document.getElementById('rstFreq').addEventListener('click', (e) => {
   e.stopPropagation();
-  hiddenFreqs.clear();
+  activeFreqs.clear();
   buildFreqChips();
   applyFilters();
 });
