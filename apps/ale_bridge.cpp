@@ -1978,6 +1978,9 @@ int main(int argc, char* argv[]) {
             r.comment        = cfg.location_sharing_include_comment ? g.comment : "";
             r.call_context   = d->call_context;
             r.received_at    = std::time(nullptr);
+            // RX frequency the GPR arrived on — lets the relay map filter
+            // stations by band. 0 when no channel is active (offline/no radio).
+            r.frequency_hz   = ctrl.get_current_channel().rx_frequency_hz;
             r.dedup_key      = ale::make_dedup_key(g, source, cfg.location_sharing_round_digits);
 
             ctx.loc_svc->enqueue(std::move(r));

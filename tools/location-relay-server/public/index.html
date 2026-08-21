@@ -29,16 +29,40 @@
   .pop .kv b { color: var(--mute); font-weight: 400; }
   .pop .raw { margin-top: 6px; font-family: ui-monospace, Consolas, monospace; font-size: 11px;
               color: var(--mute); word-break: break-all; }
+  /* ── Filter controls (same panel, same palette) ─────────────────────────── */
+  #hud .fhead { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px;
+                color: var(--mute); font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
+  #hud .fhead:first-of-type { margin-top: 4px; }
+  #hud .fhead .rst { margin-left: auto; cursor: pointer; color: var(--accent);
+                     font-size: 10px; text-transform: none; letter-spacing: 0; }
+  #hud .fhead .rst:hover { text-decoration: underline; }
+  #hud .row.tog { cursor: pointer; user-select: none; border-radius: 4px;
+                  padding: 2px 4px; margin: 2px -4px; }
+  #hud .row.tog:hover { background: rgba(79, 131, 196, 0.12); }
+  #hud .row.tog.off { opacity: 0.32; }
+  #hud .row.tog.off .dot { background: transparent !important; box-shadow: inset 0 0 0 2px currentColor; }
+  #hud .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  #hud .chip { background: var(--bg); border: 1px solid var(--border); color: var(--mute);
+               border-radius: 11px; padding: 2px 8px; font-size: 11px; cursor: pointer;
+               user-select: none; font-variant-numeric: tabular-nums; }
+  #hud .chip:hover { border-color: var(--accent); color: var(--text); }
+  #hud .chip.on { border-color: var(--accent); color: var(--text); }
+  #hud .chip.off { opacity: 0.32; text-decoration: line-through; }
+  #hud .chip .cnt { color: var(--mute); margin-left: 4px; }
+  #hud .empty { color: var(--mute); font-size: 11px; font-style: italic; }
 </style>
 </head>
 <body>
 <div id="map"></div>
 <div id="hud">
   <h1>openALE Location Relay</h1>
-  <div class="row"><span class="dot" style="background:var(--online)"></span>Online (&le;15m)<span class="count" id="cOnline">0</span></div>
-  <div class="row"><span class="dot" style="background:var(--recent)"></span>Recent (&le;60m)<span class="count" id="cRecent">0</span></div>
-  <div class="row"><span class="dot" style="background:var(--stale)"></span>Stale (&le;24h)<span class="count" id="cStale">0</span></div>
-  <div class="row"><span class="dot" style="background:var(--offline)"></span>Offline (&gt;24h)<span class="count" id="cOffline">0</span></div>
+  <div class="fhead">Filter by time <span class="rst" id="rstTime">reset</span></div>
+  <div class="row tog" data-state="ONLINE"><span class="dot" style="background:var(--online);color:var(--online)"></span>Online (&le;15m)<span class="count" id="cOnline">0</span></div>
+  <div class="row tog" data-state="RECENT"><span class="dot" style="background:var(--recent);color:var(--recent)"></span>Recent (&le;60m)<span class="count" id="cRecent">0</span></div>
+  <div class="row tog" data-state="STALE"><span class="dot" style="background:var(--stale);color:var(--stale)"></span>Stale (&le;24h)<span class="count" id="cStale">0</span></div>
+  <div class="row tog" data-state="OFFLINE"><span class="dot" style="background:var(--offline);color:var(--offline)"></span>Offline (&gt;24h)<span class="count" id="cOffline">0</span></div>
+  <div class="fhead">Filter by frequency <span class="rst" id="rstFreq">reset</span></div>
+  <div id="freqChips" class="chips"><span class="empty">loading…</span></div>
   <div class="meta" id="meta">loading…</div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -48,28 +72,116 @@
 const STATE_COLOR = { ONLINE: '#37c26a', RECENT: '#d8b34a', STALE: '#d8703f', OFFLINE: '#5a6572' };
 const REFRESH_MS = 15000;
 
+// Amateur HF band plan (inclusive edges, in Hz). A station's frequency_hz is
+// mapped to one of these bands for filtering; anything outside the list —
+// including 0/unknown and non-HF frequencies — falls into the 'OTHER' bucket so
+// it stays filterable rather than silently always-visible. The bands are a
+// fixed legend, shown always (like the time-state rows above), not built from
+// observed data.
+const BANDS = [
+  { key: '160m', label: '160m', min: 1.8e6,    max: 2.0e6 },
+  { key: '80m',  label: '80m',  min: 3.5e6,    max: 4.0e6 },
+  { key: '60m',  label: '60m',  min: 5.3305e6, max: 5.4035e6 },
+  { key: '40m',  label: '40m',  min: 7.0e6,    max: 7.3e6 },
+  { key: '30m',  label: '30m',  min: 10.1e6,   max: 10.15e6 },
+  { key: '20m',  label: '20m',  min: 14.0e6,   max: 14.35e6 },
+  { key: '17m',  label: '17m',  min: 18.068e6, max: 18.168e6 },
+  { key: '15m',  label: '15m',  min: 21.0e6,   max: 21.45e6 },
+  { key: '12m',  label: '12m',  min: 24.89e6,  max: 24.99e6 },
+  { key: '10m',  label: '10m',  min: 28.0e6,   max: 29.7e6 },
+];
+const OTHER_KEY = 'OTHER';
+
 const map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors',
   maxZoom: 19,
 }).addTo(map);
 
-const markers = new Map();  // callsign -> L.CircleMarker
+// callsign -> { marker, state, bandKey, props }
+const markers = new Map();
+let lastData = null;
+
+// Filter state — a station is shown iff its state toggle AND its band toggle
+// are both on. Default: all on (show everything). Clicking a row/chip flips it;
+// the "reset" link turns everything back on.
+const hiddenStates = new Set();   // e.g. { 'OFFLINE' }
+const hiddenFreqs  = new Set();   // band keys ('160m'..'10m') + OTHER_KEY
+
+function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function fmtFreq(hz) {
+  if (!hz) return 'unknown';
+  const mhz = hz / 1e6;
+  // Trim trailing zeros but keep 3 decimals max: 14090000 -> "14.090", 7000000 -> "7"
+  return (mhz.toFixed(3)).replace(/\.?0+$/, '') + ' MHz';
+}
+
+function bandKeyOf(hz) {
+  if (!hz) return OTHER_KEY;
+  for (const b of BANDS) if (hz >= b.min && hz <= b.max) return b.key;
+  return OTHER_KEY;
+}
 
 function popupHtml(p) {
   const lines = [
     ['Last seen', new Date(p.last_seen_at).toLocaleString()],
     ['Heard via', p.last_observer],
-    ['Reports', p.report_count],
   ];
+  if (p.frequency_hz) lines.push(['Frequency', fmtFreq(p.frequency_hz)]);
+  lines.push(['Reports', p.report_count]);
   if (p.altitude !== undefined && p.altitude !== null) lines.push(['Altitude', `${p.altitude} ${p.altitude_unit || ''}`]);
   if (p.position_timestamp) lines.push(['Position time', p.position_timestamp]);
   return `<div class="pop"><h2>${escapeHtml(p.callsign)}</h2>
     <div class="kv">${lines.map(([k, v]) => `<b>${k}</b><span>${escapeHtml(String(v))}</span>`).join('')}</div>
   </div>`;
 }
-function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+// ── Filter application ─────────────────────────────────────────────────────
+function isVisible(entry) {
+  return !hiddenStates.has(entry.state) && !hiddenFreqs.has(entry.bandKey);
+}
+
+function applyFilters() {
+  let shown = 0, total = 0;
+  for (const entry of markers.values()) {
+    total++;
+    const on = isVisible(entry);
+    if (on) {
+      if (!map.hasLayer(entry.marker)) entry.marker.addTo(map);
+      shown++;
+    } else {
+      if (map.hasLayer(entry.marker)) map.removeLayer(entry.marker);
+    }
+  }
+  const meta = document.getElementById('meta');
+  if (total === 0) { meta.textContent = 'no stations'; return; }
+  const filt = (hiddenStates.size || hiddenFreqs.size) ? ` · ${shown}/${total} shown` : '';
+  meta.textContent = `${total} station(s)${filt} · updated ${new Date().toLocaleTimeString()}`;
+}
+
+// ── Frequency band chips (fixed legend, same idiom as the time rows) ───────
+function buildFreqChips() {
+  const container = document.getElementById('freqChips');
+  // Tally current markers by band key.
+  const tally = new Map();
+  for (const e of markers.values()) tally.set(e.bandKey, (tally.get(e.bandKey) || 0) + 1);
+  // Bands are always shown (fixed legend); 'Other' only when something
+  // actually falls outside the named HF bands.
+  const parts = BANDS.map((b) => {
+    const on = !hiddenFreqs.has(b.key);
+    const cnt = tally.get(b.key) || 0;
+    return `<span class="chip ${on ? 'on' : 'off'}" data-freq="${b.key}">${b.label}<span class="cnt">${cnt}</span></span>`;
+  });
+  const otherCnt = tally.get(OTHER_KEY) || 0;
+  if (otherCnt) {
+    const on = !hiddenFreqs.has(OTHER_KEY);
+    parts.push(`<span class="chip ${on ? 'on' : 'off'}" data-freq="${OTHER_KEY}">Other<span class="cnt">${otherCnt}</span></span>`);
+  }
+  container.innerHTML = parts.join('');
+}
+
+// ── Refresh: fetch → reconcile markers → counts → chips → filter ──────────
 async function refresh() {
   let data;
   try {
@@ -79,6 +191,7 @@ async function refresh() {
     document.getElementById('meta').textContent = 'Fetch failed: ' + e.message;
     return;
   }
+  lastData = data;
   const counts = { ONLINE: 0, RECENT: 0, STALE: 0, OFFLINE: 0 };
   const seen = new Set();
 
@@ -88,32 +201,75 @@ async function refresh() {
     counts[p.state] = (counts[p.state] || 0) + 1;
     seen.add(p.callsign);
 
-    let m = markers.get(p.callsign);
     const color = STATE_COLOR[p.state] || STATE_COLOR.OFFLINE;
-    if (!m) {
-      m = L.circleMarker([lat, lon], { radius: 7, weight: 2, color, fillColor: color, fillOpacity: 0.6 }).addTo(map);
-      markers.set(p.callsign, m);
+    let entry = markers.get(p.callsign);
+    if (!entry) {
+      const m = L.circleMarker([lat, lon], { radius: 7, weight: 2, color, fillColor: color, fillOpacity: 0.6 });
+      entry = { marker: m, state: p.state, bandKey: bandKeyOf(p.frequency_hz), props: p };
+      markers.set(p.callsign, entry);
     } else {
-      m.setLatLng([lat, lon]);
-      m.setStyle({ color, fillColor: color });
+      entry.marker.setLatLng([lat, lon]);
+      entry.marker.setStyle({ color, fillColor: color });
+      entry.state = p.state;
+      entry.bandKey = bandKeyOf(p.frequency_hz);
+      entry.props = p;
     }
-    m.bindPopup(popupHtml(p));
+    entry.marker.bindPopup(popupHtml(p));
   }
 
-  // Drop markers for stations no longer returned (shouldn't normally happen —
-  // /api/v1/locations returns every station with a known position regardless
-  // of state — but keeps the map correct if the server ever filters OFFLINE out).
-  for (const [callsign, m] of markers) {
-    if (!seen.has(callsign)) { map.removeLayer(m); markers.delete(callsign); }
+  // Drop markers for stations no longer returned.
+  for (const [cs, entry] of markers) {
+    if (!seen.has(cs)) { map.removeLayer(entry.marker); markers.delete(cs); }
   }
 
   document.getElementById('cOnline').textContent  = counts.ONLINE;
   document.getElementById('cRecent').textContent  = counts.RECENT;
   document.getElementById('cStale').textContent   = counts.STALE;
   document.getElementById('cOffline').textContent = counts.OFFLINE;
-  document.getElementById('meta').textContent =
-    `${data.features.length} station(s) · updated ${new Date().toLocaleTimeString()}`;
+
+  buildFreqChips();
+  applyFilters();
 }
+
+// ── Filter UI wiring ───────────────────────────────────────────────────────
+function refreshStateToggles() {
+  document.querySelectorAll('#hud .row.tog').forEach((row) => {
+    const st = row.dataset.state;
+    row.classList.toggle('off', hiddenStates.has(st));
+  });
+}
+
+document.getElementById('hud').addEventListener('click', (ev) => {
+  const row = ev.target.closest('.row.tog');
+  if (row) {
+    const st = row.dataset.state;
+    if (hiddenStates.has(st)) hiddenStates.delete(st); else hiddenStates.add(st);
+    refreshStateToggles();
+    applyFilters();
+    return;
+  }
+  const chip = ev.target.closest('.chip');
+  if (chip) {
+    const k = chip.dataset.freq;
+    if (hiddenFreqs.has(k)) hiddenFreqs.delete(k); else hiddenFreqs.add(k);
+    buildFreqChips();   // re-render on/off classes
+    applyFilters();
+    return;
+  }
+});
+
+document.getElementById('rstTime').addEventListener('click', (e) => {
+  e.stopPropagation();
+  hiddenStates.clear();
+  refreshStateToggles();
+  applyFilters();
+});
+document.getElementById('rstFreq').addEventListener('click', (e) => {
+  e.stopPropagation();
+  hiddenFreqs.clear();
+  buildFreqChips();
+  applyFilters();
+});
 
 refresh();
 setInterval(refresh, REFRESH_MS);

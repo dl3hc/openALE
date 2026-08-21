@@ -115,7 +115,8 @@ std::string LocationRelayService::to_json(const LocationReport& r) {
         j += "\"timestamp\":null,";
     }
     j += "\"received_at\":"; json_escape_append(j, iso8601_utc(r.received_at)); j += ',';
-    j += "\"call_type\":";   json_escape_append(j, r.call_context);
+    j += "\"call_type\":";   json_escape_append(j, r.call_context); j += ',';
+    j += "\"frequency_hz\":"; j += std::to_string(r.frequency_hz);
     j += '}';
     return j;
 }
