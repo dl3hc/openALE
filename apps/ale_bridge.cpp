@@ -844,8 +844,17 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     }
     if (cmd == "STATION_LOAD" || cmd == "CHANNELS_LOAD") {
         const std::string resolved = resolve_data_path(msg.get_string("path"));
-        const bool ok = ctrl.load_station_file(resolved);
-        if (ok) pal::log_info("openALE", "Station file loaded from %s", resolved.c_str());
+        // load_channel_file (not load_station_file): arms overlay persistence so
+        // station.state references this file instead of duplicating its channels.
+        const bool ok = ctrl.load_channel_file(resolved);
+        if (ok) {
+            pal::log_info("openALE", "Station file loaded from %s", resolved.c_str());
+            // Persist the reference immediately so the loaded preset survives a
+            // restart even if no other mutation follows (station.state records
+            // channel_file= + the operator's nets/contacts/settings, not the
+            // channel rows — see ALEController::save_state's overlay mode).
+            if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
+        }
         mj::Value r = make_reply(msg, ok);
         if (!ok) r.set("error", mj::Value::string(
             file_exists(resolved) ? "invalid or corrupt channel file" : "file not found"));

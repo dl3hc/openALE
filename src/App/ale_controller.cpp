@@ -24,6 +24,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 
 namespace {
 
@@ -3907,6 +3908,26 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "link_default_individual=" << (config_.link_default_individual ? 1 : 0) << "\n";
     f << "link_default_group=" << (config_.link_default_group ? 1 : 0) << "\n";
     f << "link_default_allcall=" << (config_.link_default_allcall ? 1 : 0) << "\n";
+    // Overlay-persistence references (see save_state/load_state): when a preset
+    // channel file is sourced, station.state records its path here plus the IDs
+    // the operator deleted from it, instead of every frequency row. The added/
+    // modified channel rows themselves are written by write_station_body()'s
+    // overlay_only mode. Empty when no file is loaded (legacy full save).
+    if (!loaded_channel_file_.empty()) {
+        f << "channel_file=" << loaded_channel_file_ << "\n";
+        // Deleted = preset IDs no longer present in calling_channels_.
+        std::string deleted_csv;
+        for (const auto& fc : file_channels_) {
+            bool present = false;
+            for (const auto& cc : calling_channels_)
+                if (cc.id == fc.id) { present = true; break; }
+            if (!present) {
+                if (!deleted_csv.empty()) deleted_csv += ",";
+                deleted_csv += fc.id;
+            }
+        }
+        f << "channel_deleted=" << deleted_csv << "\n";
+    }
     const auto& stations = sm_.get_address_book().all_stations();
     if (!stations.empty()) {
         f << "\n# ALE address export\n";
@@ -3928,7 +3949,7 @@ bool ALEController::export_settings(const std::string& path)
     return f.good();
 }
 
-bool ALEController::import_settings(const std::string& path)
+bool ALEController::import_settings(const std::string& path, bool follow_channel_file)
 {
     std::ifstream f(path);
     if (!f.is_open()) return false;
@@ -3955,9 +3976,12 @@ bool ALEController::import_settings(const std::string& path)
             add_self_address(val);
             set_primary_self_address(val);
         } else if (key == "station_file" && !val.empty()) {
-            station_file_to_load = val;
+            if (follow_channel_file) station_file_to_load = val;
         } else if (key == "channel_file" && !val.empty()) {
-            station_file_to_load = val;  // legacy alias
+            if (follow_channel_file) station_file_to_load = val;  // legacy alias
+        } else if (key == "channel_deleted") {
+            // Overlay bookkeeping consumed by load_state; ignored here (import_settings
+            // never owns channel-set mutations — see load_state's overlay path).
         } else if (key == "assumed_scan_channels" || key == "target_scan_channels") {
             cfg.assumed_scan_channels = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "golay_mode") {
@@ -4226,15 +4250,29 @@ bool ALEController::set_channel_mode(const std::string& id, const std::string& m
     return true;
 }
 
+void ALEController::clear_station_stores()
+{
+    net_store_.clear();
+    contact_store_.clear();
+    group_call_store_.clear();
+}
+
 bool ALEController::load_station_file(const std::string& path)
 {
     std::ifstream f(path);
     if (!f.is_open()) return false;
 
+    clear_station_stores();
+    const bool ok = parse_station_body(f, /*replace_channels=*/true);
+    // Deliberately does NOT touch station_file_: loading a station file (e.g. a
+    // shared community preset from nets/) must not silently repoint auto-save
+    // at it. Auto-save is armed exclusively by load_state() at startup.
+    return ok;
+}
+
+bool ALEController::parse_station_body(std::istream& f, bool replace_channels)
+{
     std::vector<Channel> loaded;
-    net_store_.clear();
-    contact_store_.clear();
-    group_call_store_.clear();
 
     std::string line;
     while (std::getline(f, line)) {
@@ -4311,22 +4349,56 @@ bool ALEController::load_station_file(const std::string& path)
         auto ch = parse_channel_spec(line);
         if (ch) loaded.push_back(*ch);
     }
-    for (auto& ch : loaded)
-        if (ch.id.empty()) ch.id = next_free_channel_id(loaded);
-    calling_channels_ = std::move(loaded);
+    if (replace_channels) {
+        for (auto& ch : loaded)
+            if (ch.id.empty()) ch.id = next_free_channel_id(loaded);
+        calling_channels_ = std::move(loaded);
+    } else {
+        // Overlay merge: add/override each parsed channel by ID onto the
+        // existing (preset) channels. Added channels get a free ID if blank.
+        for (auto& ch : loaded) {
+            if (ch.id.empty()) ch.id = next_free_channel_id(calling_channels_);
+            bool found = false;
+            for (auto& cc : calling_channels_)
+                if (cc.id == ch.id) { cc = ch; found = true; break; }
+            if (!found) calling_channels_.push_back(ch);
+        }
+    }
     sm_.set_calling_channels(calling_channels_);
-    // Deliberately does NOT touch station_file_: loading a station file (e.g. a
-    // shared community preset from nets/) must not silently repoint auto-save
-    // at it. Auto-save is armed exclusively by load_state() at startup.
     return true;
 }
 
-void ALEController::write_station_body(std::ostream& f) const
+bool ALEController::load_channel_file(const std::string& path)
+{
+    // Load the preset (clears stores, replaces channels) then snapshot it as
+    // the overlay diff anchor and record the path so save_state() references it.
+    if (!load_station_file(path)) return false;
+    loaded_channel_file_ = path;
+    file_channels_ = calling_channels_;  // preset snapshot, before any overlay
+    return true;
+}
+
+void ALEController::write_station_body(std::ostream& f, bool overlay_only) const
 {
     f << "# openALE station file — MIL-STD-188-141B\n";
     f << "# ID:id rx_hz tx_hz mode [flags] [label]   flags=[OFF,RX,IC,IS,IR]\n";
-    for (const auto& ch : calling_channels_)
+    // overlay_only (save_state with a loaded preset): emit only channels the
+    // operator added or modified vs. the preset snapshot — unchanged rows come
+    // from the referenced file (channel_file=). Diff by ID + formatted line so
+    // a frequency/flag tweak is captured but an untouched row is omitted.
+    std::unordered_map<std::string, std::string> file_line_by_id;
+    if (overlay_only) {
+        for (const auto& fc : file_channels_)
+            file_line_by_id.emplace(fc.id, format_channel_line(fc));
+    }
+    for (const auto& ch : calling_channels_) {
+        if (overlay_only) {
+            const auto it = file_line_by_id.find(ch.id);
+            if (it != file_line_by_id.end() && it->second == format_channel_line(ch))
+                continue;  // unchanged — sourced from the file, not re-saved
+        }
         f << format_channel_line(ch) << '\n';
+    }
     if (!net_store_.empty()) {
         f << "# NET:name id,id,...  [dwell=ms] [scan=0|1] [sound=0|1] [sndint=sec] [c=N]\n";
         for (const auto& net : net_store_.all()) {
@@ -4372,16 +4444,93 @@ bool ALEController::save_state(const std::string& path) const
     std::ofstream f(path);
     if (!f.is_open()) return false;
     f << "# openALE-state version=1\n";
-    write_station_body(f);
+    // When a preset channel file is sourced, omit unchanged frequency rows —
+    // station.state references the file (channel_file=) + the operator's edits.
+    write_station_body(f, !loaded_channel_file_.empty());
     write_settings_body(f);
     return f.good();
 }
 
 bool ALEController::load_state(const std::string& path)
 {
-    load_station_file(path);   // best-effort; missing file just means nothing to load yet
-    import_settings(path);     // best-effort; same file, key=value lines only
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        station_file_ = path;  // first run — arm auto-save; nothing to load yet
+        return true;
+    }
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    const std::string content = ss.str();   // one buffer; two passes below
+    f.close();
+
+    // Pre-scan the overlay references written by write_settings_body().
+    std::string channel_file_ref;
+    std::string channel_deleted_csv;
+    {
+        std::istringstream scan(content);
+        std::string line;
+        while (std::getline(scan, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            const auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string key = line.substr(0, eq);
+            const std::string val = line.substr(eq + 1);
+            if (key == "channel_file" && !val.empty())      channel_file_ref    = val;
+            else if (key == "channel_deleted")               channel_deleted_csv = val;
+        }
+    }
+
+    if (!channel_file_ref.empty()) {
+        // Overlay path: channels come from the referenced preset; station.state
+        // holds only the operator's added/modified channels, a deleted-ID list,
+        // and the nets/contacts/groups that overlay the preset's.
+        if (load_channel_file(channel_file_ref)) {
+            // Drop channels the operator deleted from the preset.
+            if (!channel_deleted_csv.empty()) {
+                for (const auto& id : split_csv(channel_deleted_csv)) {
+                    calling_channels_.erase(
+                        std::remove_if(calling_channels_.begin(), calling_channels_.end(),
+                                       [&](const Channel& c) { return c.id == id; }),
+                        calling_channels_.end());
+                }
+                sm_.set_calling_channels(calling_channels_);
+            }
+            // Replace the preset's nets/contacts/groups with the operator's set
+            // from station.state, then merge the added/modified overlay channels
+            // by ID (channels are NOT cleared — preset channels stay).
+            clear_station_stores();
+            std::istringstream body(content);
+            parse_station_body(body, /*replace_channels=*/false);
+        } else {
+            // Preset missing/moved: load only station.state's own body (its
+            // overlay channels + nets) so the operator's manual work survives.
+            pal::log_warn("openALE",
+                          "channel file not found: %s — loading overlay channels only",
+                          channel_file_ref.c_str());
+            loaded_channel_file_.clear();
+            file_channels_.clear();
+            clear_station_stores();
+            calling_channels_.clear();
+            std::istringstream body(content);
+            parse_station_body(body, /*replace_channels=*/true);
+        }
+    } else {
+        // Legacy path: station.state holds the full channel rows (no preset
+        // reference). Parse it as a station file (clears + replaces). Leave
+        // loaded_channel_file_ empty so the next save is the legacy full format.
+        clear_station_stores();
+        std::istringstream body(content);
+        parse_station_body(body, /*replace_channels=*/true);
+    }
+
+    import_settings(path, /*follow_channel_file=*/false);  // key=value settings only
     station_file_ = path;      // always arm auto-save, whether or not anything was found
+
+    // Activate the first net so the operator starts with a scoped net (surfaces
+    // to the GUI via SCAN_NET_GET). No-op if there are no nets or one is active.
+    if (active_scan_net_.empty() && !net_store_.empty())
+        active_scan_net_ = net_store_.all().front().name;
+
     return true;
 }
 

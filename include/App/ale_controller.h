@@ -155,6 +155,19 @@ public:
     bool load_channels(const std::string& path) { return load_station_file(path); }  // compat alias
 
     /**
+     * Load a preset channel file the way the operator does (wizard / Files tab):
+     * same as load_station_file(), but also arms overlay persistence — records the
+     * path as the sourced preset (loaded_channel_file_) and snapshots the loaded
+     * channels (file_channels_) so later save_state() diffs against them and
+     * station.state stores only channel_file= + the operator's edits, not every
+     * frequency row. Resets any previous overlay (a fresh file replaces the base).
+     */
+    bool load_channel_file(const std::string& path);
+
+    /// Path of the preset channel file currently sourced (empty = none).
+    const std::string& loaded_channel_file() const { return loaded_channel_file_; }
+
+    /**
      * Save all station data to a .ale file (channels, nets, contacts, group rosters, allcall).
      * \return false on I/O error.
      */
@@ -782,8 +795,14 @@ public:
      */
     bool export_settings(const std::string& path);
 
-    /** Import settings written by export_settings(). @return true on success */
-    bool import_settings(const std::string& path);
+    /** Import settings written by export_settings(). @return true on success.
+     *  \param follow_channel_file  when true (default, external ale.conf) a
+     *  channel_file=/station_file= line triggers the legacy cascade
+     *  (load_station_file of the referenced file). When false (used by load_state
+     *  on its own merged file) those keys are skipped — load_state handles the
+     *  preset + overlay itself and must not re-clear the stores mid-load.
+     */
+    bool import_settings(const std::string& path, bool follow_channel_file = true);
 
     // ── Radio / VFO control ───────────────────────────────────────────────
     // All of these go directly through the attached pal::IRadio (set_radio())
@@ -1373,6 +1392,12 @@ private:
     LQAMetrics               lqa_db_metrics_;     // connected to lqa_database_; fed into the SM
     std::vector<Channel>     calling_channels_;  // cached here so initiate_call() can reorder
     std::string              station_file_;       // auto-save path (empty = no auto-save)
+    // Overlay-persistence state (see save_state/load_state): when a preset channel
+    // file has been loaded, station.state stores only a channel_file= reference +
+    // the operator's added/modified channels + a deleted-ID list instead of every
+    // frequency row. file_channels_ is the preset snapshot to diff against at save.
+    std::string              loaded_channel_file_;  // preset path (empty = no file; legacy full save)
+    std::vector<Channel>     file_channels_;        // preset channels as loaded (diff anchor)
 
     // Net / Contact / Self-address tables (GUI-facing address book + scanning-call sizing)
     NetStore                 net_store_;
@@ -1645,8 +1670,24 @@ private:
     /// Body-writers shared between the standalone save_station_file()/
     /// export_settings() and the composed save_state() — write into an
     /// already-open stream so save_state() can concatenate both into one file.
-    void write_station_body(std::ostream& f) const;
+    /// \param overlay_only  when true (save_state with a loaded preset), the
+    /// channel ID/frequency lines are emitted ONLY for channels the operator
+    /// added or modified vs. file_channels_; unchanged channels come from the
+    /// referenced file. NET:/CONTACT:/GROUP:/ALLCALL are always written.
+    void write_station_body(std::ostream& f, bool overlay_only = false) const;
     void write_settings_body(std::ostream& f) const;
+
+    /// Clear the net/contact/group stores (channel list untouched). Shared by
+    /// load_station_file (fresh load) and load_state's overlay path (replace the
+    /// preset's nets/contacts with the operator's station.state set).
+    void clear_station_stores();
+    /// Parse a station-file body (NET:/CONTACT:/GROUP:/ALLCALL:/ID: lines) from
+    /// an open stream. \param replace_channels  true → calling_channels_ is
+    /// replaced by the parsed ID: lines (full load); false → parsed ID: lines
+    /// are merged by ID (add/override) onto the existing channels (overlay).
+    /// Nets/contacts/groups are added (caller clears first if a replace is
+    /// intended). Always re-syncs the SM's calling channels at the end.
+    bool parse_station_body(std::istream& f, bool replace_channels);
     void on_received_word(const ALEWord& word);
 
     // ── update() concern handlers ─────────────────────────────────────────────
