@@ -308,6 +308,17 @@ static mj::Value make_event(const std::string& name) {
     return e;
 }
 
+// LocationRelayService::ConnState → GUI string. Mirrors the enum order in
+// App/location_relay_service.h.
+static const char* loc_conn_state_name(int s) {
+    switch (s) {
+        case ale::LocationRelayService::CS_CONNECTED:    return "connected";
+        case ale::LocationRelayService::CS_DISCONNECTED: return "disconnected";
+        case ale::LocationRelayService::CS_SERVER_ERROR: return "server_error";
+        default:                                          return "unknown";
+    }
+}
+
 // Assemble the pal::create_radio() spec from structured GUI fields (so the GUI
 // never needs to know the hamlib spec syntax). The Hamlib rig MODEL is the single
 // selector; its port type (derived from rig_caps::port_type via pal::rig_port_type)
@@ -1246,6 +1257,9 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("include_comment",  mj::Value::boolean(cfg.location_sharing_include_comment));
         r.set("queue_size",       mj::Value::number(cfg.location_sharing_queue_size));
         r.set("running",          mj::Value::boolean(ctx.loc_svc && ctx.loc_svc->is_running()));
+        r.set("conn_state",       mj::Value::string(loc_conn_state_name(
+                                    ctx.loc_svc ? ctx.loc_svc->conn_state()
+                                                 : ale::LocationRelayService::CS_UNKNOWN)));
         return mj::dump(r);
     }
     if (cmd == "LOCATION_SHARING_SET") {
@@ -2130,6 +2144,19 @@ int main(int argc, char* argv[]) {
             while (ctx.loc_svc->pop_status(loc_status)) {
                 mj::Value e = make_event("status");
                 e.set("msg", mj::Value::string(loc_status));
+                ws.send_text(mj::dump(e));
+            }
+        }
+
+        // Drain Location Relay endpoint connection-state transitions → live
+        // GUI pill update (the "Running" pill under Privacy / Network —
+        // Location Relay). Pushed on initial probe and on every loss/restore.
+        {
+            int cs;
+            while (ctx.loc_svc->pop_conn_state(cs)) {
+                mj::Value e = make_event("location_relay");
+                e.set("running", mj::Value::boolean(ctx.loc_svc->is_running()));
+                e.set("conn_state", mj::Value::string(loc_conn_state_name(cs)));
                 ws.send_text(mj::dump(e));
             }
         }

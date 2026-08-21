@@ -75,11 +75,23 @@ std::string make_dedup_key(const AleGpr& gpr, const std::string& source_addr,
 
 class LocationRelayService {
 public:
+    /// Connection state of the configured API endpoint, re-evaluated on every
+    /// send and by a periodic idle health check. Surfaced live to the GUI pill
+    /// where "Running" used to be the only signal (which only proved the worker
+    /// thread existed, not that the endpoint was reachable).
+    enum ConnState : int {
+        CS_UNKNOWN       = 0,  ///< no check completed yet (initial)
+        CS_CONNECTED     = 1,  ///< last response round-tripped with a 2xx
+        CS_DISCONNECTED  = 2,  ///< no response at all (DNS / connect / TLS / timeout)
+        CS_SERVER_ERROR  = 3,  ///< reachable but replied non-2xx (auth, 5xx, ...)
+    };
+
     struct Config {
         std::string url;
         std::string token;
         uint16_t    queue_size       = 64;
         uint32_t    min_interval_sec = 30;  ///< per-source throttle
+        uint32_t    health_check_interval_sec = 60;  ///< idle endpoint probe cadence
     };
 
     LocationRelayService() = default;
@@ -92,6 +104,14 @@ public:
     /// Stop the worker thread and wait for it to join. Idempotent.
     void stop();
     bool is_running() const { return running_.load(); }
+
+    /// Snapshot of the current endpoint connection state (for LOCATION_SHARING_GET).
+    int conn_state() const;
+
+    /// Drains the connection state if it has changed since the last call —
+    /// returns true and sets out when a transition occurred. Call from the main
+    /// thread (bridge main loop) to emit live WS updates to the GUI pill.
+    bool pop_conn_state(int& out);
 
     /// Gate a pre-built report through per-source dedup (LRU on dedup_key)
     /// and throttle (min_interval_sec), then queue it. Drops the oldest
@@ -122,6 +142,19 @@ private:
     std::mutex              status_mtx_;
     std::deque<std::string> status_queue_;
     void push_status(const std::string& s);
+
+    // Endpoint connection state — written by the worker, read by the main
+    // thread via conn_state()/pop_conn_state().
+    mutable std::mutex conn_mtx_;
+    int conn_state_   = CS_UNKNOWN;   ///< current state (guarded by conn_mtx_)
+    int last_drained_ = CS_UNKNOWN;   ///< last value handed to pop_conn_state()
+
+    /// Reclassify the connection from a send/probe outcome and, on transition,
+    /// log via pal::logger + push a status line. reachable = a response came
+    /// back at all (DNS/connect/TLS/timeout failures set it false).
+    void update_conn_state(bool reached, int http_status);
+    /// Periodic idle probe of cfg_.url (http_probe, no data written).
+    void run_health_check();
 
     void worker_loop();
     static std::string to_json(const LocationReport& r);

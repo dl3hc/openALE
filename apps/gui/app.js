@@ -329,6 +329,7 @@ function onBridgeEvent(e) {
   switch (e.event) {
     case 'state': applyBridgeState(e.value); break;
     case 'status': aleLogInfo(e.msg); break;
+    case 'location_relay': renderLocStatus(true, e.running, e.conn_state); break;
     case 'call_received':
       isIncomingCall = true;
       notifyRingStart();
@@ -3623,6 +3624,25 @@ function onLocShareEnabledChange() {
   const body = document.getElementById('locShareBody');
   if (body) body.style.opacity = enabled ? '1' : '0.5';
 }
+
+// Render the Location Relay status pill under Privacy / Network — Location
+// Relay. `running` only proves the worker thread exists; `connState` is the
+// re-evaluated endpoint reachability (connected / disconnected / server_error
+// / unknown) the worker probes on start and every ~60s while idle. Shared by
+// the LOCATION_SHARING_GET pull and the live `location_relay` event push.
+function renderLocStatus(enabled, running, connState) {
+  const el = document.getElementById('locShareStatus');
+  if (!el) return;
+  el.classList.remove('ok', 'err', 'warn');
+  if (!enabled) { el.textContent = ''; return; }
+  if (!running) { el.textContent = 'Enabled, not running'; el.classList.add('warn'); return; }
+  switch (connState) {
+    case 'connected':    el.textContent = 'Running · Connected';        el.classList.add('ok');  break;
+    case 'disconnected': el.textContent = 'Running · No connection';     el.classList.add('err'); break;
+    case 'server_error': el.textContent = 'Running · Server error';      el.classList.add('warn'); break;
+    default:              el.textContent = 'Running…'; break;  // initial probe in flight
+  }
+}
 function syncLocationSharingFromBridge() {
   bridgeSend('LOCATION_SHARING_GET', {}, (r) => {
     if (!r.ok) return;
@@ -3644,8 +3664,7 @@ function syncLocationSharingFromBridge() {
     // the hint just reflects whether one is already stored.
     const tokenHint = document.getElementById('locShareTokenHint');
     if (tokenHint) tokenHint.textContent = r.token_set ? 'A token is currently stored.' : 'No token stored.';
-    const statusEl = document.getElementById('locShareStatus');
-    if (statusEl) statusEl.textContent = r.enabled ? (r.running ? 'Running' : 'Enabled, not running') : '';
+    renderLocStatus(r.enabled, r.running, r.conn_state);
     onLocShareEnabledChange();
   });
 }

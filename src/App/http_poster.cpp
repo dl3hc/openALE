@@ -129,6 +129,73 @@ bool http_post_json(const std::string& url, const std::string& token,
     return completed;
 }
 
+// Connection health check (GET, no body). Same reachability contract as
+// http_post_json: true iff a response round-tripped, regardless of status.
+bool http_probe(const std::string& url, const std::string& token, HttpPostResult& out) {
+    std::string scheme, host, path;
+    uint16_t port = 0;
+    if (!parse_url(url, scheme, host, port, path)) {
+        pal::log_warn("LocationRelay", "probe: malformed URL: %s", url.c_str());
+        return false;
+    }
+    const bool secure = (scheme == "https");
+    const std::wstring whost(host.begin(), host.end());
+    const std::wstring wpath(path.begin(), path.end());
+
+    HINTERNET session = WinHttpOpen(L"ALE-LocationRelay/1.0",
+                                    WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) {
+        pal::log_error("LocationRelay", "probe: WinHttpOpen failed (err=%lu)", GetLastError());
+        return false;
+    }
+    HINTERNET conn = WinHttpConnect(session, whost.c_str(), port, 0);
+    if (!conn) {
+        pal::log_error("LocationRelay", "probe: WinHttpConnect failed (err=%lu)", GetLastError());
+        WinHttpCloseHandle(session);
+        return false;
+    }
+    HINTERNET req = WinHttpOpenRequest(conn, L"GET", wpath.c_str(), nullptr,
+                                       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                       secure ? WINHTTP_FLAG_SECURE : 0);
+    if (!req) {
+        pal::log_error("LocationRelay", "probe: WinHttpOpenRequest failed (err=%lu)", GetLastError());
+        WinHttpCloseHandle(conn);
+        WinHttpCloseHandle(session);
+        return false;
+    }
+
+    std::wstring headers;
+    if (!token.empty()) {
+        const std::wstring wtoken(token.begin(), token.end());
+        headers += L"Authorization: Bearer " + wtoken + L"\r\n";
+    }
+
+    bool completed = false;
+    if (!WinHttpSendRequest(req, headers.empty() ? nullptr : headers.c_str(),
+                            static_cast<DWORD>(headers.size()),
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+        pal::log_warn("LocationRelay", "probe: WinHttpSendRequest failed (err=%lu)", GetLastError());
+    } else if (!WinHttpReceiveResponse(req, nullptr)) {
+        pal::log_warn("LocationRelay", "probe: WinHttpReceiveResponse failed (err=%lu)", GetLastError());
+    } else {
+        DWORD status = 0, status_size = sizeof(status);
+        WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+                            WINHTTP_NO_HEADER_INDEX);
+        out.status = static_cast<int>(status);
+        // Drain + discard the body — only reachability/status matters here.
+        char buf[2048];
+        DWORD got;
+        while (WinHttpReadData(req, buf, sizeof(buf) - 1, &got) && got > 0) { /* discard */ }
+        completed = true;
+    }
+    WinHttpCloseHandle(req);
+    WinHttpCloseHandle(conn);
+    WinHttpCloseHandle(session);
+    return completed;
+}
+
 } // namespace ale
 
 #else
@@ -196,6 +263,64 @@ bool http_post_json(const std::string& url, const std::string& token,
             out.status = std::atoi(raw.c_str() + sp1 + 1);
         const size_t sep = raw.find("\r\n\r\n");
         if (sep != std::string::npos) out.body = raw.substr(sep + 4);
+        completed = (out.status != 0);
+    }
+    ::close(s);
+    freeaddrinfo(res);
+    return completed;
+}
+
+// Connection health check (GET, no body) — raw HTTP/1.0 for http:// only,
+// mirroring http_post_json's POSIX limitations (https:// needs a TLS backend).
+bool http_probe(const std::string& url, const std::string& token, HttpPostResult& out) {
+    std::string scheme, host, path;
+    uint16_t port = 0;
+    if (!parse_url(url, scheme, host, port, path)) {
+        pal::log_warn("LocationRelay", "probe: malformed URL: %s", url.c_str());
+        return false;
+    }
+    if (scheme == "https") {
+        pal::log_warn("LocationRelay",
+                       "probe: HTTPS relay needs a TLS backend on Linux — not yet implemented");
+        return false;
+    }
+
+    struct addrinfo hints{};
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo* res = nullptr;
+    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0) {
+        pal::log_error("LocationRelay", "probe: DNS lookup failed for %s", host.c_str());
+        return false;
+    }
+    int s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (s < 0) {
+        freeaddrinfo(res);
+        pal::log_error("LocationRelay", "probe: socket() failed");
+        return false;
+    }
+    bool completed = false;
+    if (connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+        pal::log_error("LocationRelay", "probe: connect() to %s:%u failed", host.c_str(), port);
+    } else {
+        std::string req = "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\n";
+        if (!token.empty()) req += "Authorization: Bearer " + token + "\r\n";
+        req += "Connection: close\r\n\r\n";
+        ::send(s, req.c_str(), static_cast<int>(req.size()), 0);
+
+        char buf[4096];
+        ssize_t n;
+        std::string raw;
+        while ((n = ::read(s, buf, sizeof(buf) - 1)) > 0) {
+            buf[n] = '\0';
+            raw += buf;
+            // Only the status line matters — stop once we've parsed it.
+            if (out.status != 0 && raw.find("\r\n\r\n") != std::string::npos) break;
+        }
+        const size_t line_end = raw.find("\r\n");
+        const size_t sp1 = raw.find(' ');
+        if (line_end != std::string::npos && sp1 != std::string::npos && sp1 < line_end)
+            out.status = std::atoi(raw.c_str() + sp1 + 1);
         completed = (out.status != 0);
     }
     ::close(s);

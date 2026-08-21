@@ -27,6 +27,14 @@ struct HttpPostResult {
 bool http_post_json(const std::string& url, const std::string& token,
                      const std::string& json_body, HttpPostResult& out);
 
+/// GETs url (no body) with the Bearer token if non-empty. Returns true iff a
+/// response round-tripped — i.e. the host was reachable and answered. Used by
+/// LocationRelayService's periodic connection health check; never writes data
+/// (a probe, not an ingest). out.status is the HTTP code (0 if no response).
+/// A true return with out.status==0 would be inconsistent on these backends —
+/// treat any true return as "reachable", and out.status for the sub-label.
+bool http_probe(const std::string& url, const std::string& token, HttpPostResult& out);
+
 /// HTTPS-only policy (Konzept §10): true for https://, and for
 /// http://127.0.0.1 or http://localhost (local test-server exception).
 bool location_url_allowed(const std::string& url);
