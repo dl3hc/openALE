@@ -101,6 +101,11 @@ AMD to all stations, not just position reports.
 ## Other
 
 - README.md now links to `docs/ALE_GPR_SPEC.md` and the two Location Sharing docs.
+- Hamlib dependency bumped from 4.5.2 to 4.7.2. `scripts/build_hamlib.sh` now clones
+  the `4.7.2` tag (Hamlib's GitHub tags are bare version numbers — the previous
+  `Hamlib-<version>` tag form did not exist and would have failed the clone) and
+  rebuilds `libhamlib-4.dll` against the latest Hamlib release. The soname stays
+  `libhamlib-4.dll` (major-ABI-versioned, unchanged across the 4.x series).
 
 ---
 
