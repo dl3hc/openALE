@@ -127,6 +127,9 @@ Covers the modem, protocol/word parsing, link state machine, AQC extensions, FS-
 - [Threading Model](docs/THREADING.md)
 - [Glossary](docs/GLOSSARY.md) — ALE terminology and acronyms
 - [Testing Guide](docs/TESTING.md)
+- [ALE-GPR Position Reports](docs/ALE_GPR_SPEC.md) — HFLINK ALE-GPR v1.1 wire format over AMD
+- [Location Sharing — How-To](docs/LOCATION_SHARING_HOWTO.md) — forward received positions to a live web map (setup guide)
+- [Location Sharing — Concept/Architecture](docs/LOCATION_SHARING_CONCEPT.md) — design doc (German)
 
 ---
 

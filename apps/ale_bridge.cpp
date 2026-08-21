@@ -26,8 +26,11 @@
 #include "App/audio_monitor.h"
 #include "App/audio_transport.h"
 #include "App/gps_service.h"
+#include "App/http_poster.h"
+#include "App/location_relay_service.h"
 #include "App/sfi_service.h"
 #include "App/voice_path_manager.h"
+#include "Protocol/Message/ale_gpr.h"
 #include "PAL/crash_handler.h"
 #include "PAL/events.h"
 #include "PAL/logger.h"
@@ -48,10 +51,12 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -370,8 +375,9 @@ struct BridgeCtx {
     std::string                    audio_out;  ///< last successfully opened TX device
     float                          tx_volume = 0.25f; ///< persists across AUDIO_OPEN/CLOSE
     // GPS / SFI services and shared pending-update mailbox
-    GpsService*       gps_svc  = nullptr;
-    SfiService*       sfi_svc  = nullptr;
+    GpsService*            gps_svc  = nullptr;
+    SfiService*            sfi_svc  = nullptr;
+    LocationRelayService*  loc_svc  = nullptr;
     PendingUpdate*    pending  = nullptr;
     bridge::WsServer* ws       = nullptr;  ///< for GPS/SFI push events from STATION_LOC_SET
     // Dynamic audio-path owner (ALE-modem ↔ voice passthrough on the VAC).
@@ -443,6 +449,22 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
             });
         } else {
             pal::log_info("openALE", "SFI service: disabled");
+        }
+    }
+
+    // ── Location Relay ───────────────────────────────────────────────────────
+    if (ctx.loc_svc) {
+        ctx.loc_svc->stop();   // always stop first; start() below spawns a fresh thread
+        if (cfg.location_sharing_enabled && !cfg.location_api_url.empty()) {
+            LocationRelayService::Config lcfg;
+            lcfg.url               = cfg.location_api_url;
+            lcfg.token              = cfg.location_api_token;
+            lcfg.queue_size         = cfg.location_sharing_queue_size;
+            lcfg.min_interval_sec   = cfg.location_sharing_min_interval_sec;
+            pal::log_info("openALE", "Location Relay: starting (%s)", lcfg.url.c_str());
+            ctx.loc_svc->start(lcfg);
+        } else {
+            pal::log_info("openALE", "Location Relay: disabled");
         }
     }
 }
@@ -616,11 +638,63 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         // Typed dispatch: if LINKED, send AMD over the established link; otherwise
         // queue it and place a call to `to`. `to` is the selected contact (or the
         // active peer when LINKED — ignored by send_amd in that case).
+        // `link` (optional, default false): not-LINKED path only — whether the
+        // third handshake frame concludes with TIS (link persists) or TWAS (no
+        // link, message already delivered from the calling frame). Omitting the
+        // field no longer forces a link, matching the Ion2G-style default.
         const std::string to   = msg.get_string("to");
         const std::string text = msg.get_string("text");
-        const std::string resp = ctrl.send_amd(to, text);
+        const bool link        = msg.get_bool("link", false);
+        const std::string resp = ctrl.send_amd(to, text, link);
         mj::Value r = make_reply(msg, resp.rfind("OK:", 0) == 0);
         r.set("msg", mj::Value::string(resp));
+        return mj::dump(r);
+    }
+    if (cmd == "GPR_BUILD") {
+        // Read-only: builds and returns an ALE-GPR payload string, sends nothing.
+        // The caller sends it via the existing "AMD" command ({to, text, link}).
+        const std::string object = msg.has("object") ? msg.get_string("object")
+                                                       : ctrl.get_primary_self_address();
+
+        double lat_deg = 0.0, lon_deg = 0.0;
+        bool have_position = false;
+        if (ctrl.has_gps_fix()) {
+            lat_deg = ctrl.get_gps_lat();
+            lon_deg = ctrl.get_gps_lon();
+            have_position = true;
+        } else {
+            lat_deg = ctrl.get_station_lat();
+            lon_deg = ctrl.get_station_lon();
+            have_position = (ctrl.get_position_source() != ALEStationConfig::PositionSource::NONE);
+        }
+        if (!have_position) {
+            mj::Value r = make_reply(msg, false);
+            r.set("msg", mj::Value::string("no station position available (set a position source first)"));
+            return mj::dump(r);
+        }
+
+        // Altitude: only ever available from a live GPS fix (not manual/grid).
+        bool has_altitude = false;
+        double altitude = 0.0;
+        if (msg.has("altitude")) {
+            has_altitude = true;
+            altitude = msg.get_number("altitude");
+        } else if (ctrl.has_gps_fix() && ctx.gps_svc && ctx.gps_svc->has_altitude()) {
+            has_altitude = true;
+            altitude = ctx.gps_svc->alt();
+        }
+        const char altitude_unit = msg.has("altitude_unit")
+            ? msg.get_string("altitude_unit", "M")[0] : 'M';
+
+        const std::string comment = msg.get_string("comment");
+        const std::time_t now = std::time(nullptr);
+
+        const std::string gpr_text = ale::generate_gpr(
+            object, lat_deg, lon_deg, has_altitude, altitude, altitude_unit,
+            now, 'Z', comment);
+
+        mj::Value r = make_reply(msg, true);
+        r.set("gpr_text", mj::Value::string(gpr_text));
         return mj::dump(r);
     }
     if (cmd == "MANUAL_ACCEPT_MODE") {
@@ -924,6 +998,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("scan_dwell_ms"))          ctrl.set_scan_dwell_ms(static_cast<uint32_t>(msg.get_number("scan_dwell_ms")));
         if (msg.has("sounding_interval_sec"))  ctrl.set_sounding_interval_sec(static_cast<uint32_t>(msg.get_number("sounding_interval_sec")));
         if (msg.has("link_idle_timeout_sec"))  ctrl.set_link_idle_timeout_sec(static_cast<uint32_t>(msg.get_number("link_idle_timeout_sec")));
+        if (msg.has("amd_send_max_attempts"))  ctrl.set_amd_send_max_attempts(static_cast<uint32_t>(msg.get_number("amd_send_max_attempts")));
         if (msg.has("max_tune_time_ms"))       ctrl.set_max_tune_time_ms(static_cast<uint32_t>(msg.get_number("max_tune_time_ms")));
         if (msg.has("ptt_lead_ms"))            ctrl.set_ptt_lead_ms(static_cast<uint32_t>(msg.get_number("ptt_lead_ms")));
         if (msg.has("ptt_tail_ms"))            ctrl.set_ptt_tail_ms(static_cast<uint32_t>(msg.get_number("ptt_tail_ms")));
@@ -939,6 +1014,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("scan_dwell_ms",                    mj::Value::number(ctrl.get_scan_dwell_ms()));
         r.set("sounding_interval_sec",            mj::Value::number(ctrl.get_sounding_interval_sec()));
         r.set("link_idle_timeout_sec",            mj::Value::number(ctrl.get_link_idle_timeout_sec()));
+        r.set("amd_send_max_attempts",            mj::Value::number(ctrl.get_amd_send_max_attempts()));
         r.set("max_tune_time_ms",                 mj::Value::number(ctrl.get_max_tune_time_ms()));
         r.set("ptt_lead_ms",                      mj::Value::number(ctrl.get_ptt_lead_ms()));
         r.set("ptt_tail_ms",                      mj::Value::number(ctrl.get_ptt_tail_ms()));
@@ -970,13 +1046,18 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     }
     if (cmd == "STATION_LOC_SET") {
         using PS = ALEStationConfig::PositionSource;
+        PS src = ctrl.get_position_source();
         if (msg.has("position_source"))
-            ctrl.set_position_source(static_cast<PS>(
-                static_cast<int>(msg.get_number("position_source"))));
-        if (msg.has("lat_deg") && msg.has("lon_deg"))
+            src = static_cast<PS>(static_cast<int>(msg.get_number("position_source")));
+        // Apply the resolved source first — set_station_position_manual()/
+        // set_station_position_grid() below also assign position_source as a
+        // side effect, so only invoke them when src actually selects that mode.
+        // Otherwise (GPS/GPSD/NONE) this call is what makes src stick.
+        ctrl.set_position_source(src);
+        if (src == PS::MANUAL && msg.has("lat_deg") && msg.has("lon_deg"))
             ctrl.set_station_position_manual(msg.get_number("lat_deg"),
                                              msg.get_number("lon_deg"));
-        if (msg.has("grid_locator"))
+        if (src == PS::MAIDENHEAD && msg.has("grid_locator"))
             ctrl.set_station_position_grid(msg.get_string("grid_locator"));
         if (msg.has("gpsd_host") || msg.has("gpsd_port")) {
             const auto& cfg = ctrl.get_config();
@@ -997,6 +1078,96 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             cfg.sfi_enabled = msg.get_bool("sfi_enabled");
             ctrl.apply_config(cfg);
         }
+        restart_location_services(ctx, ctrl);
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
+        return mj::dump(make_reply(msg, true));
+    }
+
+    // ── Automatic ALE-GPR/GGA position reporting (docs/ALE_GPR_SPEC.md) ────
+    if (cmd == "POSITION_REPORT_GET") {
+        const auto& cfg = ctrl.get_config();
+        mj::Value r = make_reply(msg, true);
+        r.set("mode",          mj::Value::number(static_cast<double>(static_cast<int>(cfg.position_report_mode))));
+        r.set("target",        mj::Value::string(cfg.position_report_target));
+        r.set("net",           mj::Value::string(cfg.position_report_net));
+        r.set("change_m",      mj::Value::number(cfg.position_report_change_m));
+        r.set("interval_min",  mj::Value::number(cfg.position_report_interval_min));
+        r.set("format",        mj::Value::number(static_cast<double>(static_cast<int>(cfg.position_report_format))));
+        r.set("comment",       mj::Value::string(cfg.position_report_comment));
+        return mj::dump(r);
+    }
+    if (cmd == "POSITION_REPORT_SET") {
+        using Mode   = ALEStationConfig::PositionReportMode;
+        using Format = ALEStationConfig::PositionReportFormat;
+        ALEStationConfig cfg = ctrl.get_config();
+        if (msg.has("mode"))
+            cfg.position_report_mode = static_cast<Mode>(static_cast<int>(msg.get_number("mode")));
+        if (msg.has("target"))       cfg.position_report_target = msg.get_string("target");
+        if (msg.has("net"))          cfg.position_report_net = msg.get_string("net");
+        if (msg.has("change_m"))
+            cfg.position_report_change_m = static_cast<uint32_t>(msg.get_number("change_m"));
+        if (msg.has("interval_min"))
+            cfg.position_report_interval_min = static_cast<uint32_t>(msg.get_number("interval_min"));
+        if (msg.has("format"))
+            cfg.position_report_format = static_cast<Format>(static_cast<int>(msg.get_number("format")));
+        if (msg.has("comment"))      cfg.position_report_comment = msg.get_string("comment");
+        ctrl.apply_config(cfg);
+        if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
+        return mj::dump(make_reply(msg, true));
+    }
+
+    // ── Location Relay (docs/LOCATION_SHARING_CONCEPT.md) ──────────────────
+    if (cmd == "LOCATION_SHARING_GET") {
+        const auto& cfg = ctrl.get_config();
+        mj::Value r = make_reply(msg, true);
+        r.set("enabled",          mj::Value::boolean(cfg.location_sharing_enabled));
+        r.set("url",              mj::Value::string(cfg.location_api_url));
+        // Token is deliberately NOT echoed back (Konzept §17 — never log/expose
+        // it once set). The GUI shows a "configured"/"not configured" state
+        // instead of the raw value; POSTing a new value always overwrites.
+        r.set("token_set",        mj::Value::boolean(!cfg.location_api_token.empty()));
+        r.set("allcall",          mj::Value::boolean(cfg.location_sharing_allcall));
+        r.set("individual",       mj::Value::boolean(cfg.location_sharing_individual));
+        r.set("net",              mj::Value::boolean(cfg.location_sharing_net));
+        r.set("group",            mj::Value::boolean(cfg.location_sharing_group));
+        r.set("linked",           mj::Value::boolean(cfg.location_sharing_linked));
+        r.set("min_interval_sec", mj::Value::number(cfg.location_sharing_min_interval_sec));
+        r.set("round_digits",     mj::Value::number(cfg.location_sharing_round_digits));
+        r.set("include_comment",  mj::Value::boolean(cfg.location_sharing_include_comment));
+        r.set("queue_size",       mj::Value::number(cfg.location_sharing_queue_size));
+        r.set("running",          mj::Value::boolean(ctx.loc_svc && ctx.loc_svc->is_running()));
+        return mj::dump(r);
+    }
+    if (cmd == "LOCATION_SHARING_SET") {
+        ALEStationConfig cfg = ctrl.get_config();
+        if (msg.has("enabled"))    cfg.location_sharing_enabled = msg.get_bool("enabled");
+        if (msg.has("url")) {
+            const std::string url = msg.get_string("url");
+            if (!url.empty() && !ale::location_url_allowed(url)) {
+                mj::Value r = make_reply(msg, false);
+                r.set("error", mj::Value::string("URL must be https://, or http://127.0.0.1 for local testing"));
+                return mj::dump(r);
+            }
+            cfg.location_api_url = url;
+        }
+        // Empty "token" is a no-op (keep the stored token) — only a non-empty
+        // value overwrites, so the GUI can leave the field blank on re-save
+        // without clobbering an already-configured token.
+        if (msg.has("token") && !msg.get_string("token").empty())
+            cfg.location_api_token = msg.get_string("token");
+        if (msg.has("allcall"))          cfg.location_sharing_allcall = msg.get_bool("allcall");
+        if (msg.has("individual"))       cfg.location_sharing_individual = msg.get_bool("individual");
+        if (msg.has("net"))              cfg.location_sharing_net = msg.get_bool("net");
+        if (msg.has("group"))            cfg.location_sharing_group = msg.get_bool("group");
+        if (msg.has("linked"))           cfg.location_sharing_linked = msg.get_bool("linked");
+        if (msg.has("min_interval_sec"))
+            cfg.location_sharing_min_interval_sec = static_cast<uint32_t>(msg.get_number("min_interval_sec"));
+        if (msg.has("round_digits"))
+            cfg.location_sharing_round_digits = static_cast<uint8_t>(msg.get_number("round_digits"));
+        if (msg.has("include_comment"))  cfg.location_sharing_include_comment = msg.get_bool("include_comment");
+        if (msg.has("queue_size"))
+            cfg.location_sharing_queue_size = static_cast<uint16_t>(msg.get_number("queue_size"));
+        ctrl.apply_config(cfg);
         restart_location_services(ctx, ctrl);
         if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
@@ -1402,9 +1573,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // GPS / SFI services — started on demand from STATION_LOC_SET
-    GpsService       gps_svc;
-    SfiService       sfi_svc;
+    // GPS / SFI / Location-Relay services — started on demand from
+    // STATION_LOC_SET / LOCATION_SHARING_SET
+    GpsService            gps_svc;
+    SfiService            sfi_svc;
+    LocationRelayService  loc_svc;
     PendingUpdate    pending;
     AudioTransport   transport;   // declared first → destroyed after voice_mgr / audio_monitor
     VoicePathManager voice_mgr;   // declared second → destroyed before transport
@@ -1451,10 +1624,19 @@ int main(int argc, char* argv[]) {
     BridgeCtx ctx{ &ctrl, &audio, &radio, lqa_path, state_path,
                    /*audio_in*/"", /*audio_out*/"",
                    /*tx_volume*/0.25f,
-                   &gps_svc, &sfi_svc, &pending, &ws,
+                   &gps_svc, &sfi_svc, &loc_svc, &pending, &ws,
                    &voice_mgr, /*voice_armed*/false,
                    &audio_monitor,
                    &rigctld };
+
+    // Resume GPS / SFI / Location-Relay from persisted config (station.state,
+    // loaded above). Previously these only ever started from a live
+    // STATION_LOC_SET/LOCATION_SHARING_SET call, so a previously-enabled
+    // service sat inactive after every bridge restart until the GUI's
+    // connect-time sync happened to push a SET — unlike rigctld, which
+    // already starts inline from persisted config a few lines above. This
+    // call makes the three behave the same way.
+    restart_location_services(ctx, ctrl);
 
     // ── Event bus subscriptions ──────────────────────────────────────────
     // All ALEController events arrive via the global PAL event handler.
@@ -1480,6 +1662,24 @@ int main(int argc, char* argv[]) {
                 v.set("peer", mj::Value::string(ev.message));
                 ws.send_text(mj::dump(v));
             }
+        });
+
+        bus->on(pal::EventType::ALE_AMD_NO_LINK, [&](const pal::Event& ev) {
+            mj::Value e = make_event("amd_no_link");
+            e.set("peer", mj::Value::string(ev.message));
+            ws.send_text(mj::dump(e));
+        });
+
+        bus->on(pal::EventType::ALE_AMD_NOT_SENT, [&](const pal::Event& ev) {
+            mj::Value e = make_event("amd_not_sent");
+            e.set("peer", mj::Value::string(ev.message));
+            ws.send_text(mj::dump(e));
+        });
+
+        bus->on(pal::EventType::ALE_AMD_DELIVERED, [&](const pal::Event& ev) {
+            mj::Value e = make_event("amd_delivered");
+            e.set("peer", mj::Value::string(ev.message));
+            ws.send_text(mj::dump(e));
         });
 
         bus->on(pal::EventType::ALE_CALL_RECEIVED, [&](const pal::Event& ev) {
@@ -1539,7 +1739,66 @@ int main(int argc, char* argv[]) {
             e.set("self", mj::Value::string(d->self_addr));
             e.set("peer", mj::Value::string(d->peer_addr));
             e.set("text", mj::Value::string(d->text));
+            e.set("call_context", mj::Value::string(d->call_context));
+            if (ale::is_gpr(d->text)) {
+                const ale::AleGpr g = ale::parse_gpr(d->text);
+                mj::Value gv = mj::Value::object();
+                gv.set("valid_structure",  mj::Value::boolean(g.valid_gpr_structure));
+                gv.set("valid_position",   mj::Value::boolean(g.valid_position));
+                gv.set("valid_timestamp",  mj::Value::boolean(g.valid_timestamp));
+                gv.set("manual_or_invalid",mj::Value::boolean(g.manual_or_invalid_position));
+                gv.set("object",  mj::Value::string(g.object));
+                gv.set("comment", mj::Value::string(g.comment));
+                if (g.has_latitude)  gv.set("lat_deg", mj::Value::number(g.latitude_deg));
+                if (g.has_longitude) gv.set("lon_deg", mj::Value::number(g.longitude_deg));
+                if (g.has_altitude) {
+                    gv.set("altitude",      mj::Value::number(g.altitude));
+                    gv.set("altitude_unit", mj::Value::string(std::string(1, g.altitude_unit)));
+                }
+                if (g.has_timestamp)
+                    gv.set("timestamp_utc", mj::Value::number(static_cast<double>(g.timestamp_utc)));
+                e.set("gpr", gv);
+            }
             ws.send_text(mj::dump(e));
+        });
+
+        // Location Relay (docs/LOCATION_SHARING_CONCEPT.md §4): independent
+        // subscriber on the same event, gate → dedup(in enqueue) → queue. The
+        // Core stays GPR-agnostic beyond call_context; parsing happens here,
+        // exactly like the GUI-forward handler above (Konzept §4 recommendation).
+        bus->on(pal::EventType::ALE_AMD_RECEIVED, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::AmdData*>(ev.data);
+            if (!ale::is_gpr(d->text)) return;
+            const auto& cfg = ctrl.get_config();
+            if (!cfg.location_sharing_enabled) return;
+
+            const ale::AleGpr g = ale::parse_gpr(d->text);
+            const std::string source = g.object.empty() ? std::string(d->peer_addr) : g.object;
+            if (!ale::is_shareable(g, source, d->call_context, d->self_addr, cfg)) return;
+
+            ale::LocationReport r;
+            r.observer     = d->self_addr;
+            r.source       = source;
+            r.relay        = (source != d->peer_addr) ? d->peer_addr : "";
+            r.raw_gpr      = g.raw;
+            r.has_position = g.valid_position;
+            if (g.has_latitude && g.has_longitude) {
+                const double scale = std::pow(10.0, cfg.location_sharing_round_digits);
+                r.lat = std::round(g.latitude_deg * scale) / scale;
+                r.lon = std::round(g.longitude_deg * scale) / scale;
+            }
+            r.has_altitude   = g.has_altitude;
+            r.altitude       = g.altitude;
+            r.altitude_unit  = g.altitude_unit;
+            r.has_timestamp  = g.has_timestamp;
+            r.timestamp_utc  = g.timestamp_utc;
+            r.comment        = cfg.location_sharing_include_comment ? g.comment : "";
+            r.call_context   = d->call_context;
+            r.received_at    = std::time(nullptr);
+            r.dedup_key      = ale::make_dedup_key(g, source, cfg.location_sharing_round_digits);
+
+            ctx.loc_svc->enqueue(std::move(r));
+            pal::log_info("LocationRelay", "queued %s (via %s)", source.c_str(), d->call_context);
         });
 
         // Passive channel monitor: every decoded RX ALE word.
@@ -1652,9 +1911,31 @@ int main(int argc, char* argv[]) {
                 ctrl.set_gps_fix(pending.gps_acq, pending.gps_lat, pending.gps_lon);
                 pending.gps_dirty = false;
             }
+            if (ctx.gps_svc) {
+                // Altitude/raw-GGA are supplementary (ALE-GPR report generation
+                // only, see set_gps_altitude()'s doc comment) — polled directly
+                // each tick rather than threaded through the fix-changed
+                // callback/mailbox above, which exists for the propagation-
+                // context-affecting lat/lon signal.
+                ctrl.set_gps_altitude(ctx.gps_svc->has_altitude(), ctx.gps_svc->alt());
+                ctrl.set_gps_raw_gga(ctx.gps_svc->raw_gga());
+            }
             if (pending.sfi_dirty) {
                 ctrl.set_current_sfi(pending.sfi);
                 pending.sfi_dirty = false;
+            }
+        }
+
+        // Drain Location Relay worker status lines → ALE-Log (Konzept §17:
+        // "Bridge-Main-Loop drain → ALE-Log + WS-Event", same pull-based
+        // pattern as the mailbox above, but for fire-and-forget log text
+        // rather than state ctrl.update() depends on).
+        {
+            std::string loc_status;
+            while (ctx.loc_svc->pop_status(loc_status)) {
+                mj::Value e = make_event("status");
+                e.set("msg", mj::Value::string(loc_status));
+                ws.send_text(mj::dump(e));
             }
         }
 
