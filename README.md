@@ -114,6 +114,9 @@ without radio hardware, `radio_mock.exe` emulates a Hamlib `rigctld`-compatible 
 - [Propagation-Aware LQA Scoring](docs/LQA_PROPAGATION.md) — solar-elevation/SFI ranking factor
 - [Voice Audio Routing](docs/VOICE_AUDIO_ROUTING.md)
 - [Threading Model](docs/THREADING.md)
+- [ALE-GPR Position Reports](docs/ALE_GPR_SPEC.md) — HFLINK ALE-GPR v1.1 wire format over AMD
+- [Location Sharing — How-To](docs/LOCATION_SHARING_HOWTO.md) — forward received positions to a live web map (setup guide)
+- [Location Sharing — Concept/Architecture](docs/LOCATION_SHARING_CONCEPT.md) — design doc (German)
 
 ---
 

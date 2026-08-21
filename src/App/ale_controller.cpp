@@ -8,6 +8,7 @@
 #include "PAL/logger.h"
 #include "PAL/radio.h"
 #include "Protocol/Control/ale_freq_select.h"
+#include "Protocol/Message/ale_gpr.h"
 #include "Protocol/Message/ale_orderwire_protocols.h"
 #include "Word/address_encoder.h"
 #include "Word/ale_word.h"
@@ -17,6 +18,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <numeric>
 #include <optional>
@@ -34,6 +36,23 @@ static bool is_valid_ale_address(const std::string& addr) {
     for (char c : addr)
         if (!ale::WordParser::is_valid_basic38_char(c)) return false;
     return true;
+}
+
+// Great-circle distance in meters (haversine). Used by tick_position_report()'s
+// ON_CHANGE mode to compare the current position against the last-reported one.
+static double haversine_distance_m(double lat1_deg, double lon1_deg,
+                                    double lat2_deg, double lon2_deg) {
+    constexpr double kEarthRadiusM = 6371000.0;
+    constexpr double kDegToRad     = 3.14159265358979323846 / 180.0;
+    const double phi1    = lat1_deg * kDegToRad;
+    const double phi2    = lat2_deg * kDegToRad;
+    const double dphi    = (lat2_deg - lat1_deg) * kDegToRad;
+    const double dlambda = (lon2_deg - lon1_deg) * kDegToRad;
+    const double a = std::sin(dphi / 2) * std::sin(dphi / 2) +
+                     std::cos(phi1) * std::cos(phi2) *
+                         std::sin(dlambda / 2) * std::sin(dlambda / 2);
+    const double c = 2.0 * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
+    return kEarthRadiusM * c;
 }
 
 static bool is_ale_mode(const std::string& s) {
@@ -354,6 +373,18 @@ ALEController::ALEController()
             sm_.send_sounding();
         }
     });
+
+    // Push config_'s built-in defaults (incl. link_idle_timeout_sec=360, see
+    // ale_station_config.h) into the state machine right away. Without this,
+    // sm_'s TimingParameters::Twa_ms sits at its own raw fallback
+    // (ALETimingConstants::Twa_ms = 30s, a spec constant, not the intended
+    // operator default) until load_state()/import_settings() successfully
+    // opens a station.state file and calls apply_config() itself — which
+    // never happens on a fresh install / missing/relocated state file, and
+    // was silently leaving outgoing calls with a 30s idle-timeout instead of
+    // the intended 360s. Safe/idempotent to repeat when load_state() applies
+    // the real persisted config afterward.
+    apply_config(config_);
 }
 
 // ── LBT occupancy (A.5.4.7) ──────────────────────────────────────────────────
@@ -914,6 +945,7 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     set_sounding_use_twas(cfg.sounding_use_twas);
     set_sounding_warning_lead_sec(cfg.sounding_warning_lead_sec);
     set_link_idle_timeout_sec(cfg.link_idle_timeout_sec);
+    config_.amd_send_max_attempts        = cfg.amd_send_max_attempts;
     set_test_channel_link_hold_time(cfg.test_channel_link_hold_time);
     set_max_tune_time_ms(cfg.max_tune_time_ms);
     set_ptt_lead_ms(cfg.ptt_lead_ms);
@@ -934,6 +966,25 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.rigctld_server_enabled       = cfg.rigctld_server_enabled;
     config_.rigctld_server_port          = cfg.rigctld_server_port;
     config_.rigctld_server_bind_remote   = cfg.rigctld_server_bind_remote;
+    config_.position_report_mode         = cfg.position_report_mode;
+    config_.position_report_target       = cfg.position_report_target;
+    config_.position_report_net          = cfg.position_report_net;
+    config_.position_report_change_m     = cfg.position_report_change_m;
+    config_.position_report_interval_min = cfg.position_report_interval_min;
+    config_.position_report_format       = cfg.position_report_format;
+    config_.position_report_comment      = cfg.position_report_comment;
+    config_.location_sharing_enabled         = cfg.location_sharing_enabled;
+    config_.location_api_url                 = cfg.location_api_url;
+    config_.location_api_token               = cfg.location_api_token;
+    config_.location_sharing_allcall         = cfg.location_sharing_allcall;
+    config_.location_sharing_individual      = cfg.location_sharing_individual;
+    config_.location_sharing_net             = cfg.location_sharing_net;
+    config_.location_sharing_group           = cfg.location_sharing_group;
+    config_.location_sharing_linked          = cfg.location_sharing_linked;
+    config_.location_sharing_min_interval_sec = cfg.location_sharing_min_interval_sec;
+    config_.location_sharing_round_digits    = cfg.location_sharing_round_digits;
+    config_.location_sharing_include_comment = cfg.location_sharing_include_comment;
+    config_.location_sharing_queue_size      = cfg.location_sharing_queue_size;
     update_propagation_context();
 }
 
@@ -1074,6 +1125,15 @@ bool ALEController::initiate_call(const std::string& target_addr)
     if (!is_valid_ale_address(target_addr)) {
         emit_status("ERROR: address '" + target_addr
                     + "' invalid — must be 3–15 Basic-38 characters (A-Z, 0-9, @, ?)");
+        return false;
+    }
+    // An AllCall broadcast (see broadcast_position_report()) deliberately stays
+    // in IDLE/SCANNING rather than a dedicated state while its burst drains, so
+    // it cannot block a normal call via the state check alone — guard here too,
+    // or a call placed mid-burst would interleave its words into the same TX
+    // queue as the still-draining broadcast.
+    if (sm_.is_allcall_broadcasting()) {
+        emit_status("Cannot call — AllCall broadcast still transmitting");
         return false;
     }
 
@@ -1311,14 +1371,26 @@ std::string ALEController::active_peer() const
     return !to.empty() ? to : sm_.get_caller_address();
 }
 
-std::string ALEController::send_amd(const std::string& target, const std::string& text)
+std::string ALEController::send_amd(const std::string& target, const std::string& text,
+                                     bool link_after_send)
 {
     if (text.empty())
         return "ERROR: AMD requires message text (max 90 chars, Expanded-64)";
 
+    // "ALLCALL" is a friendly sentinel, not a wire address — the actual
+    // AllCall address is the spec-literal "@?@" (A.5.2.4.7), built and
+    // transmitted by broadcast_position_report()'s one-shot TWAS-only burst,
+    // never through the normal calling/handshake/retry path below.
+    if (target == "ALLCALL")
+        return broadcast_position_report(text);
+
     // ── LINKED: send AMD over the established link as a single-burst ─────────
     // orderwire frame.  TO[peer] (+DATA/REP ext) ×2 + CMD AMD + message + TIS self
-    // (the TIS:SELF conclusion is appended by trigger_linked_orderwire()).
+    // (the TIS:SELF conclusion is appended by the orderwire path). Delivery
+    // confirmation (Call→Response→ACK + retry) is owned by the SM's LINKED-AMD
+    // confirm sub-phases (send_linked_amd) — the same LISTENING/WAIT_ACK timing
+    // and WordRole response/ACK detection the not-linked handshake uses. Outcomes
+    // arrive as OperatorEvent::AMD_DELIVERED / AMD_RETRY / AMD_NOT_DELIVERED.
     if (sm_.get_state() == ALEState::LINKED) {
         const std::string peer = active_peer();
         if (peer.empty())
@@ -1332,30 +1404,70 @@ std::string ALEController::send_amd(const std::string& target, const std::string
         if (amd.empty())
             return "ERROR: AMD text has no encodable characters";
         words.insert(words.end(), amd.begin(), amd.end());
-        // Single-burst (false): doubling the *whole* burst (double_burst=true)
-        // would also repeat the message text — only the address doubles above.
-        sm_.trigger_linked_orderwire(words, /*double_burst=*/false);
-        sm_.on_link_activity();   // reset Twa while the burst is queued
+        sm_.send_linked_amd(std::move(words), peer,
+                            std::max(1u, config_.amd_send_max_attempts));
         return "OK: AMD sent over linked orderwire to " + peer;
     }
 
     // ── Not LINKED: queue AMD as the pending message and place a call. ───────
-    // A.5.7.2.2: AMD is sent in the ACK frame (third handshake frame), not the calling frame.
+    // Ion2G-style: AMD rides the calling frame (frame 1), delivered before the
+    // handshake even completes. link_after_send controls frame 3's TIS/TWAS
+    // conclusion — default false: message delivered, no link persists. Whether
+    // the called station responds is the delivery indicator; no response → retry
+    // up to amd_send_max_attempts, then notify "not heard" (on_operator_event /
+    // tick_relink drive the verdict). This is the first attempt, so seed the
+    // shared retry budget before the call goes out.
     if (!is_valid_ale_address(target))
         return "ERROR: target address invalid — 3–15 Basic-38 chars (A-Z, 0-9, @, ?)";
+    amd_confirm_clear_();
+    amd_retry_active_          = true;
+    amd_attempts_remaining_    = std::max(1u, config_.amd_send_max_attempts);
+    amd_retry_target_          = target;
+    amd_retry_text_            = text;
+    amd_retry_link_after_send_ = link_after_send;
+    return attempt_amd_send_(target, text, link_after_send);
+}
+
+// One not-linked AMD call attempt: queue the AMD as the pending message and place
+// the call. Factored out of send_amd() so the tick-deferred retry path can re-issue
+// an identical attempt without re-seeding the shared retry budget. Returns the same
+// status strings send_amd()'s not-linked branch historically returned.
+std::string ALEController::attempt_amd_send_(const std::string& target,
+                                             const std::string& text,
+                                             bool link_after_send)
+{
     ALEStateMachine::PendingMessage msg;
-    msg.type    = ALEStateMachine::PendingMessage::Type::AMD;
-    msg.content = text;   // encode_amd() sanitises/truncates downstream in the SM
+    msg.type            = ALEStateMachine::PendingMessage::Type::AMD;
+    msg.content          = text;   // encode_amd() sanitises/truncates downstream in the SM
+    msg.link_after_send = link_after_send;
     sm_.set_pending_message(msg);
-    if (!initiate_call(target))
+    if (!initiate_call(target)) {
+        amd_confirm_clear_();      // can't place the call → abandon the retry cycle
         return std::string("ERROR: cannot call in state ")
                + ALEStateMachine::state_name(state());
+    }
     return "OK: AMD queued, calling " + target;
+}
+
+std::string ALEController::broadcast_position_report(const std::string& text)
+{
+    if (text.empty())
+        return "ERROR: AMD requires message text (max 90 chars, Expanded-64)";
+    const std::string self = sm_.get_self_address();
+    if (self.empty())
+        return "ERROR: no self address configured";
+    if (sm_.is_allcall_broadcasting())
+        return "ERROR: AllCall broadcast already in progress";
+    if (!sm_.send_allcall_broadcast(self, text))
+        return std::string("ERROR: cannot broadcast in state ")
+               + ALEStateMachine::state_name(state());
+    return "OK: AllCall broadcast sent";
 }
 
 void ALEController::emergency_stop()
 {
     emit_status("EMERGENCY STOP — aborting all ALE operations");
+    amd_confirm_clear_();             // drop any in-flight AMD delivery-confirmation state
     sm_.emergency_manual_control();   // SM → IDLE (sends TWAS if LINKED)
     pending_tx_words_.clear();        // drop buffered words not yet sent to modulator
     modulator_.abort();               // flush modulator TX queue
@@ -1473,6 +1585,7 @@ void ALEController::update(uint32_t now_ms)
     tick_frame_settle(now_ms);
     tick_relink(now_ms);
     tick_sounding_sweep(now_ms);
+    tick_position_report(now_ms);
     tick_test_channel(now_ms);
     tick_offline_completion();
     tick_lqa_update(now_ms);
@@ -1636,6 +1749,8 @@ void ALEController::tick_relink(uint32_t now_ms)
 
     freq_select_.tick(now_ms);
 
+    tick_amd_confirm(now_ms);
+
     // After TWAS completes and SM is back to IDLE/SCANNING, re-initiate the call
     // to pending_relink_addr_ on the now-best channel.
     if (!pending_relink_addr_.empty()) {
@@ -1644,6 +1759,28 @@ void ALEController::tick_relink(uint32_t now_ms)
             std::string addr = std::move(pending_relink_addr_);
             pending_relink_addr_.clear();
             initiate_call(addr);
+        }
+    }
+}
+
+// AMD delivery-confirmation timeouts / retries (both paths). Split out of
+// tick_relink() for clarity; called once per tick.
+void ALEController::tick_amd_confirm(uint32_t now_ms)
+{
+    // The LINKED-path confirmation (Call→Response→ACK + retry) is now owned by the
+    // SM's LINKED-AMD confirm sub-phases; nothing to drive here for it. This tick
+    // handles only the NOT-linked path's reentrancy-safe deferred re-call:
+    // NO_CHANNELS_LEFT set the pending flag on the SM's own callback stack, so the
+    // actual re-call happens here — never inline in the callback — once the SM has
+    // settled to IDLE/SCANNING and the inter-attempt gap (Tt_next_try) has elapsed.
+    if (amd_retry_pending_recall_) {
+        const ALEState st = sm_.get_state();
+        if ((st == ALEState::IDLE || st == ALEState::SCANNING)
+            && now_ms >= amd_retry_recall_after_ms_
+            && pending_relink_addr_.empty()) {
+            amd_retry_pending_recall_ = false;
+            attempt_amd_send_(amd_retry_target_, amd_retry_text_,
+                              amd_retry_link_after_send_);
         }
     }
 }
@@ -1714,6 +1851,84 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
     // When remaining_ms <= 0 but SM is CALLING/HANDSHAKE/LINKED, leave
     // auto_sounding_last_ms_ unchanged so the sweep fires the moment the SM
     // returns to IDLE/SCANNING.
+}
+
+void ALEController::tick_position_report(uint32_t now_ms)
+{
+    // Automatic ALE-GPR/GGA position reporting (docs/ALE_GPR_SPEC.md), direct
+    // template: tick_sounding_sweep() above. Manual "Send Position" (bridge
+    // GPR_BUILD + AMD commands) is independent of this timer and always works
+    // regardless of position_report_mode.
+    using Mode   = ALEStationConfig::PositionReportMode;
+    using Format = ALEStationConfig::PositionReportFormat;
+    if (config_.position_report_mode == Mode::NONE || config_.position_report_target.empty())
+        return;
+
+    const ALEState st = sm_.get_state();
+    if (st != ALEState::IDLE && st != ALEState::SCANNING) return;
+
+    // Resolve current position: live GPS fix, else configured station position
+    // (same fallback GPR_BUILD uses in apps/ale_bridge.cpp for manual sends).
+    double lat, lon;
+    bool have_position;
+    if (has_gps_fix()) {
+        lat = gps_lat_;
+        lon = gps_lon_;
+        have_position = true;
+    } else {
+        lat = config_.station_lat_deg;
+        lon = config_.station_lon_deg;
+        have_position = (config_.position_source != ALEStationConfig::PositionSource::NONE);
+    }
+    if (!have_position) return;
+
+    bool fire = false;
+    if (config_.position_report_mode == Mode::INTERVAL) {
+        const uint32_t interval_ms = config_.position_report_interval_min * 60000u;
+        if (interval_ms == 0) return;
+        fire = (now_ms - last_report_ms_) >= interval_ms;
+    } else { // ON_CHANGE
+        // Hard-coded 60 s safety floor, independent of the configured threshold —
+        // guards against channel congestion from ordinary GPS jitter repeatedly
+        // re-crossing a tiny threshold (the GUI's threshold picker carries the
+        // same warning). Always fires once on the very first fix seen so the
+        // peer/network has an initial position to work from.
+        constexpr uint32_t kChangeFloorMs = 60000;
+        if (!has_last_reported_position_) {
+            fire = true;
+        } else if (now_ms - last_report_ms_ >= kChangeFloorMs) {
+            const double dist_m = haversine_distance_m(lat, lon, last_reported_lat_, last_reported_lon_);
+            fire = dist_m >= static_cast<double>(config_.position_report_change_m);
+        }
+    }
+    if (!fire) return;
+
+    // Build the report text. GGA passthrough is only ever available for a live
+    // NMEA-serial fix (raw_gga_ is only ever populated by that source) — the
+    // GUI already gates the format picker on this, but re-check here since
+    // config can outlive the fix that made GGA valid.
+    std::string text;
+    if (config_.position_report_format == Format::GGA && has_gps_fix() && !gps_raw_gga_.empty()) {
+        text = gps_raw_gga_;
+    } else {
+        const bool has_alt = has_gps_altitude();
+        text = ale::generate_gpr(get_primary_self_address(), lat, lon,
+                                  has_alt, has_alt ? gps_altitude_m_ : 0.0, 'M',
+                                  static_cast<std::time_t>(std::time(nullptr)), 'Z',
+                                  config_.position_report_comment);
+    }
+    if (text.empty()) return;
+
+    const std::string resp = send_amd(config_.position_report_target, text, false);
+    // Always re-arm, success or failure — mirrors tick_sounding_sweep()'s
+    // "re-arm now to avoid busy-looping" fallback for a send that can't
+    // currently go out (e.g. no callable channels this tick).
+    last_report_ms_ = now_ms;
+    if (resp.rfind("OK:", 0) == 0) {
+        last_reported_lat_          = lat;
+        last_reported_lon_          = lon;
+        has_last_reported_position_ = true;
+    }
 }
 
 // ── Test-Channel sweep (active per-peer LQA collection) ──────────────────────
@@ -2262,7 +2477,7 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
             if (!tail.empty()) call_amd_pending_.push_back(std::move(tail));
             const std::string caller = sm_.get_caller_address();
             if (!caller.empty() && !self_address_store_.matches_self(caller))
-                for (const auto& text : call_amd_pending_) amd_dispatch(caller, text);
+                for (const auto& text : call_amd_pending_) amd_dispatch(caller, text, handshake_call_context_);
             call_amd_pending_.clear();
         }
         last_caller_.clear();
@@ -2278,6 +2493,10 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         hs_call_freq_hz_ = 0;
         call_amd_ = {};
         call_amd_pending_.clear();
+        // Snapshot now — sm_.is_allcall_handshake() reads allcall_silent_,
+        // which the SM resets on leaving HANDSHAKE (IDLE/SCANNING/LINKED
+        // entry), before the from==HANDSHAKE dispatch above would see it.
+        handshake_call_context_ = sm_.is_allcall_handshake() ? "ALLCALL" : "INDIVIDUAL";
         lqa_exchange_.on_handshake_start();
     }
 
@@ -2290,8 +2509,11 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         if (!tail.empty()) resp_amd_pending_.push_back(std::move(tail));
         const std::string peer = !sm_.get_to_address().empty()
             ? sm_.get_to_address() : sm_.get_caller_address();
-        if (!peer.empty() && !self_address_store_.matches_self(peer))
-            for (const auto& text : resp_amd_pending_) amd_dispatch(peer, text);
+        if (!peer.empty() && !self_address_store_.matches_self(peer)) {
+            const char* resp_context = sm_.is_active_call_group() ? "GROUP"
+                : sm_.is_active_call_net() ? "NET" : "INDIVIDUAL";
+            for (const auto& text : resp_amd_pending_) amd_dispatch(peer, text, resp_context);
+        }
         resp_amd_pending_.clear();
     }
 
@@ -2437,6 +2659,9 @@ void ALEController::on_operator_event(OperatorEvent ev)
             }
             link_start_ms_ = now_ms_;
             dispatch(pal::EventType::ALE_LINK_ESTABLISHED, peer);
+            // AMD delivery confirmation (not-linked path): the called station
+            // responded (the link came up) → the AMD was heard. Silent success.
+            if (amd_retry_active_) amd_confirm_clear_();
             break;
         }
         case OperatorEvent::CALL_REJECTED:
@@ -2463,6 +2688,13 @@ void ALEController::on_operator_event(OperatorEvent ev)
                 lqa_exchange_.on_call_concluded();
             emit_status("Call rejected by remote station (TWAS)");
             dispatch(pal::EventType::ALE_LINK_TERMINATED, "Call rejected");
+            // AMD delivery confirmation (not-linked path): a reject still means the
+            // called station was heard → counts as delivered (operator's ruling).
+            // Reuses ALE_AMD_DELIVERED (silent, no extra state cleanup in the GUI —
+            // link_terminated above already does that) purely so the GUI can mark
+            // the sent message's badge; no-op if there was no pending AMD.
+            dispatch(pal::EventType::ALE_AMD_DELIVERED, sm_.get_to_address());
+            if (amd_retry_active_) amd_confirm_clear_();
             break;
         case OperatorEvent::NO_CHANNELS_LEFT:
             // No JOE response received on any channel → discard response-frame acc.
@@ -2481,11 +2713,111 @@ void ALEController::on_operator_event(OperatorEvent ev)
             }
             emit_status("No reply — all calling channels exhausted");
             dispatch(pal::EventType::ALE_LINK_TERMINATED, "No reply");
+            // AMD delivery confirmation (not-linked path): no station responded on
+            // any channel → not heard. Retry (up to amd_send_max_attempts) or give
+            // up. This fires on the SM's OWN callback stack, so NEVER re-call the SM
+            // here — only set a pending flag + inter-attempt deadline; tick_relink()
+            // performs the actual re-call once the SM has settled to IDLE/SCANNING.
+            if (amd_retry_active_) {
+                const std::string peer = amd_retry_target_;
+                if (amd_attempts_remaining_ > 1) {
+                    --amd_attempts_remaining_;
+                    emit_status("Nothing heard from " + peer + " — AMD retry "
+                                + std::to_string(config_.amd_send_max_attempts
+                                                 - amd_attempts_remaining_ + 1)
+                                + "/" + std::to_string(config_.amd_send_max_attempts));
+                    amd_retry_pending_recall_  = true;
+                    amd_retry_recall_after_ms_ = now_ms_ + ale::TT_NEXT_TRY_MS;
+                } else {
+                    emit_status("AMD not sent — " + peer + " not heard after "
+                                + std::to_string(config_.amd_send_max_attempts)
+                                + " attempts");
+                    dispatch(pal::EventType::ALE_AMD_NOT_SENT, peer);
+                    amd_confirm_clear_();
+                }
+            }
             break;
         case OperatorEvent::EMERGENCY_ACTIVE:
             emit_status("Emergency manual control is now active");
             dispatch(pal::EventType::SYSTEM_WARNING, "Emergency manual control active");
             break;
+        case OperatorEvent::AMD_SENT_NO_LINK: {
+            // Caller side: frame 3 concluded with TWAS by request (Ion2G-style AMD
+            // send, link_after_send=false) — the message was already delivered from
+            // the calling frame; this is a graceful "handshake done, no link wanted"
+            // outcome, not a rejection. Same response-frame-quality cleanup as
+            // CALL_REJECTED (a real handshake occurred, response-frame metrics may
+            // have been measured) but a distinct status line / event so it never
+            // reads as a failure in the ALE Log or contact history.
+            if (op_params_.lqa_enabled && hs_resp_acc_.word_count() > 0) {
+                const std::string peer = sm_.get_to_address();
+                if (!peer.empty() && !self_address_store_.matches_self(peer)
+                    && hs_resp_freq_hz_ > 0) {
+                    lqa_database_.update_entry_extended(hs_resp_freq_hz_, peer,
+                        hs_resp_acc_.snr_avg(),
+                        static_cast<float>(hs_resp_acc_.ber_score()),
+                        hs_resp_acc_.sinad_avg(),
+                        0.0f, -120.0f, 0,
+                        static_cast<int>(hs_resp_acc_.word_count()), 0);
+                    record_lqa_history(hs_resp_freq_hz_, peer);
+                }
+            }
+            hs_resp_acc_.reset();
+            hs_resp_freq_hz_ = 0;
+            if (auto r = sounding_accumulator_.finalize()) commit_sounding_result(*r);
+            if (config_.lqa_exchange_enabled)
+                lqa_exchange_.on_call_concluded();
+            {
+                const std::string peer = sm_.get_to_address();
+                emit_status("AMD delivered to " + peer + " — no link (by request)");
+                dispatch(pal::EventType::ALE_AMD_NO_LINK, peer);
+            }
+            // Delivery confirmation (not-linked path): a completed handshake means
+            // the called station responded → the AMD was heard. Silent success.
+            if (amd_retry_active_) amd_confirm_clear_();
+            break;
+        }
+        case OperatorEvent::AMD_RECEIVED_NO_LINK: {
+            // Callee side: caller's frame 3 was TWAS instead of TIS. The AMD text
+            // (if any) was already dispatched via ALE_AMD_RECEIVED from the calling
+            // frame; this only reports the link decision. No response-frame
+            // metrics to clean up here — hs_resp_acc_ is caller-side only.
+            const std::string peer = sm_.get_caller_address();
+            emit_status("AMD received — caller declined link");
+            dispatch(pal::EventType::ALE_AMD_NO_LINK, peer);
+            break;
+        }
+        case OperatorEvent::AMD_DELIVERED: {
+            // LINKED-state confirmed AMD: the SM saw the peer's Response and sent
+            // the ACK (Call→Response→ACK complete). Silent success — a plain status
+            // line, no chime (mirrors the not-linked silent-success path). The
+            // dedicated event (distinct from the log-only status line) lets the
+            // GUI mark the specific sent message bubble as delivered.
+            const std::string peer = active_peer();
+            emit_status("AMD delivered to " + peer + " — confirmed");
+            dispatch(pal::EventType::ALE_AMD_DELIVERED, peer);
+            break;
+        }
+        case OperatorEvent::AMD_RETRY: {
+            // LINKED-state confirmed AMD: reply window elapsed with no Response,
+            // attempts remain → the SM is resending the burst. attempts_left was
+            // already decremented for this retry (see linked_amd_retry_or_fail_()),
+            // so it directly gives this attempt's ordinal.
+            const std::string peer = active_peer();
+            const uint32_t max_attempts = std::max(1u, config_.amd_send_max_attempts);
+            const uint32_t attempt = max_attempts - sm_.linked_amd_attempts_left() + 1;
+            emit_status("Nothing heard from " + peer + " — AMD retry "
+                        + std::to_string(attempt) + "/" + std::to_string(max_attempts));
+            break;
+        }
+        case OperatorEvent::AMD_NOT_DELIVERED: {
+            // LINKED-state confirmed AMD: all attempts exhausted with no Response.
+            const std::string peer = active_peer();
+            emit_status("AMD not sent — " + peer + " not heard after "
+                        + std::to_string(config_.amd_send_max_attempts) + " attempts");
+            dispatch(pal::EventType::ALE_AMD_NOT_SENT, peer);
+            break;
+        }
     }
 }
 
@@ -2636,11 +2968,11 @@ std::string ALEController::amd_step(AmdAccumulator& st, const ALEWord& word)
     return {};
 }
 
-void ALEController::amd_dispatch(const std::string& peer, const std::string& text)
+void ALEController::amd_dispatch(const std::string& peer, const std::string& text, const char* call_context)
 {
     if (text.empty() || peer.empty()) return;
     const std::string self = get_primary_self_address();
-    ale::AmdData ad{ self.c_str(), peer.c_str(), text.c_str() };
+    ale::AmdData ad{ self.c_str(), peer.c_str(), text.c_str(), call_context };
     dispatch(pal::EventType::ALE_AMD_RECEIVED, "", 0, &ad, sizeof(ad));
 }
 
@@ -2689,7 +3021,7 @@ void ALEController::rx_accumulate_resp_amd(const ALEWord& word)
 void ALEController::rx_accumulate_linked_amd(const ALEWord& word)
 {
     if (sm_.get_state() != ALEState::LINKED) {
-        amd_dispatch(linked_amd_peer_, amd_flush(linked_amd_));   // best-effort on exit
+        amd_dispatch(linked_amd_peer_, amd_flush(linked_amd_), "LINKED");   // best-effort on exit
         return;
     }
 
@@ -2701,13 +3033,23 @@ void ALEController::rx_accumulate_linked_amd(const ALEWord& word)
     // the settle deadline (Tdrw-silence fallback in tick_frame_settle).
     if (linked_amd_.collecting)
         linked_amd_settle_ms_ = now_ms_;
-    amd_dispatch(linked_amd_peer_, done);
+    amd_dispatch(linked_amd_peer_, done, "LINKED");
+    // Delivery confirmation (receiver side, primary commit): a complete AMD just
+    // arrived over the link → have the SM reply with the Response frame and run
+    // its WAIT_ACK. Guarded on non-empty so only a real message triggers it.
+    if (!done.empty())
+        reply_to_linked_amd_(linked_amd_peer_);
 }
 
 void ALEController::commit_linked_amd()
 {
     linked_amd_settle_ms_ = 0;
-    amd_dispatch(linked_amd_peer_, amd_flush(linked_amd_));
+    const std::string flushed = amd_flush(linked_amd_);
+    amd_dispatch(linked_amd_peer_, flushed, "LINKED");
+    // Delivery confirmation (receiver side, Tdrw-silence fallback commit): only
+    // when this fallback actually flushed a message the primary path missed.
+    if (!flushed.empty())
+        reply_to_linked_amd_(linked_amd_peer_);
     linked_amd_peer_.clear();
 }
 
@@ -2721,7 +3063,7 @@ void ALEController::rx_accumulate_ack_amd(const ALEWord& word)
 {
     if (sm_.get_state() != ALEState::HANDSHAKE
         || sm_.get_handshake_phase() != HandshakePhase::WAIT_ACK) {
-        amd_dispatch(ack_amd_peer_, amd_flush(ack_amd_));   // best-effort on exit
+        amd_dispatch(ack_amd_peer_, amd_flush(ack_amd_), "LINKED");   // best-effort on exit
         return;
     }
 
@@ -2729,13 +3071,50 @@ void ALEController::rx_accumulate_ack_amd(const ALEWord& word)
     const std::string done = amd_step(ack_amd_, word);
     if (!was_collecting && ack_amd_.collecting)
         ack_amd_peer_ = sm_.get_caller_address();
-    amd_dispatch(ack_amd_peer_, done);
+    amd_dispatch(ack_amd_peer_, done, "LINKED");
 }
 
 void ALEController::commit_ack_amd()
 {
-    amd_dispatch(ack_amd_peer_, amd_flush(ack_amd_));
+    amd_dispatch(ack_amd_peer_, amd_flush(ack_amd_), "LINKED");
     ack_amd_peer_.clear();
+}
+
+// ── LINKED-state AMD delivery confirmation (receiver reply) ──────────────────
+// The wait/detect/ACK/retry logic lives in the SM's LINKED-AMD confirm sub-phases
+// (see ale_state_machine.cpp), reusing the CALLING/LISTENING + HANDSHAKE/WAIT_ACK
+// timing and WordRole detection. The controller only kicks off the receiver reply
+// (it owns the LQA measurement the optional CMD 'a' carries) and maps the SM's
+// AMD_DELIVERED / AMD_RETRY / AMD_NOT_DELIVERED operator events to the GUI.
+void ALEController::reply_to_linked_amd_(const std::string& sender)
+{
+    if (sender.empty() || self_address_store_.matches_self(sender)) return;
+    // Optional bilateral LQA piggyback: the CMD 'a' word (what WE measured FROM
+    // the sender) rides the Response frame; the SM builds TO[sender]×2 + … + TIS,
+    // we supply only the CMD 'a' word (LQA measurement lives above the SM).
+    std::vector<ALEWord> cmd_words;
+    const Channel ch = get_current_channel();
+    if (config_.lqa_exchange_enabled && ch.rx_frequency_hz > 0
+        && !reporting_inhibited(ch.rx_frequency_hz)) {
+        const uint32_t raw = lqa_exchange_.build_cmd_a_word(ch.rx_frequency_hz, sender, false);
+        const auto cmd = ALESequenceBuilder::lqa_cmd(raw).words();
+        cmd_words.assign(cmd.begin(), cmd.end());
+    }
+    sm_.respond_to_linked_amd(sender, std::move(cmd_words));
+}
+
+// Clear the NOT-linked AMD retry state (the linked path's state now lives in the
+// SM). Called on success/exhaustion of a not-linked confirmed AMD and on
+// emergency_stop().
+void ALEController::amd_confirm_clear_()
+{
+    amd_retry_active_          = false;
+    amd_attempts_remaining_    = 0;
+    amd_retry_target_.clear();
+    amd_retry_text_.clear();
+    amd_retry_link_after_send_ = false;
+    amd_retry_pending_recall_  = false;
+    amd_retry_recall_after_ms_ = 0;
 }
 
 void ALEController::rx_handle_lqa_exchange(const ALEWord& word)
@@ -2754,7 +3133,11 @@ void ALEController::rx_handle_lqa_exchange(const ALEWord& word)
             (cur_st == ALEState::HANDSHAKE
                 && sm_.get_handshake_phase() == HandshakePhase::WAIT_CYCLE_END)
             || (cur_st == ALEState::CALLING
-                && sm_.get_calling_phase() == CallingPhase::LISTENING);
+                && sm_.get_calling_phase() == CallingPhase::LISTENING)
+            // LINKED: capture the CMD 'a' carried in the AMD delivery-confirmation
+            // Response frame (and any bilateral CMD 'a' received while linked) —
+            // without this the word is on the wire but silently dropped by RX.
+            || cur_st == ALEState::LINKED;
         if (word.type == PreambleType::CMD && cmd_char_code(word) == 'a'
                 && in_bilateral_window) {
             const Channel cur_bilat_ch = get_current_channel();
@@ -3373,6 +3756,15 @@ void ALEController::set_gps_fix(bool valid, double lat_deg, double lon_deg) {
     update_propagation_context();
 }
 
+void ALEController::set_gps_altitude(bool has_altitude, double altitude_m) {
+    gps_has_altitude_ = has_altitude;
+    gps_altitude_m_    = has_altitude ? altitude_m : 0.0;
+}
+
+void ALEController::set_gps_raw_gga(const std::string& raw_gga) {
+    gps_raw_gga_ = raw_gga;
+}
+
 void ALEController::set_current_sfi(float sfi) {
     current_sfi_ = sfi;
     update_propagation_context();
@@ -3426,6 +3818,25 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "rigctld_server_enabled=" << (config_.rigctld_server_enabled ? 1 : 0) << "\n";
     f << "rigctld_server_port=" << config_.rigctld_server_port << "\n";
     f << "rigctld_server_bind_remote=" << (config_.rigctld_server_bind_remote ? 1 : 0) << "\n";
+    f << "position_report_mode=" << static_cast<int>(config_.position_report_mode) << "\n";
+    f << "position_report_target=" << config_.position_report_target << "\n";
+    f << "position_report_net=" << config_.position_report_net << "\n";
+    f << "position_report_change_m=" << config_.position_report_change_m << "\n";
+    f << "position_report_interval_min=" << config_.position_report_interval_min << "\n";
+    f << "position_report_format=" << static_cast<int>(config_.position_report_format) << "\n";
+    f << "position_report_comment=" << config_.position_report_comment << "\n";
+    f << "location_sharing_enabled=" << (config_.location_sharing_enabled ? 1 : 0) << "\n";
+    f << "location_api_url=" << config_.location_api_url << "\n";
+    f << "location_api_token=" << config_.location_api_token << "\n";
+    f << "location_sharing_allcall=" << (config_.location_sharing_allcall ? 1 : 0) << "\n";
+    f << "location_sharing_individual=" << (config_.location_sharing_individual ? 1 : 0) << "\n";
+    f << "location_sharing_net=" << (config_.location_sharing_net ? 1 : 0) << "\n";
+    f << "location_sharing_group=" << (config_.location_sharing_group ? 1 : 0) << "\n";
+    f << "location_sharing_linked=" << (config_.location_sharing_linked ? 1 : 0) << "\n";
+    f << "location_sharing_min_interval_sec=" << config_.location_sharing_min_interval_sec << "\n";
+    f << "location_sharing_round_digits=" << static_cast<int>(config_.location_sharing_round_digits) << "\n";
+    f << "location_sharing_include_comment=" << (config_.location_sharing_include_comment ? 1 : 0) << "\n";
+    f << "location_sharing_queue_size=" << config_.location_sharing_queue_size << "\n";
     const auto& stations = sm_.get_address_book().all_stations();
     if (!stations.empty()) {
         f << "\n# ALE address export\n";
@@ -3550,6 +3961,46 @@ bool ALEController::import_settings(const std::string& path)
             cfg.rigctld_server_port = static_cast<uint16_t>(std::stoul(val));
         } else if (key == "rigctld_server_bind_remote") {
             cfg.rigctld_server_bind_remote = (val == "1");
+        } else if (key == "position_report_mode") {
+            cfg.position_report_mode =
+                static_cast<ALEStationConfig::PositionReportMode>(std::stoi(val));
+        } else if (key == "position_report_target") {
+            cfg.position_report_target = val;
+        } else if (key == "position_report_net") {
+            cfg.position_report_net = val;
+        } else if (key == "position_report_change_m") {
+            cfg.position_report_change_m = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "position_report_interval_min") {
+            cfg.position_report_interval_min = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "position_report_format") {
+            cfg.position_report_format =
+                static_cast<ALEStationConfig::PositionReportFormat>(std::stoi(val));
+        } else if (key == "position_report_comment") {
+            cfg.position_report_comment = val;
+        } else if (key == "location_sharing_enabled") {
+            cfg.location_sharing_enabled = (val == "1");
+        } else if (key == "location_api_url") {
+            cfg.location_api_url = val;
+        } else if (key == "location_api_token") {
+            cfg.location_api_token = val;
+        } else if (key == "location_sharing_allcall") {
+            cfg.location_sharing_allcall = (val == "1");
+        } else if (key == "location_sharing_individual") {
+            cfg.location_sharing_individual = (val == "1");
+        } else if (key == "location_sharing_net") {
+            cfg.location_sharing_net = (val == "1");
+        } else if (key == "location_sharing_group") {
+            cfg.location_sharing_group = (val == "1");
+        } else if (key == "location_sharing_linked") {
+            cfg.location_sharing_linked = (val == "1");
+        } else if (key == "location_sharing_min_interval_sec") {
+            cfg.location_sharing_min_interval_sec = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "location_sharing_round_digits") {
+            cfg.location_sharing_round_digits = static_cast<uint8_t>(std::stoi(val));
+        } else if (key == "location_sharing_include_comment") {
+            cfg.location_sharing_include_comment = (val == "1");
+        } else if (key == "location_sharing_queue_size") {
+            cfg.location_sharing_queue_size = static_cast<uint16_t>(std::stoul(val));
         } else if (key == "station" && !val.empty()) {
             // station=callsign|name  (new format)
             const auto sep = val.find('|');

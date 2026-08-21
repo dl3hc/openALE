@@ -58,6 +58,12 @@ struct ALEStationConfig {
     /// (entspricht PCALE TWA=360000 ms). Der SM-Spec-Default bleibt 30 s
     /// (ale_timing.h Twa_ms, AC-LINK-003-001); dies ist nur der Stations-Default.
     uint32_t  link_idle_timeout_sec  = 360;
+    /// AMD delivery-confirmation retry budget: how many times an AMD send is
+    /// attempted before giving up and notifying "not heard". Applies to both the
+    /// not-linked path (each attempt = one full call sequence, whose Response is
+    /// the delivery indicator) and the linked path (each attempt = one AMD burst,
+    /// confirmed by the peer's Response frame → sender ACK). Default 3.
+    uint32_t  amd_send_max_attempts  = 3;
     /// Test-Channel sweep: time to stay LINKED on each channel before terminating
     /// and advancing. Tdrw (784 ms) is always enforced as a floor so bilateral
     /// LQA metrics can commit before snapshot. Default 1 s.
@@ -126,6 +132,42 @@ struct ALEStationConfig {
     std::string nmea_port           = "";         ///< "COM3" / "/dev/ttyUSB0"
     uint32_t    nmea_baud           = 4800;
     bool        sfi_enabled         = false;      ///< enable NOAA SFI background fetch
+
+    // ── ALE-GPR automatic position reporting (docs/ALE_GPR_SPEC.md) ───────
+    enum class PositionReportMode : uint8_t {
+        NONE     = 0,  ///< automatic reporting off — manual "Send Position" still works
+        ON_CHANGE= 1,  ///< report when the position moves >= position_report_change_m
+        INTERVAL = 2,  ///< report every position_report_interval_min minutes
+    };
+    enum class PositionReportFormat : uint8_t {
+        GPR = 0,  ///< HFLINK ALE-GPR encoded report (default, works from any position source)
+        GGA = 1,  ///< raw $GPGGA passthrough — only available for a live NMEA-serial fix
+    };
+
+    PositionReportMode   position_report_mode         = PositionReportMode::NONE;
+    std::string          position_report_target       = "";  ///< address, or "ALLCALL"
+    std::string          position_report_net          = "";  ///< net for channel selection (ALLCALL only)
+    uint32_t              position_report_change_m     = 1000; ///< on-change threshold, meters
+    uint32_t              position_report_interval_min = 15;
+    PositionReportFormat position_report_format       = PositionReportFormat::GPR;
+    std::string           position_report_comment      = "";  ///< standing comment, <=25 chars,
+                                                                 ///< used verbatim by automatic sends
+
+    // ── Location Relay (forward received ALE-GPR positions to a web API) ──
+    // docs/LOCATION_SHARING_CONCEPT.md §13. Off by default except allcall,
+    // which is only effective once location_sharing_enabled (master) is set.
+    bool        location_sharing_enabled         = false; ///< master opt-in
+    std::string location_api_url                 = "";    ///< https://.../api/v1/locations
+    std::string location_api_token                = "";    ///< Bearer token, never logged
+    bool        location_sharing_allcall         = true;  ///< forward ALLCALL-received GPRs
+    bool        location_sharing_individual      = false; ///< forward individual-call GPRs
+    bool        location_sharing_net             = false; ///< forward net-call GPRs
+    bool        location_sharing_group           = false; ///< forward group-call GPRs
+    bool        location_sharing_linked          = false; ///< forward GPRs over an established link
+    uint32_t    location_sharing_min_interval_sec = 30;    ///< throttle, per source
+    uint8_t     location_sharing_round_digits    = 2;      ///< lat/lon rounding (privacy + dedup)
+    bool        location_sharing_include_comment = false;  ///< forward the GPR comment field
+    uint16_t    location_sharing_queue_size      = 64;      ///< bounded outbound queue
 
     // ── rigctld/netrigctl-compatible read-only TCP server (Tuner) ─────────
     /// true = accept local netrigctl clients (Hamlib RIG_MODEL_NETRIGCTL)

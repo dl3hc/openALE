@@ -424,16 +424,40 @@ public:
      *    `TO[peer] (+DATA/REP ext) + CMD AMD + message DATA/REP + TIS self`,
      *    sent SINGLE (not doubled) so the peer decodes the text once. The active
      *    peer (get_to_address()/get_caller_address()) is used; @p target is ignored.
+     *    @p link_after_send is meaningless here (already linked) and ignored.
      *  - not LINKED: the AMD is queued as the pending message and a call is
-     *    initiated to @p target (existing in-call MESSAGE-section path).
+     *    initiated to @p target. Ion2G-style: the message rides the calling
+     *    frame itself (delivered before the handshake completes), and the
+     *    third handshake frame's TIS/TWAS conclusion — controlled by
+     *    @p link_after_send — decides whether a link persists afterward.
+     *    Default false: message delivered, no link (matches "just send a
+     *    message" intent; a real link never forms). Pass true for "select
+     *    peer, send this message, and link" in one step.
      *
-     * @p target  Peer address to call when not LINKED (Basic-38, 3–15 chars).
-     *            Ignored when LINKED.
-     * @p text    Message text, max 90 chars Expanded-64 (0x20–0x5F); sanitised
-     *            and truncated by encode_amd().
+     * @p target            Peer address to call when not LINKED (Basic-38, 3–15
+     *                      chars). Ignored when LINKED.
+     * @p text               Message text, max 90 chars Expanded-64 (0x20–0x5F);
+     *                      sanitised and truncated by encode_amd().
+     * @p link_after_send    Not-LINKED path only: true = frame 3 concludes with
+     *                      TIS (link persists, normal LINKED outcome); false
+     *                      (default) = TWAS (handshake concludes, no link).
      * @return "OK: ..." on success, "ERROR: ..." on validation failure.
      */
-    std::string send_amd(const std::string& target, const std::string& text);
+    std::string send_amd(const std::string& target, const std::string& text,
+                          bool link_after_send = false);
+
+    /**
+     * One-shot ALE-GPR/AMD position-report broadcast to the AllCall address
+     * (A.5.5.4.4) — transmits once, concludes TWAS, no response wait, no
+     * retry. send_amd() delegates here transparently when \p target is the
+     * literal string "ALLCALL" (see ALEStationConfig::position_report_target),
+     * so callers normally just call send_amd(); this is exposed separately
+     * for direct use by tick_position_report() and the manual "Send Position"
+     * broadcast path.
+     * @return "OK: ..." on success, "ERROR: ..." on failure (no self address
+     *         configured, not IDLE/SCANNING, or a broadcast already in flight).
+     */
+    std::string broadcast_position_report(const std::string& text);
 
     /**
      * The currently linked peer address (get_to_address() falling back to
@@ -709,6 +733,13 @@ public:
     void set_gps_fix(bool valid, double lat_deg, double lon_deg);
     /** Called from the bridge main loop to deliver a new SFI value from SfiService. */
     void set_current_sfi(float sfi);
+    /** Called from the bridge main loop (polled each tick, not event-driven —
+     *  see apps/ale_bridge.cpp's GPS drain block) to mirror GpsService's
+     *  altitude/raw-GGA state into the controller for tick_position_report().
+     *  Scoped only to feed ALE-GPR/GGA report generation, same as GpsService's
+     *  own has_altitude()/alt(); not wired into LQA/propagation scoring. */
+    void set_gps_altitude(bool has_altitude, double altitude_m);
+    void set_gps_raw_gga(const std::string& raw_gga);
 
     ALEStationConfig::PositionSource get_position_source() const { return config_.position_source; }
     double             get_station_lat()    const { return config_.station_lat_deg; }
@@ -717,6 +748,9 @@ public:
     bool               has_gps_fix()        const { return gps_fix_valid_; }
     double             get_gps_lat()        const { return gps_lat_; }
     double             get_gps_lon()        const { return gps_lon_; }
+    bool               has_gps_altitude()   const { return gps_fix_valid_ && gps_has_altitude_; }
+    double             get_gps_altitude()   const { return gps_altitude_m_; }
+    const std::string& get_gps_raw_gga()    const { return gps_raw_gga_; }
     float              get_current_sfi()    const { return current_sfi_; }
 
     // ── Settings export/import ────────────────────────────────────────────
@@ -982,6 +1016,9 @@ public:
     uint32_t  get_scan_dwell_ms() const          { return config_.scan_dwell_ms; }
     uint32_t  get_sounding_interval_sec() const { return config_.sounding_interval_sec; }
     uint32_t  get_link_idle_timeout_sec() const  { return config_.link_idle_timeout_sec; }
+    /** AMD delivery-confirmation retry budget (attempts before "not heard"). */
+    void      set_amd_send_max_attempts(uint32_t n) { config_.amd_send_max_attempts = n; }
+    uint32_t  get_amd_send_max_attempts() const      { return config_.amd_send_max_attempts; }
     uint32_t  get_test_channel_link_hold_time() const { return config_.test_channel_link_hold_time; }
     uint32_t  get_max_tune_time_ms() const       { return config_.max_tune_time_ms; }
     uint32_t  get_ptt_lead_ms() const            { return config_.ptt_lead_ms; }
@@ -1254,6 +1291,11 @@ private:
     // (A.5.7.2.3 requires display "upon arrival", not upon link success).
     AmdAccumulator           call_amd_;
     std::vector<std::string> call_amd_pending_;
+    // Snapshot of sm_.is_allcall_handshake() taken at HANDSHAKE entry — by the
+    // time HANDSHAKE is left (where call_amd_pending_ is dispatched), the SM
+    // has already reset allcall_silent_ on entering IDLE/SCANNING/LINKED, so
+    // the flag must be captured up front instead of read at dispatch time.
+    const char*              handshake_call_context_ = "INDIVIDUAL";
 
     // Response-frame AMD RX — active while CALLING/LISTENING (A.5.7.2.2,
     // calling-station side, receiving JOE's response). Like the calling-frame
@@ -1278,6 +1320,27 @@ private:
     AmdAccumulator linked_amd_;
     std::string    linked_amd_peer_;              // peer to attribute the message to
     uint32_t       linked_amd_settle_ms_ = 0;      // last-word time; Tdrw-silence commit deadline
+
+    // ── AMD delivery confirmation + retry ────────────────────────────────────
+    // Call→Response→ACK confirmation, both paths reusing the SM handshake:
+    //   • Not-linked path: the SM's own CALLING→LISTENING→SENDING_ACK handshake IS
+    //     the 3 frames; the Response is observed via on_operator_event()
+    //     (LINK_ESTABLISHED / AMD_SENT_NO_LINK / CALL_REJECTED = heard;
+    //     NO_CHANNELS_LEFT = not heard → retry). The fields below track that retry.
+    //   • Linked path: owned entirely by the SM's LINKED-AMD confirm sub-phases
+    //     (send_linked_amd / respond_to_linked_amd, see ale_state_machine.cpp) —
+    //     no controller-side state; outcomes arrive as OperatorEvent::AMD_DELIVERED
+    //     / AMD_RETRY / AMD_NOT_DELIVERED.
+    bool        amd_retry_active_          = false;  ///< a not-linked send is awaiting its verdict
+    uint32_t    amd_attempts_remaining_    = 0;      ///< counts down from amd_send_max_attempts
+    // Not-linked resend context + reentrancy-safe deferred re-call (NO_CHANNELS_LEFT
+    // fires on the SM callback stack — never re-call the SM inline; defer via this
+    // pending flag checked in tick_amd_confirm, exactly like pending_relink_addr_):
+    std::string amd_retry_target_;
+    std::string amd_retry_text_;
+    bool        amd_retry_link_after_send_ = false;
+    bool        amd_retry_pending_recall_  = false;  ///< tick_amd_confirm resends when IDLE/SCANNING
+    uint32_t    amd_retry_recall_after_ms_ = 0;      ///< inter-attempt gap deadline (TT_NEXT_TRY)
 
     // LQA
     LQADatabase              lqa_database_;
@@ -1355,6 +1418,14 @@ private:
     // as SOUNDING, which naturally blocks a re-entry).
     bool                     auto_sounding_on_       = false;
     uint32_t                 auto_sounding_interval_ms_ = 0;
+
+    // Automatic ALE-GPR/GGA position reporting (tick_position_report, see
+    // ALEStationConfig::position_report_mode). Mirrors the auto-sounding
+    // timer shape: last_report_ms_ re-arms only on a completed fire.
+    uint32_t last_report_ms_               = 0;
+    double   last_reported_lat_            = 0.0;
+    double   last_reported_lon_            = 0.0;
+    bool     has_last_reported_position_   = false;
     std::string              auto_sounding_net_;
     std::string              active_scan_net_;        ///< Active net for start_scanning() scoping
     uint32_t                 auto_sounding_last_ms_  = 0;
@@ -1371,6 +1442,9 @@ private:
     double   gps_lat_       = 0.0;
     double   gps_lon_       = 0.0;
     bool     gps_fix_valid_ = false;
+    bool        gps_has_altitude_ = false;
+    double      gps_altitude_m_   = 0.0;
+    std::string gps_raw_gga_;
     float    current_sfi_   = 0.0f;
 
     // Call/link timing (get_call_duration_seconds, is_link_active)
@@ -1557,7 +1631,9 @@ private:
     void tick_sm(uint32_t now_ms);              ///< sm_.update() + maybe_emit_call_alert()
     void tick_frame_settle(uint32_t now_ms);    ///< sounding commit + RX-BER commit (Tdrw)
     void tick_relink(uint32_t now_ms);          ///< EFS evaluate + EFS tick + auto-relink fire
+    void tick_amd_confirm(uint32_t now_ms);     ///< not-linked AMD deferred retry re-call (linked path lives in the SM)
     void tick_sounding_sweep(uint32_t now_ms);  ///< periodic multi-channel sounding sweep
+    void tick_position_report(uint32_t now_ms); ///< automatic ALE-GPR/GGA on-change/interval reporting
     void tick_test_channel(uint32_t now_ms);    ///< active per-peer Test-Channel sweep driver
     void tick_offline_completion();             ///< pull symbol frames in offline (no-audio) mode
     void tick_lqa_update(uint32_t now_ms);      ///< throttled LQA DB prune + auto-sounding check
@@ -1582,7 +1658,7 @@ private:
     // Shared AMD core (A.5.7.2.2) — see AmdAccumulator above.
     std::string amd_step(AmdAccumulator& st, const ALEWord& word);            ///< CMD discrimination + accumulate; returns trimmed text when a message just concluded (TIS/TWAS or a superseding CMD)
     std::string amd_flush(AmdAccumulator& st);                                ///< force-conclude an in-progress accumulation (best-effort exit / silence fallback)
-    void        amd_dispatch(const std::string& peer, const std::string& text); ///< fires ALE_AMD_RECEIVED iff both are non-empty
+    void        amd_dispatch(const std::string& peer, const std::string& text, const char* call_context); ///< fires ALE_AMD_RECEIVED iff both are non-empty
 
     void rx_accumulate_call_amd(const ALEWord& word);        ///< calling-frame AMD reassembly (A.5.7.2.2, called-station side); dispatch deferred to on_sm_state_change()
     void rx_accumulate_resp_amd(const ALEWord& word);        ///< response-frame AMD reassembly (A.5.7.2.2, calling-station side); dispatch deferred to on_sm_state_change()
@@ -1590,6 +1666,12 @@ private:
     void commit_linked_amd();                               ///< amd_dispatch(linked_amd_peer_, amd_flush(linked_amd_)) — Tdrw-silence fallback call site
     void rx_accumulate_ack_amd(const ALEWord& word);         ///< ACK-frame AMD reassembly (A.5.7.2.2, responder)
     void commit_ack_amd();                                  ///< amd_dispatch(ack_amd_peer_, amd_flush(ack_amd_))
+
+    // AMD delivery confirmation
+    std::string attempt_amd_send_(const std::string& target, const std::string& text,
+                                  bool link_after_send);     ///< one not-linked call attempt (factored from send_amd)
+    void reply_to_linked_amd_(const std::string& sender);    ///< receiver: kick off the SM's linked-AMD Response (supplies the optional CMD 'a')
+    void amd_confirm_clear_();                               ///< reset the not-linked AMD retry state (linked path lives in the SM)
 
     /**
      * Emit the incoming-call alert (on_call_received / ALE_CALL_RECEIVED) and any
