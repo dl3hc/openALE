@@ -2,9 +2,10 @@
  * \file Protocol/Message/ale_orderwire_protocols.h
  * \brief ALE orderwire message protocols (MIL-STD-188-141B A.5.7)
  *
- * Encoding for Basic Orderwire message types transmitted in the
- * Message section of an ALE ACK frame (A.5.7.2.2)
- * or in the ORDERWIRE sub-phase of an established link (LinkedPhase::ORDERWIRE).
+ * Encoding for Basic Orderwire message types transmitted in the Message
+ * section of an ALE calling frame (Ion2G-style AMD, see
+ * ALEStateMachine::enqueue_call_sequence_()) or in the ORDERWIRE sub-phase
+ * of an established link (LinkedPhase::ORDERWIRE).
  *
  *   AMD — Automatic Message Display (A.5.7.2)
  *   DTM — Data Text Message        (A.5.7.3)
@@ -26,7 +27,8 @@ namespace ale {
  *   IDLE       — Link established, no active orderwire session.
  *   ORDERWIRE  — Orderwire message exchange in progress (A.5.7).
  *                AMD/DTM/DBM may only be initiated from this sub-state
- *                (AMD in the ACK frame is an exception per A.5.7.2.2).
+ *                (AMD in the calling frame, before any link exists, is an
+ *                exception — see ALEStateMachine::enqueue_call_sequence_()).
  */
 enum class LinkedPhase {
     IDLE,       ///< No active orderwire session
@@ -34,7 +36,7 @@ enum class LinkedPhase {
 };
 
 /**
- * Encode an AMD text message into ALE words (A.5.7.2.2).
+ * Encode an AMD text message into ALE words (A.5.7.2.2 word layout).
  *
  * Frame layout:
  *   Word 0 : CMD AMD  — preamble=CMD, Expanded-64 payload (first 3 chars)
@@ -46,14 +48,15 @@ enum class LinkedPhase {
  * Rules:
  * - Characters outside Expanded-64 (0x20–0x5F) are replaced with '?'.
  * - The last triplet is padded with SP (0x20) if 1 or 2 chars are missing
- *   (A.5.7.2.2 — no operator intervention required).
+ *   (no operator intervention required).
  * - Maximum 30 words / 90 characters (A.5.7.2.3); excess is silently truncated.
  * - Returns an empty vector if \p text is empty.
  *
  * This function is the single authoritative AMD encoder for the stack.
- * ALEStateMachine::build_ack_words() delegates to it exclusively so that
- * AMD words are guaranteed to be placed only in the ACK frame (A.5.7.2.2) —
- * never in the calling frame's scanning, leading, or conclusion sections.
+ * ALEStateMachine::enqueue_call_sequence_() delegates to it exclusively (Ion2G-
+ * style calling-frame AMD) — never in the scanning or leading-address sections,
+ * and never in the ACK/third-handshake frame, which is purely the caller's
+ * link/no-link (TIS/TWAS) decision — see ALEStateMachine::build_ack_words().
  *
  * \param text  ASCII text to encode (up to 90 characters).
  * \return      Ordered list of ALEWords for the Message section.

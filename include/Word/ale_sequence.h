@@ -171,6 +171,14 @@ public:
                                   bool is_reject = false);
 
     /**
+     * FROM self-identification word — Ion2G-style AMD calling frame.
+     * One-word (or DATA/REP-extended) [FROM:self], §A.5.2.3 anchor type FROM.
+     * Placed after the leading call, before the AMD CMD/DATA payload, so the
+     * called station can identify the caller without waiting for frame 3.
+     */
+    static ALESequence from_id(const std::string& self);
+
+    /**
      * Complete response frame — called station (JOE) side §A.5.5.3.3 / Figure A-30.
      *
      *   is_reject = false: TO [caller] × 2 + TIS [self]   (accept)
@@ -183,10 +191,13 @@ public:
     /**
      * Complete ACK frame — calling station (SAM) side §A.5.5.3.4 / Figure A-31.
      *
-     *   TO [peer] × 2 + TIS [self]
+     *   no_link = false (default): TO [peer] × 2 + TIS [self]  (link established)
+     *   no_link = true:            TO [peer] × 2 + TWAS [self] (Ion2G-style AMD
+     *                              decline: handshake concludes, no link persists)
      */
     static ALESequence ack(const std::string& peer_addr,
-                           const std::string& self_addr);
+                           const std::string& self_addr,
+                           bool no_link = false);
 
     /**
      * Link termination frame (§A.5.5.3.5 / T-07).

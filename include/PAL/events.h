@@ -39,6 +39,9 @@ enum class EventType {
     ALE_CALL_SENT,
     ALE_LINK_ESTABLISHED,
     ALE_LINK_TERMINATED,
+    ALE_AMD_NO_LINK,      ///< AMD handshake concluded without linking (frame-3 TWAS)
+    ALE_AMD_NOT_SENT,     ///< AMD send exhausted all attempts with no response (not-linked or linked); message=peer
+    ALE_AMD_DELIVERED,    ///< LINKED-state AMD confirmed delivered (Call→Response→ACK complete); message=peer
     ALE_SOUNDING,
     ALE_LQA_UPDATE,
     ALE_STATUS,           ///< Human-readable status/log line

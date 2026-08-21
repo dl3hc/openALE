@@ -119,6 +119,10 @@ ALESequence ALESequenceBuilder::conclusion(const std::string& self, bool is_reje
     return ALESequence(AddressEncoder::encode(self, anchor));
 }
 
+ALESequence ALESequenceBuilder::from_id(const std::string& self) {
+    return ALESequence(AddressEncoder::encode(self, PreambleType::FROM));
+}
+
 ALESequence ALESequenceBuilder::response(const std::string& caller_addr,
                                          const std::string& self_addr,
                                          bool is_reject) {
@@ -131,10 +135,13 @@ ALESequence ALESequenceBuilder::response(const std::string& caller_addr,
 }
 
 ALESequence ALESequenceBuilder::ack(const std::string& peer_addr,
-                                    const std::string& self_addr) {
-    // §A.5.5.3.4 / Figure A-31: TO peer (×2) + TIS self.
+                                    const std::string& self_addr,
+                                    bool no_link) {
+    // §A.5.5.3.4 / Figure A-31: TO peer (×2) + TIS self (link) or TWAS self
+    // (Ion2G-style AMD decline — handshake concludes, no link persists).
+    const PreambleType conclusion_type = no_link ? PreambleType::TWAS : PreambleType::TIS;
     return addressed_then_conclusion(peer_addr, PreambleType::TO,
-                                     self_addr, PreambleType::TIS);
+                                     self_addr, conclusion_type);
 }
 
 ALESequence ALESequenceBuilder::termination(const std::string& peer_addr,

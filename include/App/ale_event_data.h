@@ -28,9 +28,10 @@ struct SoundingWarningData {
 
 /// Payload for EventType::ALE_AMD_RECEIVED
 struct AmdData {
-    const char* self_addr; ///< Local station address (receiver)
-    const char* peer_addr; ///< Remote station address (sender)
-    const char* text;      ///< Assembled orderwire text
+    const char* self_addr;    ///< Local station address (receiver)
+    const char* peer_addr;    ///< Remote station address (sender)
+    const char* text;         ///< Assembled orderwire text
+    const char* call_context; ///< "ALLCALL"|"INDIVIDUAL"|"NET"|"GROUP"|"LINKED" — how this AMD arrived
 };
 
 /// Payload for EventType::ALE_WORD_DECODED and ALE_WORD_TX

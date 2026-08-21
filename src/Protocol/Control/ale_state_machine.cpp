@@ -26,7 +26,7 @@ static const char* STATE_NAMES[] = {
 
 static const char* EVENT_NAMES[] = {
     "START_SCAN", "STOP_SCAN", "CALL_REQUEST", "CALL_DETECTED",
-    "HANDSHAKE_COMPLETE", "LINK_TIMEOUT", "LINK_TERMINATED",
+    "HANDSHAKE_COMPLETE", "LINK_TIMEOUT", "LINK_TERMINATED", "AMD_DECLINED_LINK",
     "SOUNDING_REQUEST", "SOUNDING_COMPLETE", "ERROR_OCCURRED"
 };
 
@@ -106,7 +106,7 @@ const char* ALEStateMachine::state_name(ALEState state) {
 
 const char* ALEStateMachine::event_name(ALEEvent event) {
     uint8_t i = static_cast<uint8_t>(event);
-    return i > 9 ? "UNKNOWN" : EVENT_NAMES[i];
+    return i > 10 ? "UNKNOWN" : EVENT_NAMES[i];
 }
 
 // ============================================================================
@@ -132,11 +132,13 @@ bool ALEStateMachine::process_event(ALEEvent event) {
         case ALEState::CALLING:
             if (event == ALEEvent::HANDSHAKE_COMPLETE) return transition_to(ALEState::LINKED);
             if (event == ALEEvent::LINK_TIMEOUT)       return transition_to(pre_link_state_);  // T-01
+            if (event == ALEEvent::AMD_DECLINED_LINK)  return transition_to(pre_link_state_);  // graceful, no link wanted
             break;
 
         case ALEState::HANDSHAKE:
             if (event == ALEEvent::HANDSHAKE_COMPLETE) return transition_to(ALEState::LINKED);
             if (event == ALEEvent::LINK_TIMEOUT)       return transition_to(pre_link_state_);  // T-01
+            if (event == ALEEvent::AMD_DECLINED_LINK)  return transition_to(pre_link_state_);  // graceful, no link wanted
             break;
 
         case ALEState::LINKED:
@@ -263,6 +265,19 @@ void ALEStateMachine::enter_state(ALEState new_state) {
     // SENDING_RESPONSE / SENDING_ACK): no TX burst is pending on a fresh state.
     tx_drain_start_ms_    = 0;
     tx_drain_deadline_ms_ = ALETimingConstants::TX_DRAIN_TIMEOUT_MS;
+
+    // Any real state change ends an in-flight LINKED-AMD confirm exchange (the
+    // confirm only lives *within* LINKED; leaving LINKED — teardown/timeout — or
+    // (re)entering it as a fresh link clears it). See LinkedAmdPhase.
+    linked_amd_phase_          = LinkedAmdPhase::NONE;
+    linked_amd_listen_start_ms_ = 0;
+    linked_amd_resp_detected_  = false;
+    linked_amd_resp_tlww_ms_   = 0;
+    linked_amd_ack_to_detected_ = false;
+    linked_amd_ack_tis_rcvd_   = false;
+    linked_amd_ack_tlww_ms_    = 0;
+    linked_amd_retry_pending_  = false;
+    linked_amd_retry_after_ms_ = 0;
 
     switch (new_state) {
         case ALEState::IDLE:
@@ -548,14 +563,9 @@ void ALEStateMachine::handle_calling() {
             if (!response_to_detected) {
                 // (a) — responder turnaround + decode + 2×L latency.
                 // AC-LINK-019-6: abort if TO_SELF not decoded within this window.
-                const uint32_t wait_ms =
-                      static_cast<uint32_t>(0.5 + ale::Twrt_slow_ms)  // 1960 ms turnaround+tune
-                    + static_cast<uint32_t>(ale::Tdrw_ms)            // + 784 ms ≈ 2×L latency
-                    + (ALETimingConstants::Tdrw_ms
-                       - ALETimingConstants::Tlww_ms);               // + 392 ms: JOE settles SAM's
-                // conclusion over Tdrw (not Tlww) before responding, delaying its response start by
-                // one settle-delta (mirrors the WAIT_CYCLE_END settle change).  Total = 3136 ms.
-                if ((current_time_ms - listening_start_ms) >= wait_ms)
+                // Window factored into listening_response_wait_ms_() so the
+                // LINKED-AMD confirm LISTEN reuses the identical timing.
+                if ((current_time_ms - listening_start_ms) >= listening_response_wait_ms_())
                     try_next_calling_channel(); // AC-LINK-019-6
             } else if (tlww_start_ms == 0) {
                 // (b) — waiting for TIS JOE conclusion.  Measured as silence
@@ -585,16 +595,16 @@ void ALEStateMachine::handle_calling() {
         }
 
         // ── SENDING_ACK ───────────────────────────────────────────────────
-        // Third handshake frame: TO JOE [DATA]* TIS SAM [DATA]*.
-        // Transition to LINKED via on_word_complete() after all words sent.
+        // Third handshake frame: TO JOE × 2 + TIS/TWAS SAM (Ion2G-style link
+        // decision — see build_ack_words()). Transition to LINKED (TIS) or
+        // pre_link_state_ via AMD_DECLINED_LINK (TWAS) in on_word_complete()
+        // after all words sent.
         case CallingPhase::SENDING_ACK: {
             if (words_pending > 0) {
-                // Waiting for the ACK frame to drain.  Bound the wait so an audio
-                // stall (or a transmit_callback that doesn't arm the completion)
-                // doesn't hang here until the 30 s Twa backstop.  The ACK frame can
-                // carry a pending AMD (A.5.7.2.2) — tx_drain_deadline_ms_ is scaled
-                // to the actual burst length at the arm site below, so a long
-                // message isn't cut off by a budget sized for the bare ACK.
+                // Waiting for the frame to drain (always short now — no message
+                // content here, see build_ack_words()).  Bound the wait so an
+                // audio stall (or a transmit_callback that doesn't arm the
+                // completion) doesn't hang here until the 30 s Twa backstop.
                 if (tx_drain_start_ms_ != 0 &&
                     (current_time_ms - tx_drain_start_ms_) >= tx_drain_deadline_ms_) {
                     SM_TRACE("[TRACE] handle_calling: SENDING_ACK drain timeout → LINK_TIMEOUT\n");
@@ -775,15 +785,9 @@ void ALEStateMachine::handle_handshake() {
         case HandshakePhase::WAIT_ACK: {
             if (hs_ack_to_ms == 0) {
                 // (1) — ACK start must arrive within this turnaround window.
-                const uint32_t wait_ms =
-                      ale::Twr_slow_int                              //  915 ms protocol turnaround
-                    + static_cast<uint32_t>(ale::Tdrw_ms)           // + 784 ms ≈ 2×L round-trip latency
-                    + (ALETimingConstants::Tdrw_ms
-                       - ALETimingConstants::Tlww_ms);              // + 392 ms: SAM settles its
-                // conclusion over Tdrw (not Tlww) before starting the ACK, so a multi-word JOE
-                // address pushes the ACK start one settle-delta later (mirrors the LISTENING(c)
-                // / WAIT_CYCLE_END settle change).  Total = 2091 ms.
-                if ((current_time_ms - hs_ack_start_ms) >= wait_ms) {
+                // Window factored into wait_ack_start_wait_ms_() so the LINKED-AMD
+                // confirm receiver's WAIT_ACK reuses the identical timing.
+                if ((current_time_ms - hs_ack_start_ms) >= wait_ack_start_wait_ms_()) {
                     SM_TRACE("[TRACE] handle_handshake: WAIT_ACK Twr timeout (no ACK start) → LINK_TIMEOUT\n");
                     process_event(ALEEvent::LINK_TIMEOUT);
                     return;
@@ -853,14 +857,15 @@ void ALEStateMachine::handle_linked() {
     // ── Linked Orderwire (Enhanced Frequency-Select, A.5.6.3.2) ─────────────
     // Sends pending_orderwire_words_ + TIS:SELF (×2) while LINKED so that
     // EFS proposals/responses can be exchanged without terminating the link.
-    if (orderwire_transmitting_) {
-        if (words_pending == 0) {
-            orderwire_transmitting_   = false;
-            tx_drain_start_ms_ = 0;
-            if (rx_enabled_callback) rx_enabled_callback(true);
-        }
-        return;
-    }
+    // The words_pending==0 drain transition (RX re-enable + LINKED-AMD confirm
+    // phase hand-off) happens synchronously in on_word_complete() the instant
+    // the last word completes — that is the only place that ever observes
+    // orderwire_transmitting_==true together with words_pending==0. By the time
+    // this function next runs (the following update() tick), on_word_complete()
+    // has already cleared orderwire_transmitting_, so a duplicate check here
+    // could never fire; this early-return only suppresses the idle-warning/Twa
+    // logic below while a burst is still in flight.
+    if (orderwire_transmitting_) return;
     if (orderwire_pending_) {
         orderwire_pending_      = false;
         orderwire_transmitting_ = true;
@@ -897,6 +902,34 @@ void ALEStateMachine::handle_linked() {
         return;
     }
 
+    // ── LINKED-state AMD retry pacing (Tt = TT_NEXT_TRY_MS) ──────────────────
+    // linked_amd_retry_or_fail_() queues the resend here rather than firing it
+    // immediately — matches the not-linked path's inter-attempt gap instead of
+    // hammering the channel with zero turnaround between bursts.
+    if (linked_amd_retry_pending_) {
+        if (current_time_ms >= linked_amd_retry_after_ms_) {
+            linked_amd_retry_pending_ = false;
+            pending_orderwire_words_  = linked_amd_burst_;
+            orderwire_double_burst_   = false;
+            orderwire_pending_        = true;
+            last_word_time_ms         = current_time_ms;
+        }
+        return;
+    }
+
+    // ── LINKED-state AMD delivery confirmation (Call→Response→ACK) ───────────
+    // Runs only between bursts (we return above while orderwire_transmitting_).
+    // While a confirm is in flight, suppress the idle-warning/Twa logic below —
+    // the exchange itself is link activity and drives its own bounded timeouts.
+    if (linked_amd_phase_ == LinkedAmdPhase::LISTENING && linked_amd_listen_start_ms_ != 0) {
+        handle_linked_amd_listening_();
+        return;
+    }
+    if (linked_amd_phase_ == LinkedAmdPhase::WAIT_ACK) {
+        handle_linked_amd_wait_ack_();
+        return;
+    }
+
     // ── Idle warning (Twa lead) ─────────────────────────────────────────────
     // Any link activity moves last_word_time_ms (ALE word RX, TX orderwire,
     // on_link_activity(), reset_link_idle_timer()).  Detect that here and re-arm
@@ -908,9 +941,17 @@ void ALEStateMachine::handle_linked() {
     }
     if (!linked_terminating_ && !idle_warning_sent_ && idle_warning_cb_) {
         const uint32_t idle_ms = current_time_ms - last_word_time_ms;
-        const uint32_t warn_at = (timing_.Twa_ms > ALETimingConstants::IDLE_WARNING_LEAD_MS)
-                                   ? (timing_.Twa_ms - ALETimingConstants::IDLE_WARNING_LEAD_MS)
-                                   : 0u;
+        // Scale the lead time down for a short Twa instead of a flat
+        // IDLE_WARNING_LEAD_MS: with the two equal (e.g. an unconfigured/
+        // degenerate Twa_ms == the 30s lead constant), warn_at would collapse
+        // to 0 and the warning fired the instant the link came up — jarring,
+        // and indistinguishable from a real "about to time out" state. Capping
+        // the lead at half of Twa_ms keeps the normal case (Twa_ms=360s)
+        // completely unchanged (min(30s, 180s) = 30s) while still giving a
+        // short-but-real grace window for any deliberately short Twa_ms.
+        const uint32_t lead_ms = std::min(ALETimingConstants::IDLE_WARNING_LEAD_MS,
+                                           timing_.Twa_ms / 2u);
+        const uint32_t warn_at = (timing_.Twa_ms > lead_ms) ? (timing_.Twa_ms - lead_ms) : 0u;
         if (idle_ms >= warn_at) {
             idle_warning_sent_ = true;
             const uint32_t remaining_sec =
@@ -942,6 +983,132 @@ void ALEStateMachine::trigger_linked_orderwire(std::vector<ALEWord> words,
     orderwire_double_burst_  = double_burst;
     orderwire_pending_       = true;
     last_word_time_ms        = current_time_ms;  // reset Twa to prevent timeout during TX
+}
+
+// ── LINKED-state AMD delivery confirmation (Call→Response→ACK) ───────────────
+// See LinkedAmdPhase. TX rides the existing orderwire path (queue content-only;
+// TIS:SELF is appended by handle_linked's orderwire block). Detection reuses the
+// WordRole classifier (ALECallProcessor::react_linked_amd_confirm_) and the reply
+// windows below are shared with CALLING/LISTENING and HANDSHAKE/WAIT_ACK.
+
+uint32_t ALEStateMachine::listening_response_wait_ms_() {
+    // handle_calling LISTENING(a): responder turnaround (Twrt_slow) + ~2×L latency
+    // (Tdrw) + one settle-delta (Tdrw − Tlww). Total ≈ 3136 ms.
+    return static_cast<uint32_t>(0.5 + ale::Twrt_slow_ms)
+         + static_cast<uint32_t>(ale::Tdrw_ms)
+         + (ALETimingConstants::Tdrw_ms - ALETimingConstants::Tlww_ms);
+}
+
+uint32_t ALEStateMachine::wait_ack_start_wait_ms_() {
+    // handle_handshake WAIT_ACK(1): ACK turnaround (Twr_slow) + ~2×L latency (Tdrw)
+    // + one settle-delta (Tdrw − Tlww). Total ≈ 2091 ms.
+    return ale::Twr_slow_int
+         + static_cast<uint32_t>(ale::Tdrw_ms)
+         + (ALETimingConstants::Tdrw_ms - ALETimingConstants::Tlww_ms);
+}
+
+void ALEStateMachine::send_linked_amd(std::vector<ALEWord> content_words,
+                                       const std::string& peer, uint32_t max_attempts) {
+    check_thread_();
+    if (current_state != ALEState::LINKED || linked_terminating_) return;
+    linked_amd_burst_         = content_words;           // verbatim resend on retry
+    linked_amd_peer_          = peer;
+    linked_amd_attempts_left_ = std::max(1u, max_attempts);
+    linked_amd_phase_         = LinkedAmdPhase::LISTENING;
+    linked_amd_listen_start_ms_ = 0;                     // armed once the burst drains
+    linked_amd_resp_detected_ = false;
+    linked_amd_resp_tlww_ms_  = 0;
+    // Ship the burst via the orderwire path (single, not doubled — AMD text).
+    pending_orderwire_words_ = std::move(content_words);
+    orderwire_double_burst_  = false;
+    orderwire_pending_       = true;
+    last_word_time_ms        = current_time_ms;
+}
+
+void ALEStateMachine::respond_to_linked_amd(const std::string& sender,
+                                             std::vector<ALEWord> extra_cmd_words) {
+    check_thread_();
+    if (current_state != ALEState::LINKED || linked_terminating_) return;
+    if (sender.empty()) return;
+    // Response frame content: TO[sender] ×2 (leading_call) + optional CMD 'a';
+    // TIS:SELF is appended by the orderwire path.
+    std::vector<ALEWord> resp = ALESequenceBuilder::leading_call(sender).words();
+    resp.insert(resp.end(), extra_cmd_words.begin(), extra_cmd_words.end());
+    linked_amd_peer_          = sender;
+    linked_amd_phase_         = LinkedAmdPhase::RESPONDING;
+    pending_orderwire_words_  = std::move(resp);
+    orderwire_double_burst_   = false;
+    orderwire_pending_        = true;
+    last_word_time_ms         = current_time_ms;
+}
+
+void ALEStateMachine::handle_linked_amd_listening_() {
+    // Sender side. Mirrors handle_calling LISTENING(a)/(b)/(c), but a window
+    // timeout retries the burst (or gives up) instead of hopping channels, and a
+    // detected Response leads to the ACK frame instead of link establishment.
+    if (!linked_amd_resp_detected_) {
+        // (a) waiting for the peer's Response to *start* (TO-self).
+        if ((current_time_ms - linked_amd_listen_start_ms_) >= listening_response_wait_ms_())
+            linked_amd_retry_or_fail_();
+    } else if (linked_amd_resp_tlww_ms_ == 0) {
+        // (b) saw TO-self, waiting for the peer's TIS conclusion — 5×Trw silence.
+        if ((current_time_ms - last_word_time_ms) >= 5u * ALETimingConstants::Trw_ms)
+            linked_amd_retry_or_fail_();
+    } else {
+        // (c) saw TIS, let it settle (Tdrw), then send the ACK (frame 3):
+        // TO[peer] ×2 (content-only, TIS:SELF appended by the orderwire path).
+        if ((current_time_ms - linked_amd_resp_tlww_ms_) >= ALETimingConstants::Tdrw_ms) {
+            linked_amd_phase_           = LinkedAmdPhase::SENDING_ACK;
+            linked_amd_listen_start_ms_ = 0;
+            pending_orderwire_words_    = ALESequenceBuilder::leading_call(linked_amd_peer_).words();
+            orderwire_double_burst_     = false;
+            orderwire_pending_          = true;
+            last_word_time_ms           = current_time_ms;
+        }
+    }
+}
+
+void ALEStateMachine::linked_amd_retry_or_fail_() {
+    if (linked_amd_attempts_left_ > 1) {
+        --linked_amd_attempts_left_;
+        // Defer the resend by Tt (TT_NEXT_TRY_MS) — the same inter-attempt pacing
+        // the not-linked path's retry already uses (amd_retry_recall_after_ms_ in
+        // ale_controller.cpp). Without this the burst went straight back out the
+        // instant the listening window expired: correct attempt COUNT, wrong
+        // protocol TIMING (hammering the channel with zero turnaround, unlike
+        // every other retry path in this codebase). handle_linked() fires the
+        // actual resend once linked_amd_retry_after_ms_ elapses.
+        linked_amd_listen_start_ms_ = 0;
+        linked_amd_resp_detected_   = false;
+        linked_amd_resp_tlww_ms_    = 0;
+        linked_amd_retry_pending_   = true;
+        linked_amd_retry_after_ms_  = current_time_ms + ale::TT_NEXT_TRY_MS;
+        last_word_time_ms           = current_time_ms;
+        if (operator_callback) operator_callback(OperatorEvent::AMD_RETRY);
+    } else {
+        linked_amd_phase_           = LinkedAmdPhase::NONE;
+        linked_amd_listen_start_ms_ = 0;
+        if (operator_callback) operator_callback(OperatorEvent::AMD_NOT_DELIVERED);
+    }
+}
+
+void ALEStateMachine::handle_linked_amd_wait_ack_() {
+    // Receiver side. Mirrors handle_handshake WAIT_ACK(1)/(2)/(3); a timeout here
+    // just ends the exchange silently — the AMD itself was already displayed, only
+    // the wire-level acknowledgement of our Response went unseen (no retransmit).
+    if (!linked_amd_ack_to_detected_) {
+        // (1) ACK start (TO-self) must arrive within the Twr turnaround window.
+        if ((current_time_ms - linked_amd_ack_start_ms_) >= wait_ack_start_wait_ms_())
+            linked_amd_phase_ = LinkedAmdPhase::NONE;
+    } else if (!linked_amd_ack_tis_rcvd_) {
+        // (2) saw TO-self, waiting for the sender's TIS — 5×Trw silence.
+        if ((current_time_ms - last_word_time_ms) >= 5u * ALETimingConstants::Trw_ms)
+            linked_amd_phase_ = LinkedAmdPhase::NONE;
+    } else if (linked_amd_ack_tlww_ms_ != 0
+               && (current_time_ms - linked_amd_ack_tlww_ms_) >= ALETimingConstants::Tdrw_ms) {
+        // (3) ACK conclusion settled → handshake closed on the receiver side.
+        linked_amd_phase_ = LinkedAmdPhase::NONE;
+    }
 }
 
 void ALEStateMachine::on_link_activity() {
@@ -1091,6 +1258,19 @@ bool ALEStateMachine::initiate_call(const std::string& target) {
     active_message_  = pending_message;
     pending_message  = PendingMessage{};
 
+    // Calling-frame AMD words (Ion2G-style, replaces the old ACK-frame embedding):
+    // FROM[self] self-ID + the AMD CMD/DATA/REP payload. Both empty ALESequence{}
+    // unless active_message_.type==AMD — this is the ONLY gate that puts extra
+    // words on the air, so a plain call (active_message_.type==NONE) is byte-
+    // identical to before this feature: enqueue_call_sequence_() and the
+    // LEADING_CALL slot-count both simply append/count zero words below.
+    const bool has_amd = (active_message_.type == PendingMessage::Type::AMD)
+                       && !active_message_.content.empty();
+    active_amd_from_seq_ = has_amd
+        ? ALESequenceBuilder::from_id(address_book.get_self_address()) : ALESequence{};
+    active_amd_words_ = has_amd
+        ? ALESequence(encode_amd(active_message_.content)) : ALESequence{};
+
     // Snapshot CMD LQA and LQA report; both survive channel retries like active_message_.
     active_lqa_cmd_seq_ = pending_lqa_cmd_set_
         ? ALESequenceBuilder::lqa_cmd(pending_lqa_cmd_raw_) : ALESequence{};
@@ -1197,6 +1377,7 @@ bool ALEStateMachine::send_sounding_sweep(const std::vector<Channel>& channels) 
     check_thread_();
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING)
         return false;
+    if (allcall_broadcasting_) return false;  // don't interleave with a draining broadcast
     if (channels.empty()) return false;
     sounding_sweep_chs_    = channels;
     sounding_sweep_idx_    = 0;
@@ -1204,6 +1385,31 @@ bool ALEStateMachine::send_sounding_sweep(const std::vector<Channel>& channels) 
     // Pin current() to the first sweep channel and tune the radio to it.
     channel_manager_.set_override(channels[0]);
     return process_event(ALEEvent::SOUNDING_REQUEST);
+}
+
+bool ALEStateMachine::send_allcall_broadcast(const std::string& self_addr, const std::string& text) {
+    check_thread_();
+    if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING) return false;
+    if (allcall_broadcasting_) return false;  // one in flight — see is_allcall_broadcasting()
+    if (self_addr.empty()) return false;
+    const auto amd = encode_amd(text);
+    if (amd.empty()) return false;
+
+    // A.5.2.4.7: the global AllCall address is the literal 3-char "@?@" —
+    // already valid Basic-38 (A-Z, 0-9, @, ?), no length/charset special-case
+    // needed anywhere else in the address path.
+    static constexpr const char* kGlobalAllCallAddr = "@?@";
+    std::vector<ALEWord> words = ALESequenceBuilder::leading_call(kGlobalAllCallAddr).words();
+    const auto from = ALESequenceBuilder::from_id(self_addr).words();
+    const auto twas = ALESequenceBuilder::conclusion(self_addr, /*is_reject=*/true).words();
+    words.insert(words.end(), from.begin(), from.end());
+    words.insert(words.end(), amd.begin(), amd.end());
+    words.insert(words.end(), twas.begin(), twas.end());
+
+    allcall_broadcasting_ = true;
+    if (rx_enabled_callback) rx_enabled_callback(false);
+    transmit_words(words);
+    return true;
 }
 
 void ALEStateMachine::terminate_link() {
@@ -1310,7 +1516,13 @@ uint32_t ALEStateMachine::compute_calling_timeout_ms() const {
         calling_channels.empty() ? 1u : static_cast<uint32_t>(calling_channels.size()),
         target_scan_channels,
         static_cast<uint32_t>(leading_seq_.size()),
-        static_cast<uint32_t>(conclusion_seq_.size())
+        static_cast<uint32_t>(conclusion_seq_.size()),
+        // Calling-frame MESSAGE section: FROM self-ID + LQA CMD/report + AMD —
+        // all re-sent on every channel retry, so budgeted like leading_seq_.
+        // 0 for any call with nothing queued there (unaffected: same budget as
+        // before this field existed).
+        static_cast<uint32_t>(active_amd_from_seq_.size() + active_lqa_cmd_seq_.size()
+                             + active_lqa_report_seq_.size() + active_amd_words_.size())
     };
     return ale::calc_calling_timeout_ms(p);
 }
@@ -1364,74 +1576,71 @@ void ALEStateMachine::try_next_calling_channel() {
 // initiate_call() time, so ALESequenceBuilder is called at send time.
 
 // AMD word building is delegated to encode_amd() in ale_orderwire_protocols.cpp
-// (AC-GEN-014-002). Per A.5.7.2.2, AMD is placed in the message section of the
-// ACK frame (build_ack_words()), not in the calling frame — the complete calling
-// cycle (call + response) must precede the AMD content.
+// (AC-GEN-014-002). Ion2G-style: AMD now rides the CALLING frame (frame 1), not
+// the ACK frame — TO×2 + FROM[self] + [CMD 'a'] + [CMD 'r'+DATA...] + CMD-AMD +
+// TIS[self]. The called station can identify the caller and read the message
+// without waiting for a full 3-way handshake to complete; frame 3 (build_ack_words())
+// then becomes purely the caller's link/no-link decision (TIS vs TWAS).
 
 void ALEStateMachine::enqueue_call_sequence_() {
     // scanning_seq_ and leading_seq_ are pre-built by initiate_call*():
     //   scanning_seq_  — scan_channels × 2 words (§A.5.2.5.1 / §A.5.5.4.3)
     //   leading_seq_   — full address × 2 (Tlc = 2×Tc, §A.5.5.3.1)
     //   conclusion_seq_ — TIS self address (§A.5.2.3.2.2)
-    // MESSAGE section (A.5.2.5.5 / Table A-XIV): CMD 'a' [+ LQA report] between
-    // leading address words and the TIS conclusion.  active_lqa_cmd_seq_ /
-    // active_lqa_report_seq_ are snapshot at initiate_call() and survive channel
-    // retries unchanged (re-emitted on every retry channel).
-    // AMD is NOT in the calling frame — it goes in build_ack_words() because the
-    // full calling cycle (call + response) must precede AMD content (A.5.7.2.2).
+    // MESSAGE section (A.5.2.5.5 / Table A-XIV): FROM[self] + CMD 'a' [+ LQA
+    // report] + CMD-AMD between leading address words and the TIS conclusion.
+    // active_amd_from_seq_ / active_amd_words_ / active_lqa_cmd_seq_ /
+    // active_lqa_report_seq_ are all snapshot at initiate_call() and survive
+    // channel retries unchanged (re-emitted on every retry channel).
+    // active_amd_from_seq_/active_amd_words_ are empty ALESequence{} for any
+    // non-AMD call (see initiate_call()'s has_amd gate) — a plain call therefore
+    // transmits exactly the same words as before this feature.
 
     transmit_words(scanning_seq_.words());
     transmit_words(leading_seq_.words());
+    transmit_words(active_amd_from_seq_.words());
     transmit_words(active_lqa_cmd_seq_.words());
     transmit_words(active_lqa_report_seq_.words());
+    transmit_words(active_amd_words_.words());
     transmit_words(conclusion_seq_.words());
+
+    // Note: unlike SENDING_ACK/SENDING_RESPONSE/LINKED-termination, the CALLING
+    // TX phases (SCANNING_CALL/LEADING_CALL/CONCLUSION) have no per-frame
+    // tx_drain_start_ms_ stall watchdog of their own — they are purely word-
+    // count driven by on_word_complete() (see the LEADING_CALL/CONCLUSION cases
+    // below). The overall CALLING-state backstop is compute_calling_timeout_ms()
+    // (checked every update() via check_link_timeout()), which now includes the
+    // MESSAGE-section word count (FROM + LQA + AMD) via CallingBudgetParams::
+    // message_words — see initiate_call() / compute_calling_timeout_ms() — so a
+    // long AMD calling frame (up to Tm_max = 59×Trw ≈ 23.1 s, A.5.7.2.3) is
+    // budgeted for and won't self-abort via a bogus LINK_TIMEOUT mid-transmission.
 }
 
 void ALEStateMachine::build_ack_words() {
-    // ACK frame per REQ-LINK-008 / §A.5.5.3.4 / Figure A-31:
-    //   TO [to_address] × 2 + [CMD AMD + DATA/REP...] + TIS [self]
-    // LQA CMD 'a' and LQA report were already sent in the calling frame MESSAGE
-    // section (enqueue_call_sequence_()) per Table A-XIV — do NOT re-emit here.
-    // AMD goes here because the full calling cycle (call + response) must precede
-    // the AMD content (A.5.7.2.2).
+    // Third handshake frame per §A.5.5.3.4 / Figure A-31, Ion2G-style:
+    //   TO [to_address] × 2 + TIS [self]  — link established (normal call, or
+    //                                        AMD send with link_after_send=true)
+    //   TO [to_address] × 2 + TWAS [self] — AMD sent with link_after_send=false:
+    //                                        handshake concludes, no link persists
+    // No message content here — LQA CMD/report and AMD (if any) were already
+    // sent in the calling frame MESSAGE section (enqueue_call_sequence_()).
     // to_address is set during the LISTENING phase (process_received_word),
     // so it is encoded here at send time, not pre-computed.
-    const bool has_amd = (active_message_.type == PendingMessage::Type::AMD)
-                      && !active_message_.content.empty();
-    if (has_amd) {
-        const auto base = ALESequenceBuilder::ack(
-            to_address, address_book.get_self_address());
-        const auto& bw = base.words();
-        // Find where the conclusion section begins (first TIS or TWAS word).
-        size_t conc_start = bw.size();
-        for (size_t i = 0; i < bw.size(); ++i) {
-            if (bw[i].type == PreambleType::TIS || bw[i].type == PreambleType::TWAS) {
-                conc_start = i;
-                break;
-            }
-        }
-        std::vector<ALEWord> words;
-        for (size_t i = 0; i < conc_start; ++i) words.push_back(bw[i]);
-        const auto amd = encode_amd(active_message_.content);
-        words.insert(words.end(), amd.begin(), amd.end());
-        for (size_t i = conc_start; i < bw.size(); ++i) words.push_back(bw[i]);
-        transmit_words(words);
-    } else {
-        transmit_words(ALESequenceBuilder::ack(
-            to_address, address_book.get_self_address()).words());
-    }
+    const bool no_link = (active_message_.type == PendingMessage::Type::AMD)
+                       && !active_message_.link_after_send;
+    transmit_words(ALESequenceBuilder::ack(
+        to_address, address_book.get_self_address(), no_link).words());
+
     // Arm the TX-drain deadline: on_word_complete() normally fires
-    // HANDSHAKE_COMPLETE once the frame drains; if the audio stalls or the
-    // completion is never armed, handle_calling SENDING_ACK force-aborts after
-    // tx_drain_deadline_ms_ instead of waiting the full Twa backstop.  A max-
-    // length AMD embedded above can push this frame to 59×Trw ≈ 23.1 s
-    // (A.5.7.2.3 Tm_max incl. AMD) — scale the deadline to the words actually
-    // queued instead of the flat TX_DRAIN_TIMEOUT_MS sized for the bare ACK.
+    // LINK_ESTABLISHED/AMD_DECLINED_LINK once the frame drains; if the audio
+    // stalls or the completion is never armed, handle_calling SENDING_ACK
+    // force-aborts after tx_drain_deadline_ms_ instead of waiting the full Twa
+    // backstop. This frame never carries AMD content anymore (moved to the
+    // calling frame, see enqueue_call_sequence_()), so the flat default is
+    // always sufficient here.
     if (words_pending > 0) {
         tx_drain_start_ms_    = current_time_ms;
-        tx_drain_deadline_ms_ = std::max(
-            ALETimingConstants::TX_DRAIN_TIMEOUT_MS,
-            words_pending * ALETimingConstants::Trw_ms + 2u * ALETimingConstants::Trw_ms);
+        tx_drain_deadline_ms_ = ALETimingConstants::TX_DRAIN_TIMEOUT_MS;
     }
 }
 
@@ -1552,6 +1761,41 @@ void ALEStateMachine::on_word_complete() {
             orderwire_transmitting_ = false;
             tx_drain_start_ms_      = 0;   // disarm the drain safety net
             if (rx_enabled_callback) rx_enabled_callback(true);
+            // LINKED-AMD confirm hand-off: a burst just drained. Instead of going
+            // idle, advance the confirm phase (the reply window only starts NOW —
+            // after our own burst is off the air — never mid-transmission). This
+            // MUST live here, not in handle_linked(): this decrement-and-check is
+            // the only place that ever sees orderwire_transmitting_==true and
+            // words_pending==0 at once — handle_linked() only runs on the next
+            // update() tick, by which point orderwire_transmitting_ is already
+            // false, so a duplicate hand-off there is unreachable dead code (the
+            // bug this replaces: the LISTEN window never opened / WAIT_ACK never
+            // started / the ACK was never queued, because nothing ever ran this
+            // switch).
+            switch (linked_amd_phase_) {
+                case LinkedAmdPhase::LISTENING:
+                    // sender: AMD burst (or a retry) drained → open the LISTEN window
+                    linked_amd_listen_start_ms_ = current_time_ms;
+                    linked_amd_resp_detected_   = false;
+                    linked_amd_resp_tlww_ms_    = 0;
+                    last_word_time_ms           = current_time_ms;  // hold off Twa
+                    break;
+                case LinkedAmdPhase::RESPONDING:
+                    // receiver: Response drained → wait for the sender's ACK
+                    linked_amd_phase_           = LinkedAmdPhase::WAIT_ACK;
+                    linked_amd_ack_start_ms_    = current_time_ms;
+                    linked_amd_ack_to_detected_ = false;
+                    linked_amd_ack_tis_rcvd_    = false;
+                    linked_amd_ack_tlww_ms_     = 0;
+                    last_word_time_ms           = current_time_ms;
+                    break;
+                case LinkedAmdPhase::SENDING_ACK:
+                    // sender: ACK drained → the 3-frame handshake is complete
+                    linked_amd_phase_ = LinkedAmdPhase::NONE;
+                    if (operator_callback) operator_callback(OperatorEvent::AMD_DELIVERED);
+                    break;
+                default: break;
+            }
         }
         return;
     }
@@ -1567,6 +1811,19 @@ void ALEStateMachine::on_word_complete() {
         if (words_pending == 0 && sounding_phase_ == SoundingPhase::TRANSMITTING) {
             sounding_phase_                = SoundingPhase::LISTENING;
             sounding_listening_start_ms_    = current_time_ms;  // Fenster-Timer neu starten
+            if (rx_enabled_callback) rx_enabled_callback(true);
+        }
+        return;
+    }
+
+    // ── ALLCALL broadcast path (send_allcall_broadcast) ──────────────────
+    // Flag-gated, not state-gated: the broadcast deliberately stays in
+    // IDLE/SCANNING rather than a dedicated state (see is_allcall_broadcasting()),
+    // so this must be checked ahead of the CALLING/HANDSHAKE state branches.
+    if (allcall_broadcasting_) {
+        if (words_pending > 0) --words_pending;
+        if (words_pending == 0) {
+            allcall_broadcasting_ = false;
             if (rx_enabled_callback) rx_enabled_callback(true);
         }
         return;
@@ -1617,12 +1874,18 @@ void ALEStateMachine::on_word_complete() {
 
             case CallingPhase::LEADING_CALL: {
                 // leading_seq_ is pre-doubled (Tlc = 2×Tc, §A.5.5.3.1); its size
-                // equals 2×wpa.  The MESSAGE section (CMD 'a' + LQA report) is
-                // emitted immediately after leading_seq_ in enqueue_call_sequence_(),
-                // so those words are counted here before transitioning to CONCLUSION.
+                // equals 2×wpa.  The MESSAGE section (FROM self-ID + CMD 'a' +
+                // LQA report + AMD) is emitted immediately after leading_seq_ in
+                // enqueue_call_sequence_(), so those words are counted here before
+                // transitioning to CONCLUSION.  active_amd_from_seq_/
+                // active_amd_words_ are empty for any non-AMD call, so tlc_slots
+                // is unchanged for a plain call — see the invariant callout in
+                // enqueue_call_sequence_().
                 const uint32_t tlc_slots = static_cast<uint32_t>(leading_seq_.size())
+                                         + static_cast<uint32_t>(active_amd_from_seq_.size())
                                          + static_cast<uint32_t>(active_lqa_cmd_seq_.size())
-                                         + static_cast<uint32_t>(active_lqa_report_seq_.size());
+                                         + static_cast<uint32_t>(active_lqa_report_seq_.size())
+                                         + static_cast<uint32_t>(active_amd_words_.size());
                 if (call_cycles_in_phase >= tlc_slots) {
                     SM_TRACE("[TRACE] on_word_complete: LEADING_CALL → CONCLUSION (tlc_slots="
                              + std::to_string(tlc_slots) + ")\n");
@@ -1647,14 +1910,26 @@ void ALEStateMachine::on_word_complete() {
             }
 
             case CallingPhase::SENDING_ACK: {
-                // ACK frame (Figure A-31): TO [to_address] × 2 + TIS [self_address].
+                // ACK frame (Figure A-31): TO [to_address] × 2 + TIS/TWAS [self_address].
                 // Completion tied to the actual TX queue draining (words_pending == 0)
                 // rather than a re-derived slot count, so any address length works.
+                // no_link mirrors build_ack_words()'s derivation: an AMD send with
+                // link_after_send=false concluded frame 3 with TWAS instead of TIS —
+                // graceful "handshake done, no link wanted", not a real link.
                 if (words_pending == 0) {
-                    SM_TRACE("[TRACE] on_word_complete: SENDING_ACK → LINKED\n");
-                    if (operator_callback)
-                        operator_callback(OperatorEvent::LINK_ESTABLISHED);
-                    process_event(ALEEvent::HANDSHAKE_COMPLETE);
+                    const bool no_link = (active_message_.type == PendingMessage::Type::AMD)
+                                       && !active_message_.link_after_send;
+                    if (no_link) {
+                        SM_TRACE("[TRACE] on_word_complete: SENDING_ACK → AMD_DECLINED_LINK\n");
+                        if (operator_callback)
+                            operator_callback(OperatorEvent::AMD_SENT_NO_LINK);
+                        process_event(ALEEvent::AMD_DECLINED_LINK);
+                    } else {
+                        SM_TRACE("[TRACE] on_word_complete: SENDING_ACK → LINKED\n");
+                        if (operator_callback)
+                            operator_callback(OperatorEvent::LINK_ESTABLISHED);
+                        process_event(ALEEvent::HANDSHAKE_COMPLETE);
+                    }
                 }
                 break;
             }

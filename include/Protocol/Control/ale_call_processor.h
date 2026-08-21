@@ -72,6 +72,11 @@ private:
     static void react_scanning_(ALEStateMachine& sm, const WordRole& r);
     static void react_calling_(ALEStateMachine& sm, const WordRole& r);
     static void react_handshake_(ALEStateMachine& sm, const WordRole& r, const ALEWord& word);
+    /// LINKED-state AMD delivery confirmation: drive the sender's LISTENING (peer
+    /// Response) / receiver's WAIT_ACK (sender ACK) detection flags. Reuses the
+    /// same WordRole classification as react_calling_/react_handshake_; pure
+    /// flag-setting, never consumes the word. No-op when no confirm is in flight.
+    static void react_linked_amd_confirm_(ALEStateMachine& sm, const WordRole& r);
     // Shared: TO_SELF / ALLCALL detection (old SM detect_incoming_call).
     static void detect_incoming_call_(ALEStateMachine& sm, const WordRole& r);
 

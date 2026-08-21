@@ -58,6 +58,8 @@ enum class ALEEvent {
     HANDSHAKE_COMPLETE,
     LINK_TIMEOUT,
     LINK_TERMINATED,
+    AMD_DECLINED_LINK,  ///< Handshake concluded normally but caller chose not to link
+                         ///< (frame-3 TWAS after an AMD send) — graceful, NOT a timeout/failure
     SOUNDING_REQUEST,
     SOUNDING_COMPLETE,
     ERROR_OCCURRED
@@ -72,6 +74,11 @@ enum class OperatorEvent {
     NO_CHANNELS_LEFT,  ///< All calling channels exhausted with no reply
     LINK_ESTABLISHED,  ///< Three-way handshake complete — link is up
     EMERGENCY_ACTIVE,  ///< emergency_manual_control() was invoked
+    AMD_SENT_NO_LINK,     ///< Caller side: AMD delivered, frame-3 TWAS sent by request (no link)
+    AMD_RECEIVED_NO_LINK, ///< Callee side: AMD received, caller's frame-3 TWAS declined the link
+    AMD_DELIVERED,        ///< LINKED-state AMD confirmed: peer's Response seen, ACK sent (Call→Response→ACK)
+    AMD_NOT_DELIVERED,    ///< LINKED-state AMD: no Response within the reply window after all attempts
+    AMD_RETRY,            ///< LINKED-state AMD: reply window elapsed, resending the burst (attempts remain)
 };
 
 /**
@@ -89,7 +96,11 @@ enum class OperatorEvent {
  *                       ├─ "TO SAM" detected → arm Tlww (AC-LINK-019-6)
  *                       └─ "TIS JOE" + Tlww → SENDING_ACK
  *   SENDING_ACK       TO JOE × 2 + TIS SAM — third handshake frame (REQ-LINK-008)
- *                       └─ complete → LINKED (HANDSHAKE_COMPLETE)
+ *                       ├─ complete (TIS)  → LINKED (HANDSHAKE_COMPLETE)
+ *                       └─ complete (TWAS) → pre_link_state_ (AMD_DECLINED_LINK):
+ *                          Ion2G-style AMD send with link_after_send=false —
+ *                          message already delivered in the calling frame,
+ *                          caller declines to link
  *
  * Net calls (A.5.5.4.2.1): SAM-seitig identischer Ablauf wie Individual Call.
  */
@@ -172,14 +183,40 @@ enum class HandshakePhase {
 };
 
 /**
+ * \enum LinkedAmdPhase
+ * LINKED-state AMD delivery-confirmation sub-state — a 3-frame Call→Response→ACK
+ * exchange run *without leaving LINKED*, reusing the same reply-wait timing and
+ * WordRole response/ACK detection as CALLING/LISTENING and HANDSHAKE/WAIT_ACK.
+ * The AMD burst still ships via the existing linked-orderwire path (trigger_
+ * linked_orderwire); these phases add the confirmation + retry around it.
+ *
+ *   Sender (started by send_linked_amd()):
+ *     LISTENING     after the AMD burst drains, wait the LISTENING reply window
+ *                     for the peer's Response frame (TO self ×2 [+CMD 'a'] + TIS)
+ *                     └─ Response seen → SENDING_ACK; window elapsed → retry or
+ *                        AMD_NOT_DELIVERED
+ *     SENDING_ACK   TO peer ×2 + TIS self (3rd frame) — drained → AMD_DELIVERED
+ *   Receiver (started by respond_to_linked_amd()):
+ *     RESPONDING    TO sender ×2 [+CMD 'a'] + TIS self — drained → WAIT_ACK
+ *     WAIT_ACK      wait the WAIT_ACK window for the sender's ACK, then idle
+ */
+enum class LinkedAmdPhase { NONE, LISTENING, SENDING_ACK, RESPONDING, WAIT_ACK };
+
+/**
  * \class ALEStateMachine
  */
 class ALEStateMachine {
 public:
-    /** Pending AMD orderwire message — sent in the ACK frame per A.5.7.2.2. */
+    /**
+     * Pending AMD orderwire message — sent in the calling frame (frame 1),
+     * Ion2G-style: TO×2 + FROM[self] + CMD-AMD + TIS[self]. link_after_send
+     * controls the frame-3 conclusion the caller sends after the handshake:
+     * false (default) = TWAS, no link persists; true = TIS, normal LINKED.
+     */
     struct PendingMessage {
         enum class Type { NONE, AMD } type;
         std::string content;
+        bool link_after_send = false;
         PendingMessage() : type(Type::NONE) {}
     };
 
@@ -290,6 +327,28 @@ public:
     bool send_sounding_sweep(const std::vector<Channel>& channels);
 
     /**
+     * One-shot AllCall broadcast (A.5.5.4.4): TO[@?@]×2 + FROM[self] +
+     * AMD(text) + TWAS[self], transmitted once on the current channel — no
+     * scanning-call phase, no response wait, no retry. The global AllCall
+     * address "@?@" is spec-literal (A.5.2.4.7); it already satisfies the
+     * normal 3-char Basic-38 address rules, no address-validator bypass
+     * needed. Receivers concluding on TWAS resume scanning silently
+     * (A.5.5.4.4) — this is "fire and forget" by design: AnyCall (A.5.5.4.5)
+     * exists for the solicited-response case, not this one.
+     * \return false if not in IDLE/SCANNING, self_addr is empty, or text has
+     *         no encodable characters.
+     */
+    bool send_allcall_broadcast(const std::string& self_addr, const std::string& text);
+
+    /// True while a send_allcall_broadcast() burst is still draining (see
+    /// on_word_complete()'s allcall_broadcasting_ branch). Callers that must
+    /// not interleave TX with an in-flight broadcast (e.g. initiate_call())
+    /// check this before queuing new words — the broadcast intentionally
+    /// stays in IDLE/SCANNING rather than a dedicated state, so this flag is
+    /// the only signal available.
+    bool is_allcall_broadcasting() const { return allcall_broadcasting_; }
+
+    /**
      * Terminate the current link per A.5.5.3.5:
      * Sends TO [peer] × 2 + TWAS [self] before transitioning to pre_link_state_.
      * No-op if not in LINKED state.
@@ -378,8 +437,10 @@ public:
     const std::vector<Channel>& get_calling_channels() const { return calling_channels; }
 
     /**
-     * Queue an AMD orderwire message to be sent in the ACK frame of the next call
-     * (A.5.7.2.2: AMD follows the complete calling+response cycle, not the calling frame).
+     * Queue an AMD orderwire message to be sent in the calling frame (frame 1)
+     * of the next call — Ion2G-style TO×2 + FROM[self] + CMD-AMD + TIS[self].
+     * PendingMessage::link_after_send controls whether frame 3 (sent by this
+     * station as caller) concludes with TIS (link) or TWAS (no link, default).
      * Calling set_pending_message with type=NONE removes any queued message.
      */
     void set_pending_message(const PendingMessage& msg) { pending_message = msg; }
@@ -427,6 +488,42 @@ public:
      */
     void trigger_linked_orderwire(std::vector<ALEWord> words,
                                   bool double_burst = true);
+
+    /**
+     * Send a delivery-confirmed AMD over the established link (sender side).
+     * Ships @p content_words (TO[peer]×2 + CMD-AMD + text — content only; the
+     * TIS:SELF conclusion is appended by the orderwire path) exactly like
+     * trigger_linked_orderwire(), then runs the LINKED confirm sub-state machine:
+     * after the burst drains it LISTENs for the peer's Response frame, sends an
+     * ACK on success (fires OperatorEvent::AMD_DELIVERED), or — if no Response
+     * arrives within the reply window — resends the identical burst up to
+     * @p max_attempts total (OperatorEvent::AMD_RETRY each time) before giving up
+     * (OperatorEvent::AMD_NOT_DELIVERED). No-op unless LINKED and not terminating.
+     */
+    void send_linked_amd(std::vector<ALEWord> content_words,
+                         const std::string& peer, uint32_t max_attempts);
+
+    /**
+     * Reply to a just-received linked AMD (receiver side): transmit the Response
+     * frame (TO[sender]×2 + @p extra_cmd_words [e.g. a bilateral CMD 'a'] + TIS
+     * self — content built here, TIS appended by the orderwire path), then WAIT
+     * for the sender's ACK, closing the Call→Response→ACK handshake. No-op unless
+     * LINKED and not terminating. Called by ALEController when a linked AMD
+     * completes (the controller supplies the optional CMD 'a' word since LQA
+     * measurement lives above the SM).
+     */
+    void respond_to_linked_amd(const std::string& sender,
+                               std::vector<ALEWord> extra_cmd_words);
+
+    /** True while a LINKED-state AMD delivery-confirmation exchange is in flight. */
+    bool linked_amd_confirm_active() const {
+        return linked_amd_phase_ != LinkedAmdPhase::NONE;
+    }
+
+    /** Sends left, including the one about to go out (or just sent). Only
+     *  meaningful while linked_amd_confirm_active(); lets the caller (GUI/
+     *  status line) report "attempt N of M" alongside AMD_RETRY/AMD_NOT_DELIVERED. */
+    uint32_t linked_amd_attempts_left() const { return linked_amd_attempts_left_; }
 
     /**
      * Emergency manual override per REQ-LINK-007 / A.5.5.1.
@@ -480,11 +577,25 @@ public:
     HandshakePhase get_handshake_phase()      const { return handshake_phase; }
     SoundingPhase  get_sounding_phase()       const { return sounding_phase_; }
     uint32_t       get_words_pending()        const { return words_pending; }
+    /// True while a linked-orderwire burst is queued but not yet handed to the
+    /// modulator (the gap between trigger_linked_orderwire() and the SM tick that
+    /// starts transmitting it). Combined with get_words_pending()>0, this lets a
+    /// caller tell whether its just-queued burst is still on the air.
+    bool           is_orderwire_pending()     const { return orderwire_pending_; }
     bool           is_emergency_active()      const { return emergency_active; }
     const std::string& get_to_address()      const { return to_address; }
     const std::string& get_caller_address()   const { return caller_address; }
     bool           is_hs_conclusion_rcvd()    const { return hs_conclusion_rcvd; }
     bool           is_pending_reject()        const { return pending_reject_; }
+    /// true = the handshake currently/just entered is an AllCall (A.5.5.4.4).
+    /// Only meaningful to read at HANDSHAKE entry — reset to false on leaving
+    /// HANDSHAKE (IDLE/SCANNING/LINKED entry), so a caller reacting to the
+    /// *exit* transition must snapshot this at entry time instead.
+    bool           is_allcall_handshake()     const { return allcall_silent_; }
+    /// true = the currently/most-recently initiated outgoing call was a net call.
+    bool           is_active_call_net()       const { return active_call_is_net; }
+    /// true = the currently/most-recently initiated outgoing call was a group call.
+    bool           is_active_call_group()     const { return active_call_is_group; }
 
     /**
      * Debug-only single-thread contract net.  Returns the number of times a
@@ -754,6 +865,12 @@ private:
     // ── Orderwire message state ───────────────────────────────────────────
     PendingMessage pending_message;   ///< set via set_pending_message(); consumed by initiate_call()
     PendingMessage active_message_;   ///< snapshot taken at initiate_call() time; survives channel retries
+    // Calling-frame AMD words (Ion2G-style): FROM[self] self-ID + the AMD CMD/DATA/REP
+    // payload itself. Both snapshotted in initiate_call() alongside active_message_,
+    // empty ALESequence{} unless active_message_.type==AMD — see the "plain calls
+    // unaffected" invariant in enqueue_call_sequence_().
+    ALESequence active_amd_from_seq_;  ///< FROM[self] (+ext) — empty unless AMD pending
+    ALESequence active_amd_words_;     ///< CMD-AMD (+DATA/REP...) — empty unless AMD pending
 
     // ── CMD LQA (char 'a', Table A-XIV) ──────────────────────────────────
     uint32_t    pending_lqa_cmd_raw_ = 0;
@@ -774,6 +891,24 @@ private:
     bool                 orderwire_pending_      = false;
     bool                 orderwire_transmitting_ = false;
     bool                 orderwire_double_burst_ = true;  ///< EFS=true; AMD=false (single)
+
+    // ── LINKED-state AMD delivery confirmation (see LinkedAmdPhase) ───────
+    // A Call→Response→ACK exchange run without leaving LINKED. Detection reuses
+    // the WordRole classifier + the LISTENING/WAIT_ACK reply-wait timing; TX
+    // reuses the orderwire path. ALECallProcessor (a friend) drives the RX flags.
+    LinkedAmdPhase       linked_amd_phase_          = LinkedAmdPhase::NONE;
+    std::vector<ALEWord> linked_amd_burst_;          ///< sender: content words, re-sent verbatim on retry
+    std::string          linked_amd_peer_;           ///< the confirm exchange peer
+    uint32_t             linked_amd_attempts_left_   = 0;  ///< sender: remaining sends (incl. current)
+    uint32_t             linked_amd_listen_start_ms_ = 0;  ///< sender: LISTENING window anchor (0 = burst still draining)
+    bool                 linked_amd_resp_detected_   = false; ///< sender: saw peer's TO-self (Response start)
+    uint32_t             linked_amd_resp_tlww_ms_    = 0;  ///< sender: peer TIS settle anchor
+    uint32_t             linked_amd_ack_start_ms_    = 0;  ///< receiver: WAIT_ACK window anchor
+    bool                 linked_amd_ack_to_detected_ = false; ///< receiver: saw sender's TO-self (ACK start)
+    bool                 linked_amd_ack_tis_rcvd_    = false; ///< receiver: saw sender's TIS
+    uint32_t             linked_amd_ack_tlww_ms_     = 0;  ///< receiver: ACK TIS settle anchor
+    bool                 linked_amd_retry_pending_   = false; ///< sender: retry queued, waiting out the Tt gap below
+    uint32_t             linked_amd_retry_after_ms_  = 0;  ///< sender: resend once current_time_ms reaches this (Tt = TT_NEXT_TRY_MS after the window expired)
 
     // ── Scanning sub-state ───────────────────────────────────────────────
     ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING
@@ -802,6 +937,9 @@ private:
     size_t               sounding_sweep_idx_     = 0;
     bool                 sounding_sweep_active_  = false;
     bool                 sounding_use_twas_      = false; ///< TIS (invite) vs TWAS (announce-only)
+
+    // ── One-shot AllCall broadcast (send_allcall_broadcast) ────────────────
+    bool allcall_broadcasting_ = false;
 
     // ── Target scan channels ──────────────────────────────────────────────
     uint32_t target_scan_channels;       ///< Assumed scan channels of target (for Tsc)
@@ -875,6 +1013,16 @@ private:
     void handle_linked();
     void handle_sounding();
 
+    // ── LINKED-state AMD confirmation drivers (called from handle_linked) ──
+    void handle_linked_amd_listening_();   ///< sender: LISTEN for the peer Response, then SENDING_ACK
+    void handle_linked_amd_wait_ack_();    ///< receiver: WAIT for the sender ACK, then idle
+    void linked_amd_retry_or_fail_();      ///< sender: resend burst (attempts left) or AMD_NOT_DELIVERED
+    // Reply-wait windows, shared with handle_calling LISTENING(a) / handle_handshake
+    // WAIT_ACK(1) so the linked confirm waits exactly as long as the not-linked
+    // handshake before deciding a retry/timeout is due.
+    static uint32_t listening_response_wait_ms_();  ///< LISTENING(a): Twrt_slow + Tdrw + settle
+    static uint32_t wait_ack_start_wait_ms_();       ///< WAIT_ACK(1): Twr_slow + Tdrw + settle
+
     bool check_link_timeout();
 
     /**
@@ -921,10 +1069,11 @@ private:
     void enqueue_call_sequence_();
 
     /**
-     * SENDING_ACK: third handshake frame §A.5.5.3.4 / Figure A-31 + A.5.7.2.2.
-     * Sequence: TO [to_address] × 2 + [CMD 'a'] + [CMD 'r'+DATA...] + [CMD AMD+DATA/REP...] + TIS [self]
-     * Message section (LQA CMD/Report + AMD) inserted before TIS conclusion when present.
-     * A.5.7.2.2: complete calling+response cycle precedes all message content.
+     * SENDING_ACK: third handshake frame §A.5.5.3.4 / Figure A-31.
+     * Sequence: TO [to_address] × 2 + TIS [self] (link) or TWAS [self] (no link).
+     * No message content here — AMD (if any) was already sent in the calling
+     * frame (frame 1); this frame is purely the caller's link/no-link decision,
+     * Ion2G-style. TWAS when active_message_.type==AMD && !link_after_send.
      * Built at send time because to_address is set during LISTENING phase.
      */
     void build_ack_words();
