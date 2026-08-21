@@ -966,6 +966,26 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.rigctld_server_enabled       = cfg.rigctld_server_enabled;
     config_.rigctld_server_port          = cfg.rigctld_server_port;
     config_.rigctld_server_bind_remote   = cfg.rigctld_server_bind_remote;
+    // Rig connection + audio device (persisted connection settings — see
+    // rig_auto_connect / audio_auto_open docs in ale_station_config.h). These
+    // are pure data on config_ (no runtime side effect here — the live radio /
+    // audio device is owned by the bridge, not the controller), so a plain
+    // copy is correct. Without this, import_settings() / RIG_CONNECT /
+    // AUDIO_OPEN would parse the fields into a local cfg that apply_config
+    // then drops, and save_state() would persist blanks.
+    config_.rig_model        = cfg.rig_model;
+    config_.rig_host         = cfg.rig_host;
+    config_.rig_port         = cfg.rig_port;
+    config_.rig_serial       = cfg.rig_serial;
+    config_.rig_baud         = cfg.rig_baud;
+    config_.rig_dtr           = cfg.rig_dtr;
+    config_.rig_rts           = cfg.rig_rts;
+    config_.rig_stab          = cfg.rig_stab;
+    config_.rig_ptt           = cfg.rig_ptt;
+    config_.rig_auto_connect = cfg.rig_auto_connect;
+    config_.audio_in         = cfg.audio_in;
+    config_.audio_out        = cfg.audio_out;
+    config_.audio_auto_open = cfg.audio_auto_open;
     config_.position_report_mode         = cfg.position_report_mode;
     config_.position_report_target       = cfg.position_report_target;
     config_.position_report_net          = cfg.position_report_net;
@@ -985,6 +1005,9 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.location_sharing_round_digits    = cfg.location_sharing_round_digits;
     config_.location_sharing_include_comment = cfg.location_sharing_include_comment;
     config_.location_sharing_queue_size      = cfg.location_sharing_queue_size;
+    config_.link_default_individual          = cfg.link_default_individual;
+    config_.link_default_group               = cfg.link_default_group;
+    config_.link_default_allcall             = cfg.link_default_allcall;
     update_propagation_context();
 }
 
@@ -1382,7 +1405,7 @@ std::string ALEController::send_amd(const std::string& target, const std::string
     // transmitted by broadcast_position_report()'s one-shot TWAS-only burst,
     // never through the normal calling/handshake/retry path below.
     if (target == "ALLCALL")
-        return broadcast_position_report(text);
+        return broadcast_position_report(text, link_after_send);
 
     // ── LINKED: send AMD over the established link as a single-burst ─────────
     // orderwire frame.  TO[peer] (+DATA/REP ext) ×2 + CMD AMD + message + TIS self
@@ -1449,7 +1472,28 @@ std::string ALEController::attempt_amd_send_(const std::string& target,
     return "OK: AMD queued, calling " + target;
 }
 
-std::string ALEController::broadcast_position_report(const std::string& text)
+std::string ALEController::send_amd_group(const std::vector<std::string>& members, const std::string& text,
+                                           bool link_after_send)
+{
+    if (text.empty())
+        return "ERROR: AMD requires message text (max 90 chars, Expanded-64)";
+    if (members.empty())
+        return "ERROR: group call requires at least one member";
+
+    ALEStateMachine::PendingMessage msg;
+    msg.type            = ALEStateMachine::PendingMessage::Type::AMD;
+    msg.content          = text;   // encode_amd() sanitises/truncates downstream in the SM
+    msg.link_after_send = link_after_send;
+    sm_.set_pending_message(msg);
+    if (!initiate_group_call(members)) {
+        sm_.set_pending_message(ALEStateMachine::PendingMessage{});  // can't call → abandon
+        return std::string("ERROR: cannot call in state ")
+               + ALEStateMachine::state_name(state());
+    }
+    return "OK: AMD queued, calling " + std::to_string(members.size()) + " member(s)";
+}
+
+std::string ALEController::broadcast_position_report(const std::string& text, bool link_after_send)
 {
     if (text.empty())
         return "ERROR: AMD requires message text (max 90 chars, Expanded-64)";
@@ -1458,7 +1502,17 @@ std::string ALEController::broadcast_position_report(const std::string& text)
         return "ERROR: no self address configured";
     if (sm_.is_allcall_broadcasting())
         return "ERROR: AllCall broadcast already in progress";
-    if (!sm_.send_allcall_broadcast(self, text))
+    // Same "call width" C resolution the normal calling path uses (see
+    // initiate_call()/resolve_sounding_C()) — there's no target contact to
+    // look a net up from for a broadcast, so this falls through the same
+    // named-net → auto-sounding-net → active-scan-net → assumed_scan_channels
+    // chain, preferring the configured Position Reports net when set.
+    // send_allcall_broadcast() reads target_scan_channels to size its
+    // scanning call (A.5.2.5.1) — without setting it here it would silently
+    // reuse whatever value the last individual call happened to leave behind.
+    const uint32_t C = resolve_sounding_C(config_.position_report_net);
+    sm_.set_target_scan_channels(C);
+    if (!sm_.send_allcall_broadcast(self, text, link_after_send))
         return std::string("ERROR: cannot broadcast in state ")
                + ALEStateMachine::state_name(state());
     return "OK: AllCall broadcast sent";
@@ -3821,6 +3875,19 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "rigctld_server_enabled=" << (config_.rigctld_server_enabled ? 1 : 0) << "\n";
     f << "rigctld_server_port=" << config_.rigctld_server_port << "\n";
     f << "rigctld_server_bind_remote=" << (config_.rigctld_server_bind_remote ? 1 : 0) << "\n";
+    f << "rig_model=" << config_.rig_model << "\n";
+    f << "rig_host=" << config_.rig_host << "\n";
+    f << "rig_port=" << config_.rig_port << "\n";
+    f << "rig_serial=" << config_.rig_serial << "\n";
+    f << "rig_baud=" << config_.rig_baud << "\n";
+    f << "rig_dtr=" << config_.rig_dtr << "\n";
+    f << "rig_rts=" << config_.rig_rts << "\n";
+    f << "rig_stab=" << config_.rig_stab << "\n";
+    f << "rig_ptt=" << config_.rig_ptt << "\n";
+    f << "rig_auto_connect=" << (config_.rig_auto_connect ? 1 : 0) << "\n";
+    f << "audio_in=" << config_.audio_in << "\n";
+    f << "audio_out=" << config_.audio_out << "\n";
+    f << "audio_auto_open=" << (config_.audio_auto_open ? 1 : 0) << "\n";
     f << "position_report_mode=" << static_cast<int>(config_.position_report_mode) << "\n";
     f << "position_report_target=" << config_.position_report_target << "\n";
     f << "position_report_net=" << config_.position_report_net << "\n";
@@ -3840,6 +3907,9 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "location_sharing_round_digits=" << static_cast<int>(config_.location_sharing_round_digits) << "\n";
     f << "location_sharing_include_comment=" << (config_.location_sharing_include_comment ? 1 : 0) << "\n";
     f << "location_sharing_queue_size=" << config_.location_sharing_queue_size << "\n";
+    f << "link_default_individual=" << (config_.link_default_individual ? 1 : 0) << "\n";
+    f << "link_default_group=" << (config_.link_default_group ? 1 : 0) << "\n";
+    f << "link_default_allcall=" << (config_.link_default_allcall ? 1 : 0) << "\n";
     const auto& stations = sm_.get_address_book().all_stations();
     if (!stations.empty()) {
         f << "\n# ALE address export\n";
@@ -3964,6 +4034,32 @@ bool ALEController::import_settings(const std::string& path)
             cfg.rigctld_server_port = static_cast<uint16_t>(std::stoul(val));
         } else if (key == "rigctld_server_bind_remote") {
             cfg.rigctld_server_bind_remote = (val == "1");
+        } else if (key == "rig_model") {
+            cfg.rig_model = val;
+        } else if (key == "rig_host") {
+            cfg.rig_host = val;
+        } else if (key == "rig_port") {
+            cfg.rig_port = val;
+        } else if (key == "rig_serial") {
+            cfg.rig_serial = val;
+        } else if (key == "rig_baud") {
+            cfg.rig_baud = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "rig_dtr") {
+            cfg.rig_dtr = val;
+        } else if (key == "rig_rts") {
+            cfg.rig_rts = val;
+        } else if (key == "rig_stab") {
+            cfg.rig_stab = static_cast<uint32_t>(std::stoul(val));
+        } else if (key == "rig_ptt") {
+            cfg.rig_ptt = val;
+        } else if (key == "rig_auto_connect") {
+            cfg.rig_auto_connect = (val == "1");
+        } else if (key == "audio_in") {
+            cfg.audio_in = val;
+        } else if (key == "audio_out") {
+            cfg.audio_out = val;
+        } else if (key == "audio_auto_open") {
+            cfg.audio_auto_open = (val == "1");
         } else if (key == "position_report_mode") {
             cfg.position_report_mode =
                 static_cast<ALEStationConfig::PositionReportMode>(std::stoi(val));
@@ -4004,6 +4100,12 @@ bool ALEController::import_settings(const std::string& path)
             cfg.location_sharing_include_comment = (val == "1");
         } else if (key == "location_sharing_queue_size") {
             cfg.location_sharing_queue_size = static_cast<uint16_t>(std::stoul(val));
+        } else if (key == "link_default_individual") {
+            cfg.link_default_individual = (val == "1");
+        } else if (key == "link_default_group") {
+            cfg.link_default_group = (val == "1");
+        } else if (key == "link_default_allcall") {
+            cfg.link_default_allcall = (val == "1");
         } else if (key == "station" && !val.empty()) {
             // station=callsign|name  (new format)
             const auto sep = val.find('|');
@@ -4017,7 +4119,10 @@ bool ALEController::import_settings(const std::string& path)
                 conf_stations.push_back({fields[0], fields.size() > 1 ? fields[1] : ""});
         }
         // net= / net_channel=: legacy keys, silently ignored (nets now in station file)
-        // audio_in / audio_out: bridge-level, silently ignored here
+        // voice_armed=: bridge-level (ctx.voice_armed), silently ignored here —
+        // only meaningful together with an actually-opened audio device, which
+        // this layer never owns (see audio_in/audio_out above and
+        // restart_audio_connection() in apps/ale_bridge.cpp).
     }
     apply_config(cfg);
     if (has_lqa_enabled) set_lqa_enabled(lqa_enabled_val);

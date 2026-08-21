@@ -391,6 +391,90 @@ struct BridgeCtx {
 
 // ── Command dispatch ────────────────────────────────────────────────────────
 //
+// Attach `spec` as the live radio, tearing down any existing one first. Shared
+// by RIG_CONNECT and the startup auto-reconnect path (restart_radio_connection)
+// so both go through one create/initialize/start/set_radio sequence. Empty
+// spec just tears down and returns false (None/Offline — not an error, caller
+// decides how to report that).
+static bool connect_radio(BridgeCtx& ctx, ALEController& ctrl, const std::string& spec) {
+    if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
+    if (spec.empty()) return false;
+    *ctx.radio = pal::create_radio(spec);
+    bool ok = *ctx.radio && (*ctx.radio)->initialize() && (*ctx.radio)->start();
+    if (ok) ctrl.set_radio(ctx.radio->get());
+    else    ctx.radio->reset();
+    return ok;
+}
+
+// Rebuild the mj::Value build_radio_spec() expects, from persisted config
+// instead of a live GUI message — used only by restart_radio_connection().
+static mj::Value rig_config_to_msg(const ALEStationConfig& cfg) {
+    mj::Value m = mj::obj();
+    m.set("model",  mj::Value::string(cfg.rig_model));
+    m.set("host",   mj::Value::string(cfg.rig_host));
+    m.set("port",   mj::Value::string(cfg.rig_port));
+    m.set("serial", mj::Value::string(cfg.rig_serial));
+    m.set("baud",   mj::Value::number(cfg.rig_baud));
+    m.set("dtr",    mj::Value::string(cfg.rig_dtr));
+    m.set("rts",    mj::Value::string(cfg.rig_rts));
+    m.set("stab",   mj::Value::number(cfg.rig_stab));
+    m.set("ptt",    mj::Value::string(cfg.rig_ptt));
+    return m;
+}
+
+// Re-attach the last-connected rig automatically at startup, mirroring how
+// restart_rigctld_server() below auto-starts from persisted config. Opt-in:
+// only armed when a prior RIG_CONNECT succeeded and no RIG_DISCONNECT
+// followed (see rig_auto_connect doc in ale_station_config.h).
+static void restart_radio_connection(BridgeCtx& ctx, ALEController& ctrl) {
+    const auto& cfg = ctrl.get_config();
+    if (!cfg.rig_auto_connect || cfg.rig_model.empty()) return;
+    const std::string spec = build_radio_spec(rig_config_to_msg(cfg));
+    if (connect_radio(ctx, ctrl, spec)) {
+        pal::log_info("openALE", "Rig auto-reconnect: attached model %s (%s)",
+                      cfg.rig_model.c_str(), ctrl.get_rig_connection_status().c_str());
+    } else {
+        pal::log_error("openALE", "Rig auto-reconnect: failed to attach model %s (%s)",
+                       cfg.rig_model.c_str(), spec.c_str());
+    }
+}
+
+// Open (or reopen) the audio device with the given RX/TX device names, tearing
+// down any existing device first. Shared by AUDIO_OPEN and the startup
+// auto-reopen path (restart_audio_connection). Identical to AUDIO_OPEN's
+// former inline body — just factored out so both call sites stay in sync.
+static bool open_audio(BridgeCtx& ctx, ALEController& ctrl,
+                        const std::string& in_dev, const std::string& out_dev) {
+    if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); }
+    *ctx.audio = make_audio_device();
+    const bool ok = (*ctx.audio)->open(in_dev, out_dev);
+    if (ok) {
+        ctrl.set_audio_device(ctx.audio->get());
+        (*ctx.audio)->set_tx_volume(ctx.tx_volume);
+        ctx.audio_in = in_dev; ctx.audio_out = out_dev;
+    } else {
+        ctx.audio->reset(); ctx.audio_in.clear(); ctx.audio_out.clear();
+    }
+    return ok;
+}
+
+// Re-open the last-used audio device automatically at startup, mirroring
+// restart_radio_connection() above. Opt-in: only armed when a prior
+// AUDIO_OPEN succeeded and no AUDIO_CLOSE followed (see audio_auto_open doc
+// in ale_station_config.h).
+static void restart_audio_connection(BridgeCtx& ctx, ALEController& ctrl) {
+    const auto& cfg = ctrl.get_config();
+    if (!cfg.audio_auto_open) return;
+    if (cfg.audio_in.empty() && cfg.audio_out.empty()) return;
+    if (open_audio(ctx, ctrl, cfg.audio_in, cfg.audio_out)) {
+        pal::log_info("openALE", "Audio auto-reopen: in='%s' out='%s'",
+                      cfg.audio_in.c_str(), cfg.audio_out.c_str());
+    } else {
+        pal::log_error("openALE", "Audio auto-reopen: failed to open in='%s' out='%s'",
+                       cfg.audio_in.c_str(), cfg.audio_out.c_str());
+    }
+}
+
 // Restart GPS and/or SFI services to match the current ALEController config.
 // Call after any config change that may affect position source or sfi_enabled.
 // Safe to call on a fresh BridgeCtx (stop() on un-started services is no-op).
@@ -562,7 +646,18 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.find("roster"))
             return pc(msg, ctrl, "CMD:GROUP_CALL " + msg.get_string("roster"));
         const mj::Value* members = msg.find("members");
-        const bool ok = members && ctrl.initiate_group_call(members->as_string_array());
+        if (!members) return mj::dump(make_reply(msg, false));
+        // Same optional {text, link} typed-dispatch pattern as "AMD": when text
+        // is present, queue an AMD on the group call instead of a plain call.
+        if (msg.has("text")) {
+            const std::string text = msg.get_string("text");
+            const bool link        = msg.get_bool("link", false);
+            const std::string resp = ctrl.send_amd_group(members->as_string_array(), text, link);
+            mj::Value r = make_reply(msg, resp.rfind("OK:", 0) == 0);
+            r.set("msg", mj::Value::string(resp));
+            return mj::dump(r);
+        }
+        const bool ok = ctrl.initiate_group_call(members->as_string_array());
         return mj::dump(make_reply(msg, ok));
     }
     if (cmd == "GROUP_ROSTERS_LIST") {
@@ -1006,6 +1101,9 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("sounding_use_twas"))          ctrl.set_sounding_use_twas(msg.get_bool("sounding_use_twas"));
         if (msg.has("sounding_warning_lead_sec"))        ctrl.set_sounding_warning_lead_sec(static_cast<uint32_t>(msg.get_number("sounding_warning_lead_sec")));
         if (msg.has("test_channel_link_hold_time"))      ctrl.set_test_channel_link_hold_time(static_cast<uint32_t>(msg.get_number("test_channel_link_hold_time")));
+        if (msg.has("link_default_individual"))          ctrl.set_link_default_individual(msg.get_bool("link_default_individual"));
+        if (msg.has("link_default_group"))                ctrl.set_link_default_group(msg.get_bool("link_default_group"));
+        if (msg.has("link_default_allcall"))              ctrl.set_link_default_allcall(msg.get_bool("link_default_allcall"));
         if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));
     }
@@ -1022,6 +1120,9 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("sounding_use_twas",                mj::Value::boolean(ctrl.get_sounding_use_twas()));
         r.set("sounding_warning_lead_sec",        mj::Value::number(ctrl.get_sounding_warning_lead_sec()));
         r.set("test_channel_link_hold_time",      mj::Value::number(ctrl.get_test_channel_link_hold_time()));
+        r.set("link_default_individual",          mj::Value::boolean(ctrl.get_link_default_individual()));
+        r.set("link_default_group",               mj::Value::boolean(ctrl.get_link_default_group()));
+        r.set("link_default_allcall",             mj::Value::boolean(ctrl.get_link_default_allcall()));
         return mj::dump(r);
     }
 
@@ -1226,26 +1327,52 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(r);
     }
     if (cmd == "AUDIO_OPEN") {
-        // Close any currently-open device first (detach from controller so the
-        // symbol source / completion arming are torn down before close()).
-        if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); }
-        *ctx.audio = make_audio_device();
         const std::string in_dev  = msg.get_string("in");
         const std::string out_dev = msg.get_string("out");
-        const bool ok = (*ctx.audio)->open(in_dev, out_dev);
+        const bool ok = open_audio(ctx, ctrl, in_dev, out_dev);
         if (ok) {
-            ctrl.set_audio_device(ctx.audio->get());
-            (*ctx.audio)->set_tx_volume(ctx.tx_volume);
-            ctx.audio_in = in_dev; ctx.audio_out = out_dev;
+            // Persist the device selection so it survives a restart — see
+            // audio_auto_open doc in ale_station_config.h. Same pattern as
+            // RIG_CONNECT / RIGCTLD_SET: start from the current config so
+            // unrelated settings are untouched.
+            ALEStationConfig cfg = ctrl.get_config();
+            cfg.audio_in        = in_dev;
+            cfg.audio_out       = out_dev;
+            cfg.audio_auto_open = true;
+            ctrl.apply_config(cfg);
+            if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         }
-        else    { ctx.audio->reset(); ctx.audio_in.clear(); ctx.audio_out.clear(); }
         mj::Value r = make_reply(msg, ok);
         if (!ok) r.set("error", mj::Value::string("could not open audio device(s)"));
         return mj::dump(r);
     }
     if (cmd == "AUDIO_CLOSE") {
         if (*ctx.audio) { ctrl.set_audio_device(nullptr); (*ctx.audio)->close(); ctx.audio->reset(); }
+        // An explicit close disarms auto-reopen-on-startup — keep the saved
+        // device names (AUDIO_CONFIG_GET still hydrates the GUI with them,
+        // and SETTINGS_EXPORT still records "last successfully opened") but
+        // don't silently reopen them again on the next launch.
+        if (ctrl.get_config().audio_auto_open) {
+            ALEStationConfig cfg = ctrl.get_config();
+            cfg.audio_auto_open = false;
+            ctrl.apply_config(cfg);
+            if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
+        }
         return mj::dump(make_reply(msg, true));
+    }
+    if (cmd == "AUDIO_CONFIG_GET") {
+        // Saved device selection for the GUI to hydrate the Audio panel on
+        // load — see audio_auto_open doc in ale_station_config.h. Distinct
+        // from AUDIO_DEVICES (enumerates what's available) and AUDIO_LEVEL
+        // (live meter) — this reports the saved configuration plus whether
+        // it's currently attached.
+        mj::Value r = make_reply(msg, true);
+        const auto& cfg = ctrl.get_config();
+        r.set("in",           mj::Value::string(cfg.audio_in));
+        r.set("out",          mj::Value::string(cfg.audio_out));
+        r.set("auto_open",    mj::Value::boolean(cfg.audio_auto_open));
+        r.set("connected",    mj::Value::boolean(static_cast<bool>(*ctx.audio)));
+        return mj::dump(r);
     }
     // ── Voice passthrough (dynamic audio-path management) ───────────────────
     // VOICE_ARM arms/disarms voice capability. When armed, a link_established
@@ -1320,19 +1447,34 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(r);
     }
     if (cmd == "RIG_CONNECT") {
-        // Tear down any existing radio first.
-        if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
         const std::string spec = build_radio_spec(msg);
         if (spec.empty()) {  // empty model → None / Offline, stay disconnected, succeed
+            connect_radio(ctx, ctrl, spec);  // still tears down any existing radio
             mj::Value r = make_reply(msg, true);
             r.set("connected", mj::Value::boolean(false));
             r.set("status", mj::Value::string("not attached"));
             return mj::dump(r);
         }
-        *ctx.radio = pal::create_radio(spec);
-        bool ok = *ctx.radio && (*ctx.radio)->initialize() && (*ctx.radio)->start();
-        if (ok) ctrl.set_radio(ctx.radio->get());
-        else    ctx.radio->reset();
+        const bool ok = connect_radio(ctx, ctrl, spec);
+        if (ok) {
+            // Persist the connection so it survives a restart — see
+            // rig_auto_connect doc in ale_station_config.h. Started from the
+            // current config (not defaults) so unrelated settings are untouched,
+            // same pattern as RIGCTLD_SET below.
+            ALEStationConfig cfg = ctrl.get_config();
+            cfg.rig_model        = msg.get_string("model", "");
+            cfg.rig_host         = msg.get_string("host", "127.0.0.1");
+            cfg.rig_port         = msg.get_string("port", "4532");
+            cfg.rig_serial       = msg.get_string("serial", "");
+            cfg.rig_baud         = static_cast<uint32_t>(msg.get_number("baud", 0));
+            cfg.rig_dtr          = msg.get_string("dtr", "on");
+            cfg.rig_rts          = msg.get_string("rts", "on");
+            cfg.rig_stab         = static_cast<uint32_t>(msg.get_number("stab", 200));
+            cfg.rig_ptt          = msg.get_string("ptt", "normal");
+            cfg.rig_auto_connect = true;
+            ctrl.apply_config(cfg);
+            if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
+        }
 
         mj::Value r = make_reply(msg, ok);
         r.set("connected", mj::Value::boolean(ok && ctrl.test_rig_connection()));
@@ -1341,7 +1483,16 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         return mj::dump(r);
     }
     if (cmd == "RIG_DISCONNECT") {
-        if (*ctx.radio) { ctrl.set_radio(nullptr); (*ctx.radio)->stop(); ctx.radio->reset(); }
+        connect_radio(ctx, ctrl, "");  // tears down any existing radio, no-op if none attached
+        // An explicit disconnect disarms auto-reconnect-on-startup — keep the
+        // saved model/port fields (RIG_GET still hydrates the GUI with them)
+        // but don't silently key the radio up again on the next launch.
+        if (ctrl.get_config().rig_auto_connect) {
+            ALEStationConfig cfg = ctrl.get_config();
+            cfg.rig_auto_connect = false;
+            ctrl.apply_config(cfg);
+            if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
+        }
         mj::Value r = make_reply(msg, true);
         r.set("connected", mj::Value::boolean(false));
         r.set("status", mj::Value::string("not attached"));
@@ -1351,6 +1502,25 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         mj::Value r = make_reply(msg, true);
         r.set("connected", mj::Value::boolean(ctrl.test_rig_connection()));
         r.set("status", mj::Value::string(ctrl.get_rig_connection_status()));
+        return mj::dump(r);
+    }
+    if (cmd == "RIG_GET") {
+        // Saved connection settings (model/port/dtr/rts/ptt/...) for the GUI to
+        // hydrate the Radio/CAT panel on load — see rig_auto_connect doc in
+        // ale_station_config.h. Distinct from RIG_STATUS, which reports the
+        // live attach state, not the saved configuration.
+        mj::Value r = make_reply(msg, true);
+        const auto& cfg = ctrl.get_config();
+        r.set("model",        mj::Value::string(cfg.rig_model));
+        r.set("host",         mj::Value::string(cfg.rig_host));
+        r.set("port",         mj::Value::string(cfg.rig_port));
+        r.set("serial",       mj::Value::string(cfg.rig_serial));
+        r.set("baud",         mj::Value::number(cfg.rig_baud));
+        r.set("dtr",          mj::Value::string(cfg.rig_dtr));
+        r.set("rts",          mj::Value::string(cfg.rig_rts));
+        r.set("stab",         mj::Value::number(cfg.rig_stab));
+        r.set("ptt",          mj::Value::string(cfg.rig_ptt));
+        r.set("auto_connect", mj::Value::boolean(cfg.rig_auto_connect));
         return mj::dump(r);
     }
     if (cmd == "RIG_LIST") {
@@ -1524,8 +1694,11 @@ int main(int argc, char* argv[]) {
 
     auto timer = pal::create_timer();
 
-    // Audio device and radio start detached (offline). The GUI attaches them at
-    // runtime via AUDIO_OPEN / RIG_CONNECT — there are no startup flags for them.
+    // Audio device and radio both start detached (offline) here — there are
+    // no startup flags for either. restart_audio_connection() /
+    // restart_radio_connection() below re-attach them from persisted config a
+    // few lines down if audio_auto_open / rig_auto_connect was armed by a
+    // prior AUDIO_OPEN / RIG_CONNECT.
     std::unique_ptr<AudioDevice> audio;
     std::unique_ptr<pal::IRadio> radio;
 
@@ -1637,6 +1810,16 @@ int main(int argc, char* argv[]) {
     // already starts inline from persisted config a few lines above. This
     // call makes the three behave the same way.
     restart_location_services(ctx, ctrl);
+
+    // Re-attach the last-connected rig from persisted config (station.state,
+    // loaded above), if a prior RIG_CONNECT armed rig_auto_connect and no
+    // RIG_DISCONNECT followed since. See restart_radio_connection() for details.
+    restart_radio_connection(ctx, ctrl);
+
+    // Re-open the last-used audio device from persisted config, if a prior
+    // AUDIO_OPEN armed audio_auto_open and no AUDIO_CLOSE followed since.
+    // See restart_audio_connection() for details.
+    restart_audio_connection(ctx, ctrl);
 
     // ── Event bus subscriptions ──────────────────────────────────────────
     // All ALEController events arrive via the global PAL event handler.

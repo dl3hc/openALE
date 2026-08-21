@@ -221,6 +221,28 @@ void ALEStateMachine::update(uint32_t now_ms) {
         return;
     }
 
+    // ── ALLCALL broadcast TX-drain safety net ───────────────────────────────
+    // Flag-gated, not state-gated: current_state stays IDLE/SCANNING for the
+    // whole broadcast (see send_allcall_broadcast() / on_word_complete()'s
+    // allcall_broadcasting_ branch), and IDLE has no handle_*() below at all,
+    // so this can't live inside a per-state handler the way the other
+    // TX-drain safety nets do (handle_linked's linked_terminating_/
+    // orderwire_transmitting_, handle_calling's SENDING_ACK/SENDING_RESPONSE).
+    // Same purpose as those: if on_word_complete() never drains words_pending
+    // to 0 (audio stall, or a transmit_callback that doesn't arm the
+    // completion), the broadcast would otherwise leave RX disabled forever
+    // with nothing else to recover it. No state transition happens here to
+    // trigger enter_state()'s words_pending reset, so it's cleared explicitly.
+    if (allcall_broadcasting_ && tx_drain_start_ms_ != 0 &&
+        (current_time_ms - tx_drain_start_ms_) >= tx_drain_deadline_ms_) {
+        SM_TRACE("[TRACE] update: AllCall broadcast drain timeout — force-recovering\n");
+        allcall_broadcasting_ = false;
+        tx_drain_start_ms_    = 0;
+        words_pending         = 0;
+        if (rx_enabled_callback) rx_enabled_callback(true);
+        return;
+    }
+
     switch (current_state) {
         case ALEState::SCANNING:  handle_scanning();  break;
         case ALEState::CALLING:   handle_calling();   break;
@@ -331,6 +353,7 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             twce_start_ms       = current_time_ms;
             hs_tlww_start_ms    = 0;
             hs_conclusion_rcvd  = false;
+            hs_conclusion_is_twas_ = false;
             caller_address.clear();
             hs_words_in_phase   = 0;
             hs_ack_start_ms     = 0;
@@ -663,6 +686,18 @@ void ALEStateMachine::handle_handshake() {
             // the extension was appended, truncating the caller address.
             if (hs_conclusion_rcvd && hs_tlww_start_ms > 0 &&
                 (current_time_ms - hs_tlww_start_ms) >= ALETimingConstants::Tdrw_ms) {
+                if (hs_conclusion_is_twas_) {
+                    // TWAS conclusion (A.5.5.3.2 individual-call rejection, or
+                    // A.5.5.4.4 AllCall/wildcard "resume scanning, don't
+                    // respond") — caller_address is now fully settled
+                    // (multi-word extensions included, via the same
+                    // DATA_EXTENSION path TIS uses), so on_sm_state_change()
+                    // will correctly attribute any AMD already reassembled by
+                    // rx_accumulate_call_amd() before this abort discards it.
+                    SM_TRACE("[TRACE] handle_handshake: TWAS conclusion settle → LINK_TIMEOUT\n");
+                    process_event(ALEEvent::LINK_TIMEOUT);
+                    return;
+                }
                 // AllCall (A.5.5.4.4): one-way broadcast — no response frame.  On
                 // TIS conclusion, link directly to the caller (the conclusion
                 // carries the caller's real address; the AllCall address never
@@ -1323,6 +1358,33 @@ bool ALEStateMachine::initiate_group_call(const std::vector<std::string>& member
     conclusion_seq_ = ALESequenceBuilder::conclusion(address_book.get_self_address());
     scanning_seq_   = group_scan_seq_;   // unified entry point for enqueue_call_sequence_()
 
+    // Snapshot AMD orderwire and release the pending slot so the user can queue
+    // the next message immediately.  active_message_ persists across channel retries.
+    active_message_  = pending_message;
+    pending_message  = PendingMessage{};
+
+    // Calling-frame AMD words (Ion2G-style, replaces the old ACK-frame embedding):
+    // FROM[self] self-ID + the AMD CMD/DATA/REP payload. Both empty ALESequence{}
+    // unless active_message_.type==AMD — this is the ONLY gate that puts extra
+    // words on the air, so a plain group call (active_message_.type==NONE) is
+    // byte-identical to before this feature: enqueue_call_sequence_() and the
+    // LEADING_CALL slot-count both simply append/count zero words below.
+    const bool has_amd = (active_message_.type == PendingMessage::Type::AMD)
+                       && !active_message_.content.empty();
+    active_amd_from_seq_ = has_amd
+        ? ALESequenceBuilder::from_id(address_book.get_self_address()) : ALESequence{};
+    active_amd_words_ = has_amd
+        ? ALESequence(encode_amd(active_message_.content)) : ALESequence{};
+
+    // Snapshot CMD LQA and LQA report; both survive channel retries like active_message_.
+    active_lqa_cmd_seq_ = pending_lqa_cmd_set_
+        ? ALESequenceBuilder::lqa_cmd(pending_lqa_cmd_raw_) : ALESequence{};
+    pending_lqa_cmd_set_ = false;
+
+    active_lqa_report_seq_ = pending_lqa_report_set_
+        ? pending_lqa_report_seq_ : ALESequence{};
+    pending_lqa_report_set_ = false;
+
     return process_event(ALEEvent::CALL_REQUEST);
 }
 
@@ -1387,7 +1449,8 @@ bool ALEStateMachine::send_sounding_sweep(const std::vector<Channel>& channels) 
     return process_event(ALEEvent::SOUNDING_REQUEST);
 }
 
-bool ALEStateMachine::send_allcall_broadcast(const std::string& self_addr, const std::string& text) {
+bool ALEStateMachine::send_allcall_broadcast(const std::string& self_addr, const std::string& text,
+                                              bool link_after_send) {
     check_thread_();
     if (current_state != ALEState::IDLE && current_state != ALEState::SCANNING) return false;
     if (allcall_broadcasting_) return false;  // one in flight — see is_allcall_broadcasting()
@@ -1399,9 +1462,19 @@ bool ALEStateMachine::send_allcall_broadcast(const std::string& self_addr, const
     // already valid Basic-38 (A-Z, 0-9, @, ?), no length/charset special-case
     // needed anywhere else in the address path.
     static constexpr const char* kGlobalAllCallAddr = "@?@";
-    std::vector<ALEWord> words = ALESequenceBuilder::leading_call(kGlobalAllCallAddr).words();
-    const auto from = ALESequenceBuilder::from_id(self_addr).words();
-    const auto twas = ALESequenceBuilder::conclusion(self_addr, /*is_reject=*/true).words();
+    // Full standard calling routine (A.5.2.5.1 scanning call + A.5.5.3.1
+    // leading call) — a scanning call section MUST precede the leading call,
+    // sized to the same "call width" C the normal calling path uses
+    // (Tsc = C×2×Trw, see target_scan_channels / initiate_call() /
+    // ALEController::resolve_sounding_C()). Without it, a listening station
+    // only catches the broadcast if its scan dwell already happens to be on
+    // this channel at this instant — the scanning call is what lets a station
+    // mid-hop elsewhere still lock on before the leading call starts.
+    std::vector<ALEWord> words   = ALESequenceBuilder::scanning_call(kGlobalAllCallAddr, target_scan_channels).words();
+    const auto leading = ALESequenceBuilder::leading_call(kGlobalAllCallAddr).words();
+    const auto from    = ALESequenceBuilder::from_id(self_addr).words();
+    const auto twas    = ALESequenceBuilder::conclusion(self_addr, /*is_reject=*/!link_after_send).words();
+    words.insert(words.end(), leading.begin(), leading.end());
     words.insert(words.end(), from.begin(), from.end());
     words.insert(words.end(), amd.begin(), amd.end());
     words.insert(words.end(), twas.begin(), twas.end());
@@ -1409,6 +1482,21 @@ bool ALEStateMachine::send_allcall_broadcast(const std::string& self_addr, const
     allcall_broadcasting_ = true;
     if (rx_enabled_callback) rx_enabled_callback(false);
     transmit_words(words);
+    // Arm the TX-drain safety net (see the ALLCALL branch in update(), right
+    // after check_link_timeout()) — without it, an audio stall or a
+    // transmit_callback that never arms on_word_complete() would leave RX
+    // disabled forever with nothing to recover it, since this path stays in
+    // IDLE/SCANNING the whole time (no state transition to fall back on).
+    // Scaled to the words just queued, same formula the orderwire burst uses
+    // (words.size() == words_pending here, since transmit_words() just set
+    // it from 0) — the scanning call alone can be C×2 words, easily past the
+    // flat TX_DRAIN_TIMEOUT_MS for a large net.
+    if (words_pending > 0) {
+        tx_drain_start_ms_    = current_time_ms;
+        tx_drain_deadline_ms_ = std::max(
+            ALETimingConstants::TX_DRAIN_TIMEOUT_MS,
+            words_pending * ALETimingConstants::Trw_ms + 2u * ALETimingConstants::Trw_ms);
+    }
     return true;
 }
 
@@ -1824,6 +1912,7 @@ void ALEStateMachine::on_word_complete() {
         if (words_pending > 0) --words_pending;
         if (words_pending == 0) {
             allcall_broadcasting_ = false;
+            tx_drain_start_ms_    = 0;  // disarm the drain safety net (update())
             if (rx_enabled_callback) rx_enabled_callback(true);
         }
         return;

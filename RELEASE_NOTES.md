@@ -23,6 +23,18 @@ handshake frame becomes a pure link/no-link decision by the sender: leave it unc
 message-only delivery, or tick the new **Link** checkbox next to the AMD send box to keep
 the link established afterward, same as before.
 
+**Rig & audio settings survive a restart.** The Hamlib rig model, COM port, DTR/RTS, and
+PTT method — and the audio input/output device — are now saved when you connect, and
+openALE re-attaches both automatically on the next launch. An explicit Disconnect / Close
+disarms auto-reconnect for that item (so a deliberate disconnect stays disconnected next
+time) but keeps the saved values pre-filled for a one-click reconnect.
+
+**ALLCALL broadcasts reach scanning stations and can carry free-text AMD.** A broadcast
+now sends a standard scanning-call section before the leading call (A.5.2.5.1), so a
+station scanning elsewhere can lock on before the leading call starts. A pinned
+"ALLCALL" pseudo-contact in the Contacts list (both GUIs) lets you broadcast free-text
+AMD to all stations, not just position reports.
+
 ## New Features
 
 - **ALE-GPR position reports**: Settings ▸ Location ▸ Position Reports lets you send a
@@ -40,6 +52,18 @@ the link established afterward, same as before.
 - Messages panel redesigned with clearer sent/received direction styling and a delivery
   status pill (pending / delivered / not delivered) on sent messages, driven by real
   handshake outcomes instead of assuming a queued send succeeded.
+- **Connection persistence**: the rig model, COM port, baud, DTR/RTS, settle time, and
+  PTT method — plus the audio input/output device — are saved on a successful Connect /
+  Open and re-attached automatically on the next launch. Explicit Disconnect / Close
+  disarms auto-reconnect for that item but keeps the saved values pre-filled.
+- **Pinned ALLCALL contact**: a pseudo-contact in the Contacts list (both GUIs) lets you
+  broadcast free-text AMD to all stations, not just position reports.
+- **Group AMD**: AMD can now be sent to a multi-member group call, riding the group
+  calling frame the same way individual AMD rides an individual call.
+- **Link Policy defaults**: Settings ▸ Policy ▸ Link Policy sets the default TIS/TWAS
+  conclusion per destination type (Individual / Group / ALLCALL). The compose-row **Link**
+  checkbox is pre-filled from these and remains overridable per send. ALLCALL broadcasts
+  now also support the **Link** option (TIS conclusion) instead of always fire-and-forget.
 
 ## Fixes
 
@@ -59,6 +83,20 @@ the link established afterward, same as before.
   when only an unrelated field (e.g. the SFI toggle) was being updated through the same
   bridge command — this could silently clobber a configured GPS/NMEA position source back
   to Manual.
+- ALLCALL broadcasts were sent as a leading call only — no preceding scanning-call
+  section (A.5.2.5.1) — so a station scanning another channel could not lock on before
+  the leading call started. A scanning call sized to the same call width C now precedes
+  the broadcast.
+- Received ALLCALL/wildcard position reports (and any AMD in a TWAS-concluded calling
+  frame) were silently dropped: the TWAS conclusion never captured the caller's address,
+  so the report had no attributed sender. TWAS conclusions now settle the caller identity
+  the same way TIS does (multi-word extensions included), then abort without linking.
+- An ALLCALL broadcast whose audio stalled could leave RX disabled permanently — the
+  broadcast stays in IDLE/SCANNING the whole time with no state transition to recover it.
+  A TX-drain safety net now force-recovers the path.
+- `apply_config()` did not propagate the rig- and audio-connection fields into the live
+  config, so the new persistence would have silently no-op'd (saved values never reached
+  the auto-reconnect path).
 
 ## Other
 

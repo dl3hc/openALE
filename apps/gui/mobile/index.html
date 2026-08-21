@@ -237,7 +237,7 @@
           <textarea class="msg-input" id="msgInput" rows="2" placeholder="AMD message — max 90 chars, caps…" maxlength="90"
             oninput="updateMsgCount()"
             onkeydown="if(event.key==='Enter'){event.preventDefault();sendAmd();}"></textarea>
-          <label class="msg-link-toggle" title="Keep the link established after this message is delivered">
+          <label class="msg-link-toggle" id="msgLinkLabel" title="Keep the link established after this message is delivered">
             <input type="checkbox" id="msgLinkAfterSend">
             Link
           </label>
@@ -1310,6 +1310,34 @@
           </div>
           <div class="fhint" style="margin-top:6px">
             Governs which inbound frames the controller answers or displays. Calls from disabled or unlisted addresses are dropped unless <em style="font-style:normal;color:var(--accent)">Accept Any Call</em> is on.
+          </div>
+
+          <div class="ssec-title" style="margin-top:16px">Link Policy</div>
+          <div class="fg">
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">Individual Calls</div>
+                <div class="ftoggle-desc">Default TIS/TWAS for a fresh AMD send to a single contact. TIS keeps the link open (frame 3); TWAS delivers the message and lets the handshake conclude. The compose-row Link checkbox is pre-filled from this and is always overridable per send.</div>
+              </div>
+              <label class="ftoggle"><input type="checkbox" id="cfgLinkDefaultIndividual" onchange="applyTimingToBridge()"><span class="ftrack"></span></label>
+            </div>
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">Group Calls</div>
+                <div class="ftoggle-desc">Same default, for AMD sent to a multi-member group call.</div>
+              </div>
+              <label class="ftoggle"><input type="checkbox" id="cfgLinkDefaultGroup" onchange="applyTimingToBridge()"><span class="ftrack"></span></label>
+            </div>
+            <div class="ftoggle-row">
+              <div class="ftoggle-info">
+                <div class="ftoggle-name">ALLCALL</div>
+                <div class="ftoggle-desc">Same default, for AMD broadcast to the pinned ALLCALL entry.</div>
+              </div>
+              <label class="ftoggle"><input type="checkbox" id="cfgLinkDefaultAllcall" onchange="applyTimingToBridge()"><span class="ftrack"></span></label>
+            </div>
+          </div>
+          <div class="fhint" style="margin-top:6px">
+            This is the TX-side counterpart of Acceptance Policy above (what I offer by default when I initiate, vs. what I accept from others). Periodic Sounding has its own separate Conclusion Type control in the header Sound panel — not affected by this section.
           </div>
         </div><!-- /policy -->
 

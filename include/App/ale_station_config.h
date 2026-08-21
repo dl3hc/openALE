@@ -8,7 +8,6 @@
  * Was NICHT hier steht:
  *  - Channel / Net / Contact / SelfAddressEntry  — eigene Datenstores
  *  - TimingParameters in ale_timing.h            — Protokoll-Konstanten
- *  - Audiogerät, Rig-Backend                     — Laufzeit-Session-Parameter
  */
 #pragma once
 #include <cstdint>
@@ -168,6 +167,48 @@ struct ALEStationConfig {
     uint8_t     location_sharing_round_digits    = 2;      ///< lat/lon rounding (privacy + dedup)
     bool        location_sharing_include_comment = false;  ///< forward the GPR comment field
     uint16_t    location_sharing_queue_size      = 64;      ///< bounded outbound queue
+
+    // ── Link-intent defaults (TIS invites a link, TWAS = fire-and-forget) ──
+    // Settings-level defaults per destination type; the GUI's per-send "Link"
+    // checkbox is pre-filled from these but always overridable. All default
+    // false (TWAS/no-link) — matches current hardcoded behavior exactly, so
+    // this ships with zero behavior change until an operator opts in.
+    bool link_default_individual = false;
+    bool link_default_group      = false;
+    bool link_default_allcall    = false;
+
+    // ── Rig connection (Hamlib CAT) ────────────────────────────────────────
+    // Mirrors the fields the GUI's rigArgs() sends to RIG_CONNECT (see
+    // build_radio_spec() in apps/ale_bridge.cpp). Saved on every successful
+    // RIG_CONNECT so the operator's rig selection and port settings survive
+    // a restart instead of reverting to "None / Offline" every time.
+    std::string rig_model         = "";     ///< Hamlib model ID as string; "" = None/Offline
+    std::string rig_host          = "127.0.0.1"; ///< network backends (NET rigctl, FLRig, ...)
+    std::string rig_port          = "4532";      ///< network backends' TCP port (string, not rigctld_server_port)
+    std::string rig_serial        = "";     ///< serial device, e.g. "COM3" / "/dev/ttyUSB0"
+    uint32_t    rig_baud          = 0;      ///< 0 = rig-caps default
+    std::string rig_dtr           = "on";   ///< "on"/"off"/"unset"
+    std::string rig_rts           = "on";   ///< "on"/"off"/"unset"
+    uint32_t    rig_stab          = 200;    ///< post-open line-state settle time (ms)
+    std::string rig_ptt           = "normal"; ///< "normal"/"mic"/"data" CAT PTT audio-input select
+    /// true = re-attach rig_model with the saved settings automatically on
+    /// bridge startup (mirrors rigctld_server_enabled's own-config-driven
+    /// auto-start). Set whenever RIG_CONNECT succeeds; cleared on an explicit
+    /// RIG_DISCONNECT so a deliberate disconnect does not silently reconnect
+    /// on the next launch.
+    bool        rig_auto_connect  = false;
+
+    // ── Audio device ────────────────────────────────────────────────────────
+    // Mirrors the fields the GUI's AUDIO_OPEN sends (see apps/ale_bridge.cpp).
+    // Saved on every successful AUDIO_OPEN so the operator's device selection
+    // survives a restart instead of reverting to "no device" every time.
+    std::string audio_in           = "";    ///< RX (capture) device, bare name (no "IN: " prefix)
+    std::string audio_out          = "";    ///< TX (render) device, bare name (no "OUT: " prefix)
+    /// true = re-open audio_in/audio_out automatically on bridge startup
+    /// (mirrors rig_auto_connect). Set whenever AUDIO_OPEN succeeds; cleared
+    /// on an explicit AUDIO_CLOSE so a deliberate close does not silently
+    /// reopen on the next launch.
+    bool        audio_auto_open    = false;
 
     // ── rigctld/netrigctl-compatible read-only TCP server (Tuner) ─────────
     /// true = accept local netrigctl clients (Hamlib RIG_MODEL_NETRIGCTL)
