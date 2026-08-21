@@ -149,7 +149,8 @@ void GpsService::stop() {
     if (nmea_thread_.joinable()) nmea_thread_.join();
     // Reset fix state on stop
     std::lock_guard<std::mutex> g(fix_mtx_);
-    fix_valid_ = false;
+    fix_valid_   = false;
+    fix_has_alt_ = false;
 }
 
 bool GpsService::has_fix() const {
@@ -165,14 +166,28 @@ double GpsService::lon() const {
     return fix_lon_;
 }
 
-void GpsService::update_fix(bool valid, double lat, double lon) {
+bool GpsService::has_altitude() const {
+    std::lock_guard<std::mutex> g(fix_mtx_);
+    return fix_valid_ && fix_has_alt_;
+}
+double GpsService::alt() const {
+    std::lock_guard<std::mutex> g(fix_mtx_);
+    return fix_alt_;
+}
+std::string GpsService::raw_gga() const {
+    std::lock_guard<std::mutex> g(fix_mtx_);
+    return raw_gga_;
+}
+
+void GpsService::update_fix(bool valid, double lat, double lon, bool has_alt, double alt) {
     bool changed;
     {
         std::lock_guard<std::mutex> g(fix_mtx_);
         changed = (valid != fix_valid_) ||
                   (valid && (lat != fix_lat_ || lon != fix_lon_));
-        fix_valid_ = valid;
-        if (valid) { fix_lat_ = lat; fix_lon_ = lon; }
+        fix_valid_   = valid;
+        fix_has_alt_ = valid && has_alt;
+        if (valid) { fix_lat_ = lat; fix_lon_ = lon; fix_alt_ = has_alt ? alt : 0.0; }
     }
     if (changed) {
         std::lock_guard<std::mutex> g(cb_mtx_);
@@ -208,8 +223,9 @@ void GpsService::gpsd_loop(Config cfg) {
                 linebuf.erase(0, pos + 1);
                 if (line.find("\"class\":\"TPV\"") != std::string::npos) {
                     double lat, lon; bool fix_ok;
-                    if (parse_tpv_json(line, lat, lon, fix_ok))
-                        update_fix(fix_ok, lat, lon);
+                    bool has_alt; double alt;
+                    if (parse_tpv_json(line, lat, lon, fix_ok, has_alt, alt))
+                        update_fix(fix_ok, lat, lon, has_alt, alt);
                 }
             }
         }
@@ -242,8 +258,11 @@ void GpsService::nmea_loop(Config cfg) {
                 if (linebuf.size() > 6) {
                     const std::string prefix = linebuf.substr(0, 6);
                     if (prefix == "$GPGGA" || prefix == "$GNGGA") {
-                        if (parse_gpgga(linebuf, lat, lon))
-                            update_fix(true, lat, lon);
+                        bool has_alt; double alt;
+                        if (parse_gpgga(linebuf, lat, lon, has_alt, alt)) {
+                            { std::lock_guard<std::mutex> g(fix_mtx_); raw_gga_ = linebuf; }
+                            update_fix(true, lat, lon, has_alt, alt);
+                        }
                     } else if (prefix == "$GPRMC" || prefix == "$GNRMC") {
                         if (parse_gprmc(linebuf, lat, lon, active))
                             update_fix(active, lat, lon);
@@ -264,14 +283,16 @@ void GpsService::nmea_loop(Config cfg) {
 // ── Static parsers ─────────────────────────────────────────────────────────────
 
 bool GpsService::parse_tpv_json(const std::string& json,
-                                 double& lat, double& lon, bool& fix_ok)
+                                 double& lat, double& lon, bool& fix_ok,
+                                 bool& has_alt, double& alt)
 {
     // Hand-rolled token search: no external JSON dep.
-    auto find_num = [&](const std::string& key) -> double {
+    auto find_num = [&](const std::string& key, bool& found) -> double {
         const size_t p = json.find("\"" + key + "\":");
-        if (p == std::string::npos) return 0.0;
+        if (p == std::string::npos) { found = false; return 0.0; }
         size_t vs = json.find_first_of("-0123456789", p + key.size() + 3);
-        if (vs == std::string::npos) return 0.0;
+        if (vs == std::string::npos) { found = false; return 0.0; }
+        found = true;
         return std::stod(json.substr(vs));
     };
 
@@ -283,8 +304,10 @@ bool GpsService::parse_tpv_json(const std::string& json,
     const int mode = std::stoi(json.substr(vs));
     fix_ok = (mode >= 2);
 
-    lat = find_num("lat");
-    lon = find_num("lon");
+    bool found;
+    lat = find_num("lat", found);
+    lon = find_num("lon", found);
+    alt = find_num("alt", has_alt);  // gpsd TPV "alt" (MSL altitude, meters)
     return true;
 }
 
@@ -313,14 +336,17 @@ static std::vector<std::string> nmea_split(const std::string& s) {
     return fields;
 }
 
-bool GpsService::parse_gpgga(const std::string& s, double& lat, double& lon) {
-    // $GPGGA,time,lat,N,lon,E,quality,...
+bool GpsService::parse_gpgga(const std::string& s, double& lat, double& lon,
+                              bool& has_alt, double& alt) {
+    // $GPGGA,time,lat,N,lon,E,quality,numSV,HDOP,alt,altUnit,...
     auto f = nmea_split(s);
     if (f.size() < 7) return false;
     if (f[6].empty() || f[6] == "0") return false;  // quality 0 = no fix
     if (f[2].empty() || f[4].empty()) return false;
     lat = nmea_coord(f[2], f[3]);
     lon = nmea_coord(f[4], f[5]);
+    has_alt = (f.size() > 9 && !f[9].empty());
+    alt = has_alt ? std::stod(f[9]) : 0.0;  // field 9 = MSL altitude, meters
     return true;
 }
 
