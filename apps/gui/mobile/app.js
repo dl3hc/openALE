@@ -166,7 +166,8 @@ function syncAllFromBridge() {
   syncAudioMonitorFromBridge();     // pull channel-monitor ("listen in") state from core
   enumVoiceDevices();               // populate browser mic/speaker selectors
   pollRigStatus();   // establish initial radio-control lock state
-  populateRigDropdown();
+  syncRigFromBridge();  // hydrate model/COM-port/DTR/RTS/PTT from saved config
+  syncAudioConfigFromBridge();  // hydrate audio device selection + open state from saved config
   // Always PULL core state into the GUI on connect — never push stale DOM
   // values here. The DOM only reflects whatever the browser last rendered
   // (page-load HTML defaults, or leftovers from a previous session); pushing
@@ -1827,6 +1828,12 @@ let contacts = [];
 let selectedContacts = [];   // multi-select array of contact objects; 1 → 1:1 call, >1 → group call
 let editingContactCs = null;
 
+// Synthetic pinned "contact" for the ALLCALL broadcast address (A.5.2.4.7).
+// Not a real contact — never persisted, never sent via CONTACT_SELECT/CALL.
+// Mutually exclusive with real-contact multi-select (see toggleContact()/
+// toggleAllcallContact()) — mixing it into a group call makes no sense.
+const ALLCALL_CONTACT = { cs: 'ALLCALL', name: 'All stations', fav: false, allcall: true };
+
 function renderContacts() {
   const q  = (document.getElementById('contactSearch')?.value || '').toUpperCase();
   const el = document.getElementById('contactList');
@@ -1835,15 +1842,19 @@ function renderContacts() {
     .filter(c => !q || c.cs.toUpperCase().includes(q) || (c.name||'').toUpperCase().includes(q))
     .sort((a,b) => (b.fav?1:0) - (a.fav?1:0));
   // Drop any selections that no longer exist.
-  selectedContacts = selectedContacts.filter(c => contacts.includes(c));
+  selectedContacts = selectedContacts.filter(c => c === ALLCALL_CONTACT || contacts.includes(c));
 
   const n = selectedContacts.length;
+  const isAllcall = selectedContacts.includes(ALLCALL_CONTACT);
   const cb = document.getElementById('callBtn');
-  if (cb) cb.disabled = n === 0;
+  // Can't establish a link to ALLCALL (A.5.5.4.4 — one-way, no response) —
+  // Messages (sendAmd) is the only way to use this destination.
+  if (cb) cb.disabled = n === 0 || isAllcall;
   // Reflect the selection onto the CALL hero target line.
   const tgt = document.getElementById('callTarget');
   if (tgt) {
-    if (n === 0) tgt.textContent = 'Select contacts to call';
+    if (isAllcall) tgt.textContent = "Can't link to ALLCALL — use Messages to broadcast";
+    else if (n === 0) tgt.textContent = 'Select contacts to call';
     else if (n === 1) tgt.textContent = `Call → ${selectedContacts[0].cs}`;
     else {
       const names = selectedContacts.map(c => c.cs);
@@ -1855,8 +1866,20 @@ function renderContacts() {
   // CTA label: "Call" for 1:1, "Group Call" for multi.
   const lbl = document.querySelector('#callBtn .btn-call-lbl');
   if (lbl) lbl.textContent = n > 1 ? 'Group Call' : 'Call';
+  updateMsgLinkToggleState();
 
-  el.innerHTML = list.length ? list.map(c => {
+  const allcallSel = isAllcall ? ' sel' : '';
+  const allcallHtml = `<div class="contact-item contact-item-allcall${allcallSel}"
+      onclick="toggleAllcallContact()"
+      title="Broadcast — all listening stations, no reply expected (A.5.5.4.4)">
+      <div class="contact-avatar">${isAllcall ? icon('check',16) : icon('radio',16)}</div>
+      <div class="contact-info">
+        <div class="contact-cs">${ALLCALL_CONTACT.cs}</div>
+        <div class="contact-name">${escapeHtml(ALLCALL_CONTACT.name)}</div>
+      </div>
+    </div>`;
+
+  el.innerHTML = allcallHtml + (list.length ? list.map(c => {
     const idx = contacts.indexOf(c);
     const sel = selectedContacts.includes(c) ? ' sel' : '';
     return `<div class="contact-item${sel}"
@@ -1876,7 +1899,35 @@ function renderContacts() {
         <button class="contact-edit" title="Edit" onclick="event.stopPropagation();openContactEditor(${idx})">${icon('pencil',12)}</button>
       </div>
     </div>`;
-  }).join('') : `<div class="empty-state">${icon('userPlus',20)}<div class="empty-state-title">No contacts yet</div><div class="empty-state-hint">Save a station's callsign to call or message it.</div><button class="empty-state-cta" onclick="openContactEditor()">+ Add a contact</button></div>`;
+  }).join('') : `<div class="empty-state">${icon('userPlus',20)}<div class="empty-state-title">No contacts yet</div><div class="empty-state-hint">Save a station's callsign to call or message it.</div><button class="empty-state-cta" onclick="openContactEditor()">+ Add a contact</button></div>`);
+}
+
+// Toggle the ALLCALL pseudo-contact — exclusive with real-contact selection
+// (picking it clears any real-contact multi-select and vice versa, see
+// toggleContact()).
+function toggleAllcallContact() {
+  selectedContacts = selectedContacts.includes(ALLCALL_CONTACT) ? [] : [ALLCALL_CONTACT];
+  renderContacts();
+}
+
+// Pre-fills the Messages compose row's "Link" checkbox from the Link Policy
+// default (Settings ▸ Policy) for the selected destination's type — individual,
+// group (>1 selected), or ALLCALL — whenever the destination changes. The
+// checkbox itself remains a plain per-send override the operator can still
+// flip before Send. ALLCALL and Group both now support TIS (send_allcall_
+// broadcast() threads link_after_send through; group calls embed AMD via
+// ALEController::send_amd_group()), so neither is force-disabled anymore.
+function updateMsgLinkToggleState() {
+  const label = document.getElementById('msgLinkLabel');
+  const cb    = document.getElementById('msgLinkAfterSend');
+  if (!label || !cb) return;
+  const isAllcall = selectedContacts.includes(ALLCALL_CONTACT);
+  const isGroup   = !isAllcall && selectedContacts.length > 1;
+  const defId = isAllcall ? 'cfgLinkDefaultAllcall'
+              : isGroup   ? 'cfgLinkDefaultGroup'
+                          : 'cfgLinkDefaultIndividual';
+  cb.checked = document.getElementById(defId)?.checked ?? false;
+  label.title = "Keep the link established after this message is delivered";
 }
 
 // Scrolls to the CALL tab and focuses Contacts' search box — the CTA target
@@ -1899,6 +1950,8 @@ function focusContactPicker() {
 function toggleContact(i) {
   const c = contacts[i];
   if (!c) return;
+  // Real contacts and ALLCALL are mutually exclusive selections.
+  if (selectedContacts.includes(ALLCALL_CONTACT)) selectedContacts = [];
   const idx = selectedContacts.indexOf(c);
   if (idx >= 0) selectedContacts.splice(idx, 1);
   else selectedContacts.push(c);
@@ -2004,7 +2057,7 @@ function closeCallModePanel() {
 }
 
 function startCall(single) {
-  if (selectedContacts.length !== 1 || !bridgeConnected) return;
+  if (selectedContacts.length !== 1 || selectedContacts[0].allcall || !bridgeConnected) return;
   closeCallModePanel();
   setStatus('Calling…', 'calling');   // cosmetic; real transition comes from CALLING/link_established
   bridgeSend('CALL', { addr: selectedContacts[0].cs, single_channel: !!single });
@@ -2141,15 +2194,18 @@ function updateRigFields() {
 }
 
 // Populate the Hamlib model dropdown from the bridge's RIG_LIST reply.
-// Groups entries by manufacturer using <optgroup>. Restores any previously
-// selected model number after rebuilding the list. Records each model's port
-// type (network/serial/other) so updateRigFields() can adapt the connection
-// fields. Defaults to NET rigctl (model 2) on first load — preserves the prior
-// TCP-netrigctl default — then re-evaluates field visibility.
-function populateRigDropdown() {
+// Groups entries by manufacturer using <optgroup>. Restores the previously
+// selected model number after rebuilding the list — either the one passed in
+// (wantModel, from syncRigFromBridge()'s saved config) or, if omitted, the
+// dropdown's own current selection. Records each model's port type
+// (network/serial/other) so updateRigFields() can adapt the connection
+// fields. Falls back to NET rigctl (model 2) when nothing is saved yet —
+// preserves the prior TCP-netrigctl default — then re-evaluates field
+// visibility.
+function populateRigDropdown(wantModel) {
   const sel = document.getElementById('rigModel');
   if (!sel || !bridgeConnected) return;
-  const prev = sel.value;
+  const prev = wantModel !== undefined ? wantModel : sel.value;
   bridgeSend('RIG_LIST', {}, (r) => {
     if (!r.ok || !Array.isArray(r.rigs)) return;
     sel.innerHTML = '';
@@ -2231,6 +2287,27 @@ function enumDevices() {
   })();
 }
 
+// Hydrate the Audio panel from the bridge's saved device config
+// (AUDIO_CONFIG_GET) — the selection a prior AUDIO_OPEN persisted (see
+// audio_auto_open doc in ale_station_config.h). Also reflects whether the
+// bridge already auto-reopened the device on startup, so the Connect Audio
+// button/audioOpen state aren't stale until the Settings modal happens to be
+// opened. restoreAudioSelection() (called from enumDevices()) re-selects
+// these devices once the dropdowns are actually populated.
+function syncAudioConfigFromBridge() {
+  bridgeSend('AUDIO_CONFIG_GET', {}, (r) => {
+    if (!r.ok) return;
+    if (r.in)  audioInSelected  = r.in;
+    if (r.out) audioOutSelected = r.out;
+    audioOpen = !!r.connected;
+    const btn = document.getElementById('audioConnectBtn');
+    if (btn) {
+      btn.innerHTML = audioOpen ? `${icon('square',12)} Close Audio` : `${icon('power',12)} Connect Audio`;
+      btn.classList.toggle('scan-on', audioOpen);
+    }
+  });
+}
+
 // Dedicated audio Connect/Close (own button, not the settings Save). Sends
 // AUDIO_OPEN with the selected device names; the bridge opens the real WASAPI
 // device and attaches it to the controller (ale_bridge.cpp AUDIO_OPEN).
@@ -2289,6 +2366,32 @@ document.getElementById('cfgTxVol')?.addEventListener('input', function() {
 // Live CAT-link state (bridge attached a real pal::IRadio). Drives the Connect
 // button label and the radio-control lock (see setRadioCtrlEnabled).
 let rigConnected = false;
+
+// Hydrate the Radio/CAT panel from the bridge's saved rig config (RIG_GET) —
+// the settings a prior RIG_CONNECT persisted (see rig_auto_connect doc in
+// ale_station_config.h). Without this the model/COM-port/DTR/RTS/PTT fields
+// silently reset to blank defaults on every reload even though the bridge
+// itself may have already auto-reconnected the radio underneath. Only sets
+// fields the bridge actually returned — never overwrites with blanks.
+function syncRigFromBridge() {
+  bridgeSend('RIG_GET', {}, (r) => {
+    if (!r.ok) return;
+    populateRigDropdown(r.model || '');
+    const setVal = (id, v) => {
+      if (v === undefined || v === null) return;
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    };
+    setVal('rigHost', r.host);
+    setVal('rigPort', r.port);
+    setVal('rigSerial', r.serial);
+    setVal('rigBaud', r.baud);
+    setVal('rigDtr', r.dtr);
+    setVal('rigRts', r.rts);
+    setVal('rigStab', r.stab);
+    setVal('rigPttInput', r.ptt);
+  });
+}
 
 // Read the structured rig fields the bridge needs for create_radio(). The model
 // is the single selector; the bridge derives the connection kind from it, so
@@ -3254,6 +3357,9 @@ function applyTimingToBridge() {
   const concSel = document.getElementById('cfgSoundingConclusion');
   if (concSel) args.sounding_use_twas = concSel.value === 'twas';
   const th = num('cfgTestChannelHold'); if (th) args.test_channel_link_hold_time = th;
+  const ldi = document.getElementById('cfgLinkDefaultIndividual'); if (ldi) args.link_default_individual = ldi.checked;
+  const ldg = document.getElementById('cfgLinkDefaultGroup');      if (ldg) args.link_default_group      = ldg.checked;
+  const lda = document.getElementById('cfgLinkDefaultAllcall');    if (lda) args.link_default_allcall    = lda.checked;
   bridgeSend('TIMING_SET', args);
 }
 
@@ -3760,6 +3866,10 @@ function syncTimingFromBridge() {
     const conc = document.getElementById('cfgSoundingConclusion');
     if (conc && typeof r.sounding_use_twas === 'boolean')
       conc.value = r.sounding_use_twas ? 'twas' : 'tis';
+    const setChk = (id, v) => { const el = document.getElementById(id); if (el && typeof v === 'boolean') el.checked = v; };
+    setChk('cfgLinkDefaultIndividual', r.link_default_individual);
+    setChk('cfgLinkDefaultGroup',      r.link_default_group);
+    setChk('cfgLinkDefaultAllcall',    r.link_default_allcall);
   });
 }
 
@@ -4087,6 +4197,11 @@ function amdStatusBadge(status) {
   if (status === 'pending')   return `<span class="msg-tick msg-tick-pending" title="Sent — waiting for the peer's response">${icon('check',11)}</span>`;
   if (status === 'delivered') return `<span class="msg-tick msg-tick-delivered" title="Delivered — response received">${icon('check',11)}${icon('check',11)}</span>`;
   if (status === 'failed')    return `<span class="msg-tick msg-tick-failed" title="Not delivered — no response after all retries">✕</span>`;
+  // ALLCALL is fire-and-forget (A.5.5.4.4, concludes TWAS) — there is no
+  // response to wait for, so this resolves immediately from the bridge's
+  // synchronous AMD reply instead of an async amd_delivered/amd_not_sent event.
+  if (status === 'broadcast') return `<span class="msg-tick msg-tick-broadcast" title="Broadcast sent to ALLCALL — no reply expected">${icon('radio',11)}</span>`;
+  if (status === 'broadcast_failed') return `<span class="msg-tick msg-tick-failed" title="Broadcast not sent">✕</span>`;
   return '';
 }
 // Correlate an 'amd_delivered'/'amd_not_sent' confirm event back to the sent
@@ -4176,24 +4291,72 @@ function sendAmd() {
     txt = txt.slice(0, 90);
     aleLogInfo('AMD: trimmed to 90 chars');
   }
-  const to = linkedPeer || (selectedContacts.length === 1 ? selectedContacts[0].cs : '');
-  if (!to) {
-    aleLogInfo('AMD: no target — select exactly one contact or establish a link first');
-    return;
-  }
+  // ALLCALL is a deliberate destination pick (the pinned pseudo-contact) and
+  // always wins over an active link or a different selected contact — a
+  // broadcast makes no sense to silently redirect to whoever you're linked to.
+  const isAllcall = selectedContacts.length === 1 && selectedContacts[0].allcall;
+  const isGroup   = !isAllcall && selectedContacts.length > 1;
   const linkCb = document.getElementById('msgLinkAfterSend');
   const link   = !!(linkCb && linkCb.checked);
   const self = primarySelfAddr();
+
+  // Group call (>1 selected, mutually exclusive with ALLCALL): AMD embedded
+  // in the calling frame via ALEController::send_amd_group(), single attempt,
+  // no retry budget (see backend). Delivery-confirm events during the
+  // handshake carry the actual responding member's address, not the joined
+  // roster string used for display below — group AMD delivery-confirmation
+  // isn't in scope, so markAmdStatus() is reused best-effort, same plumbing
+  // as the individual path, with no new status states.
+  if (isGroup) {
+    const members = selectedContacts.map(c => c.cs);
+    const peerLabel = members.length <= 3 ? members.join(', ') : `${members.length} stations`;
+    const msg = { self, peer: peerLabel, time: nowZulu(), text: txt, own: true, status: 'pending' };
+    messages.unshift(msg);
+    inp.value = '';
+    updateMsgCount();
+    renderMessages();
+    if (bridgeConnected) {
+      bridgeSend('GROUP_CALL', { members, text: txt, link }, (r) => {
+        if (r && !r.ok) {
+          msg.status = 'amd_not_sent';
+          aleLogInfo('AMD: ' + (r.msg || 'group send failed'));
+          renderMessages();
+        }
+      });
+    } else {
+      aleLogInfo('AMD demo: GROUP_CALL ' + members.join(',') + ' DATA:AMD');
+    }
+    return;
+  }
+
+  const to = isAllcall ? 'ALLCALL' : (linkedPeer || (selectedContacts.length === 1 ? selectedContacts[0].cs : ''));
+  if (!to) {
+    aleLogInfo('AMD: no target — select a contact or establish a link first');
+    return;
+  }
   // Every send gets a delivery-confirm badge now — both paths resolve it:
   // LINKED path -> 'amd_delivered'/'amd_not_sent'; not-yet-linked path ->
   // 'link_established' (TIS, link kept) / 'amd_no_link' (TWAS, no link) /
-  // 'amd_not_sent' (no response after retries). See markAmdStatus().
+  // 'amd_not_sent' (no response after retries). See markAmdStatus(). ALLCALL
+  // is fire-and-forget (A.5.5.4.4) — no async confirm event ever arrives, so
+  // it's resolved directly from the bridge's synchronous AMD reply below.
   const msg = { self, peer: to, time: nowZulu(), text: txt, own: true, status: 'pending' };
   messages.unshift(msg);
   inp.value = '';
   updateMsgCount();
   renderMessages();
-  if (bridgeConnected) { bridgeSend('AMD', { to, text: txt, link }); return; }
+  if (bridgeConnected) {
+    if (isAllcall) {
+      bridgeSend('AMD', { to, text: txt, link }, (r) => {
+        msg.status = (r && r.ok) ? 'broadcast' : 'broadcast_failed';
+        if (r && !r.ok) aleLogInfo('AMD: ' + (r.msg || 'broadcast failed'));
+        renderMessages();
+      });
+      return;
+    }
+    bridgeSend('AMD', { to, text: txt, link });
+    return;
+  }
   aleLogInfo('AMD demo: TO:' + to.slice(0,3) + ' DATA:AMD TIS:' + self.slice(0, 3));
 }
 function nowZulu() { return new Date().toISOString().slice(11,16) + 'Z'; }

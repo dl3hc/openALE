@@ -447,6 +447,21 @@ public:
                           bool link_after_send = false);
 
     /**
+     * Queue an AMD message on a group call: places it as the pending message
+     * then initiates the group call, so the AMD rides the calling frame
+     * exactly as send_amd()'s not-linked individual-call path does. Unlike
+     * send_amd(), this makes a single attempt only — no retry-budget
+     * bookkeeping (amd_retry_active_ etc.); a plain group call has no
+     * auto-retry today either, so a single-attempt group AMD send matches
+     * existing group-call semantics rather than adding a new capability.
+     * @p link_after_send    Frame 3 conclusion: true = TIS (link persists),
+     *                      false (default) = TWAS (fire-and-forget).
+     * @return "OK: ..." on success, "ERROR: ..." on validation/state failure.
+     */
+    std::string send_amd_group(const std::vector<std::string>& members, const std::string& text,
+                                bool link_after_send = false);
+
+    /**
      * One-shot ALE-GPR/AMD position-report broadcast to the AllCall address
      * (A.5.5.4.4) — transmits once, concludes TWAS, no response wait, no
      * retry. send_amd() delegates here transparently when \p target is the
@@ -457,7 +472,7 @@ public:
      * @return "OK: ..." on success, "ERROR: ..." on failure (no self address
      *         configured, not IDLE/SCANNING, or a broadcast already in flight).
      */
-    std::string broadcast_position_report(const std::string& text);
+    std::string broadcast_position_report(const std::string& text, bool link_after_send = false);
 
     /**
      * The currently linked peer address (get_to_address() falling back to
@@ -953,6 +968,14 @@ public:
     /** Set the pre-sounding countdown lead time in seconds (config_.sounding_warning_lead_sec). */
     void set_sounding_warning_lead_sec(uint32_t sec);
     uint32_t get_sounding_warning_lead_sec() const { return config_.sounding_warning_lead_sec; }
+
+    /** Link-intent defaults (TIS invites a link, TWAS = fire-and-forget) per destination type. */
+    void set_link_default_individual(bool v) { config_.link_default_individual = v; }
+    void set_link_default_group(bool v)      { config_.link_default_group = v; }
+    void set_link_default_allcall(bool v)    { config_.link_default_allcall = v; }
+    bool get_link_default_individual() const { return config_.link_default_individual; }
+    bool get_link_default_group() const      { return config_.link_default_group; }
+    bool get_link_default_allcall() const    { return config_.link_default_allcall; }
 
     /**
      * Interrupt the pending idle-sounding countdown on @p net. Re-arms that

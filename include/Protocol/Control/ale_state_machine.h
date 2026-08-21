@@ -338,7 +338,8 @@ public:
      * \return false if not in IDLE/SCANNING, self_addr is empty, or text has
      *         no encodable characters.
      */
-    bool send_allcall_broadcast(const std::string& self_addr, const std::string& text);
+    bool send_allcall_broadcast(const std::string& self_addr, const std::string& text,
+                                 bool link_after_send = false);
 
     /// True while a send_allcall_broadcast() burst is still draining (see
     /// on_word_complete()'s allcall_broadcasting_ branch). Callers that must
@@ -840,7 +841,11 @@ private:
     uint32_t       twce_start_ms;        ///< Timestamp when HANDSHAKE was entered (diagnostic; the Twce abort is silence-based on last_word_time_ms)
     uint32_t       hs_tlww_start_ms;     ///< Tlww in WAIT_CYCLE_END and WAIT_ACK; 0 = not yet
     bool           hs_conclusion_rcvd;   ///< TIS [caller] received in WAIT_CYCLE_END
-    std::string    caller_address;       ///< Calling station identity (from TIS word)
+    bool           hs_conclusion_is_twas_ = false; ///< conclusion word was TWAS, not TIS (A.5.5.3.2/
+                                          ///< A.5.5.4.4 wildcard/AllCall "no response") — settle
+                                          ///< the same as TIS for identity capture, then
+                                          ///< handle_handshake() aborts instead of linking.
+    std::string    caller_address;       ///< Calling station identity (from TIS or TWAS word)
     uint32_t       hs_words_in_phase;    ///< TX word counter for SENDING_RESPONSE
     uint32_t       hs_ack_start_ms;      ///< Timestamp when WAIT_ACK started
     uint32_t       hs_ack_to_ms;         ///< "TO JOE" (ACK start) detected in WAIT_ACK; 0 = not yet

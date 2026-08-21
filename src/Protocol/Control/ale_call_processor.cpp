@@ -231,8 +231,28 @@ void ALECallProcessor::react_handshake_(ALEStateMachine& sm, const WordRole& r, 
             sm.active_call_from = sm.caller_address;
             sm.hs_tlww_start_ms = sm.current_time_ms;
             break;
-        case WordRole::TWAS_WORD:  // TWAS during calling cycle → abort (A.5.5.3.2)
-            sm.process_event(ALEEvent::LINK_TIMEOUT);
+        case WordRole::TWAS_WORD:
+            // TWAS concluding the calling cycle (A.5.5.3.2) — for AllCall/
+            // wildcard addresses this is the spec-normal "no response"
+            // outcome (A.5.5.4.4: "Calls to wildcard addresses that conclude
+            // with TWAS shall be processed identically to the AllCall
+            // protocol"), not an error. Capture identity exactly like
+            // TIS_CALLER so a multi-word address settles via DATA_EXTENSION
+            // (classify()'s `collecting` gate keys off hs_conclusion_rcvd
+            // regardless of which branch set it); handle_handshake()'s
+            // settle timer then aborts via hs_conclusion_is_twas_ rather than
+            // linking — but only after caller_address is fully known, so any
+            // AMD already reassembled by rx_accumulate_call_amd() (e.g. an
+            // ALE-GPR position report) is correctly attributed and dispatched
+            // instead of silently dropped by on_sm_state_change()'s
+            // caller.empty() guard.
+            if (!sm.hs_conclusion_rcvd) {
+                sm.caller_address         = r.address;
+                sm.active_call_from       = r.address;
+                sm.hs_conclusion_rcvd     = true;
+                sm.hs_conclusion_is_twas_ = true;
+                sm.hs_tlww_start_ms       = sm.current_time_ms;
+            }
             break;
         case WordRole::NONE:
             // DATA/REP before TIS → message section has begun; arm Tmmax (AC-LINK-018-5).

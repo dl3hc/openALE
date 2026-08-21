@@ -467,6 +467,7 @@
     .msg-tick-pending   { color: var(--tx-dim); }
     .msg-tick-delivered { color: var(--s-linked); }
     .msg-tick-failed    { color: var(--s-error); font-family: var(--mono); font-size: 11px; font-weight: 700; }
+    .msg-tick-broadcast { color: var(--s-incoming); }
 
     .msg-compose {
       padding: 8px 10px;
@@ -535,6 +536,8 @@
       align-self: center;
     }
     .msg-link-toggle input { margin: 0; cursor: pointer; }
+    .msg-link-toggle.disabled { opacity: 0.4; cursor: not-allowed; }
+    .msg-link-toggle.disabled input { cursor: not-allowed; }
 
     /* ── Contacts ── */
     .panel-contacts { flex: 1; min-height: 0; }
@@ -602,6 +605,15 @@
     .contact-item.sel .contact-cs { color: var(--accent); }
     .contact-name { font-size: 11px; color: var(--tx-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .contact-star { color: var(--s-calling); font-size: 11px; }
+
+    /* Pinned ALLCALL pseudo-contact (A.5.2.4.7) — always first, not part of
+       the real address book. Amber tint distinguishes it from real contacts
+       even when unselected; no edit/favorite actions (nothing to edit). */
+    .contact-item-allcall { margin-bottom: 4px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+    .contact-item-allcall .contact-avatar { color: var(--s-incoming); border-color: rgba(221,129,88,0.32); }
+    .contact-item-allcall .contact-cs { color: var(--s-incoming); }
+    .contact-item-allcall.sel .contact-avatar { background: rgba(221,129,88,0.16); border-color: rgba(221,129,88,0.4); }
+    .contact-item-allcall.sel .contact-cs { color: var(--s-incoming); }
 
     .call-zone {
       position: relative;
