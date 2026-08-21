@@ -126,6 +126,11 @@ std::string LocationRelayService::to_json(const LocationReport& r) {
 void LocationRelayService::start(const Config& cfg) {
     if (running_.load()) stop();
     cfg_ = cfg;
+    {
+        std::lock_guard<std::mutex> g(conn_mtx_);
+        conn_state_   = CS_UNKNOWN;   // fresh run — initial probe re-establishes it
+        last_drained_ = CS_UNKNOWN;
+    }
     running_ = true;
     worker_ = std::thread(&LocationRelayService::worker_loop, this);
 }
@@ -183,11 +188,79 @@ bool LocationRelayService::pop_status(std::string& out) {
     return true;
 }
 
+int LocationRelayService::conn_state() const {
+    std::lock_guard<std::mutex> g(conn_mtx_);
+    return conn_state_;
+}
+
+bool LocationRelayService::pop_conn_state(int& out) {
+    std::lock_guard<std::mutex> g(conn_mtx_);
+    if (conn_state_ != last_drained_) {
+        last_drained_ = conn_state_;
+        out = conn_state_;
+        return true;
+    }
+    return false;
+}
+
+void LocationRelayService::update_conn_state(bool reached, int http_status) {
+    const int new_state = reached
+        ? ((http_status >= 200 && http_status < 300) ? CS_CONNECTED : CS_SERVER_ERROR)
+        : CS_DISCONNECTED;
+
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> g(conn_mtx_);
+        if (conn_state_ != new_state) {
+            conn_state_ = new_state;
+            changed = true;
+        }
+    }
+    if (!changed) return;
+
+    switch (new_state) {
+        case CS_CONNECTED:
+            pal::log_info("LocationRelay", "connection to %s established (HTTP %d)",
+                          cfg_.url.c_str(), http_status);
+            push_status("Location API: connected (HTTP " + std::to_string(http_status) + ")");
+            break;
+        case CS_DISCONNECTED:
+            pal::log_warn("LocationRelay",
+                          "connection to %s lost — endpoint unreachable (no response)",
+                          cfg_.url.c_str());
+            push_status("Location API: no connection");
+            break;
+        case CS_SERVER_ERROR:
+            pal::log_warn("LocationRelay",
+                          "server at %s replied HTTP %d (reachable, not OK)",
+                          cfg_.url.c_str(), http_status);
+            push_status("Location API: server error (HTTP " + std::to_string(http_status) + ")");
+            break;
+        default:
+            break;
+    }
+}
+
+void LocationRelayService::run_health_check() {
+    HttpPostResult res;
+    const bool reached = http_probe(cfg_.url, cfg_.token, res);
+    update_conn_state(reached, res.status);
+}
+
 void LocationRelayService::worker_loop() {
     pal::log_info("LocationRelay", "worker thread started");
     static constexpr uint32_t kBackoffMs[3] = { 5000, 15000, 45000 };
     static constexpr uint32_t kMaxRetries   = 3;
     static constexpr std::time_t kStaleAfterSec = 600;  // 10 min
+
+    const auto idle_poll = std::chrono::milliseconds(500);
+    // Fire the initial connection check immediately (epoch < now), then on a
+    // fixed cadence while idle. Every real send also refreshes conn_state and
+    // pushes this deadline forward, so a busy stream does not re-probe.
+    auto next_health_check = std::chrono::steady_clock::time_point{};
+    const auto health_interval =
+        std::chrono::seconds(cfg_.health_check_interval_sec > 0
+                             ? cfg_.health_check_interval_sec : 60);
 
     while (running_.load()) {
         LocationReport report;
@@ -201,7 +274,12 @@ void LocationRelayService::worker_loop() {
             }
         }
         if (!have) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_health_check) {
+                run_health_check();
+                next_health_check = now + health_interval;
+            }
+            std::this_thread::sleep_for(idle_poll);
             continue;
         }
 
@@ -214,6 +292,10 @@ void LocationRelayService::worker_loop() {
         HttpPostResult res;
         const std::string body = to_json(report);
         const bool sent = http_post_json(cfg_.url, cfg_.token, body, res);
+        // A send is itself a connectivity sample — reclassify the endpoint and
+        // defer the next idle probe so we don't double-probe after traffic.
+        update_conn_state(sent, res.status);
+        next_health_check = std::chrono::steady_clock::now() + health_interval;
 
         if (sent && res.status >= 200 && res.status < 300) {
             pal::log_info("LocationRelay", "report accepted (%d) for %s",
