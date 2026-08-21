@@ -1,123 +1,68 @@
-# Release Notes — openALE 0.0.3-pre-alpha
+# Release Notes — openALE 0.0.4-pre-alpha
 
 ## Highlights
 
-**Your configuration is now always saved.** Channels, nets, contacts, and every settings
-tab are auto-saved to a single `station.state` file as you use the app — no more losing
-edits depending on which save path happened to run last.
+**Position reports over ALE.** openALE can now send and receive HFLINK ALE-GPR v1.1
+position reports as AMD messages — manually, on a timer, or automatically whenever your
+GPS fix moves past a configurable threshold. Reports can go to a single station or out as
+an ALLCALL broadcast, and carry latitude/longitude/altitude/timestamp plus an optional
+comment. See `docs/ALE_GPR_SPEC.md`.
 
-**The desktop GUI has a new layout: Command Deck.** Radio status, channel, and transmit
-controls are now consolidated into one command bar instead of being scattered across the
-header. The main panel shows a clear Idle / Calling / Incoming / Linked state with live
-link-quality metrics (SINAD, BER, Score, Channel). The waterfall display is smoother and
-lighter on CPU/memory.
+**Location Sharing — forward received positions to a live web map.** A new opt-in relay
+service posts every position report your station receives (from ALE-GPR or raw GGA) to an
+external HTTP endpoint, so a whole net's positions can show up on a shared map in real
+time. Comes with a small, dependency-free reference server (`tools/location-relay-server`,
+Node.js + Leaflet) you can run yourself. See `docs/LOCATION_SHARING_CONCEPT.md` and
+`docs/LOCATION_SHARING_HOWTO.md` for end-to-end setup on both sides.
 
-**The setup wizard gets you further, faster.** First-run setup now walks through Channels
-and Nets (not just Callsign and Radio/Audio), lets you set each net's scan dwell time while
-you're already there, and — once you close it — automatically arms the first configured net
-so scanning, sounding, and calling are ready to go without an extra manual step.
-
-**A new opt-in Tuner server for auto-tuners.** openALE can now serve its current RX
-frequency read-only over the Hamlib `rigctld`/`netrigctl` protocol, so external tools like
-auto-tuners can follow along without opening a second, competing connection to the radio.
-
-**A dedicated Operator Audio Interface.** The audio on the device you're actually sitting at —
-mic, speaker, notifications — is now a first-class concept separate from the transceiver's own
-Modem Audio, with a header toggle to listen in on the channel at any time (not just once
-linked) and low-latency AudioWorklet-based audio under the hood.
-
-**Optional TLS (`--tls`) for remote GUI access.** Browsers only grant microphone access and
-device listing on a secure connection, so opening the GUI from another device over plain HTTP
-(`--remote`) could never unlock the full Operator Audio Interface. `--tls` serves the GUI over
-HTTPS/WSS instead, with a self-signed certificate generated automatically on first run — see
-`docs/TLS_SETUP.md`.
+**AMD messages no longer force an unwanted link.** Previously, sending any AMD message —
+even a one-off "position report" or short note — always drove the full handshake through to
+`LINKED`, whether or not that was the intent. AMD text now rides in the calling frame itself
+(Ion2G-style: the message arrives before the handshake even concludes), and the third
+handshake frame becomes a pure link/no-link decision by the sender: leave it unchecked for
+message-only delivery, or tick the new **Link** checkbox next to the AMD send box to keep
+the link established afterward, same as before.
 
 ## New Features
 
-- **Operator Audio Interface**: the browser's own mic/speaker path is now a named, distinct
-  interface from the transceiver's Modem Audio — configured entirely on whichever device the
-  GUI happens to be open on (device selection and notification preferences are saved in that
-  browser only, never sent to the controller). Settings ▸ Audio Devices now shows Modem Audio
-  and Operator Audio side by side. New capabilities built on it:
-  - **Channel Monitor**: a header toggle to "listen in" on the current channel's RX audio
-    regardless of ALE link state (previously voice passthrough only worked once a link was
-    already up).
-  - **Notifications**: an optional ring while a call is incoming and a chime when a message
-    arrives, synthesized locally and played through the selected speaker device.
-  - The browser's mic/speaker audio path now runs on a dedicated AudioWorklet audio thread
-    instead of the main JS thread, for lower and more consistent latency, with improved
-    upsampling/downsampling quality; it automatically falls back to the previous behavior when
-    accessed over a plain-HTTP remote/LAN connection.
-- **`--tls`**: serves the GUI over HTTPS/WSS instead of plain HTTP/WS, using a self-signed
-  certificate generated automatically on first run (or your own via `--cert`/`--key`), with its
-  Subject Alternative Names auto-populated from every local network interface's IP address
-  (plus `localhost`/`127.0.0.1`/`::1`) so browsers accept it without a certificate error;
-  `--tls-san HOST` adds an extra hostname/IP for addresses that aren't a local interface. This
-  is what makes `getUserMedia`/`enumerateDevices`/`AudioWorklet` actually work when the GUI is
-  opened from another device (`--remote`) — browsers only grant those APIs on a secure
-  connection. See `docs/TLS_SETUP.md`.
-- **Tuner**: opt-in read-only rigctld/netrigctl-compatible TCP server for external
-  auto-tuner tools (Settings ▸ Tuner, both GUIs; disabled by default).
-- Setup wizard's Nets step gained an inline Dwell (ms) input, and now auto-selects the
-  first configured net when the wizard closes.
-- Transmitter power control via Hamlib/CAT — TX power is now a real per-channel setting,
-  editable in the channel editor or live from the Radio Control panel; either one updates
-  the same saved value for that channel (both GUIs).
-- Opt-in CAT/rig traffic view in the ALE Log, for diagnosing radio-control issues.
-- All log output is now also written to `openALE.log` (auto-rotated once it grows past ~5 MB),
-  so it survives after the console window is gone. If openALE ever exits unexpectedly, a new
-  `crash.log` records what happened, including a resolved stack trace (function/file/line where
-  available) on both Windows and Linux — both are there to check after the fact instead of
-  losing the trail.
-- Absolute "Received" timestamp shown on Heard Stations and the LQA table (both GUIs).
-- New in-app Help / setup-guide page, linked from both GUIs' Help buttons.
-- Word-lock ("Sync") indicator simplified to a single clear pill plus a "Decoding" overlay.
-- Settings ▸ Files: the LQA database can now be exported/imported like the Configuration
-  and Channel files (previously a non-functional "Browse…" button).
+- **ALE-GPR position reports**: Settings ▸ Location ▸ Position Reports lets you send a
+  report immediately, or configure automatic reporting — on GPS-fix change (configurable
+  distance threshold, 60 s minimum interval) or on a fixed timer — to a direct address or
+  as an ALLCALL broadcast, restricted to a specific net/channel selection if desired. GPS
+  fixes now carry altitude (from gpsd TPV or `$GPGGA` field 9) for the report's altitude
+  field; a raw-NMEA passthrough format is also available when a live NMEA-serial fix is in
+  use.
+- **Location Relay**: Settings ▸ Location ▸ Location Relay forwards every position report
+  your station receives to an external HTTP endpoint (URL + optional auth token,
+  enable/disable), for live mapping outside openALE itself.
+- **AMD "Link" checkbox**: next to the AMD send box in the Messages panel — keep the link
+  established after this message is delivered, instead of the new message-only default.
+- Messages panel redesigned with clearer sent/received direction styling and a delivery
+  status pill (pending / delivered / not delivered) on sent messages, driven by real
+  handshake outcomes instead of assuming a queued send succeeded.
 
 ## Fixes
 
-- The "Sync" pill no longer stays lit indefinitely after a transmission ends — it now
-  clears on a timeout instead of relying on true silence, which real receive noise rarely
-  produces.
-- Settings, channels, and nets no longer silently fail to save.
-- Net renames now actually take effect in the core, instead of being reverted on the next
-  settings sync.
-- The Test Channel panel no longer shows stale results from a previous peer when reopened.
-- Heard Stations' expanded details no longer collapse every time the list refreshes (mobile).
-- The ALE log no longer gets spammed with repeated "sounding on/off" lines.
-- The Settings drawer no longer visibly paints over the icon rail while sliding open/closed
-  (desktop).
-- RF transmit power no longer resets to 100% on a channel hop, scan, or sounding cycle — the
-  radio now applies each channel's own configured power instead.
-- A damaged or truncated `lqa.bin` could crash openALE on startup; it's now rejected cleanly
-  (with a clear reason logged) instead, and openALE just starts with an empty LQA table.
-- Setting TX power now tells you what happened: the ALE Log reports whether the connected
-  rig supports power control and what it was set to, instead of silently doing nothing on
-  rigs that don't support it.
-- The Settings drawer was too narrow for the LQA table, truncating columns and forcing a
-  horizontal scrollbar (desktop). Widened to fit all columns without scrolling.
-- Scan dwell time on a real radio could occasionally run longer than configured: a periodic
-  background CAT read (used to catch external retunes) could still be in the radio's command
-  queue when a hop was due, delaying that hop behind it. Channel hops, frequency/mode changes,
-  and PTT now jump ahead of that background read instead of queuing behind it.
-- Settings ▸ Files: the Configuration, Channel, and LQA rows now behave identically (same
-  button order, confirmation prompts, and refresh behavior), and a failed import/export now
-  shows a real reason (e.g. "file not found") in the ALE Log instead of a bare "?".
-- AMD messages sent over an established link now send the TO address preamble twice, as
-  MIL-STD-188-141B requires (matching leading calls, ACKs, and link termination) — previously
-  it was sent only once.
-- Incoming AMD messages embedded in the calling frame or the response frame (the way most
-  other ALE stations send them) were silently dropped instead of being displayed — only AMD
-  sent in the ACK frame or over an established link was received. openALE now listens for AMD
-  in all four frames MIL-STD-188-141B allows, and displays it immediately, independent of
-  whether the resulting handshake goes on to link or times out.
+- Incoming AMD messages sent in the calling frame or response frame were previously
+  deliverable, but sending one from openALE always forced a full link — even for a message
+  with no follow-up conversation intended. Sending is now message/link decoupled as
+  described above.
+- A LINKED-state AMD's delivery confirmation (Response → ACK) could be silently starved by
+  a drain-transition race, so the message showed no delivery outcome even though it had
+  gone out.
+- A LINKED-state AMD retry resent instantly instead of waiting the normal retry backoff
+  like every other retry path in the protocol.
+- The incoming-call ring tone could keep playing indefinitely on auto-accept or a
+  pre-clicked manual accept — it was only ever stopped from the link-teardown path, not
+  either accept path.
+- `STATION_LOC_SET` always reset the position source back to Manual on every call, even
+  when only an unrelated field (e.g. the SFI toggle) was being updated through the same
+  bridge command — this could silently clobber a configured GPS/NMEA position source back
+  to Manual.
 
 ## Other
 
-- Remaining German UI strings in the mobile GUI translated to English.
-- Project renamed from ALE-Clean-Room to **openALE**; version line reset and now at
-  **0.0.3-pre-alpha**.
+- README.md now links to `docs/ALE_GPR_SPEC.md` and the two Location Sharing docs.
 
 ---
 
