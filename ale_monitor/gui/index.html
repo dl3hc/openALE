@@ -115,6 +115,47 @@
         <button class="set-btn set-save" onclick="doConfigSave()">💾 Save as startup</button>
       </div>
     </fieldset>
+
+    <fieldset class="settings-group">
+      <legend>Location Relay</legend>
+      <div class="set-row">
+        <label>Enable</label>
+        <input type="checkbox" id="setLocEnabled">
+      </div>
+      <div class="set-row">
+        <label>URL</label>
+        <input id="setLocUrl" class="set-input" placeholder="https://example.com/api/v1/locations">
+      </div>
+      <div class="set-row">
+        <label>Token</label>
+        <input id="setLocToken" class="set-input" type="password" placeholder="(leave blank to keep stored token)">
+      </div>
+      <div class="set-row">
+        <span id="locTokenHint" class="set-status">—</span>
+      </div>
+      <div class="set-row">
+        <label>CA Cert</label>
+        <input id="setLocCaCert" class="set-input" placeholder="(optional) path to server's PEM cert">
+      </div>
+      <div class="set-row">
+        <label>Min. interval (s)</label>
+        <input id="setLocMinInterval" class="set-input" type="number" min="1" max="3600" value="30">
+      </div>
+      <div class="set-row">
+        <label>Rounding (digits)</label>
+        <input id="setLocRoundDigits" class="set-input" type="number" min="0" max="6" value="6">
+      </div>
+      <div class="set-row">
+        <label><input type="checkbox" id="setLocIncludeComment"> Forward comment field</label>
+      </div>
+      <div class="set-row">
+        <button class="set-btn" onclick="doLocationSharingSet()">Apply</button>
+        <span id="locStatus" class="set-status">—</span>
+      </div>
+      <div class="set-row">
+        <button class="set-btn set-save" onclick="doConfigSave()">💾 Save as startup</button>
+      </div>
+    </fieldset>
   </div>
 </div>
 

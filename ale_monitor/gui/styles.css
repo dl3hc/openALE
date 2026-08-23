@@ -717,3 +717,6 @@ body {
   color: var(--tx-muted);
   font-size: 11px;
 }
+.set-status.ok   { color: var(--s-scanning); }
+.set-status.warn { color: var(--s-calling); }
+.set-status.err  { color: #ff5252; }
