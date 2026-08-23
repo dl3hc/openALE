@@ -400,6 +400,13 @@ if(WIN32)
     endif()
 endif()
 
+# http_poster.cpp's POSIX backend uses mbedTLS directly for its https:// client
+# (see the mbedTLS FetchContent block below for why it's already a project
+# dependency) — makes the headers visible to ale_app_core's compile step; the
+# openALE executable target already links these three libs explicitly for the
+# bridge's own TLS support.
+target_link_libraries(ale_app_core mbedtls mbedx509 mbedcrypto)
+
 # ── Audio I/O device (platform-specific) ──────────────────────────────────────
 
 if(WIN32)

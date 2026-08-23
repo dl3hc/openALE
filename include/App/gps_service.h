@@ -51,6 +51,13 @@ public:
     double lat()     const;
     double lon()     const;
 
+    /** Thread-safe: true if a source (NMEA serial or gpsd) is actively
+     *  delivering data right now, independent of has_fix(). Distinguishes
+     *  "connected, still acquiring a satellite fix" from "no data at all"
+     *  (wrong port/baud, cable unplugged, endpoint down) — both of which
+     *  otherwise look identical (has_fix() == false) to callers. */
+    bool   is_receiving() const;
+
     /** Thread-safe: true if the current fix carries an altitude (GGA field 9 / gpsd TPV "alt").
      *  Scoped to feed ALE-GPR's altitude field only — not used in LQA/propagation scoring. */
     bool   has_altitude() const;
@@ -84,6 +91,12 @@ private:
     std::atomic<bool> running_{false};
     std::thread       gpsd_thread_;
     std::thread       nmea_thread_;
+
+    // Data-liveness flags, one per source thread — see is_receiving(). Each
+    // thread flips its own flag via exchange() so the transition (not just
+    // the level) is known at the flip site, for one-shot logging.
+    std::atomic<bool> nmea_receiving_{false};
+    std::atomic<bool> gpsd_receiving_{false};
 
     FixCallback  on_fix_;
     std::mutex   cb_mtx_;

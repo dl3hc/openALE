@@ -28,13 +28,15 @@
 //   LOCATION_TRUST_PROXY     default 0    (set 1 to take client IP from X-Forwarded-For)
 //   LOCATION_MAX_CONNECTIONS default 1024 (concurrent socket cap; 0 = unlimited)
 //   LOCATION_RATE_LIMIT_PER_MIN default 600 (per-IP ingest cap; 0 disables)
-//   LOCATION_ROUND_DIGITS    default 4    (max coordinate precision; safety net)
 //   LOCATION_MAX_OBSERVERS_RESPONSE default 10 (bound the "who heard" list per station)
 //   LOCATION_COLLAPSE_BROADCASTS default off (set 1: one report row per broadcast; fresh DB)
 //   LOCATION_FLUSH_MS        default 30   (worker: max batch latency before commit)
 //   LOCATION_BATCH_MAX       default 512  (worker: flush at this many pending)
+//   LOCATION_TLS_CERT_PATH   default ""   (set with LOCATION_TLS_KEY_PATH for native HTTPS)
+//   LOCATION_TLS_KEY_PATH    default ""   (unset = plain HTTP; see README.md)
 
 const http = require('node:http');
+const https = require('node:https');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -54,8 +56,9 @@ const LOG_PATH = process.env.LOCATION_LOG_PATH !== undefined ? process.env.LOCAT
 const TRUST_PROXY = process.env.LOCATION_TRUST_PROXY === '1';
 const MAX_CONNECTIONS = parseInt(process.env.LOCATION_MAX_CONNECTIONS || '1024', 10);
 const RATE_LIMIT_PER_MIN = parseInt(process.env.LOCATION_RATE_LIMIT_PER_MIN || '600', 10);
-const ROUND_DIGITS = parseInt(process.env.LOCATION_ROUND_DIGITS || '4', 10);
 const MAX_OBSERVERS_RESPONSE = parseInt(process.env.LOCATION_MAX_OBSERVERS_RESPONSE || '10', 10);
+const TLS_CERT_PATH = process.env.LOCATION_TLS_CERT_PATH || '';
+const TLS_KEY_PATH  = process.env.LOCATION_TLS_KEY_PATH  || '';
 
 // ── Logging (terminal + file) ───────────────────────────────────────────────
 // Zero-dep: every log line goes to stdout AND an append-only file. Client-
@@ -227,17 +230,6 @@ function isAuthorized(req) {
 
 function nowIso() { return new Date().toISOString(); }
 
-// Max-precision safety net: clamp incoming coordinates to ROUND_DIGITS
-// decimals (default 4 ≈ 11 m). This only ever COARSENS — a client that sent
-// coarser (stronger privacy) is untouched (1.2 → 1.2000, same point); a
-// misbehaving/legacy client sending 8 decimals gets clamped. Applied before
-// storage and before the collapse dedup key so the key is consistent.
-function roundCoord(v) {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return v;
-  const f = Math.pow(10, ROUND_DIGITS);
-  return Math.round(v * f) / f;
-}
-
 // Konzept §14's TTL table, applied to last_seen_at.
 function stationState(lastSeenAtIso) {
   const ageMin = (Date.now() - Date.parse(lastSeenAtIso)) / 60000;
@@ -349,8 +341,8 @@ async function handleIngest(req, res) {
       type: 'ingest',
       fields: {
         observer, source, relay, sourceType, rawGpr,
-        latitude:  hasLat ? roundCoord(body.latitude)  : null,
-        longitude: hasLon ? roundCoord(body.longitude) : null,
+        latitude:  hasLat ? body.latitude  : null,
+        longitude: hasLon ? body.longitude : null,
         altitude, altitudeUnit, timestamp, receivedAt, callType, comment,
         frequencyHz, hasPosition: hasLat && hasLon,
       },
@@ -430,12 +422,17 @@ async function handleStationDetail(_req, res, id) {
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
 function serveStatic(req, res, urlPath) {
-  let rel = urlPath === '/' ? '/index.html' : urlPath;
-  // Resolve under PUBLIC_DIR and verify the resolved path stays inside it
-  // (path.resolve collapses ".."; the +sep check rejects a sibling directory
-  // whose name merely starts with PUBLIC_DIR, which a bare startsWith would
-  // miss). No client input reaches disk above the public root.
-  const resolved = path.resolve(PUBLIC_DIR, path.normalize(rel).replace(/^(\.\.[/\\])+/, ''));
+  const rel = urlPath === '/' ? '/index.html' : urlPath;
+  // path.join (not path.resolve) against PUBLIC_DIR first: rel carries a
+  // leading slash, and path.resolve treats an absolute second argument as
+  // overriding everything before it (on Windows this discards PUBLIC_DIR
+  // entirely and resolves to the drive root, e.g. "C:\index.html" — a 403
+  // for every request). path.join has no such special-case; it always
+  // concatenates. The outer path.resolve then normalizes ".." segments so
+  // the containment check below still catches traversal attempts (the
+  // +sep check rejects a sibling directory whose name merely starts with
+  // PUBLIC_DIR, which a bare startsWith would miss).
+  const resolved = path.resolve(path.join(PUBLIC_DIR, rel));
   if (resolved !== PUBLIC_DIR && !resolved.startsWith(PUBLIC_DIR + path.sep)) {
     res.writeHead(403);
     res.end();
@@ -451,7 +448,7 @@ function serveStatic(req, res, urlPath) {
 
 // ── Router ──────────────────────────────────────────────────────────────────
 
-const server = http.createServer((req, res) => {
+function requestListener(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const start = Date.now();
 
@@ -487,7 +484,30 @@ const server = http.createServer((req, res) => {
 
   res.writeHead(405);
   res.end();
-});
+}
+
+// TLS is optional and native (node:https — no new dependency): set both
+// LOCATION_TLS_CERT_PATH and LOCATION_TLS_KEY_PATH to terminate HTTPS here
+// directly, e.g. against a self-signed cert for a LAN deployment (see
+// README.md for a one-line generation recipe). Leave both unset to keep
+// plain HTTP and terminate TLS at a reverse proxy instead — both are valid,
+// this just avoids requiring the proxy for the common self-signed-LAN case.
+const TLS_ENABLED = !!(TLS_CERT_PATH && TLS_KEY_PATH);
+let server;
+if (TLS_ENABLED) {
+  let cert, key;
+  try {
+    cert = fs.readFileSync(TLS_CERT_PATH);
+    key = fs.readFileSync(TLS_KEY_PATH);
+  } catch (e) {
+    log('ERROR', `failed to read TLS cert/key (LOCATION_TLS_CERT_PATH=${TLS_CERT_PATH}, ` +
+                 `LOCATION_TLS_KEY_PATH=${TLS_KEY_PATH}): ${e.message}`);
+    process.exit(1);
+  }
+  server = https.createServer({ cert, key }, requestListener);
+} else {
+  server = http.createServer(requestListener);
+}
 
 // ── Capacity / DoS hardening ────────────────────────────────────────────────
 // Reports are tiny short-burst POSTs (see openALE's LocationRelayService), so
@@ -517,9 +537,10 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 server.listen(PORT, () => {
-  log('INFO', `Location Relay server listening on :${PORT} (bound 0.0.0.0)`);
-  log('INFO', `  Ingest:  POST http://<host>:${PORT}/api/v1/locations  (Bearer token required)`);
-  log('INFO', `  Map:     http://<host>:${PORT}/`);
+  const scheme = TLS_ENABLED ? 'https' : 'http';
+  log('INFO', `Location Relay server listening on :${PORT} (bound 0.0.0.0, TLS ${TLS_ENABLED ? 'on' : 'off'})`);
+  log('INFO', `  Ingest:  POST ${scheme}://<host>:${PORT}/api/v1/locations  (Bearer token required)`);
+  log('INFO', `  Map:     ${scheme}://<host>:${PORT}/`);
   log('INFO', `  DB:      ${DB_PATH}  (owned by db-worker.js)`);
   log('INFO', `  Log:     ${LOG_PATH || '(file disabled, stdout only)'}`);
   log('INFO', `  Decay:   stations not seen in ${RETENTION_DAYS}d removed every ${DECAY_INTERVAL_MIN}min`);

@@ -89,6 +89,7 @@ public:
     struct Config {
         std::string url;
         std::string token;
+        std::string ca_cert_path;  ///< pinned server cert (PEM); empty = system trust store
         uint16_t    queue_size       = 64;
         uint32_t    min_interval_sec = 30;  ///< per-source throttle
         uint32_t    health_check_interval_sec = 60;  ///< idle endpoint probe cadence

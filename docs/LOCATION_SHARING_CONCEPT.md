@@ -316,7 +316,9 @@ dedup_key = source + "|" + gpr_timestamp_utc + "|" + round(lat, k) + "," + round
 - `source` = GPR-OBJECT (nicht AMD-Sender — sonst würde ein Relay dieselbe
   Position als „neue" durchkommen).
 - `round(latlon, k)` mit `k = location_sharing_round_digits` (Privacy-Rundung,
-  default 2 → ~1 km). Rundung dient gleichzeitig Privacy **und** Dedup-Stabilität.
+  default 6 → volle GPS-Präzision, keine Blurring). Operator kann `k` senken,
+  um die Position bewusst zu verwischen; Rundung dient dann gleichzeitig
+  Privacy **und** Dedup-Stabilität.
 - LRU-Set pro Observer, bounded (z.B. letzte 256 Keys). Treffer → kein Enqueue.
 - Bewusst **pro Observer**: zwei Stationen dürfen dieselbe Source durchaus
   beide melden (der Server will ja „gehört von DF3SR **und** DL3ABC").
@@ -369,7 +371,7 @@ bool      location_sharing_individual     = false;  // Individual Calls
 bool      location_sharing_net            = false;  // NETCALL
 bool      location_sharing_linked         = false;  // AMDs über bestehende Verbindung
 uint32_t  location_sharing_min_interval_sec = 30;   // Throttle pro source
-uint8_t   location_sharing_round_digits   = 2;      // Privacy-Rundung lat/lon
+uint8_t   location_sharing_round_digits   = 6;      // Privacy-Rundung lat/lon (6 = volle GPS-Präzision)
 bool      location_sharing_include_comment = false; // GPR-Kommentar nicht senden
 uint16_t  location_sharing_queue_size     = 64;     // Bounded Queue
 ```
@@ -535,11 +537,15 @@ Position unbekannt" → Online ohne Marker).
 
 ## 19. Open Questions
 
-1. **Linux TLS-Backend.** `sfi_service.cpp:80` macht Linux nur Raw-HTTP ohne TLS.
-   Für HTTPS-Relay braucht es OpenSSL oder libcurl als Abhängigkeit
-   (CMakeLists.txt). Entscheidung: neue Abhängigkeit vs. „nur Windows + lokaler
-   HTTP-Relay auf Linux". Empfehlung: kleine `HttpPoster`-Abstraktion, WinHTTP
-   sofort, Linux folgt. — **Operator-Entscheidung nötig.**
+1. **Linux TLS-Backend.** ~~`sfi_service.cpp:80` macht Linux nur Raw-HTTP ohne
+   TLS.~~ **Gelöst für Location Relay** (`http_poster.cpp`, die hier
+   empfohlene `HttpPoster`-Abstraktion): POSIX nutzt jetzt mbedTLS (bereits
+   Projekt-Abhängigkeit, siehe `apps/bridge/tls_support.cpp`), Windows
+   weiterhin WinHTTP; beide unterstützen optionales Cert-Pinning
+   (`location_ca_cert_path`) für selbstsignierte Relay-Server-Zertifikate.
+   `sfi_service.cpp` selbst hat eine eigene, separate Raw-HTTP-Implementierung
+   (unabhängig von `HttpPoster`) und bleibt von dieser Änderung unberührt —
+   außerhalb des Scopes von Location Relay.
 2. **call_context-Ableitung im Linked-Pfad.** Ist ein AMD über eine bestehende
    Verbindung `LINKED` oder der ursprüngliche Call-Typ der Verbindung? Vorschlag:
    `LINKED` (konfigurierbar via `location_sharing_linked`). Am State-Machine

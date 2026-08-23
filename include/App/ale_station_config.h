@@ -158,13 +158,14 @@ struct ALEStationConfig {
     bool        location_sharing_enabled         = false; ///< master opt-in
     std::string location_api_url                 = "";    ///< https://.../api/v1/locations
     std::string location_api_token                = "";    ///< Bearer token, never logged
+    std::string location_ca_cert_path            = "";    ///< pinned server cert (PEM); empty = system trust store
     bool        location_sharing_allcall         = true;  ///< forward ALLCALL-received GPRs
     bool        location_sharing_individual      = false; ///< forward individual-call GPRs
     bool        location_sharing_net             = false; ///< forward net-call GPRs
     bool        location_sharing_group           = false; ///< forward group-call GPRs
     bool        location_sharing_linked          = false; ///< forward GPRs over an established link
     uint32_t    location_sharing_min_interval_sec = 30;    ///< throttle, per source
-    uint8_t     location_sharing_round_digits    = 2;      ///< lat/lon rounding (privacy + dedup)
+    uint8_t     location_sharing_round_digits    = 6;      ///< lat/lon rounding (privacy + dedup); 6 = full GPS precision
     bool        location_sharing_include_comment = false;  ///< forward the GPR comment field
     uint16_t    location_sharing_queue_size      = 64;      ///< bounded outbound queue
 

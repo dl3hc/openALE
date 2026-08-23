@@ -99,10 +99,20 @@ That's it for local testing — openALE can already reach
 deliberate exception for `127.0.0.1`/`localhost`, exactly so you can test
 without setting up TLS first).
 
-**For real use across the network**, put a TLS-terminating reverse proxy
-(Caddy, nginx, Traefik, …) in front of it and point openALE at the
-`https://` URL instead — the server itself doesn't speak TLS. See
-[`tools/location-relay-server/README.md`](../tools/location-relay-server/README.md)
+**For real use across the network**, you need real HTTPS. Two ways to get
+it — either works with openALE's client on both Windows and Linux:
+
+1. **Native TLS**: set `LOCATION_TLS_CERT_PATH`/`LOCATION_TLS_KEY_PATH` in
+   the server's `.env` (a one-line `openssl` command generates a self-signed
+   cert — see the server's README). Then set openALE's **CA Certificate
+   Path** field to that certificate, since a self-signed cert isn't in any
+   system trust store and needs to be pinned explicitly.
+2. **Reverse proxy**: put Caddy/nginx/Traefik in front for TLS termination
+   (typically with a real CA-signed cert, e.g. Let's Encrypt) and point
+   openALE at the proxy's `https://` URL — leave CA Certificate Path empty
+   in this case, the system trust store already validates a real cert.
+
+See [`tools/location-relay-server/README.md`](../tools/location-relay-server/README.md)
 for the full API reference, storage model, and env var list.
 
 Keep the server running (systemd unit, pm2, a screen/tmux session — your
@@ -119,6 +129,7 @@ Reports* and *Known Positions* to **Privacy / Network — Location Relay**.
 | **Enable Location Relay** | Master switch. Off by default — nothing is ever sent until you flip this. |
 | **API Endpoint** | The server's ingest URL, e.g. `https://relay.example.com/api/v1/locations` or `http://127.0.0.1:8766/api/v1/locations` for local testing. |
 | **Bearer Token** | Must match the server's `LOCATION_API_TOKEN`. Write-only in the GUI — once saved, it's never displayed or sent back to the browser again; the field just shows a hint that a token is stored. |
+| **CA Certificate Path** | Optional. If the server uses a self-signed certificate, point this at that certificate (PEM) — the client trusts exactly that cert. Leave empty for a real CA-signed cert (system trust store) or for `http://127.0.0.1`/`localhost` local testing. |
 | **Forward positions received via** | Per-call-type gates: ALLCALL, Individual Call, Net Call, Group Call, Linked (over an established connection). Only checked types get forwarded — see the privacy note below. |
 | **Min. interval per source (s)** | Throttle: don't forward more than one report from the same station more often than this, even if it keeps re-sending. Default 30s. |
 | **Position rounding (digits)** | Reduces position precision before it's sent — 2 digits ≈ 1 km resolution. Also stabilizes deduplication. |
@@ -175,16 +186,21 @@ client-side before any network call happens).
   within your configured minimum interval, the second one is silently
   dropped — that's by design, not a bug.
 
-**openALE logs "HTTPS relay needs a TLS backend on Linux" and nothing
-sends.**
-This is a known, documented limitation (see the concept doc's Open Question
-#1): the Linux build has no TLS client yet, so it can only POST to plain
-`http://` targets — put a reverse proxy with TLS in front of the server and
-point the *proxy's* `http://` origin at openALE only if that origin is
-`127.0.0.1`/`localhost`; for a remote Linux station, this currently means
-Location Relay can't reach a real HTTPS endpoint until a TLS backend
-(OpenSSL/libcurl) is added. Windows is unaffected — it uses WinHTTP with TLS
-already.
+**openALE logs a TLS/certificate warning and nothing sends.**
+Both platforms speak real TLS now (Windows via WinHTTP, Linux via mbedTLS),
+so this almost always means a certificate trust problem rather than a
+missing TLS backend:
+- `no ca_cert_path configured and no system CA bundle found` / `does not
+  match the configured ca_cert_path pin` (Linux) or `server certificate
+  does not match the configured ca_cert_path pin` (Windows) — the server is
+  using a self-signed certificate and either **CA Certificate Path** is
+  empty or points at the wrong file. Set it to the exact `cert.pem` the
+  server was started with.
+- `failed to load ca_cert_path ... (unreadable/invalid PEM)` — the path is
+  wrong, or the file isn't a valid PEM certificate.
+- No TLS-specific warning at all, just "endpoint unreachable" — a plain
+  connectivity problem (host/port/firewall), not TLS; see the reachability
+  troubleshooting above.
 
 **"Auth failed" / 401 shown in the ALE Log.**
 The tokens don't match. Re-enter the token in openALE's Location Relay

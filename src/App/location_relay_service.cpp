@@ -243,7 +243,7 @@ void LocationRelayService::update_conn_state(bool reached, int http_status) {
 
 void LocationRelayService::run_health_check() {
     HttpPostResult res;
-    const bool reached = http_probe(cfg_.url, cfg_.token, res);
+    const bool reached = http_probe(cfg_.url, cfg_.token, cfg_.ca_cert_path, res);
     update_conn_state(reached, res.status);
 }
 
@@ -291,7 +291,7 @@ void LocationRelayService::worker_loop() {
 
         HttpPostResult res;
         const std::string body = to_json(report);
-        const bool sent = http_post_json(cfg_.url, cfg_.token, body, res);
+        const bool sent = http_post_json(cfg_.url, cfg_.token, body, cfg_.ca_cert_path, res);
         // A send is itself a connectivity sample — reclassify the endpoint and
         // defer the next idle probe so we don't double-probe after traffic.
         update_conn_state(sent, res.status);
