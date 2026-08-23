@@ -997,6 +997,7 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.location_sharing_enabled         = cfg.location_sharing_enabled;
     config_.location_api_url                 = cfg.location_api_url;
     config_.location_api_token               = cfg.location_api_token;
+    config_.location_ca_cert_path            = cfg.location_ca_cert_path;
     config_.location_sharing_allcall         = cfg.location_sharing_allcall;
     config_.location_sharing_individual      = cfg.location_sharing_individual;
     config_.location_sharing_net             = cfg.location_sharing_net;
@@ -3899,6 +3900,7 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "location_sharing_enabled=" << (config_.location_sharing_enabled ? 1 : 0) << "\n";
     f << "location_api_url=" << config_.location_api_url << "\n";
     f << "location_api_token=" << config_.location_api_token << "\n";
+    f << "location_ca_cert_path=" << config_.location_ca_cert_path << "\n";
     f << "location_sharing_allcall=" << (config_.location_sharing_allcall ? 1 : 0) << "\n";
     f << "location_sharing_individual=" << (config_.location_sharing_individual ? 1 : 0) << "\n";
     f << "location_sharing_net=" << (config_.location_sharing_net ? 1 : 0) << "\n";
@@ -4106,6 +4108,8 @@ bool ALEController::import_settings(const std::string& path, bool follow_channel
             cfg.location_api_url = val;
         } else if (key == "location_api_token") {
             cfg.location_api_token = val;
+        } else if (key == "location_ca_cert_path") {
+            cfg.location_ca_cert_path = val;
         } else if (key == "location_sharing_allcall") {
             cfg.location_sharing_allcall = (val == "1");
         } else if (key == "location_sharing_individual") {

@@ -1,3 +1,6 @@
 location-relay.sqlite
 location-relay.sqlite-*
+location-relay.log
 .env
+cert.pem
+key.pem

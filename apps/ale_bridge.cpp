@@ -554,6 +554,7 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
             LocationRelayService::Config lcfg;
             lcfg.url               = cfg.location_api_url;
             lcfg.token              = cfg.location_api_token;
+            lcfg.ca_cert_path       = cfg.location_ca_cert_path;
             lcfg.queue_size         = cfg.location_sharing_queue_size;
             lcfg.min_interval_sec   = cfg.location_sharing_min_interval_sec;
             pal::log_info("openALE", "Location Relay: starting (%s)", lcfg.url.c_str());
@@ -1162,6 +1163,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("has_fix",      mj::Value::boolean(ctrl.has_gps_fix()));
         r.set("fix_lat",      mj::Value::number(ctrl.get_gps_lat()));
         r.set("fix_lon",      mj::Value::number(ctrl.get_gps_lon()));
+        r.set("receiving",    mj::Value::boolean(ctx.gps_svc && ctx.gps_svc->is_receiving()));
         r.set("sfi",          mj::Value::number(ctrl.get_current_sfi()));
         return mj::dump(r);
     }
@@ -1247,6 +1249,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         // it once set). The GUI shows a "configured"/"not configured" state
         // instead of the raw value; POSTing a new value always overwrites.
         r.set("token_set",        mj::Value::boolean(!cfg.location_api_token.empty()));
+        r.set("ca_cert_path",     mj::Value::string(cfg.location_ca_cert_path));
         r.set("allcall",          mj::Value::boolean(cfg.location_sharing_allcall));
         r.set("individual",       mj::Value::boolean(cfg.location_sharing_individual));
         r.set("net",              mj::Value::boolean(cfg.location_sharing_net));
@@ -1279,6 +1282,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         // without clobbering an already-configured token.
         if (msg.has("token") && !msg.get_string("token").empty())
             cfg.location_api_token = msg.get_string("token");
+        if (msg.has("ca_cert_path"))      cfg.location_ca_cert_path = msg.get_string("ca_cert_path");
         if (msg.has("allcall"))          cfg.location_sharing_allcall = msg.get_bool("allcall");
         if (msg.has("individual"))       cfg.location_sharing_individual = msg.get_bool("individual");
         if (msg.has("net"))              cfg.location_sharing_net = msg.get_bool("net");
@@ -2108,6 +2112,7 @@ int main(int argc, char* argv[]) {
     // ── Main loop — mirrors ale_cli.cpp exactly, plus WS command drain ─────
     std::string last_state      = ctrl.display_state();
     bool        last_lbt_busy   = false;
+    bool        last_gps_receiving = false;  // → live "gps_link" pill (see drain below)
     std::string last_voice_state;   // "" = not in voice session
     while (g_running) {
         const uint32_t t = static_cast<uint32_t>(timer->get_time_ms());
@@ -2128,6 +2133,17 @@ int main(int argc, char* argv[]) {
                 // context-affecting lat/lon signal.
                 ctrl.set_gps_altitude(ctx.gps_svc->has_altitude(), ctx.gps_svc->alt());
                 ctrl.set_gps_raw_gga(ctx.gps_svc->raw_gga());
+                // Data-liveness pill (independent of has_fix() — see
+                // GpsService::is_receiving() doc comment): distinguishes
+                // "connected, still acquiring a fix" from "no data at all"
+                // in the GUI, which otherwise look identical.
+                const bool cur_gps_receiving = ctx.gps_svc->is_receiving();
+                if (cur_gps_receiving != last_gps_receiving) {
+                    last_gps_receiving = cur_gps_receiving;
+                    mj::Value e = make_event("gps_link");
+                    e.set("receiving", mj::Value::boolean(cur_gps_receiving));
+                    ws.send_text(mj::dump(e));
+                }
             }
             if (pending.sfi_dirty) {
                 ctrl.set_current_sfi(pending.sfi);

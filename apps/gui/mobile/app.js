@@ -60,6 +60,7 @@ const wfMarkers      = [];          // ALE frame markers; aged each waterfall ro
 let locGpsFix = false;   // last GPS fix state from gps_fix push events
 let locGpsLat = 0.0;
 let locGpsLon = 0.0;
+let locGpsReceiving = false;  // last data-liveness state from gps_link push events
 let locSfi    = 0.0;     // last SFI value from sfi_update push events
 
 function bridgeWsUrl() {
@@ -483,12 +484,16 @@ function onBridgeEvent(e) {
     case 'gps_fix':
       locGpsFix = !!e.acquired;
       if (e.acquired) { locGpsLat = e.lat || 0; locGpsLon = e.lon || 0; }
-      updateLocStatus(locGpsFix, locGpsLat, locGpsLon, locSfi);
+      updateLocStatus(locGpsFix, locGpsLat, locGpsLon, locSfi, locGpsReceiving);
       gatePosReportGgaOption();
+      break;
+    case 'gps_link':
+      locGpsReceiving = !!e.receiving;
+      updateLocStatus(locGpsFix, locGpsLat, locGpsLon, locSfi, locGpsReceiving);
       break;
     case 'sfi_update':
       locSfi = e.sfi || 0;
-      updateLocStatus(locGpsFix, locGpsLat, locGpsLon, locSfi);
+      updateLocStatus(locGpsFix, locGpsLat, locGpsLon, locSfi, locGpsReceiving);
       break;
   }
 }
@@ -3565,8 +3570,9 @@ function syncLocationFromBridge() {
     setBool('cfgSfiEnabled', r.sfi_enabled);
     locGpsFix = !!r.has_fix;
     if (r.has_fix) { locGpsLat = r.fix_lat || 0; locGpsLon = r.fix_lon || 0; }
+    locGpsReceiving = !!r.receiving;
     locSfi = r.sfi || 0;
-    updateLocStatus(locGpsFix, locGpsLat, locGpsLon, locSfi);
+    updateLocStatus(locGpsFix, locGpsLat, locGpsLon, locSfi, locGpsReceiving);
   });
 }
 
@@ -3745,6 +3751,8 @@ function syncLocationSharingFromBridge() {
     setChecked('cfgLocShareIncludeComment', r.include_comment);
     const urlInp = document.getElementById('cfgLocShareUrl');
     if (urlInp && typeof r.url === 'string') urlInp.value = r.url;
+    const caInp = document.getElementById('cfgLocShareCaCertPath');
+    if (caInp && typeof r.ca_cert_path === 'string') caInp.value = r.ca_cert_path;
     const minInp = document.getElementById('cfgLocShareMinInterval');
     if (minInp && typeof r.min_interval_sec === 'number') minInp.value = r.min_interval_sec;
     const roundInp = document.getElementById('cfgLocShareRoundDigits');
@@ -3764,13 +3772,14 @@ function applyLocationSharingToBridge() {
     enabled:          !!document.getElementById('cfgLocShareEnabled')?.checked,
     url:              (document.getElementById('cfgLocShareUrl')?.value || '').trim(),
     token:            document.getElementById('cfgLocShareToken')?.value || '',
+    ca_cert_path:     (document.getElementById('cfgLocShareCaCertPath')?.value || '').trim(),
     allcall:          !!document.getElementById('cfgLocShareAllcall')?.checked,
     individual:       !!document.getElementById('cfgLocShareIndividual')?.checked,
     net:              !!document.getElementById('cfgLocShareNet')?.checked,
     group:            !!document.getElementById('cfgLocShareGroup')?.checked,
     linked:           !!document.getElementById('cfgLocShareLinked')?.checked,
     min_interval_sec: parseInt(document.getElementById('cfgLocShareMinInterval')?.value || '30', 10),
-    round_digits:     parseInt(document.getElementById('cfgLocShareRoundDigits')?.value || '2', 10),
+    round_digits:     parseInt(document.getElementById('cfgLocShareRoundDigits')?.value || '6', 10),
     include_comment:  !!document.getElementById('cfgLocShareIncludeComment')?.checked,
   }, (r) => {
     const tokenInp = document.getElementById('cfgLocShareToken');
@@ -3885,13 +3894,24 @@ function onLatLonInput() {
   if (gridEl) gridEl.value = latLonToGrid(lat, lon);
 }
 
-function updateLocStatus(hasFix, lat, lon, sfi) {
+// receiving = GpsService::is_receiving() (data-liveness, independent of
+// hasFix) — distinguishes "connected, acquiring fix" from "no data at all"
+// (wrong port/baud, cable unplugged), which otherwise both show as "No fix".
+function updateLocStatus(hasFix, lat, lon, sfi, receiving) {
   const gpsEl = document.getElementById('locGpsStatus');
   const sfiEl = document.getElementById('locSfiStatus');
   if (gpsEl) {
-    gpsEl.textContent = hasFix
-      ? `Fix: ${lat.toFixed(4)}°, ${lon.toFixed(4)}°`
-      : 'No fix';
+    gpsEl.classList.remove('ok', 'err', 'warn');
+    if (hasFix) {
+      gpsEl.textContent = `Fix: ${lat.toFixed(4)}°, ${lon.toFixed(4)}°`;
+      gpsEl.classList.add('ok');
+    } else if (receiving) {
+      gpsEl.textContent = 'Connected — acquiring fix…';
+      gpsEl.classList.add('warn');
+    } else {
+      gpsEl.textContent = 'No data';
+      gpsEl.classList.add('err');
+    }
   }
   if (sfiEl) {
     sfiEl.textContent = sfi > 0 ? `SFI: ${sfi.toFixed(0)} sfu` : 'Not available';

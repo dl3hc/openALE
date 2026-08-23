@@ -1,4 +1,5 @@
 #include "App/gps_service.h"
+#include "PAL/logger.h"
 
 #include <cctype>
 #include <chrono>
@@ -48,13 +49,23 @@
    static const serial_t kInvalidSerial = INVALID_HANDLE_VALUE;
    static serial_t serial_open(const std::string& port, uint32_t baud) {
        std::string p = "\\\\.\\" + port;
-       serial_t h = CreateFileA(p.c_str(), GENERIC_READ, 0, nullptr,
+       // GENERIC_WRITE is required even though we never call WriteFile(): many
+       // USB-CDC virtual COM ports (e.g. a u-blox receiver's USB serial
+       // interface) fail CreateFile or silently no-op SetCommState/
+       // SetCommTimeouts when opened read-only, since the driver's comm-config
+       // IOCTLs need write access to the handle.
+       serial_t h = CreateFileA(p.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
        if (h == INVALID_HANDLE_VALUE) return h;
        DCB dcb{};  dcb.DCBlength = sizeof(dcb);
        GetCommState(h, &dcb);
        dcb.BaudRate = static_cast<DWORD>(baud);
        dcb.ByteSize = 8;  dcb.StopBits = ONESTOPBIT;  dcb.Parity = NOPARITY;
+       // Explicit rather than relying on GetCommState's driver-dependent
+       // defaults: USB-CDC ACM devices commonly gate data flow on DTR being
+       // asserted, mirroring RS-232 modem-control semantics.
+       dcb.fDtrControl = DTR_CONTROL_ENABLE;
+       dcb.fRtsControl = RTS_CONTROL_ENABLE;
        SetCommState(h, &dcb);
        COMMTIMEOUTS ct{};
        ct.ReadIntervalTimeout        = 500;
@@ -151,6 +162,12 @@ void GpsService::stop() {
     std::lock_guard<std::mutex> g(fix_mtx_);
     fix_valid_   = false;
     fix_has_alt_ = false;
+    nmea_receiving_ = false;
+    gpsd_receiving_ = false;
+}
+
+bool GpsService::is_receiving() const {
+    return nmea_receiving_.load() || gpsd_receiving_.load();
 }
 
 bool GpsService::has_fix() const {
@@ -185,9 +202,20 @@ void GpsService::update_fix(bool valid, double lat, double lon, bool has_alt, do
         std::lock_guard<std::mutex> g(fix_mtx_);
         changed = (valid != fix_valid_) ||
                   (valid && (lat != fix_lat_ || lon != fix_lon_));
-        fix_valid_   = valid;
-        fix_has_alt_ = valid && has_alt;
-        if (valid) { fix_lat_ = lat; fix_lon_ = lon; fix_alt_ = has_alt ? alt : 0.0; }
+        fix_valid_ = valid;
+        if (!valid) {
+            // Fix lost entirely — nothing left to report an altitude against.
+            fix_has_alt_ = false;
+            fix_alt_     = 0.0;
+        } else if (has_alt) {
+            fix_has_alt_ = true;
+            fix_alt_     = alt;
+        }
+        // else: valid fix, but this sentence carries no altitude (e.g. $GPRMC,
+        // which alternates with $GPGGA on most receivers) — leave the
+        // last-known altitude from a prior GGA in place rather than clobbering
+        // it to "unavailable" on every RMC line.
+        if (valid) { fix_lat_ = lat; fix_lon_ = lon; }
     }
     if (changed) {
         std::lock_guard<std::mutex> g(cb_mtx_);
@@ -201,6 +229,9 @@ void GpsService::gpsd_loop(Config cfg) {
     while (running_.load()) {
         raw_sock_t s = tcp_connect(cfg.gpsd_host, cfg.gpsd_port);
         if (s == kInvalidSock) {
+            if (gpsd_receiving_.exchange(false))
+                pal::log_warn("GPS", "gpsd %s:%u: connection lost",
+                                             cfg.gpsd_host.c_str(), cfg.gpsd_port);
             for (int i = 0; i < 50 && running_.load(); ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
@@ -221,6 +252,9 @@ void GpsService::gpsd_loop(Config cfg) {
             while ((pos = linebuf.find('\n')) != std::string::npos) {
                 std::string line = linebuf.substr(0, pos);
                 linebuf.erase(0, pos + 1);
+                if (!gpsd_receiving_.exchange(true))
+                    pal::log_info("GPS", "gpsd %s:%u: receiving data (no satellite fix yet)",
+                                                 cfg.gpsd_host.c_str(), cfg.gpsd_port);
                 if (line.find("\"class\":\"TPV\"") != std::string::npos) {
                     double lat, lon; bool fix_ok;
                     bool has_alt; double alt;
@@ -230,6 +264,9 @@ void GpsService::gpsd_loop(Config cfg) {
             }
         }
         sock_close(s);
+        if (gpsd_receiving_.exchange(false))
+            pal::log_warn("GPS", "gpsd %s:%u: connection closed",
+                                         cfg.gpsd_host.c_str(), cfg.gpsd_port);
         update_fix(false, 0.0, 0.0);
     }
 }
@@ -237,9 +274,18 @@ void GpsService::gpsd_loop(Config cfg) {
 // ── NMEA loop ─────────────────────────────────────────────────────────────────
 
 void GpsService::nmea_loop(Config cfg) {
+    // serial_read() times out after ~1s per call (COMMTIMEOUTS on Windows,
+    // VTIME on POSIX — see serial_open() above), so a run of kSilentLimit
+    // consecutive zero-byte reads means ~kSilentLimit seconds of silence on
+    // an otherwise-open port — used to detect "port open but device stopped
+    // talking" (unplugged mid-session), distinct from "port never opened".
+    constexpr int kSilentLimit = 5;
     while (running_.load()) {
         serial_t fd = serial_open(cfg.nmea_port, cfg.nmea_baud);
         if (fd == kInvalidSerial) {
+            if (nmea_receiving_.exchange(false))
+                pal::log_warn("GPS", "NMEA serial %s: port unavailable — no data",
+                                             cfg.nmea_port.c_str());
             for (int i = 0; i < 50 && running_.load(); ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
@@ -247,13 +293,24 @@ void GpsService::nmea_loop(Config cfg) {
 
         std::string linebuf;
         char ch;
+        int silent_ticks = 0;
         while (running_.load()) {
             int n = serial_read(fd, &ch, 1);
             if (n < 0) break;
-            if (n == 0) continue;
+            if (n == 0) {
+                if (silent_ticks < kSilentLimit) ++silent_ticks;  // pin — see kSilentLimit doc above
+                if (silent_ticks >= kSilentLimit && nmea_receiving_.exchange(false))
+                    pal::log_warn("GPS", "NMEA serial %s: no data received for ~%ds — link down?",
+                                                 cfg.nmea_port.c_str(), kSilentLimit);
+                continue;
+            }
+            silent_ticks = 0;
             if (ch == '\n') {
                 // Strip trailing \r
                 if (!linebuf.empty() && linebuf.back() == '\r') linebuf.pop_back();
+                if (!linebuf.empty() && linebuf[0] == '$' && !nmea_receiving_.exchange(true))
+                    pal::log_info("GPS", "NMEA serial %s: receiving data (no satellite fix yet)",
+                                                 cfg.nmea_port.c_str());
                 double lat, lon; bool active;
                 if (linebuf.size() > 6) {
                     const std::string prefix = linebuf.substr(0, 6);
@@ -277,6 +334,8 @@ void GpsService::nmea_loop(Config cfg) {
         }
         serial_close(fd);
         update_fix(false, 0.0, 0.0);
+        if (nmea_receiving_.exchange(false))
+            pal::log_warn("GPS", "NMEA serial %s: connection closed", cfg.nmea_port.c_str());
     }
 }
 

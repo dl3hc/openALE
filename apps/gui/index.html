@@ -1182,6 +1182,11 @@
                 placeholder="(leave blank to keep the stored token)">
               <div class="fhint" id="locShareTokenHint"></div>
             </div>
+            <div class="fg">
+              <label class="flabel" for="cfgLocShareCaCertPath">CA Certificate Path</label>
+              <input class="finput" type="text" id="cfgLocShareCaCertPath"
+                placeholder="(optional) path to the relay server's certificate — required for a self-signed cert">
+            </div>
 
             <div class="fg">
               <label class="flabel">Forward positions received via</label>
@@ -1216,12 +1221,12 @@
               </div>
               <div>
                 <label class="flabel" for="cfgLocShareRoundDigits">Position rounding (digits)</label>
-                <input class="finput" type="number" id="cfgLocShareRoundDigits" min="0" max="6" value="2">
+                <input class="finput" type="number" id="cfgLocShareRoundDigits" min="0" max="6" value="6">
               </div>
             </div>
             <div class="fhint" style="margin-top:-6px">
-              Rounding reduces position resolution for privacy (2 digits ≈ 1 km) and also
-              stabilizes deduplication.
+              Default 6 = full GPS precision, no blurring. Lower to trade position accuracy
+              for privacy (2 digits ≈ 1 km); also stabilizes deduplication.
             </div>
 
             <div class="fg">

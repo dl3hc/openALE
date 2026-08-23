@@ -22,10 +22,28 @@ node server.js
 Then point openALE's **Location Relay → API Endpoint** at
 `https://your-host:PORT/api/v1/locations` (or `http://127.0.0.1:8766/...` for
 local testing — openALE's client only allows plain `http://` for
-`127.0.0.1`/`localhost`, everything else must be HTTPS; put this behind a
-reverse proxy such as Caddy/nginx/Traefik for TLS termination in production).
+`127.0.0.1`/`localhost`, everything else must be HTTPS).
 
-Open `http://your-host:PORT/` in a browser for the live map.
+For real HTTPS you have two options — either works with openALE's client:
+
+1. **Native TLS (no extra infrastructure).** Set `LOCATION_TLS_CERT_PATH` and
+   `LOCATION_TLS_KEY_PATH` in `.env` and the server terminates HTTPS itself
+   (`node:https`, zero new dependency). Generate a self-signed cert once:
+   ```sh
+   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+     -keyout key.pem -out cert.pem -days 3650 -nodes -subj "/CN=location-relay" \
+     -addext "subjectAltName=DNS:your-host,IP:192.168.2.144"
+   ```
+   Then set openALE's **CA Certificate Path** field to this `cert.pem` (the
+   client pins to exactly that certificate — required for a self-signed cert,
+   since it isn't in any system trust store).
+2. **Reverse proxy.** Leave the server on plain HTTP and put Caddy/nginx/
+   Traefik in front for TLS termination — the usual approach for a
+   CA-signed cert (e.g. via Let's Encrypt). Leave openALE's CA Certificate
+   Path empty in this case (system trust store validates a real cert).
+
+Open `http://your-host:PORT/` (or `https://` if native TLS is enabled) in a
+browser for the live map.
 
 ## API
 
@@ -97,6 +115,9 @@ else here depends on Leaflet specifically.
 - Read endpoints (`GET /api/v1/*`) are intentionally public/unauthenticated —
   the map is meant to be viewable without a credential. If that's not wanted,
   put the whole thing behind a reverse-proxy auth layer.
-- TLS is not handled here — terminate it at a reverse proxy in production.
-  openALE's client itself refuses plaintext `http://` except to
-  `127.0.0.1`/`localhost` (see `include/App/http_poster.h`).
+- TLS: either terminate it here natively (`LOCATION_TLS_CERT_PATH`/
+  `LOCATION_TLS_KEY_PATH`, see Run above) or at a reverse proxy — openALE's
+  client itself refuses plaintext `http://` except to `127.0.0.1`/`localhost`
+  (see `include/App/http_poster.h`). For a self-signed cert, openALE's
+  **CA Certificate Path** setting must point at that exact certificate — the
+  client pins to it rather than trusting the system CA store.
