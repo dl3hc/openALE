@@ -59,7 +59,11 @@ RIG* open_client(const std::string& host) {
     RIG* rig = rig_init(2);  // 2 = NET_RIGCTL / RIG_MODEL_NETRIGCTL
     if (!rig) return nullptr;
     rig->state.rigport.type.rig = RIG_PORT_NETWORK;
+#ifdef _MSC_VER
+    strncpy_s(rig->state.rigport.pathname, HAMLIB_FILPATHLEN, host.c_str(), HAMLIB_FILPATHLEN - 1);
+#else
     std::strncpy(rig->state.rigport.pathname, host.c_str(), HAMLIB_FILPATHLEN - 1);
+#endif
     return rig;
 }
 

@@ -32,6 +32,16 @@ namespace {
 
 constexpr const char* kCrashLogFile = "crash.log";
 
+FILE* fopen_portable(const char* path, const char* mode) {
+#ifdef _WIN32
+    FILE* f = nullptr;
+    fopen_s(&f, path, mode);
+    return f;
+#else
+    return std::fopen(path, mode);
+#endif
+}
+
 void write_timestamp(FILE* f) {
     const std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -151,7 +161,7 @@ void write_stack_trace(FILE* f) {
 // Shared record writer for every handler below — kept tiny and dependency-
 // free on purpose (see file doc comment).
 void write_crash_record(const char* cause, const char* detail) {
-    FILE* f = std::fopen(kCrashLogFile, "a");
+    FILE* f = fopen_portable(kCrashLogFile, "a");
     if (!f) return;
     std::fprintf(f, "==== CRASH ==== ");
     write_timestamp(f);
