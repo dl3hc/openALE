@@ -2181,6 +2181,15 @@ function showSec(sec) {
   if (sec === 'radio') populateRigDropdown(savedRigModel);
 }
 
+// Secondary tab strip within the Location section (Settings vs. Known
+// Positions) — see .ssec-tabs/.ssec-subpage in styles.css.
+function showLocTab(tab) {
+  document.querySelectorAll('.ssec-tab').forEach(el =>
+    el.classList.toggle('active', el.dataset.loctab === tab));
+  document.querySelectorAll('.ssec-subpage').forEach(el =>
+    el.classList.toggle('active', el.dataset.loctab === tab));
+}
+
 // Mobile Settings nav: toggle the Advanced group (#advNavItems) open/closed.
 // On desktop the items are always visible (CSS) and the toggle button is hidden,
 // so this only has an effect at ≤767 px where #advNavItems starts display:none.
@@ -3576,7 +3585,12 @@ function syncLocationFromBridge() {
   });
 }
 
-function applyLocationToBridge() {
+// Position Source and Fetch-SFI are independent settings with their own Apply
+// buttons — each sends only its own fields; STATION_LOC_SET on the bridge
+// already applies whichever fields are present in the message (msg.has(...)
+// gates per-field in ale_bridge.cpp), so omitting the other setting's fields
+// here leaves it untouched.
+function applyPositionSourceToBridge() {
   if (!bridgeConnected) return;
   const src   = getPositionSource();
   const lat   = parseFloat(document.getElementById('cfgLatDeg')?.value || '0');
@@ -3586,7 +3600,6 @@ function applyLocationToBridge() {
   const gport = parseInt(document.getElementById('cfgGpsdPort')?.value || '2947', 10);
   const nport = document.getElementById('cfgNmeaPort')?.value?.trim() || '';
   const nbaud = parseInt(document.getElementById('cfgNmeaBaud')?.value || '4800', 10);
-  const sfiOn = document.getElementById('cfgSfiEnabled')?.checked ?? false;
   bridgeSend('STATION_LOC_SET', {
     position_source: src,
     lat_deg:         lat,
@@ -3596,8 +3609,13 @@ function applyLocationToBridge() {
     gpsd_port:       gport,
     nmea_port:       nport,
     nmea_baud:       nbaud,
-    sfi_enabled:     sfiOn,
   });
+}
+
+function applySfiToBridge() {
+  if (!bridgeConnected) return;
+  const sfiOn = document.getElementById('cfgSfiEnabled')?.checked ?? false;
+  bridgeSend('STATION_LOC_SET', { sfi_enabled: sfiOn });
 }
 
 // ── Tuner (rigctld-compat read-only frequency server) ──────────────────────
@@ -3660,9 +3678,21 @@ function renderPosReportNetOptions() {
     nets.map(n => `<option value="${escapeHtml(n.name)}">${escapeHtml(n.name)}</option>`).join('');
   if (nets.some(n => n.name === current)) sel.value = current;
 }
+// Master switch — mirrors onLocShareEnabledChange()'s dim-body convention.
+function onPosReportEnabledChange() {
+  const enabled = !!document.getElementById('cfgPosReportEnabled')?.checked;
+  const body = document.getElementById('posReportBody');
+  if (body) body.style.opacity = enabled ? '1' : '0.5';
+}
+
 function syncPositionReportFromBridge() {
   bridgeSend('POSITION_REPORT_GET', {}, (r) => {
     if (!r.ok) return;
+    if (typeof r.enabled === 'boolean') {
+      const en = document.getElementById('cfgPosReportEnabled');
+      if (en) en.checked = r.enabled;
+      onPosReportEnabledChange();
+    }
     if (typeof r.mode === 'number') {
       const radio = document.querySelector(`input[name="posReportMode"][value="${r.mode}"]`);
       if (radio) { radio.checked = true; onPosReportModeChange(); }
@@ -3697,6 +3727,7 @@ function syncPositionReportFromBridge() {
 }
 function applyPositionReportToBridge() {
   if (!bridgeConnected) return;
+  const enabled = !!document.getElementById('cfgPosReportEnabled')?.checked;
   const mode = parseInt(document.querySelector('input[name="posReportMode"]:checked')?.value || '0', 10);
   const dest = document.querySelector('input[name="posReportDest"]:checked')?.value || 'direct';
   const target = (dest === 'allcall') ? 'ALLCALL'
@@ -3707,7 +3738,7 @@ function applyPositionReportToBridge() {
   const format = parseInt(document.querySelector('input[name="posReportFormat"]:checked')?.value || '0', 10);
   const comment = (document.getElementById('cfgPosReportStandingComment')?.value || '').toUpperCase().trim();
   bridgeSend('POSITION_REPORT_SET', {
-    mode, target, net, change_m: changeM, interval_min: intervalMin, format, comment,
+    enabled, mode, target, net, change_m: changeM, interval_min: intervalMin, format, comment,
   });
 }
 
@@ -3808,7 +3839,7 @@ function renderGprPositions() {
     const ageSec = Math.max(0, Math.round((Date.now() - p.receivedMs) / 1000));
     const age = ageSec < 60 ? (ageSec + 's ago') : (Math.round(ageSec / 60) + 'm ago');
     const pos = (typeof p.lat === 'number' && typeof p.lon === 'number')
-      ? p.lat.toFixed(4) + '°, ' + p.lon.toFixed(4) + '°' : 'position unavailable';
+      ? p.lat.toFixed(6) + '°, ' + p.lon.toFixed(6) + '°' : 'position unavailable';
     return `<div class="msg-item" style="margin-bottom:6px">
       <div class="msg-hdr">
         <span class="msg-peer">${escapeHtml(p.object)}</span>
@@ -3859,7 +3890,7 @@ function gridToLatLon(grid) {
     lon += 1.0;
     lat += 0.5;
   }
-  return { lat: +lat.toFixed(4), lon: +lon.toFixed(4) };
+  return { lat, lon };
 }
 
 function latLonToGrid(lat, lon) {
@@ -3903,7 +3934,7 @@ function updateLocStatus(hasFix, lat, lon, sfi, receiving) {
   if (gpsEl) {
     gpsEl.classList.remove('ok', 'err', 'warn');
     if (hasFix) {
-      gpsEl.textContent = `Fix: ${lat.toFixed(4)}°, ${lon.toFixed(4)}°`;
+      gpsEl.textContent = `Fix: ${lat.toFixed(6)}°, ${lon.toFixed(6)}°`;
       gpsEl.classList.add('ok');
     } else if (receiving) {
       gpsEl.textContent = 'Connected — acquiring fix…';
@@ -4291,7 +4322,7 @@ function markAmdStatus(peer, status) {
 function gprSummaryLine(g) {
   const parts = [g.object || '?'];
   parts.push((typeof g.lat_deg === 'number' && typeof g.lon_deg === 'number')
-    ? g.lat_deg.toFixed(4) + '°, ' + g.lon_deg.toFixed(4) + '°'
+    ? g.lat_deg.toFixed(6) + '°, ' + g.lon_deg.toFixed(6) + '°'
     : (g.manual_or_invalid ? 'position unavailable' : '—'));
   if (typeof g.altitude === 'number') parts.push(Math.round(g.altitude) + (g.altitude_unit || 'M'));
   if (g.comment) parts.push(g.comment);

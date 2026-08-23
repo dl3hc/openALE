@@ -760,6 +760,15 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "GPR_BUILD") {
         // Read-only: builds and returns an ALE-GPR payload string, sends nothing.
         // The caller sends it via the existing "AMD" command ({to, text, link}).
+        // position_report_enabled is the master gate for BOTH automatic sends
+        // (tick_position_report()) and this manual "Send Position Now" path —
+        // blocking it here (before any position is even looked up) stops the
+        // GUI's Send flow at its one common choke point.
+        if (!ctrl.get_config().position_report_enabled) {
+            mj::Value r = make_reply(msg, false);
+            r.set("msg", mj::Value::string("position reporting is disabled — enable it in Settings"));
+            return mj::dump(r);
+        }
         const std::string object = msg.has("object") ? msg.get_string("object")
                                                        : ctrl.get_primary_self_address();
 
@@ -1210,6 +1219,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
     if (cmd == "POSITION_REPORT_GET") {
         const auto& cfg = ctrl.get_config();
         mj::Value r = make_reply(msg, true);
+        r.set("enabled",       mj::Value::boolean(cfg.position_report_enabled));
         r.set("mode",          mj::Value::number(static_cast<double>(static_cast<int>(cfg.position_report_mode))));
         r.set("target",        mj::Value::string(cfg.position_report_target));
         r.set("net",           mj::Value::string(cfg.position_report_net));
@@ -1223,6 +1233,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         using Mode   = ALEStationConfig::PositionReportMode;
         using Format = ALEStationConfig::PositionReportFormat;
         ALEStationConfig cfg = ctrl.get_config();
+        if (msg.has("enabled"))      cfg.position_report_enabled = msg.get_bool("enabled");
         if (msg.has("mode"))
             cfg.position_report_mode = static_cast<Mode>(static_cast<int>(msg.get_number("mode")));
         if (msg.has("target"))       cfg.position_report_target = msg.get_string("target");
@@ -1968,6 +1979,21 @@ int main(int argc, char* argv[]) {
                 if (g.has_timestamp)
                     gv.set("timestamp_utc", mj::Value::number(static_cast<double>(g.timestamp_utc)));
                 e.set("gpr", gv);
+
+                // Visibility into every incoming ALE-GPR, independent of whether
+                // Location Relay is enabled/gates it — operators need to see what
+                // arrived (and why a malformed one wasn't relayed) in the log.
+                if (g.valid_position) {
+                    const std::string alt_str = g.has_altitude
+                        ? (" alt=" + std::to_string(static_cast<long>(g.altitude)) + g.altitude_unit)
+                        : std::string();
+                    pal::log_info("GPR", "position report: object=%s via %s (peer=%s) lat=%.6f lon=%.6f%s",
+                                  g.object.c_str(), d->call_context, d->peer_addr,
+                                  g.latitude_deg, g.longitude_deg, alt_str.c_str());
+                } else {
+                    pal::log_warn("GPR", "malformed/incomplete report from %s via %s: \"%s\"",
+                                  d->peer_addr, d->call_context, d->text);
+                }
             }
             ws.send_text(mj::dump(e));
         });

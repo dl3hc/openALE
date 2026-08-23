@@ -259,13 +259,25 @@ static std::string zero_pad(long value, int width) {
     return s;
 }
 
+// '*' is the field delimiter (§ "All fields are de-limited by a single *
+// character... no de-limiter at the beginning or end"); free-text fields
+// (OBJECT, COMMENT) must never be allowed to smuggle one in, or the message
+// splits into more than 7 fields and a receiver's parse_gpr() rejects the
+// whole report as structurally invalid. '#' is the spec's own placeholder/
+// spacer character for exactly this situation.
+static std::string strip_delimiter(const std::string& s) {
+    std::string out = s;
+    for (char& c : out) if (c == '*') c = '#';
+    return out;
+}
+
 std::string generate_gpr(const std::string& object,
                           double lat_deg, double lon_deg,
                           bool has_altitude, double altitude, char altitude_unit,
                           std::time_t timestamp_utc, char timezone_code,
                           const std::string& comment)
 {
-    std::string obj = object;
+    std::string obj = strip_delimiter(object);
     if (obj.size() > 15) obj = obj.substr(0, 15);
 
     // Latitude: decimal point replaced by hemisphere char, 6-digit fraction.
@@ -309,7 +321,7 @@ std::string generate_gpr(const std::string& object,
                                     zero_pad(hh, 2) + zero_pad(mm, 2) + zero_pad(ss, 2);
 
     // Comment: truncated to 25 chars.
-    std::string cmt = comment;
+    std::string cmt = strip_delimiter(comment);
     if (cmt.size() > 25) cmt = cmt.substr(0, 25);
 
     return "GPR*" + obj + "*" + lat_field + "*" + lon_field + "*" +
