@@ -1370,6 +1370,59 @@
       margin-bottom: 12px;
     }
 
+    /* Card wrapper for one functional group of fields within an .ssec —
+       every group gets its own boundary + title so adjacent groups read as
+       distinct, instead of relying on a bare hr.fsep divider (which carries
+       no label) or a second .ssec-title reused mid-page. */
+    .ssec-group {
+      background: var(--bg1);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      padding: 16px 18px;
+      margin-bottom: 16px;
+    }
+    .ssec-group:last-child { margin-bottom: 0; }
+    .ssec-group > .fg:last-child,
+    .ssec-group > .fg-row:last-child { margin-bottom: 0; }
+
+    .ssec-group-title {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 14px;
+    }
+    .ssec-group-title.dim { color: var(--tx-muted); }
+
+    /* Secondary tab strip *within* one .ssec (e.g. Location's Settings vs.
+       Known Positions) — keeps a long received-data list from pushing the
+       section's own config fields down the page. Not a second-level snav;
+       just two mutually-exclusive .ssec-subpage blocks toggled by JS. */
+    .ssec-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .ssec-tab {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      color: var(--tx-muted);
+      padding: 8px 14px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.10s;
+    }
+    .ssec-tab:hover { color: var(--tx); }
+    .ssec-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .ssec-subpage { display: none; }
+    .ssec-subpage.active { display: block; }
+
     /* Form controls */
     .fg { margin-bottom: 18px; }
     .fg-row { display: grid; gap: 14px; margin-bottom: 18px; }
@@ -1514,11 +1567,13 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px 12px;
       padding: 10px 0;
       border-bottom: 1px solid var(--border);
     }
     .ftoggle-row:last-child { border-bottom: none; }
-    .ftoggle-info { flex: 1; }
+    .ftoggle-info { flex: 1; min-width: 220px; }
     .ftoggle-name {
       font-family: var(--sans);
       font-size: 13px;
