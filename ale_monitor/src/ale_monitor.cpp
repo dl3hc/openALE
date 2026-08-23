@@ -19,12 +19,15 @@
 
 #include "App/ale_controller.h"
 #include "App/audio_device.h"
+#include "App/http_poster.h"
+#include "App/location_relay_service.h"
 #include "PAL/events.h"
 #include "PAL/crash_handler.h"
 #include "PAL/logger.h"
 #include "PAL/radio.h"
 #include "PAL/radios/hamlib_radio.h"
 #include "PAL/timer.h"
+#include "Protocol/Message/ale_gpr.h"
 #include "bridge/ws_server.h"
 #include "bridge/minijson.h"
 
@@ -36,10 +39,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -158,6 +163,22 @@ struct MonitorConfig {
     uint32_t    history_retention_days = 90;
     bool        history_enabled = true;
     std::vector<WatchlistEntry> watchlist;  // repeatable "watchlist = ADDR:A+V" config lines
+
+    // Location Relay (docs/LOCATION_SHARING_CONCEPT.md) — forwards received
+    // ALE-GPR positions to a configured web API. This monitor has no self
+    // address, so per the ALE handshake rules (WordRole::TO_SELF requires an
+    // address match; only WordRole::ALLCALL is unconditional) it can only
+    // ever observe ALLCALL-broadcast GPRs — individual/net/group/linked
+    // exchanges between two other stations are never visible to a passive,
+    // self-address-less listener. The GUI therefore exposes a single enable
+    // toggle, not per-call-type checkboxes.
+    bool        loc_share_enabled     = false;
+    std::string loc_api_url;
+    std::string loc_api_token;
+    std::string loc_ca_cert_path;
+    uint32_t    loc_min_interval_sec  = 30;
+    uint8_t     loc_round_digits      = 6;
+    bool        loc_include_comment   = false;
 };
 
 static std::string trim(const std::string& s) {
@@ -194,6 +215,13 @@ static MonitorConfig parse_config(const std::string& path) {
         else if (key == "lqa_history_file")    { if (!val.empty()) cfg.lqa_history_file = val; }
         else if (key == "history_retention_days") { try { cfg.history_retention_days = static_cast<uint32_t>(std::stoul(val)); } catch (...) {} }
         else if (key == "history_enabled") { cfg.history_enabled = (val == "1" || val == "true"); }
+        else if (key == "location_sharing_enabled")     { cfg.loc_share_enabled = (val == "1" || val == "true"); }
+        else if (key == "location_api_url")              { cfg.loc_api_url = val; }
+        else if (key == "location_api_token")            { cfg.loc_api_token = val; }
+        else if (key == "location_ca_cert_path")         { cfg.loc_ca_cert_path = val; }
+        else if (key == "location_sharing_min_interval_sec") { try { cfg.loc_min_interval_sec = static_cast<uint32_t>(std::stoul(val)); } catch (...) {} }
+        else if (key == "location_sharing_round_digits") { try { cfg.loc_round_digits = static_cast<uint8_t>(std::stoul(val)); } catch (...) {} }
+        else if (key == "location_sharing_include_comment") { cfg.loc_include_comment = (val == "1" || val == "true"); }
         else if (key == "watchlist") {
             // Repeatable key — every occurrence APPENDS an entry (unlike every
             // other key here, which is last-value-wins). Format: ADDR:A+V
@@ -233,7 +261,14 @@ static void save_config(const std::string& path, const MonitorConfig& cfg) {
       << "lqa_file = " << cfg.lqa_file << "\n"
       << "lqa_history_file = " << cfg.lqa_history_file << "\n"
       << "history_retention_days = " << cfg.history_retention_days << "\n"
-      << "history_enabled = " << (cfg.history_enabled ? 1 : 0) << "\n";
+      << "history_enabled = " << (cfg.history_enabled ? 1 : 0) << "\n"
+      << "location_sharing_enabled = " << (cfg.loc_share_enabled ? 1 : 0) << "\n"
+      << "location_api_url = " << cfg.loc_api_url << "\n"
+      << "location_api_token = " << cfg.loc_api_token << "\n"
+      << "location_ca_cert_path = " << cfg.loc_ca_cert_path << "\n"
+      << "location_sharing_min_interval_sec = " << cfg.loc_min_interval_sec << "\n"
+      << "location_sharing_round_digits = " << static_cast<unsigned>(cfg.loc_round_digits) << "\n"
+      << "location_sharing_include_comment = " << (cfg.loc_include_comment ? 1 : 0) << "\n";
     for (const auto& w : cfg.watchlist)
         f << "watchlist = " << w.addr << ":" << (w.audible ? 1 : 0) << "+" << (w.visible ? 1 : 0) << "\n";
 }
@@ -269,7 +304,21 @@ static void write_config_template(const std::string& path) {
       << "history_retention_days = 90\n"
       << "history_enabled = 1\n"
       << "# watchlist: repeatable — one line per entry, ADDR:audible+visible (1/0 flags)\n"
-      << "# watchlist = K1ABC:1+1\n";
+      << "# watchlist = K1ABC:1+1\n"
+      << "\n"
+      << "# Location Relay: forward ALLCALL-broadcast ALE-GPR positions overheard\n"
+      << "# on this channel to a configured HTTPS relay server for map display.\n"
+      << "# Off by default. This monitor has no self address, so it can only ever\n"
+      << "# see ALLCALL-broadcast position reports (see docs/LOCATION_SHARING_CONCEPT.md).\n"
+      << "location_sharing_enabled = 0\n"
+      << "location_api_url =\n"
+      << "location_api_token =\n"
+      << "# location_ca_cert_path: (optional) pinned server cert (PEM), required for a\n"
+      << "# self-signed relay server; empty = system trust store.\n"
+      << "location_ca_cert_path =\n"
+      << "location_sharing_min_interval_sec = 30\n"
+      << "location_sharing_round_digits = 6\n"
+      << "location_sharing_include_comment = 0\n";
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -377,7 +426,57 @@ struct MonitorCtx {
     MonitorConfig*                cfg;
     std::string                   config_path;   // empty = persistence disabled
     std::string                   net_file_path;  // resolved, for reload
+    ale::LocationRelayService*    loc_svc;
 };
+
+// LocationRelayService::ConnState → GUI string. Mirrors apps/ale_bridge.cpp's
+// loc_conn_state_name().
+static const char* loc_conn_state_name(int cs) {
+    switch (cs) {
+        case ale::LocationRelayService::CS_CONNECTED:    return "connected";
+        case ale::LocationRelayService::CS_DISCONNECTED: return "disconnected";
+        case ale::LocationRelayService::CS_SERVER_ERROR: return "server_error";
+        default:                                          return "unknown";
+    }
+}
+
+// Build a throwaway ALEStationConfig carrying only the 6 location_sharing_*
+// fields is_shareable() actually reads (verified against
+// src/App/location_relay_service.cpp) — never touches ctrl's real config.
+// location_sharing_allcall is hardcoded true / individual|net|group|linked
+// false: this monitor has no self address, so ALLCALL is the only call type
+// it can ever observe (see MonitorConfig's location fields doc comment).
+static ale::ALEStationConfig build_gate_cfg(const MonitorConfig& cfg) {
+    ale::ALEStationConfig g;
+    g.location_sharing_enabled         = cfg.loc_share_enabled;
+    g.location_sharing_allcall         = true;
+    g.location_sharing_individual      = false;
+    g.location_sharing_net             = false;
+    g.location_sharing_group           = false;
+    g.location_sharing_linked          = false;
+    g.location_sharing_round_digits    = cfg.loc_round_digits;
+    g.location_sharing_include_comment = cfg.loc_include_comment;
+    return g;
+}
+
+// Stop (if running) and, if enabled+configured, start a fresh
+// LocationRelayService worker thread from the current MonitorConfig.
+// Location-only slice of apps/ale_bridge.cpp's restart_location_services().
+static void restart_location_relay(MonitorCtx& ctx) {
+    ctx.loc_svc->stop();   // always stop first; start() below spawns a fresh thread
+    const auto& cfg = *ctx.cfg;
+    if (cfg.loc_share_enabled && !cfg.loc_api_url.empty()) {
+        ale::LocationRelayService::Config lcfg;
+        lcfg.url             = cfg.loc_api_url;
+        lcfg.token            = cfg.loc_api_token;
+        lcfg.ca_cert_path     = cfg.loc_ca_cert_path;
+        lcfg.min_interval_sec = cfg.loc_min_interval_sec;
+        pal::log_info("ale_monitor", "Location Relay: starting (%s)", lcfg.url.c_str());
+        ctx.loc_svc->start(lcfg);
+    } else {
+        pal::log_info("ale_monitor", "Location Relay: disabled");
+    }
+}
 
 // Apply the channel filter (all|ale|sel) to the loaded channel list by
 // toggling Channel::enabled. Idempotent.
@@ -695,6 +794,53 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
         return mj::dump(make_reply(msg, true));
     }
 
+    // ── Location Relay (docs/LOCATION_SHARING_CONCEPT.md) ─────────────────
+    // ale_monitor has no self address, so it only ever forwards ALLCALL-
+    // broadcast GPRs — see MonitorConfig's location fields doc comment.
+    // Config changes apply + restart the service immediately but, matching
+    // this app's existing MON_FILTER/WATCHLIST_SET convention, are only
+    // persisted to disk via the explicit MON_CONFIG_SAVE ("Save as startup").
+    if (cmd == "LOCATION_SHARING_GET") {
+        mj::Value r = make_reply(msg, true);
+        r.set("enabled",          mj::Value::boolean(ctx.cfg->loc_share_enabled));
+        r.set("url",              mj::Value::string(ctx.cfg->loc_api_url));
+        // Token is deliberately NOT echoed back — never log/expose it once
+        // set. The GUI shows a "configured"/"not configured" hint instead.
+        r.set("token_set",        mj::Value::boolean(!ctx.cfg->loc_api_token.empty()));
+        r.set("ca_cert_path",     mj::Value::string(ctx.cfg->loc_ca_cert_path));
+        r.set("min_interval_sec", mj::Value::number(ctx.cfg->loc_min_interval_sec));
+        r.set("round_digits",     mj::Value::number(ctx.cfg->loc_round_digits));
+        r.set("include_comment",  mj::Value::boolean(ctx.cfg->loc_include_comment));
+        r.set("running",          mj::Value::boolean(ctx.loc_svc->is_running()));
+        r.set("conn_state",       mj::Value::string(loc_conn_state_name(ctx.loc_svc->conn_state())));
+        return mj::dump(r);
+    }
+    if (cmd == "LOCATION_SHARING_SET") {
+        if (msg.has("url")) {
+            const std::string url = msg.get_string("url");
+            if (!url.empty() && !ale::location_url_allowed(url)) {
+                mj::Value r = make_reply(msg, false);
+                r.set("error", mj::Value::string("URL must be https://, or http://127.0.0.1 for local testing"));
+                return mj::dump(r);
+            }
+            ctx.cfg->loc_api_url = url;
+        }
+        if (msg.has("enabled"))       ctx.cfg->loc_share_enabled = msg.get_bool("enabled");
+        // Empty "token" is a no-op (keep the stored token) — only a non-empty
+        // value overwrites, so the GUI can leave the field blank on re-save
+        // without clobbering an already-configured token.
+        if (msg.has("token") && !msg.get_string("token").empty())
+            ctx.cfg->loc_api_token = msg.get_string("token");
+        if (msg.has("ca_cert_path"))  ctx.cfg->loc_ca_cert_path = msg.get_string("ca_cert_path");
+        if (msg.has("min_interval_sec"))
+            ctx.cfg->loc_min_interval_sec = static_cast<uint32_t>(msg.get_number("min_interval_sec"));
+        if (msg.has("round_digits"))
+            ctx.cfg->loc_round_digits = static_cast<uint8_t>(msg.get_number("round_digits"));
+        if (msg.has("include_comment")) ctx.cfg->loc_include_comment = msg.get_bool("include_comment");
+        restart_location_relay(ctx);
+        return mj::dump(make_reply(msg, true));
+    }
+
     mj::Value r = make_reply(msg, false);
     r.set("error", mj::Value::string("unknown command: " + cmd));
     return mj::dump(r);
@@ -874,7 +1020,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    MonitorCtx ctx{ &ctrl, &audio, &radio, &cfg, config_path, net_file_path };
+    ale::LocationRelayService loc_svc;
+    MonitorCtx ctx{ &ctrl, &audio, &radio, &cfg, config_path, net_file_path, &loc_svc };
 
     // ── Event bus subscriptions ──────────────────────────────────────────
     {
@@ -925,6 +1072,61 @@ int main(int argc, char* argv[]) {
             e.set("mode",       mj::Value::string(ch->rx_mode));
             ws.send_text(mj::dump(e));
         });
+
+        // Location Relay (docs/LOCATION_SHARING_CONCEPT.md §4): only ALLCALL
+        // GPRs ever reach this handler — see MonitorConfig's location fields
+        // doc comment for why. Gate → dedup(in enqueue) → queue, mirroring
+        // apps/ale_bridge.cpp's independent ALE_AMD_RECEIVED subscriber.
+        bus->on(pal::EventType::ALE_AMD_RECEIVED, [&](const pal::Event& ev) {
+            const auto* d = static_cast<const ale::AmdData*>(ev.data);
+            if (!ale::is_gpr(d->text)) return;
+
+            const ale::AleGpr g = ale::parse_gpr(d->text);
+            // Visibility into every incoming ALE-GPR, independent of whether
+            // Location Relay is enabled/gates it — operators need to see what
+            // was overheard (and why a malformed one wasn't relayed).
+            if (g.valid_position) {
+                const std::string alt_str = g.has_altitude
+                    ? (" alt=" + std::to_string(static_cast<long>(g.altitude)) + g.altitude_unit)
+                    : std::string();
+                pal::log_info("GPR", "position report: object=%s via %s (peer=%s) lat=%.6f lon=%.6f%s",
+                              g.object.c_str(), d->call_context, d->peer_addr,
+                              g.latitude_deg, g.longitude_deg, alt_str.c_str());
+            } else {
+                pal::log_warn("GPR", "malformed/incomplete report from %s via %s: \"%s\"",
+                              d->peer_addr, d->call_context, d->text);
+            }
+
+            if (!ctx.cfg->loc_share_enabled) return;
+            const std::string source = g.object.empty() ? std::string(d->peer_addr) : g.object;
+            const ale::ALEStationConfig gate_cfg = build_gate_cfg(*ctx.cfg);
+            if (!ale::is_shareable(g, source, d->call_context, d->self_addr, gate_cfg)) return;
+
+            ale::LocationReport r;
+            r.observer     = d->self_addr;   // always empty — this monitor has no self address
+            r.source       = source;
+            r.relay        = (source != d->peer_addr) ? d->peer_addr : "";
+            r.raw_gpr      = g.raw;
+            r.has_position = g.valid_position;
+            if (g.has_latitude && g.has_longitude) {
+                const double scale = std::pow(10.0, ctx.cfg->loc_round_digits);
+                r.lat = std::round(g.latitude_deg * scale) / scale;
+                r.lon = std::round(g.longitude_deg * scale) / scale;
+            }
+            r.has_altitude  = g.has_altitude;
+            r.altitude      = g.altitude;
+            r.altitude_unit = g.altitude_unit;
+            r.has_timestamp = g.has_timestamp;
+            r.timestamp_utc = g.timestamp_utc;
+            r.comment       = ctx.cfg->loc_include_comment ? g.comment : "";
+            r.call_context  = d->call_context;
+            r.received_at   = std::time(nullptr);
+            r.frequency_hz  = ctrl.get_current_channel().rx_frequency_hz;
+            r.dedup_key     = ale::make_dedup_key(g, source, ctx.cfg->loc_round_digits);
+
+            ctx.loc_svc->enqueue(std::move(r));
+            pal::log_info("LocationRelay", "queued %s (via %s)", source.c_str(), d->call_context);
+        });
     }
 
     ctrl.set_spectrum_callback([&](const float* bins, size_t n, float /*hz_per_bin*/) {
@@ -932,6 +1134,8 @@ int main(int argc, char* argv[]) {
     });
 
     // ── Startup ──────────────────────────────────────────────────────────
+    restart_location_relay(ctx);   // start eagerly from loaded config (no GUI round-trip needed)
+
     if (ctrl.channels().size() >= 2) {
         ctrl.start_scanning();
         pal::log_info("ale_monitor", "Scanning started (%zu channels, dwell %ums, filter %s)",
@@ -990,11 +1194,28 @@ int main(int argc, char* argv[]) {
             last_lbt_busy = cur_lbt_busy;
         }
 
+        // Location Relay: pull-based drain of the worker thread's status log
+        // lines and connection-state transitions (mirrors apps/ale_bridge.cpp).
+        std::string loc_status;
+        while (loc_svc.pop_status(loc_status)) {
+            mj::Value e = make_event("status");
+            e.set("msg", mj::Value::string(loc_status));
+            ws.send_text(mj::dump(e));
+        }
+        int loc_cs;
+        while (loc_svc.pop_conn_state(loc_cs)) {
+            mj::Value e = make_event("location_relay");
+            e.set("running",    mj::Value::boolean(loc_svc.is_running()));
+            e.set("conn_state", mj::Value::string(loc_conn_state_name(loc_cs)));
+            ws.send_text(mj::dump(e));
+        }
+
         timer->sleep_ms(1);
     }
 
     // ── Cleanup ──────────────────────────────────────────────────────────
     ctrl.emergency_stop();
+    loc_svc.stop();
     if (radio) radio->stop();
     if (audio) audio->close();
     ws.stop();

@@ -137,6 +137,7 @@ function syncSettingsFromBridge() {
     watchlist = r.data || [];
     renderWatchlist();
   });
+  syncLocationSharingFromBridge();
 }
 
 function setField(id, val) {
@@ -206,6 +207,59 @@ function doModeOverrideSet() {
 function doConfigSave() {
   bridgeSend('MON_CONFIG_SAVE', {}, (r) => {
     aleLogInfo(r.ok ? 'Settings saved as startup config' : ('Save failed: ' + (r.error || '?')));
+  });
+}
+
+// ── Location Relay (docs/LOCATION_SHARING_CONCEPT.md) — forward overheard ────
+// ALE-GPR positions to a configured web API. This monitor has no self
+// address, so it only ever forwards ALLCALL-broadcast reports — the GUI
+// exposes a single enable toggle, not per-call-type checkboxes (unlike
+// apps/gui, which has one address and can link).
+function renderLocStatus(enabled, running, connState) {
+  const el = document.getElementById('locStatus');
+  if (!el) return;
+  el.classList.remove('ok', 'err', 'warn');
+  if (!enabled) { el.textContent = 'Disabled'; return; }
+  if (!running) { el.textContent = 'Enabled, not running'; el.classList.add('warn'); return; }
+  switch (connState) {
+    case 'connected':    el.textContent = 'Running · Connected';    el.classList.add('ok');   break;
+    case 'disconnected': el.textContent = 'Running · No connection'; el.classList.add('err');  break;
+    case 'server_error': el.textContent = 'Running · Server error';  el.classList.add('warn'); break;
+    default:              el.textContent = 'Running…'; break;  // initial probe in flight
+  }
+}
+function syncLocationSharingFromBridge() {
+  bridgeSend('LOCATION_SHARING_GET', {}, (r) => {
+    if (!r.ok) return;
+    document.getElementById('setLocEnabled').checked = !!r.enabled;
+    document.getElementById('setLocIncludeComment').checked = !!r.include_comment;
+    setField('setLocUrl',          r.url || '');
+    setField('setLocCaCert',       r.ca_cert_path || '');
+    setField('setLocMinInterval',  r.min_interval_sec);
+    setField('setLocRoundDigits',  r.round_digits);
+    // Token is never echoed back (core-side privacy) — the hint just
+    // reflects whether one is already stored.
+    document.getElementById('locTokenHint').textContent =
+      r.token_set ? 'A token is currently stored.' : 'No token stored.';
+    renderLocStatus(r.enabled, r.running, r.conn_state);
+  });
+}
+function doLocationSharingSet() {
+  bridgeSend('LOCATION_SHARING_SET', {
+    enabled:          !!document.getElementById('setLocEnabled').checked,
+    url:              document.getElementById('setLocUrl').value.trim(),
+    token:            document.getElementById('setLocToken').value,
+    ca_cert_path:     document.getElementById('setLocCaCert').value.trim(),
+    min_interval_sec: Number(document.getElementById('setLocMinInterval').value || 30),
+    round_digits:     Number(document.getElementById('setLocRoundDigits').value || 6),
+    include_comment:  !!document.getElementById('setLocIncludeComment').checked,
+  }, (r) => {
+    document.getElementById('setLocToken').value = '';   // never keep the token in the DOM
+    if (!r || !r.ok) {
+      document.getElementById('locStatus').textContent = 'Failed: ' + ((r && r.error) || 'apply error');
+      return;
+    }
+    syncLocationSharingFromBridge();
   });
 }
 
@@ -352,6 +406,9 @@ function onBridgeEvent(e) {
       break;
     case 'channel_busy':
       applyLbtState(e.busy, e.level_db, e.floor_db);
+      break;
+    case 'location_relay':
+      renderLocStatus(document.getElementById('setLocEnabled').checked, e.running, e.conn_state);
       break;
     default:
       break;
