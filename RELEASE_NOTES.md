@@ -43,10 +43,18 @@ AMD to all stations, not just position reports.
   as an ALLCALL broadcast, restricted to a specific net/channel selection if desired. GPS
   fixes now carry altitude (from gpsd TPV or `$GPGGA` field 9) for the report's altitude
   field; a raw-NMEA passthrough format is also available when a live NMEA-serial fix is in
-  use.
+  use. A single **Enable Position Reports** switch now gates both automatic and manual
+  "Send Position Now" sends, so turning reporting off is always one toggle.
 - **Location Relay**: Settings ▸ Location ▸ Location Relay forwards every position report
   your station receives to an external HTTP endpoint (URL + optional auth token,
-  enable/disable), for live mapping outside openALE itself.
+  enable/disable), for live mapping outside openALE itself. The relay client now speaks
+  HTTPS on Linux too (previously Windows-only via WinHTTP), via a new mbedTLS-based client;
+  a **CA Certificate Path** setting pins the relay server's certificate for self-signed
+  deployments. The reference server can also terminate HTTPS itself
+  (`LOCATION_TLS_CERT_PATH`/`LOCATION_TLS_KEY_PATH`) without needing a reverse proxy.
+- **Settings redesigned**: every Settings tab now groups its fields into clearly labeled,
+  bordered sections instead of bare unlabeled divider lines, making the available options
+  easier to scan at a glance.
 - **AMD "Link" checkbox**: next to the AMD send box in the Messages panel — keep the link
   established after this message is delivered, instead of the new message-only default.
 - Messages panel redesigned with clearer sent/received direction styling and a delivery
@@ -116,6 +124,30 @@ AMD to all stations, not just position reports.
   session is the one that trips `rig_load_all_backends`. The list is now fetched only when
   you open the Radio / CAT Control tab, cached for the session, and re-fetched after a
   bridge restart; navigating Settings no longer triggers a full backend reload.
+- GPS altitude was almost always reported as unavailable (`#M`) in ALE-GPR position
+  reports even with a good fix — a `$GPRMC` sentence (which never carries altitude) was
+  unconditionally clearing the altitude a preceding `$GPGGA` sentence from the same
+  receiver had just reported, and most receivers emit GGA+RMC back to back. Altitude is
+  now preserved across altitude-less updates and only cleared when the fix itself is lost.
+- ALE-GPR coordinates were silently truncated to ~11 m precision in two places: the
+  relay server rounded every incoming position to 4 decimals before storage (SQLite
+  already stores full double precision, so this was a pure loss), and the client's own
+  privacy-rounding setting defaulted to 2 decimals (~1.1 km) — far more blurring than
+  intended for a default. The server no longer rounds at all; the client default is now
+  6 decimals, with the setting still available as an explicit operator privacy control.
+  Station Location settings persistence had the same silent-truncation bug (~11 m) on
+  every save — widened to sub-millimeter precision.
+- A free-text ALE-GPR OBJECT or COMMENT field containing the `*` field delimiter would
+  split a report into more fields than the format allows, causing a receiving station to
+  reject the whole message as malformed. Delimiter characters typed into free text are
+  now replaced with `#` before the report is built.
+- Location Relay reference server: a station's map position stopped updating for every
+  observer but the first once `LOCATION_COLLAPSE_BROADCASTS` was enabled — the
+  position/observer upsert only ran on the winning report row (201) instead of on every
+  hearing (409s included). All observers now update the map correctly on every hearing.
+- Location Relay map's frequency display rounded to 3 decimals, silently dropping
+  channels that sit on 100 Hz boundaries (e.g. 10.1455 MHz showed as "10.145 MHz") — now
+  shows 6 decimals with trailing zeros trimmed.
 
 ## Other
 
@@ -125,6 +157,9 @@ AMD to all stations, not just position reports.
   `Hamlib-<version>` tag form did not exist and would have failed the clone) and
   rebuilds `libhamlib-4.dll` against the latest Hamlib release. The soname stays
   `libhamlib-4.dll` (major-ABI-versioned, unchanged across the 4.x series).
+- `ale_app_core` now links against the project's vendored mbedTLS libraries on
+  Linux/POSIX builds (already used elsewhere in the project), to provide the Location
+  Relay HTTPS client above.
 - Location Relay reference server (`tools/location-relay-server`): a DB worker thread with
   batched transactions removes a write fan-in bottleneck (~10× ingest throughput), with
   logging, capacity/security bounds, rounding/observer-cap safety nets, and an opt-in
