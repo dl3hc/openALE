@@ -117,8 +117,10 @@ function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'
 function fmtFreq(hz) {
   if (!hz) return 'unknown';
   const mhz = hz / 1e6;
-  // Trim trailing zeros but keep 3 decimals max: 14090000 -> "14.090", 7000000 -> "7"
-  return (mhz.toFixed(3)).replace(/\.?0+$/, '') + ' MHz';
+  // 6 decimals = exact to 1 Hz (many ALE channels sit on 100 Hz boundaries,
+  // e.g. 10145500 Hz); 3 decimals silently rounded that away. Trim trailing
+  // zeros: 14090000 -> "14.09", 10145500 -> "10.1455", 7000000 -> "7".
+  return (mhz.toFixed(6)).replace(/0+$/, '').replace(/\.$/, '') + ' MHz';
 }
 
 function bandKeyOf(hz) {

@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <iomanip>
 #include <numeric>
 #include <optional>
 #include <sstream>
@@ -987,6 +988,7 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.audio_in         = cfg.audio_in;
     config_.audio_out        = cfg.audio_out;
     config_.audio_auto_open = cfg.audio_auto_open;
+    config_.position_report_enabled      = cfg.position_report_enabled;
     config_.position_report_mode         = cfg.position_report_mode;
     config_.position_report_target       = cfg.position_report_target;
     config_.position_report_net          = cfg.position_report_net;
@@ -1913,10 +1915,13 @@ void ALEController::tick_position_report(uint32_t now_ms)
 {
     // Automatic ALE-GPR/GGA position reporting (docs/ALE_GPR_SPEC.md), direct
     // template: tick_sounding_sweep() above. Manual "Send Position" (bridge
-    // GPR_BUILD + AMD commands) is independent of this timer and always works
-    // regardless of position_report_mode.
+    // GPR_BUILD + AMD commands) shares the same position_report_enabled master
+    // gate (checked in ale_bridge.cpp's GPR_BUILD handler) but is otherwise
+    // independent of this timer/mode.
     using Mode   = ALEStationConfig::PositionReportMode;
     using Format = ALEStationConfig::PositionReportFormat;
+    if (!config_.position_report_enabled)
+        return;
     if (config_.position_report_mode == Mode::NONE || config_.position_report_target.empty())
         return;
 
@@ -3863,8 +3868,20 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "relink_improvement_threshold=" << config_.relink_improvement_threshold << "\n";
     f << "enhanced_freq_select=" << (config_.enhanced_freq_select ? 1 : 0) << "\n";
     f << "position_source=" << static_cast<int>(config_.position_source) << "\n";
-    f << "station_lat_deg=" << config_.station_lat_deg << "\n";
-    f << "station_lon_deg=" << config_.station_lon_deg << "\n";
+    // std::ostream's default precision is 6 SIGNIFICANT digits, not decimal
+    // places — for a 2-3 integer-digit coordinate that leaves only ~4 decimal
+    // places (~11 m), silently degrading a manual/grid-locator position on
+    // every settings save regardless of how precisely it was entered. Widen
+    // to 9 significant digits (sub-millimeter at these magnitudes) for just
+    // these two fields, then restore the stream's prior precision so no
+    // other f << writes above/below are affected.
+    {
+        const auto old_precision = f.precision();
+        f << std::setprecision(9);
+        f << "station_lat_deg=" << config_.station_lat_deg << "\n";
+        f << "station_lon_deg=" << config_.station_lon_deg << "\n";
+        f << std::setprecision(static_cast<int>(old_precision));
+    }
     f << "grid_locator=" << config_.grid_locator << "\n";
     f << "gpsd_host=" << config_.gpsd_host << "\n";
     f << "gpsd_port=" << config_.gpsd_port << "\n";
@@ -3887,6 +3904,7 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "audio_in=" << config_.audio_in << "\n";
     f << "audio_out=" << config_.audio_out << "\n";
     f << "audio_auto_open=" << (config_.audio_auto_open ? 1 : 0) << "\n";
+    f << "position_report_enabled=" << (config_.position_report_enabled ? 1 : 0) << "\n";
     f << "position_report_mode=" << static_cast<int>(config_.position_report_mode) << "\n";
     f << "position_report_target=" << config_.position_report_target << "\n";
     f << "position_report_net=" << config_.position_report_net << "\n";
@@ -4083,6 +4101,8 @@ bool ALEController::import_settings(const std::string& path, bool follow_channel
             cfg.audio_out = val;
         } else if (key == "audio_auto_open") {
             cfg.audio_auto_open = (val == "1");
+        } else if (key == "position_report_enabled") {
+            cfg.position_report_enabled = (val == "1");
         } else if (key == "position_report_mode") {
             cfg.position_report_mode =
                 static_cast<ALEStationConfig::PositionReportMode>(std::stoi(val));

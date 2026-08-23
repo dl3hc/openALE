@@ -50,20 +50,6 @@ function flush() {
           it.latitude, it.longitude, it.altitude, it.altitudeUnit,
           it.timestamp, it.receivedAt, it.callType, it.comment, it.frequencyHz,
         ).lastInsertRowid;
-        // Station upsert runs only when this item won the report-row dedup
-        // (201), so stations.report_count counts broadcasts, not hear-ings.
-        if (it.hasPosition) {
-          stmts.upsertStationWithPosition.run(
-            it.source, it.latitude, it.longitude, it.altitude, it.altitudeUnit,
-            it.timestamp, it.comment, it.rawGpr, it.callType, it.receivedAt,
-            it.observer, it.frequencyHz,
-          );
-        } else {
-          stmts.upsertStationHeardOnly.run(
-            it.source, it.comment, it.rawGpr, it.callType, it.receivedAt,
-            it.observer, it.frequencyHz,
-          );
-        }
       } catch (e) {
         if (String(e && e.message).includes('UNIQUE constraint failed')) {
           status = 409;  // broadcast already recorded — but this observer still heard it
@@ -71,10 +57,27 @@ function flush() {
           throw e;  // non-constraint error: abort + rollback the whole batch
         }
       }
-      // ALWAYS record the observer, whether this item won the report-row
-      // dedup (201) or was deduped against an existing broadcast (409). This
-      // is what preserves the "who heard it" fan-in under collapse, where
-      // N-1 of N observers get 409 on the report row but all N are observers.
+      // Station + observer upserts ALWAYS run, whether this item won the
+      // report-row dedup (201) or collided with an existing broadcast (409).
+      // A 409 still means this observer/relay just heard the source at
+      // receivedAt — the map's last_seen_at/last_lat/last_lon must advance
+      // for every hearing, not just the first one recorded in the append-only
+      // reports table (this previously left stations stale under
+      // LOCATION_COLLAPSE_BROADCASTS=1, where all but the first observer of a
+      // broadcast get 409). Re-writing the same position on a dedup hit is
+      // harmless (idempotent — it's the same broadcast).
+      if (it.hasPosition) {
+        stmts.upsertStationWithPosition.run(
+          it.source, it.latitude, it.longitude, it.altitude, it.altitudeUnit,
+          it.timestamp, it.comment, it.rawGpr, it.callType, it.receivedAt,
+          it.observer, it.frequencyHz,
+        );
+      } else {
+        stmts.upsertStationHeardOnly.run(
+          it.source, it.comment, it.rawGpr, it.callType, it.receivedAt,
+          it.observer, it.frequencyHz,
+        );
+      }
       stmts.upsertObserver.run(it.source, it.observer, it.receivedAt, it.receivedAt);
       results.push(id !== null
         ? { reqId: it.reqId, status: 201, id }

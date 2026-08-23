@@ -143,6 +143,7 @@ struct ALEStationConfig {
         GGA = 1,  ///< raw $GPGGA passthrough — only available for a live NMEA-serial fix
     };
 
+    bool                  position_report_enabled      = false; ///< master opt-in (mirrors sfi_enabled/location_sharing_enabled); off = neither automatic nor manual sends
     PositionReportMode   position_report_mode         = PositionReportMode::NONE;
     std::string          position_report_target       = "";  ///< address, or "ALLCALL"
     std::string          position_report_net          = "";  ///< net for channel selection (ALLCALL only)
