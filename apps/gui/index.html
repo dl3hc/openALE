@@ -877,6 +877,8 @@
         <div class="ssec" data-sec="tuner">
           <div class="ssec-title">Tuner</div>
 
+          <div class="ssec-group">
+          <div class="ssec-group-title">netrigctl Server</div>
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">netrigctl Server</div>
@@ -909,6 +911,7 @@
           <div style="display:flex;gap:8px;align-items:center;margin-top:16px">
             <button class="btn-sm accent" onclick="applyTunerToBridge()">Apply</button>
           </div>
+          </div><!-- /group netrigctl -->
         </div><!-- /tuner -->
 
         <!-- ── Location ── -->
@@ -1606,7 +1609,9 @@
         <div class="ssec" data-sec="fec">
           <div class="ssec-title">FEC &amp; Sync (MIL-STD-188-141B A.5.2.6.3)</div>
 
-          <div class="fg">
+          <div class="ssec-group">
+          <div class="ssec-group-title">Golay Error Correction</div>
+          <div class="fg" style="margin-bottom:0">
             <label class="flabel">Golay Correction Mode</label>
             <div class="fradio-group">
               <label class="fradio-opt">
@@ -1628,8 +1633,11 @@
             </div>
             <div class="fhint" style="margin-top:8px">Golay(24,12) error correction power applied during word decode.</div>
           </div>
+          </div><!-- /group golay -->
 
-          <div class="fg-row col2">
+          <div class="ssec-group">
+          <div class="ssec-group-title">BER Discrimination &amp; Adaptive FEC</div>
+          <div class="fg-row col2" style="margin-bottom:0">
             <div>
               <label class="flabel">Min Unanimous Votes</label>
               <input class="finput" id="cfgVotes" type="number" value="33" min="0" max="49">
@@ -1648,6 +1656,7 @@
               </div>
             </div>
           </div>
+          </div><!-- /group ber-adaptive -->
         </div><!-- /fec -->
 
         <!-- ── Logging ── -->
