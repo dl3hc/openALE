@@ -28,12 +28,22 @@ constexpr const char* kLogFileName = "openALE.log";
 constexpr const char* kLogFileOld  = "openALE.log.old";
 constexpr long        kMaxLogBytes = 5 * 1024 * 1024;  // rotate past ~5 MB
 
+FILE* fopen_portable(const char* path, const char* mode) {
+#ifdef _WIN32
+    FILE* f = nullptr;
+    fopen_s(&f, path, mode);
+    return f;
+#else
+    return std::fopen(path, mode);
+#endif
+}
+
 // If the existing log has grown past kMaxLogBytes, move it aside before
 // opening — "längere Verwendung" (long sessions) is exactly the scenario
 // that would otherwise let this grow unbounded. Best-effort: a failed
 // rotation (e.g. .old locked by another viewer) must not block logging.
 void rotate_if_large() {
-    FILE* probe = std::fopen(kLogFileName, "rb");
+    FILE* probe = fopen_portable(kLogFileName, "rb");
     if (!probe) return;
     std::fseek(probe, 0, SEEK_END);
     const long size = std::ftell(probe);
@@ -64,7 +74,7 @@ public:
         rotate_if_large();
         // append mode: never truncate — a crash right after this run needs
         // the previous run's tail to still be on disk after a restart.
-        log_file_ = std::fopen(kLogFileName, "a");
+        log_file_ = fopen_portable(kLogFileName, "a");
     }
     ~ConsoleLogger() override {
         if (log_file_) std::fclose(log_file_);

@@ -37,7 +37,11 @@ int main(int argc, char* argv[])
     if (!rig) { fprintf(stderr, "rig_init failed\n"); return 1; }
 
     rig->state.rigport.type.rig = RIG_PORT_NETWORK;
+#ifdef _MSC_VER
+    strncpy_s(rig->state.rigport.pathname, HAMLIB_FILPATHLEN, host, HAMLIB_FILPATHLEN - 1);
+#else
     strncpy(rig->state.rigport.pathname, host, HAMLIB_FILPATHLEN - 1);
+#endif
 
     int ret = rig_open(rig);
     if (ret != RIG_OK) {
