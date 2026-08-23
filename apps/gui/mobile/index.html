@@ -524,7 +524,8 @@
             controller.
           </div>
 
-          <div class="ssec-sub-title">Modem Audio Interface</div>
+          <div class="ssec-group">
+          <div class="ssec-group-title">Modem Audio Interface</div>
           <div class="fg">
             <label class="flabel">RX Input Device</label>
             <select class="fselect" id="audioIn" onchange="onAudioInChange()">
@@ -559,8 +560,10 @@
             <button class="btn-sm" onclick="testAudio()">▶ Level Test</button>
             <button class="btn-sm" onclick="enumDevices()">↺ Refresh List</button>
           </div>
+          </div><!-- /group modem-audio -->
 
-          <div class="ssec-sub-title" style="margin-top:22px">Operator Audio Interface</div>
+          <div class="ssec-group">
+          <div class="ssec-group-title">Operator Audio Interface</div>
           <div class="fhint" style="margin-bottom:10px">
             Carries analog voice passthrough, the channel monitor, and audible notifications.
             See <em>docs/VOICE_AUDIO_ROUTING.md</em>.
@@ -593,8 +596,11 @@
               distorted/overdriven.
             </div>
           </div>
+          </div><!-- /group operator-audio -->
 
-          <div class="fg-row col2" style="align-items:center;margin-top:4px">
+          <div class="ssec-group">
+          <div class="ssec-group-title">Voice Passthrough &amp; Channel Monitor</div>
+          <div class="fg-row col2" style="align-items:center;margin-top:0">
             <label class="flabel" style="margin:0">Voice Passthrough</label>
             <label class="fradio-opt" style="margin-left:auto">
               <input type="checkbox" id="cfgVoiceArm" onchange="onVoiceArmChange(this.checked)">
@@ -620,11 +626,11 @@
             without opening Settings — it streams the transceiver's RX audio here regardless
             of link state.
           </div>
+          </div><!-- /group voice-passthrough -->
 
-          <div class="fg-row col2" style="align-items:center;margin-top:14px">
-            <label class="flabel" style="margin:0">Notifications</label>
-          </div>
-          <div class="fg-row col2" style="align-items:center">
+          <div class="ssec-group">
+          <div class="ssec-group-title">Notifications</div>
+          <div class="fg-row col2" style="align-items:center;margin-top:0">
             <label class="fradio-opt">
               <input type="checkbox" id="cfgNotifyRing" onchange="onNotifyPrefChange()">
               <span style="margin-left:6px">Ring on incoming call</span>
@@ -642,12 +648,15 @@
                    oninput="onNotifyPrefChange()">
             <div class="fhint">Played through the speaker device selected above.</div>
           </div>
+          </div><!-- /group notifications -->
         </div><!-- /audio -->
 
         <!-- ── Radio / CAT ── -->
         <div class="ssec" data-sec="radio">
           <div class="ssec-title">Radio / CAT Control</div>
 
+          <div class="ssec-group">
+          <div class="ssec-group-title">Rig Selection</div>
           <div class="fg">
             <label class="flabel" for="rigModel">Hamlib Model</label>
             <select class="fselect" id="rigModel" onchange="updateRigFields()">
@@ -712,9 +721,10 @@
               </div>
             </div>
           </div>
+          </div><!-- /group rig-selection -->
 
-          <hr class="fsep">
-
+          <div class="ssec-group">
+          <div class="ssec-group-title">PTT &amp; Keying</div>
           <div class="fg-row col2">
             <div>
               <label class="flabel">PTT Method</label>
@@ -731,7 +741,7 @@
             </div>
           </div>
 
-          <div class="fg">
+          <div class="fg" style="margin-bottom:0">
             <label class="flabel">TX Audio Input (CAT)</label>
             <select class="fselect" id="rigPttInput">
               <option value="normal" selected>Radio default (plain TX)</option>
@@ -743,9 +753,10 @@
               through the DATA/ACC socket, since on the TS-480 only the CAT command (not any menu
               setting) picks the TX input. Leave "Radio default" for non-Kenwood rigs.</div>
           </div>
+          </div><!-- /group ptt-keying -->
 
-          <hr class="fsep">
-
+          <div class="ssec-group">
+          <div class="ssec-group-title">Diagnostics &amp; Connection</div>
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">CAT/Rig Traffic</div>
@@ -757,7 +768,7 @@
             </label>
           </div>
 
-          <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+          <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
             <button class="btn-sm" onclick="testRig()">↺ Test Connection</button>
             <button class="btn-sm accent" id="rigConnectBtn" onclick="connectRig()"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg> Connect</button>
             <div class="conn-status hidden" id="rigConnStatus"></div>
@@ -767,6 +778,7 @@
             establishes the live CAT link; while disconnected, all radio-control functions
             (VFO, channel step, PTT) are locked.
           </div>
+          </div><!-- /group diagnostics -->
         </div><!-- /radio -->
 
         <!-- ── Tuner ── -->
@@ -811,8 +823,16 @@
         <div class="ssec" data-sec="location">
           <div class="ssec-title">Station Location &amp; Propagation</div>
 
+          <div class="ssec-tabs">
+            <div class="ssec-tab active" data-loctab="settings" onclick="showLocTab('settings')">Settings</div>
+            <div class="ssec-tab" data-loctab="known" onclick="showLocTab('known')">Known Positions</div>
+          </div>
+
+          <div class="ssec-subpage active" data-loctab="settings">
+
+          <div class="ssec-group">
+          <div class="ssec-group-title">Position Source</div>
           <div class="fg">
-            <label class="flabel">Position Source</label>
             <div class="fradio-group">
               <label class="fradio-opt">
                 <input type="radio" name="posSource" value="0" checked onchange="onPositionSourceChange()">
@@ -838,11 +858,11 @@
             <div class="fg-row col2">
               <div>
                 <label class="flabel" for="cfgLatDeg">Latitude (°)</label>
-                <input class="finput" type="number" id="cfgLatDeg" step="0.0001" min="-90" max="90" placeholder="51.5082" oninput="onLatLonInput()">
+                <input class="finput" type="number" id="cfgLatDeg" step="0.000001" min="-90" max="90" placeholder="51.508234" oninput="onLatLonInput()">
               </div>
               <div>
                 <label class="flabel" for="cfgLonDeg">Longitude (°)</label>
-                <input class="finput" type="number" id="cfgLonDeg" step="0.0001" min="-180" max="180" placeholder="-0.1271" oninput="onLatLonInput()">
+                <input class="finput" type="number" id="cfgLonDeg" step="0.000001" min="-180" max="180" placeholder="-0.127159" oninput="onLatLonInput()">
               </div>
             </div>
             <div class="fhint" style="margin-top:-10px;margin-bottom:18px">Grid locator is derived automatically.</div>
@@ -910,8 +930,13 @@
             </div>
           </div>
 
-          <hr class="fsep">
+          <div style="display:flex;gap:8px;align-items:center;margin-top:16px">
+            <button class="btn-sm accent" onclick="applyPositionSourceToBridge()">Apply</button>
+          </div>
+          </div><!-- /group position-source -->
 
+          <div class="ssec-group">
+          <div class="ssec-group-title">Solar Flux Index (SFI)</div>
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">Fetch Solar Flux Index</div>
@@ -932,17 +957,29 @@
           </div>
 
           <div style="display:flex;gap:8px;align-items:center;margin-top:16px">
-            <button class="btn-sm accent" onclick="applyLocationToBridge()">Apply</button>
+            <button class="btn-sm accent" onclick="applySfiToBridge()">Apply</button>
           </div>
+          </div><!-- /group sfi -->
 
-          <hr class="fsep">
-
-          <div class="ssec-title" style="margin-top:4px">Position Reports</div>
+          <div class="ssec-group">
+          <div class="ssec-group-title">Position Reports</div>
           <div class="fhint" style="margin-top:-6px;margin-bottom:14px">
-            Send an ALE-GPR (or raw-GGA) position report as an AMD message. Uses the
-            live GPS fix above when available, otherwise the configured station position.
+            Off by default. Send an ALE-GPR (or raw-GGA) position report as an AMD message. Uses
+            the live GPS fix above when available, otherwise the configured station position.
           </div>
 
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Enable Position Reports</div>
+              <div class="ftoggle-desc">Master switch — gates both automatic and manual "Send Position" sends</div>
+            </div>
+            <label class="ftoggle">
+              <input type="checkbox" id="cfgPosReportEnabled" onchange="onPosReportEnabledChange()">
+              <span class="ftrack"></span>
+            </label>
+          </div>
+
+          <div id="posReportBody" style="margin-top:14px">
           <div class="fg">
             <label class="flabel">Destination</label>
             <div class="fradio-group">
@@ -1034,33 +1071,28 @@
               placeholder="MOBILE STATION">
             <div class="fhint">Used verbatim by on-change/interval sends. The manual comment below pre-fills from this.</div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:4px;margin-bottom:16px">
+          <div style="display:flex;gap:8px;align-items:center;margin-top:4px;margin-bottom:0">
             <button class="btn-sm accent" onclick="applyPositionReportToBridge()">Apply</button>
           </div>
 
-          <hr class="fsep">
-
+          <div class="ssec-group-title dim" style="margin-top:20px">Send Position Now</div>
           <div class="fg">
-            <label class="flabel" for="cfgPosReportComment">Send Position Now — Comment</label>
+            <label class="flabel" for="cfgPosReportComment">Comment</label>
             <input class="finput" type="text" id="cfgPosReportComment" maxlength="25"
               placeholder="EVERYTHING FINE" oninput="updatePosReportCount()">
             <div class="fhint" style="display:flex;justify-content:flex-end;margin-top:2px">
               <span id="posReportCount">0/25</span>
             </div>
           </div>
-          <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+          <div style="display:flex;gap:10px;align-items:center;margin-top:8px;margin-bottom:0">
             <button class="btn-sm accent" onclick="sendPositionReport()">Send Position</button>
             <span class="loc-status" id="posReportStatus"></span>
           </div>
+          </div><!-- /posReportBody -->
+          </div><!-- /group position-reports -->
 
-          <hr class="fsep">
-
-          <div class="ssec-title" style="margin-top:4px">Known Positions <span style="font-weight:400;font-size:11px;color:var(--tx-mute)">(from received reports)</span></div>
-          <div class="pbody" id="gprPositionsList" style="padding:0"></div>
-
-          <hr class="fsep">
-
-          <div class="ssec-title" style="margin-top:4px">Privacy / Network — Location Relay</div>
+          <div class="ssec-group">
+          <div class="ssec-group-title">Privacy / Network — Location Relay</div>
           <div class="fhint" style="margin-top:-6px;margin-bottom:14px">
             Off by default. When enabled, ALE-GPR positions received from other stations are
             forwarded to the configured HTTPS endpoint. Your own transmitted positions are never
@@ -1149,6 +1181,15 @@
             <button class="btn-sm accent" onclick="applyLocationSharingToBridge()">Apply</button>
             <span class="loc-status" id="locShareStatus"></span>
           </div>
+          </div><!-- /group location-relay -->
+
+          </div><!-- /ssec-subpage settings -->
+
+          <div class="ssec-subpage" data-loctab="known">
+            <div class="fhint" style="margin-top:-6px;margin-bottom:14px">Positions received from other stations' ALE-GPR reports.</div>
+            <div class="pbody" id="gprPositionsList" style="padding:0"></div>
+          </div><!-- /ssec-subpage known -->
+
         </div><!-- /location -->
 
         <!-- ── Channels ── -->
@@ -1170,6 +1211,8 @@
         <div class="ssec" data-sec="nets">
           <div class="ssec-title">Net Membership</div>
 
+          <div class="ssec-group">
+          <div class="ssec-group-title">Automatic Sounding</div>
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">Automatic Sounding</div>
@@ -1180,17 +1223,18 @@
               <span class="ftrack"></span>
             </label>
           </div>
+          </div><!-- /group auto-sounding -->
 
-          <hr class="fsep">
-
+          <div class="ssec-group">
+          <div class="ssec-group-title">Nets</div>
           <div class="fg">
-            <label class="flabel">Nets</label>
             <div id="netList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
             <button class="btn-sm accent" onclick="addNet()">+ Add Net</button>
             <div class="fhint" style="margin-top:8px">
               A net groups channels for scanning, sounding, and calling. Each net carries its own dwell time, sounding interval, and calling-length policy.
             </div>
           </div>
+          </div><!-- /group nets-list -->
 
         </div><!-- /nets -->
 
@@ -1198,7 +1242,9 @@
         <div class="ssec" data-sec="timing">
           <div class="ssec-title">ALE Timing Parameters</div>
 
-          <div class="fg-row col3">
+          <div class="ssec-group">
+          <div class="ssec-group-title">Link &amp; Call Timeouts</div>
+          <div class="fg-row col3" style="margin-bottom:0">
             <div>
               <label class="flabel">Call Timeout (ms)</label>
               <input class="finput" id="cfgCallTo" type="number" value="15000" min="1000">
@@ -1214,19 +1260,28 @@
               <input class="finput" id="cfgLinkIdle" type="number" value="360" min="10">
               <div class="fhint">Terminate link after inactivity.</div>
             </div>
+          </div>
+          </div><!-- /group link-call-timeouts -->
+
+          <div class="ssec-group">
+          <div class="ssec-group-title">AMD Delivery</div>
+          <div class="fg-row col2" style="margin-bottom:0">
             <div>
               <label class="flabel">AMD Send Attempts</label>
               <input class="finput" id="cfgAmdMaxAttempts" type="number" value="3" min="1">
               <div class="fhint">Retries before "not heard" notification.</div>
             </div>
-          </div>
-
-          <div class="fg-row col3">
             <div>
               <label class="flabel">AMD Wait (ms)</label>
               <input class="finput" id="cfgAmdWait" type="number" value="500" min="0">
               <div class="fhint">Pause before AMD message TX.</div>
             </div>
+          </div>
+          </div><!-- /group amd-delivery -->
+
+          <div class="ssec-group">
+          <div class="ssec-group-title">Sounding</div>
+          <div class="fg-row col2" style="margin-bottom:0">
             <div>
               <label class="flabel">Sounding Interval (s)</label>
               <input class="finput" id="cfgSounding" type="number" value="300" min="60">
@@ -1238,8 +1293,11 @@
               <div class="fhint">Pre-sounding countdown popup lead time (0 = no popup).</div>
             </div>
           </div>
+          </div><!-- /group sounding -->
 
-          <div class="fg-row col3">
+          <div class="ssec-group">
+          <div class="ssec-group-title">TX/RX Turnaround &amp; Tuning</div>
+          <div class="fg-row col3" style="margin-bottom:0">
             <div>
               <label class="flabel">Turn-Around (ms)</label>
               <input class="finput" id="cfgTurnAround" type="number" value="200" min="0">
@@ -1256,8 +1314,11 @@
               <div class="fhint">Listen-before-transmit window. 784 ms for ALE-only channels, ≥ 2 s for shared channels (set per channel).</div>
             </div>
           </div>
+          </div><!-- /group turnaround-tuning -->
 
-          <div class="fg-row col3">
+          <div class="ssec-group">
+          <div class="ssec-group-title">PTT Keying &amp; Test-Channel</div>
+          <div class="fg-row col3" style="margin-bottom:0">
             <div>
               <label class="flabel">PTT Lead (ms)</label>
               <input class="finput" id="cfgPttLead" type="number" value="10" min="0">
@@ -1274,29 +1335,36 @@
               <div class="fhint">Time to stay linked on each channel during a Test-Channel sweep before terminating.</div>
             </div>
           </div>
+          </div><!-- /group ptt-keying-delays -->
 
-          <div class="fhint" style="margin-top:6px">
+          <div class="fhint" style="margin-top:2px">
             MIL-STD-188-141B Table III defaults are pre-filled. Only change for non-standard nets.
           </div>
         </div><!-- /timing -->
 
         <!-- ── Policy ── -->
         <div class="ssec" data-sec="policy">
-          <div class="ssec-title">Acceptance Policy (A.4.3.4)</div>
-          <div class="fg">
-            <div class="ftoggle-row">
-              <div class="ftoggle-info">
-                <div class="ftoggle-name">Auto-Accept Incoming Calls</div>
-                <div class="ftoggle-desc">ON: incoming calls are answered automatically. OFF: a call must be accepted manually (Answer) within the decision window below — otherwise it is dropped and the caller times out.</div>
-              </div>
-              <label class="ftoggle"><input type="checkbox" id="cfgAutoAccept" onchange="updateAutoAcceptUi()"><span class="ftrack"></span></label>
+          <div class="ssec-title">Calling Policy</div>
+
+          <div class="ssec-group">
+          <div class="ssec-group-title">Auto-Accept</div>
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Auto-Accept Incoming Calls</div>
+              <div class="ftoggle-desc">ON: incoming calls are answered automatically. OFF: a call must be accepted manually (Answer) within the decision window below — otherwise it is dropped and the caller times out.</div>
             </div>
-            <div class="fg" id="acceptDecisionRow" style="margin:6px 0 12px">
-              <label class="flabel">Manual Accept Window (s)</label>
-              <input class="finput" id="cfgAcceptTimeout" type="number" value="20" min="1" style="width:120px">
-              <div class="fhint">Time the operator has to press Answer before the call is dropped (manual mode only).</div>
-            </div>
-            <hr class="fsep">
+            <label class="ftoggle"><input type="checkbox" id="cfgAutoAccept" onchange="updateAutoAcceptUi()"><span class="ftrack"></span></label>
+          </div>
+          <div class="fg" id="acceptDecisionRow" style="margin:6px 0 0">
+            <label class="flabel">Manual Accept Window (s)</label>
+            <input class="finput" id="cfgAcceptTimeout" type="number" value="20" min="1" style="width:120px">
+            <div class="fhint">Time the operator has to press Answer before the call is dropped (manual mode only).</div>
+          </div>
+          </div><!-- /group auto-accept -->
+
+          <div class="ssec-group">
+          <div class="ssec-group-title">Inbound Acceptance (A.4.3.4)</div>
+          <div class="fg" style="margin-bottom:0">
             <div class="ftoggle-row">
               <div class="ftoggle-info">
                 <div class="ftoggle-name">Accept Any Call</div>
@@ -1329,9 +1397,11 @@
           <div class="fhint" style="margin-top:6px">
             Governs which inbound frames the controller answers or displays. Calls from disabled or unlisted addresses are dropped unless <em style="font-style:normal;color:var(--accent)">Accept Any Call</em> is on.
           </div>
+          </div><!-- /group inbound-acceptance -->
 
-          <div class="ssec-title" style="margin-top:16px">Link Policy</div>
-          <div class="fg">
+          <div class="ssec-group">
+          <div class="ssec-group-title">Link Policy (Outbound Defaults)</div>
+          <div class="fg" style="margin-bottom:0">
             <div class="ftoggle-row">
               <div class="ftoggle-info">
                 <div class="ftoggle-name">Individual Calls</div>
@@ -1355,14 +1425,17 @@
             </div>
           </div>
           <div class="fhint" style="margin-top:6px">
-            This is the TX-side counterpart of Acceptance Policy above (what I offer by default when I initiate, vs. what I accept from others). Periodic Sounding has its own separate Conclusion Type control in the header Sound panel — not affected by this section.
+            This is the TX-side counterpart of Inbound Acceptance above (what I offer by default when I initiate, vs. what I accept from others). Periodic Sounding has its own separate Conclusion Type control in the header Sound panel — not affected by this section.
           </div>
+          </div><!-- /group link-policy -->
         </div><!-- /policy -->
 
         <!-- ── LQA ── -->
         <div class="ssec" data-sec="lqa">
           <div class="ssec-title">Link Quality Analysis</div>
 
+          <div class="ssec-group">
+          <div class="ssec-group-title">Link Quality Settings</div>
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">Record LQA</div>
@@ -1415,8 +1488,11 @@
               </select>
             </div>
           </div>
+          </div><!-- /group lqa-settings -->
 
-          <table class="ch-table" style="margin-top:6px">
+          <div class="ssec-group">
+          <div class="ssec-group-title">Heard Stations LQA</div>
+          <table class="ch-table" style="margin-top:0">
             <thead>
               <tr>
                 <th>Station</th><th>Ch</th><th>Avail</th><th>Score</th>
@@ -1435,6 +1511,7 @@
           </div>
           <button class="btn-sm" style="margin-top:10px" onclick="renderLqa()">↺ Refresh</button>
           <button class="btn-sm" style="margin-top:10px;margin-left:6px" onclick="clearLqa()">⌫ Clear LQA</button>
+          </div><!-- /group lqa-table -->
         </div><!-- /lqa -->
 
         <!-- ── Groups (saved call rosters) ── -->
@@ -1493,7 +1570,9 @@
         <div class="ssec" data-sec="logging">
           <div class="ssec-title">Logging</div>
 
-          <div class="fg-row col2">
+          <div class="ssec-group">
+          <div class="ssec-group-title">Log Output</div>
+          <div class="fg-row col2" style="margin-bottom:0">
             <div>
               <label class="flabel">Log Level</label>
               <select class="fselect" id="cfgLogLevel">
@@ -1512,9 +1591,10 @@
               </div>
             </div>
           </div>
+          </div><!-- /group log-output -->
 
-          <hr class="fsep">
-
+          <div class="ssec-group">
+          <div class="ssec-group-title">Diagnostics</div>
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">RX Debug Output</div>
@@ -1525,12 +1605,15 @@
               <span class="ftrack"></span>
             </label>
           </div>
+          </div><!-- /group diagnostics -->
         </div><!-- /logging -->
 
         <!-- ── Files ── -->
         <div class="ssec" data-sec="files">
-          <div class="ssec-title">Files</div>
+          <div class="ssec-title">Station Files</div>
 
+          <div class="ssec-group">
+          <div class="ssec-group-title">Import / Export</div>
           <div class="fg">
             <label class="flabel">Configuration File</label>
             <div style="display:flex;gap:8px">
@@ -1551,7 +1634,7 @@
             <div class="fhint">Import a channel/net plan (e.g. a regional preset), or export your current channels to back it up or share it. Your live configuration is saved automatically — this isn't required for normal use.</div>
           </div>
 
-          <div class="fg">
+          <div class="fg" style="margin-bottom:0">
             <label class="flabel">LQA Database File</label>
             <div style="display:flex;gap:8px">
               <input class="finput" id="cfgLqaFile" type="text" placeholder="lqa.bin" style="flex:1">
@@ -1560,12 +1643,15 @@
             </div>
             <div class="fhint">Import a saved LQA database (channel quality history), or export the current one to back it up or share it. It's also restored automatically on startup and saved on exit — this isn't required for normal use.</div>
           </div>
+          </div><!-- /group import-export -->
         </div><!-- /files -->
 
         <!-- ── Misc / Sounding ── -->
         <div class="ssec" data-sec="misc">
           <div class="ssec-title">Misc / Sounding</div>
 
+          <div class="ssec-group">
+          <div class="ssec-group-title">LQA Persistence</div>
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">Auto-save LQA on Exit</div>
@@ -1576,9 +1662,10 @@
               <span class="ftrack"></span>
             </label>
           </div>
+          </div><!-- /group lqa-persistence -->
 
-          <hr class="fsep">
-
+          <div class="ssec-group">
+          <div class="ssec-group-title">Listen-Before-Talk (LBT)</div>
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">LBT Busy Detection</div>
@@ -1598,9 +1685,10 @@
             </div>
             <label class="ftoggle"><input type="checkbox" id="cfgLbtOverride" onchange="applyLbtToBridge()"><span class="ftrack"></span></label>
           </div>
+          </div><!-- /group lbt -->
 
-          <hr class="fsep">
-
+          <div class="ssec-group">
+          <div class="ssec-group-title">Scan Detection</div>
           <div class="ftoggle-row">
             <div class="ftoggle-info">
               <div class="ftoggle-name">Scan Stop Squelch</div>
@@ -1614,6 +1702,7 @@
               <span id="scanFloorReadout" style="font-size:11px;opacity:0.6;min-width:110px">floor —</span>
             </div>
           </div>
+          </div><!-- /group scan-detection -->
         </div><!-- /misc -->
 
       </div><!-- /scontent -->
