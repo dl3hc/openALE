@@ -149,6 +149,7 @@ function connectBridge() {
     bridgeConnected = false;
     bridgeWs = null;
     bridgePending.clear();
+    rigListLoaded = false;   // bridge process gone → re-fetch rig list on next Radio-tab visit
     applyRigState(false);
     setBridgeOverlay(true);
     if (!bridgeReconnectTimer) {
@@ -2053,7 +2054,9 @@ function openSettings() {
   enumDevices();
   enumVoiceDevices();
   syncOpAudioNotifyUi();
-  populateRigDropdown();
+  // RIG_LIST is NOT fired here — it's gated to the Radio / CAT Control tab
+  // (see showSec('radio')), so opening Settings for any other section no
+  // longer makes Hamlib iterate / reload every backend on each click.
 }
 
 // Closing Settings does NOT auto-tune the radio — per the workflow, no
@@ -2117,6 +2120,10 @@ function showSec(sec) {
       if (caret) caret.textContent = '▾';
     }
   }
+  // Populate the Hamlib model dropdown lazily — only when the operator
+  // actually opens the Radio / CAT Control tab, not on every Settings open.
+  // populateRigDropdown() is a no-op once the list is loaded this session.
+  if (sec === 'radio') populateRigDropdown(savedRigModel);
 }
 
 // Rig connection-field visibility, driven by the selected Hamlib model's port
@@ -2124,6 +2131,13 @@ function showSec(sec) {
 // nothing). The model dropdown is the single selector; there is no separate
 // backend radio group. rigPortTypeById is populated by populateRigDropdown().
 let rigPortTypeById = {};
+// RIG_LIST is static for the bridge process lifetime, and its first call is
+// the one that trips rig_load_all_backends. Cache it for the session so the
+// Radio tab can be re-visited without re-fetching; reset on bridge disconnect.
+// savedRigModel carries the synced model (RIG_GET) into the deferred populate
+// so the saved rig is pre-selected when the Radio tab is first opened.
+let rigListLoaded = false;
+let savedRigModel = '';
 function updateRigFields() {
   const sel = document.getElementById('rigModel');
   const ptype = rigPortTypeById[sel?.value ?? ''] || '';
@@ -2145,9 +2159,18 @@ function updateRigFields() {
 function populateRigDropdown(wantModel) {
   const sel = document.getElementById('rigModel');
   if (!sel || !bridgeConnected) return;
+  // The Hamlib backend list is static for the bridge process lifetime, and
+  // the first RIG_LIST is the one that trips rig_load_all_backends. Once
+  // loaded this session, don't re-fetch — and don't clobber the operator's
+  // model selection on a re-visit; just refresh connection-field visibility.
+  if (rigListLoaded) {
+    updateRigFields();
+    return;
+  }
   const prev = wantModel !== undefined ? wantModel : sel.value;
   bridgeSend('RIG_LIST', {}, (r) => {
     if (!r.ok || !Array.isArray(r.rigs)) return;
+    rigListLoaded = true;
     sel.innerHTML = '';
     rigPortTypeById = { '': '' };  // "None / Offline" → no fields
     let grp = null, lastMfg = null;
@@ -2316,7 +2339,15 @@ let rigConnected = false;
 function syncRigFromBridge() {
   bridgeSend('RIG_GET', {}, (r) => {
     if (!r.ok) return;
-    populateRigDropdown(r.model || '');
+    savedRigModel = r.model || '';
+    // If the Radio tab has already been opened (dropdown populated), apply
+    // the saved model now; otherwise it's restored when the Radio / CAT
+    // Control tab is first shown. Never trigger a RIG_LIST fetch from here.
+    if (rigListLoaded) {
+      const sel = document.getElementById('rigModel');
+      if (sel && savedRigModel && [...sel.options].some(o => o.value === savedRigModel))
+        sel.value = savedRigModel;
+    }
     const setVal = (id, v) => {
       if (v === undefined || v === null) return;
       const el = document.getElementById(id);
