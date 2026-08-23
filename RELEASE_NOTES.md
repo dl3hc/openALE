@@ -64,6 +64,20 @@ AMD to all stations, not just position reports.
   conclusion per destination type (Individual / Group / ALLCALL). The compose-row **Link**
   checkbox is pre-filled from these and remains overridable per send. ALLCALL broadcasts
   now also support the **Link** option (TIS conclusion) instead of always fire-and-forget.
+- **Location Relay — endpoint health pill**: the status indicator under Settings ▸
+  Location ▸ Location Relay now shows live endpoint reachability — Running · Connected /
+  No connection / Server error — instead of just "Running" (which only proved the worker
+  thread existed). The worker re-checks on every send and roughly every 60 s while idle.
+- **Location Relay map — HF-band filter + retention**: the reference server's map groups
+  stations by HF band (160 m–10 m + Other) rather than per-exact frequency, drops stations
+  not heard in the last two days, and uses a select-to-show allowlist in place of the old
+  hide-by-toggle filter.
+- **Channel-file overlay persistence**: `station.state` no longer duplicates every channel
+  frequency row from a loaded preset. It stores a reference to the preset file plus only the
+  channels you added/modified and a deleted-ID list, so a loaded preset survives a restart
+  without bloating the state file — and your manual channel edits are preserved.
+- **Automatic Sounding toggle** moved to the top of Settings ▸ Nets, where the per-net
+  sounding interval it controls lives. (Was under Misc / Sounding.)
 
 ## Fixes
 
@@ -97,6 +111,11 @@ AMD to all stations, not just position reports.
 - `apply_config()` did not propagate the rig- and audio-connection fields into the live
   config, so the new persistence would have silently no-op'd (saved values never reached
   the auto-reconnect path).
+- Every Settings / navbar click made Hamlib iterate and reload every radio backend — the
+  rig model dropdown was refetched on each Settings open, and the first such call in a
+  session is the one that trips `rig_load_all_backends`. The list is now fetched only when
+  you open the Radio / CAT Control tab, cached for the session, and re-fetched after a
+  bridge restart; navigating Settings no longer triggers a full backend reload.
 
 ## Other
 
@@ -106,6 +125,10 @@ AMD to all stations, not just position reports.
   `Hamlib-<version>` tag form did not exist and would have failed the clone) and
   rebuilds `libhamlib-4.dll` against the latest Hamlib release. The soname stays
   `libhamlib-4.dll` (major-ABI-versioned, unchanged across the 4.x series).
+- Location Relay reference server (`tools/location-relay-server`): a DB worker thread with
+  batched transactions removes a write fan-in bottleneck (~10× ingest throughput), with
+  logging, capacity/security bounds, rounding/observer-cap safety nets, and an opt-in
+  collapse mode.
 
 ---
 
