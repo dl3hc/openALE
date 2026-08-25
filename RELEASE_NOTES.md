@@ -86,11 +86,12 @@ AMD to all stations, not just position reports.
   without bloating the state file — and your manual channel edits are preserved.
 - **Automatic Sounding toggle** moved to the top of Settings ▸ Nets, where the per-net
   sounding interval it controls lives. (Was under Misc / Sounding.)
-- **Avoid Relay Click While Scanning**: Settings ▸ Radio ▸ PTT & Keying gets a new toggle
-  that puts the rig in Hamlib SPLIT mode while receiving/scanning, so the PA's
-  band/lowpass-filter relays don't click on every scan hop; SPLIT is dropped right before
-  transmit/sounding and re-armed once PTT goes back off. No effect on rigs whose Hamlib
-  backend doesn't support split VFO control. Hamlib backend only.
+- **Avoid Relay Click While Scanning**: Settings ▸ Radio ▸ PTT & Keying (openALE) and the
+  Radio panel (ale_monitor) get a new toggle that puts the rig in Hamlib SPLIT mode while
+  receiving/scanning, so the PA's band/lowpass-filter relays don't click on every scan hop.
+  In openALE, SPLIT is dropped right before transmit/sounding and re-armed once PTT goes
+  back off; ale_monitor never transmits, so it simply stays in SPLIT once armed. No effect
+  on rigs whose Hamlib backend doesn't support split VFO control. Hamlib backend only.
 
 ## Fixes
 
