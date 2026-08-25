@@ -162,7 +162,7 @@ function openDb(path) {
     `),
     listMappedStations: db.prepare(`
       SELECT source, last_lat, last_lon, last_altitude, last_altitude_unit,
-             last_position_timestamp, last_seen_at, last_observer, last_frequency_hz, report_count
+             last_position_timestamp, last_comment, last_seen_at, last_observer, last_frequency_hz, report_count
       FROM stations
       WHERE last_lat IS NOT NULL AND last_lon IS NOT NULL
       ORDER BY last_seen_at DESC

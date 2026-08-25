@@ -248,6 +248,7 @@ function stationToFeature(row) {
       altitude: row.last_altitude,
       altitude_unit: row.last_altitude_unit,
       position_timestamp: row.last_position_timestamp,
+      comment: row.last_comment,
       last_seen_at: row.last_seen_at,
       last_observer: row.last_observer,
       frequency_hz: row.last_frequency_hz,

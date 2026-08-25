@@ -134,6 +134,7 @@ function popupHtml(p) {
     ['Last seen', new Date(p.last_seen_at).toLocaleString()],
     ['Heard via', p.last_observer],
   ];
+  if (p.comment) lines.push(['Comment', p.comment]);
   if (p.frequency_hz) lines.push(['Frequency', fmtFreq(p.frequency_hz)]);
   lines.push(['Reports', p.report_count]);
   if (p.altitude !== undefined && p.altitude !== null) lines.push(['Altitude', `${p.altitude} ${p.altitude_unit || ''}`]);
