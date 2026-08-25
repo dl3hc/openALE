@@ -2436,6 +2436,8 @@ function syncRigFromBridge() {
     setVal('rigRts', r.rts);
     setVal('rigStab', r.stab);
     setVal('rigPttInput', r.ptt);
+    const relayClickEl = document.getElementById('rigAvoidRelayClick');
+    if (relayClickEl && r.split !== undefined) relayClickEl.checked = !!r.split;
   });
 }
 
@@ -2454,6 +2456,7 @@ function rigArgs() {
     rts:     document.getElementById('rigRts')?.value  ?? 'on',
     stab:    parseInt(document.getElementById('rigStab')?.value, 10) || 200,
     ptt:     document.getElementById('rigPttInput')?.value ?? 'normal',
+    split:   document.getElementById('rigAvoidRelayClick')?.checked ?? false,
   };
 }
 

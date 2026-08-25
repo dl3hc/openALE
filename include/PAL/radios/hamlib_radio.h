@@ -45,6 +45,11 @@ struct SerialLinePolicy {
     State    rts              = State::ON;   ///< RTS-Zustand nach Port-Open (default: HIGH)
     uint32_t stabilization_ms = 200;         ///< Wartezeit nach Port-Open vor erstem CAT-Befehl
     PttInput ptt_input        = PttInput::NORMAL;  ///< CAT-Audioeingang bei PTT ON
+
+    // Relay-click workaround (see rig_avoid_relay_click doc in
+    // ale_station_config.h). No-op on rigs whose Hamlib backend doesn't
+    // implement split VFO control (see split_supported_).
+    bool avoid_relay_click    = false;
 };
 
 /**
@@ -186,6 +191,10 @@ private:
     // wire) if power_supported_ is false. Only vom Worker.
     int  assert_power(int pct);
 
+    // Relay-click workaround: puts the rig into (or out of) SPLIT mode via
+    // rig_set_split_vfo(). No-op if split_supported_ is false. Only vom Worker.
+    void assert_split(bool on);
+
     // ── Async-Worker-Kommandotypen ────────────────────────────────────────────
     struct CmdSetChannel   { Channel ch; };
     struct CmdSetFrequency { uint32_t hz; };
@@ -249,6 +258,13 @@ private:
     // GET the backend never claimed to support, failing forever.
     std::atomic<bool> power_readback_supported_{false};
 
+    // Set once in start() from rig_->caps->set_split_vfo != nullptr — a
+    // capability check only, no I/O. Gates the relay-click workaround
+    // (assert_split() call sites in impl_set_channel/impl_set_frequency/
+    // impl_set_ptt); a rig whose backend doesn't implement split VFO control
+    // is never sent split commands.
+    std::atomic<bool> split_supported_{false};
+
     // ── Worker-only State (nach start() kein konkurrierender Zugriff nötig) ──
     // last_mode_cmd_ und current_channel_ werden ausschließlich vom Worker-Thread
     // gelesen und geschrieben; kein Mutex erforderlich.
@@ -259,6 +275,9 @@ private:
     // of 2 over netrigctl); drift is still corrected by the background sync_from_radio verify.
     RadioMode last_sent_mode_{};
     bool      mode_ever_sent_ = false;
+    // Intended SPLIT state on the wire, tracked so assert_split() call sites
+    // only issue a command when it actually needs to change. Worker-only.
+    bool      split_state_ = false;
 
     // ── Async Worker ──────────────────────────────────────────────────────────
     std::thread              worker_;
