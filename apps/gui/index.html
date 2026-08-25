@@ -845,6 +845,17 @@
               through the DATA/ACC socket, since on the TS-480 only the CAT command (not any menu
               setting) picks the TX input. Leave "Radio default" for non-Kenwood rigs.</div>
           </div>
+
+          <div class="ftoggle-row">
+            <div class="ftoggle-info">
+              <div class="ftoggle-name">Avoid Relay Click While Scanning</div>
+              <div class="ftoggle-desc">Puts the rig in SPLIT mode while receiving/scanning so the PA's band/lowpass-filter relays don't click on every hop; SPLIT is dropped for TX/sounding. No effect on rigs whose Hamlib backend doesn't support split VFO.</div>
+            </div>
+            <label class="ftoggle">
+              <input type="checkbox" id="rigAvoidRelayClick">
+              <span class="ftrack"></span>
+            </label>
+          </div>
           </div><!-- /group ptt-keying -->
 
           <div class="ssec-group">

@@ -174,6 +174,14 @@ bool HamlibRadio::start() {
                   power_supported_.load() ? "supported" : "not supported",
                   power_readback_supported_.load() ? "supported" : "not supported");
 
+    // Relay-click workaround capability check — same shape as the RFPOWER
+    // check above (pure capability lookup, no I/O, safe before the worker
+    // thread launches).
+    split_supported_.store(rig_ && rig_->caps && rig_->caps->set_split_vfo != nullptr);
+    split_state_ = false;
+    pal::log_info("HamlibRadio", "split VFO control: %s",
+                  split_supported_.load() ? "supported" : "not supported");
+
     // Serielle Schnittstelle: DTR/RTS-Leitungszustand nach Open setzen,
     // dann stabilization_ms warten bevor der erste CAT-Befehl gesendet wird.
     if (is_serial_port()) {
@@ -439,6 +447,12 @@ bool HamlibRadio::impl_set_channel(const Channel& ch) {
     // ~400 ms while SCANNING) reads the live mode and re-asserts. We still refresh
     // last_mode_cmd_ on the skip so that verify's 5 s re-assert window stays armed through a
     // long same-mode scan. VFO = RIG_VFO_CURR; passband = RIG_PASSBAND_NORMAL.
+    // Relay-click workaround: arm SPLIT before retuning so this RX/scan hop
+    // doesn't cycle the PA's band/lowpass-filter relays. impl_set_ptt() drops
+    // SPLIT again right before PTT ON so TX/sounding still switches the
+    // correct filter.
+    if (policy_.avoid_relay_click && !split_state_) assert_split(true);
+
     int freq_ret = RIG_OK;
     if (freq_changed) {
         const auto t0 = std::chrono::steady_clock::now();
@@ -501,6 +515,9 @@ bool HamlibRadio::impl_set_frequency(uint32_t hz) {
     // An SDR front-end (Quisk) restores a per-band saved mode on freq change;
     // openALE's mode must be authoritative — always assert it.
     const RadioMode saved_mode = current_channel_.tx_mode;
+
+    // Relay-click workaround — see impl_set_channel() for the full rationale.
+    if (policy_.avoid_relay_click && !split_state_) assert_split(true);
 
     const auto t0 = std::chrono::steady_clock::now();
     const int ret = rig_set_freq(rig_, RIG_VFO_CURR, static_cast<freq_t>(hz));
@@ -580,6 +597,13 @@ void HamlibRadio::impl_set_ptt(bool on) {
         default:                               ptt_mode = RIG_PTT_ON;     break;
         }
     }
+
+    // Relay-click workaround: drop SPLIT right before PTT ON so TX/sounding
+    // switches the PA's band/lowpass filter for the actual TX frequency —
+    // impl_set_channel()/impl_set_frequency() re-arm SPLIT on the next RX
+    // retune once PTT goes back off (below).
+    if (policy_.avoid_relay_click && on && split_state_) assert_split(false);
+
     const auto t0 = std::chrono::steady_clock::now();
     const int ptt_ret = rig_set_ptt(rig_, RIG_VFO_CURR, ptt_mode);
     const double ms = std::chrono::duration<double, std::milli>(
@@ -593,6 +617,8 @@ void HamlibRadio::impl_set_ptt(bool on) {
         pal::log_error("HamlibRadio", "rig_set_ptt(%s) failed", on ? "ON" : "OFF");
         trace_cat("set_ptt(%s) -> ERROR (%.0f ms)", on ? "ON" : "OFF", ms);
     }
+
+    if (policy_.avoid_relay_click && !on) assert_split(true);
 }
 
 bool HamlibRadio::impl_sync_from_radio() {
@@ -783,6 +809,30 @@ int HamlibRadio::assert_power(int pct) {
         trace_cat("set_level(RFPOWER, %d%%) -> OK (%.0f ms)", pct, ms);
     }
     return ret;
+}
+
+// Puts the rig into (or out of) SPLIT mode — the relay-click workaround (see
+// rig_avoid_relay_click doc in ale_station_config.h). No-op if the connected
+// rig's Hamlib backend doesn't advertise split VFO control. Same
+// fire-and-forget shape as assert_mode()/assert_power(): single call, no
+// readback loop. Worker-only.
+void HamlibRadio::assert_split(bool on) {
+    if (!split_supported_.load()) return;
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const int ret = rig_set_split_vfo(rig_, RIG_VFO_CURR,
+                                       on ? RIG_SPLIT_ON : RIG_SPLIT_OFF, RIG_VFO_CURR);
+    const double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    split_state_ = on;
+    if (ret != RIG_OK) {
+        pal::log_error("HamlibRadio", "  assert_split(%s) -> FAILED: %s",
+                       on ? "ON" : "OFF", rigerror(ret));
+        trace_cat("set_split(%s) -> ERROR %s (%.0f ms)", on ? "ON" : "OFF", rigerror(ret), ms);
+    } else {
+        pal::log_debug("HamlibRadio", "  assert_split(%s) -> sent", on ? "ON" : "OFF");
+        trace_cat("set_split(%s) -> OK (%.0f ms)", on ? "ON" : "OFF", ms);
+    }
 }
 
 // ── File-static helpers (hamlib types stay out of the header) ─────────────────

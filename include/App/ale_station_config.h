@@ -193,6 +193,12 @@ struct ALEStationConfig {
     std::string rig_rts           = "on";   ///< "on"/"off"/"unset"
     uint32_t    rig_stab          = 200;    ///< post-open line-state settle time (ms)
     std::string rig_ptt           = "normal"; ///< "normal"/"mic"/"data" CAT PTT audio-input select
+    /// true = while receiving/scanning, put the rig into SPLIT mode so the
+    /// PA's band/lowpass-filter relays don't click on every scan hop. SPLIT
+    /// is turned off again right before PTT ON (TX/sounding) and re-armed
+    /// after PTT OFF. No-op on rigs whose Hamlib backend doesn't implement
+    /// split VFO control.
+    bool        rig_avoid_relay_click = false;
     /// true = re-attach rig_model with the saved settings automatically on
     /// bridge startup (mirrors rigctld_server_enabled's own-config-driven
     /// auto-start). Set whenever RIG_CONNECT succeeds; cleared on an explicit

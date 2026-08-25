@@ -14,18 +14,20 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
 {
 #ifdef HAVE_HAMLIB
     // Format (serial):
-    //   "hamlib:<model>:<port>[,<baud>][,dtr=on|off|auto][,rts=on|off|auto][,stab=<ms>][,ptt=normal|mic|data]"
+    //   "hamlib:<model>:<port>[,<baud>][,dtr=on|off|auto][,rts=on|off|auto][,stab=<ms>][,ptt=normal|mic|data][,split=0|1]"
     // Format (TCP):
-    //   "hamlib:2:tcp://<host>:<port>[,ptt=normal|mic|data]"
+    //   "hamlib:2:tcp://<host>:<port>[,ptt=normal|mic|data][,split=0|1]"
     //
     // ptt=mic|data selects the CAT PTT audio input (Kenwood TX0/TX1 etc.) —
     // only rigs with a Mic/Data distinction in Hamlib honor it; others fall
     // back to the plain PTT-ON command. Default "normal" = plain PTT ON.
     //
+    // split=1 enables the relay-click workaround (SerialLinePolicy::avoid_relay_click).
+    //
     // Beispiele:
-    //   "hamlib:3021:COM3,9600,dtr=on,rts=on,stab=200,ptt=data"
+    //   "hamlib:3021:COM3,9600,dtr=on,rts=on,stab=200,ptt=data,split=1"
     //   "hamlib:3021:COM3,9600"
-    //   "hamlib:2:tcp://127.0.0.1:4532,ptt=data"
+    //   "hamlib:2:tcp://127.0.0.1:4532,ptt=data,split=1"
     if (config.rfind("hamlib:", 0) == 0) {
         const std::string rest  = config.substr(7);
         const auto        colon = rest.find(':');
@@ -75,6 +77,8 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
                         if      (val == "mic")  policy.ptt_input = SerialLinePolicy::PttInput::MIC;
                         else if (val == "data") policy.ptt_input = SerialLinePolicy::PttInput::DATA;
                         else                    policy.ptt_input = SerialLinePolicy::PttInput::NORMAL;
+                    } else if (key == "split") {
+                        policy.avoid_relay_click = (val == "1");
                     }
                 }
                 first_seg = false;

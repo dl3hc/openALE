@@ -984,6 +984,7 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.rig_rts           = cfg.rig_rts;
     config_.rig_stab          = cfg.rig_stab;
     config_.rig_ptt           = cfg.rig_ptt;
+    config_.rig_avoid_relay_click = cfg.rig_avoid_relay_click;
     config_.rig_auto_connect = cfg.rig_auto_connect;
     config_.audio_in         = cfg.audio_in;
     config_.audio_out        = cfg.audio_out;
@@ -3900,6 +3901,7 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "rig_rts=" << config_.rig_rts << "\n";
     f << "rig_stab=" << config_.rig_stab << "\n";
     f << "rig_ptt=" << config_.rig_ptt << "\n";
+    f << "rig_avoid_relay_click=" << (config_.rig_avoid_relay_click ? 1 : 0) << "\n";
     f << "rig_auto_connect=" << (config_.rig_auto_connect ? 1 : 0) << "\n";
     f << "audio_in=" << config_.audio_in << "\n";
     f << "audio_out=" << config_.audio_out << "\n";
@@ -4093,6 +4095,8 @@ bool ALEController::import_settings(const std::string& path, bool follow_channel
             cfg.rig_stab = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "rig_ptt") {
             cfg.rig_ptt = val;
+        } else if (key == "rig_avoid_relay_click") {
+            cfg.rig_avoid_relay_click = (val == "1");
         } else if (key == "rig_auto_connect") {
             cfg.rig_auto_connect = (val == "1");
         } else if (key == "audio_in") {

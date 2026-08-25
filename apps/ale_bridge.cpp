@@ -334,12 +334,16 @@ static std::string build_radio_spec(const mj::Value& msg) {
     // relevant regardless of transport, so it's read once and appended to
     // every branch below.
     const std::string ptt = msg.get_string("ptt", "normal");
+    // split=1 arms the relay-click workaround (SerialLinePolicy::avoid_relay_click) —
+    // relevant regardless of transport, so it's read once like ptt above.
+    const std::string split = msg.get_bool("split", false) ? "1" : "0";
     if (ptype == "network") {
         // "hamlib:<model>:tcp://<host>:<port>" — works for any network backend
         // (NET rigctl #2, FLRig #4, Quisk #10, GQRX #11, …), not just model 2.
         return "hamlib:" + model + ":tcp://" + msg.get_string("host", "127.0.0.1")
              + ":" + msg.get_string("port", "4532")
-             + ",ptt=" + ptt;
+             + ",ptt=" + ptt
+             + ",split=" + split;
     }
     if (ptype == "serial") {
         const std::string port  = msg.get_string("serial", "");
@@ -348,13 +352,14 @@ static std::string build_radio_spec(const mj::Value& msg) {
         const std::string dtr = msg.get_string("dtr", "on");
         const std::string rts = msg.get_string("rts", "on");
         const int stab = static_cast<int>(msg.get_number("stab", 200));
-        // Format: "hamlib:model:port,baud,dtr=on,rts=on,stab=200,ptt=normal"
+        // Format: "hamlib:model:port,baud,dtr=on,rts=on,stab=200,ptt=normal,split=0"
         return "hamlib:" + model + ":" + port
              + "," + (baud > 0 ? std::to_string(baud) : "0")
              + ",dtr=" + dtr
              + ",rts=" + rts
              + ",stab=" + std::to_string(stab)
-             + ",ptt=" + ptt;
+             + ",ptt=" + ptt
+             + ",split=" + split;
     }
     // other (Dummy / USB / Audio / …) — no connection parameters.
     return "hamlib:" + model + ":";
@@ -430,6 +435,7 @@ static mj::Value rig_config_to_msg(const ALEStationConfig& cfg) {
     m.set("rts",    mj::Value::string(cfg.rig_rts));
     m.set("stab",   mj::Value::number(cfg.rig_stab));
     m.set("ptt",    mj::Value::string(cfg.rig_ptt));
+    m.set("split",  mj::Value::boolean(cfg.rig_avoid_relay_click));
     return m;
 }
 
@@ -1509,6 +1515,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             cfg.rig_rts          = msg.get_string("rts", "on");
             cfg.rig_stab         = static_cast<uint32_t>(msg.get_number("stab", 200));
             cfg.rig_ptt          = msg.get_string("ptt", "normal");
+            cfg.rig_avoid_relay_click = msg.get_bool("split", false);
             cfg.rig_auto_connect = true;
             ctrl.apply_config(cfg);
             if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
@@ -1558,6 +1565,7 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         r.set("rts",          mj::Value::string(cfg.rig_rts));
         r.set("stab",         mj::Value::number(cfg.rig_stab));
         r.set("ptt",          mj::Value::string(cfg.rig_ptt));
+        r.set("split",        mj::Value::boolean(cfg.rig_avoid_relay_click));
         r.set("auto_connect", mj::Value::boolean(cfg.rig_auto_connect));
         return mj::dump(r);
     }
