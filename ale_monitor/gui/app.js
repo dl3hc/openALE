@@ -121,6 +121,8 @@ function syncSettingsFromBridge() {
     setField('setRigPort',        r.rig_port || '4532');
     setField('setRigSerial',      r.rig_serial || '');
     setField('setRigBaud',        r.rig_baud || 0);
+    const relayClickEl = document.getElementById('setRigAvoidRelayClick');
+    if (relayClickEl) relayClickEl.checked = !!r.rig_avoid_relay_click;
     if (r.rig_model) setField('setRigModel', String(r.rig_model));
     // Reflect the active audio device after the device list has populated.
     setTimeout(() => {
@@ -175,6 +177,7 @@ function doRigConnect() {
     port:   document.getElementById('setRigPort').value,
     serial: document.getElementById('setRigSerial').value,
     baud:   Number(document.getElementById('setRigBaud').value || 0),
+    split:  document.getElementById('setRigAvoidRelayClick')?.checked ?? false,
   };
   bridgeSend('RIG_CONNECT', args, (r) => {
     document.getElementById('rigStatus').textContent =

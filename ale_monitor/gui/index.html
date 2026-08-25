@@ -68,6 +68,7 @@
       <div class="set-row"><label>Port</label><input id="setRigPort" class="set-input" value="4532"></div>
       <div class="set-row"><label>Serial</label><input id="setRigSerial" class="set-input" placeholder="COM3 / /dev/ttyUSB0"></div>
       <div class="set-row"><label>Baud</label><input id="setRigBaud" class="set-input" type="number" value="0"></div>
+      <div class="set-row"><label title="Puts the rig in SPLIT mode while scanning so the PA's band/lowpass-filter relays don't click on every hop. No effect on rigs whose Hamlib backend doesn't support split VFO.">Avoid Relay Click</label><input id="setRigAvoidRelayClick" type="checkbox"></div>
       <div class="set-row">
         <button class="set-btn" onclick="doRigConnect()">Connect</button>
         <button class="set-btn" onclick="doRigDisconnect()">Disconnect</button>

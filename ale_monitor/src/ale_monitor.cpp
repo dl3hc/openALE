@@ -155,6 +155,12 @@ struct MonitorConfig {
     std::string rig_port = "4532";
     std::string rig_serial;
     int         rig_baud = 0;
+    // Relay-click workaround (see rig_avoid_relay_click doc in
+    // ale_station_config.h) — puts the rig in Hamlib SPLIT mode while
+    // scanning so the PA's band/lowpass-filter relays don't click on every
+    // hop. This monitor never transmits, so unlike apps/ale_bridge.cpp there
+    // is no PTT edge to drop SPLIT around — once armed it just stays on.
+    bool        rig_avoid_relay_click = false;
     uint32_t    dwell_ms = 2000;
     std::string channel_filter = "all";   // all | ale | sel
     std::string mode_override;            // empty = use file mode
@@ -208,6 +214,7 @@ static MonitorConfig parse_config(const std::string& path) {
         else if (key == "rig_port")       { cfg.rig_port = val; }
         else if (key == "rig_serial")     { cfg.rig_serial = val; }
         else if (key == "rig_baud")       { try { cfg.rig_baud = std::stoi(val); } catch (...) {} }
+        else if (key == "rig_avoid_relay_click") { cfg.rig_avoid_relay_click = (val == "1" || val == "true"); }
         else if (key == "dwell_ms")       { try { cfg.dwell_ms = static_cast<uint32_t>(std::stoul(val)); } catch (...) {} }
         else if (key == "channel_filter") { cfg.channel_filter = val.empty() ? "all" : val; }
         else if (key == "mode_override")  { cfg.mode_override = val; }
@@ -255,6 +262,7 @@ static void save_config(const std::string& path, const MonitorConfig& cfg) {
       << "rig_port = " << cfg.rig_port << "\n"
       << "rig_serial = " << cfg.rig_serial << "\n"
       << "rig_baud = " << cfg.rig_baud << "\n"
+      << "rig_avoid_relay_click = " << (cfg.rig_avoid_relay_click ? 1 : 0) << "\n"
       << "dwell_ms = " << cfg.dwell_ms << "\n"
       << "channel_filter = " << cfg.channel_filter << "\n"
       << "mode_override = " << cfg.mode_override << "\n"
@@ -292,6 +300,7 @@ static void write_config_template(const std::string& path) {
       << "rig_port = 4532\n"
       << "rig_serial =\n"
       << "rig_baud = 0\n"
+      << "rig_avoid_relay_click = 0\n"
       << "dwell_ms = 2000\n"
       << "# channel_filter: all | ale | sel\n"
       << "channel_filter = all\n"
@@ -389,18 +398,20 @@ static mj::Value make_event(const std::string& name) {
 // Empty model → "" (no radio). Mirrors apps/ale_bridge.cpp build_radio_spec().
 static std::string build_rig_spec(const std::string& model,
                                   const std::string& host, const std::string& port,
-                                  const std::string& serial, int baud) {
+                                  const std::string& serial, int baud,
+                                  bool avoid_relay_click = false) {
     if (model.empty()) return "";
     int model_id = 0;
     try { model_id = std::stoi(model); }
     catch (...) { return "hamlib:" + model + ":"; }
     const std::string ptype = pal::rig_port_type(model_id);
+    const std::string split = avoid_relay_click ? "1" : "0";
     if (ptype == "network")
-        return "hamlib:" + model + ":tcp://" + host + ":" + port;
+        return "hamlib:" + model + ":tcp://" + host + ":" + port + ",split=" + split;
     if (ptype == "serial")
         return "hamlib:" + model + ":" + serial
              + "," + (baud > 0 ? std::to_string(baud) : "0")
-             + ",dtr=on,rts=on,stab=200";
+             + ",dtr=on,rts=on,stab=200,split=" + split;
     return "hamlib:" + model + ":";
 }
 
@@ -607,7 +618,8 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
         const std::string port   = msg.get_string("port", ctx.cfg->rig_port);
         const std::string serial = msg.get_string("serial", ctx.cfg->rig_serial);
         const int baud            = static_cast<int>(msg.get_number("baud", ctx.cfg->rig_baud));
-        const std::string spec   = build_rig_spec(model, host, port, serial, baud);
+        const bool split = msg.get_bool("split", ctx.cfg->rig_avoid_relay_click);
+        const std::string spec   = build_rig_spec(model, host, port, serial, baud, split);
         if (spec.empty()) {  // None / Offline
             ctx.cfg->rig_model.clear();
             mj::Value r = make_reply(msg, true);
@@ -624,6 +636,7 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
             ctx.cfg->rig_port   = port;
             ctx.cfg->rig_serial = serial;
             ctx.cfg->rig_baud   = baud;
+            ctx.cfg->rig_avoid_relay_click = split;
         } else {
             ctx.radio->reset();
         }
@@ -760,6 +773,7 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
         r.set("rig_port",        mj::Value::string(ctx.cfg->rig_port));
         r.set("rig_serial",      mj::Value::string(ctx.cfg->rig_serial));
         r.set("rig_baud",        mj::Value::number(ctx.cfg->rig_baud));
+        r.set("rig_avoid_relay_click", mj::Value::boolean(ctx.cfg->rig_avoid_relay_click));
         r.set("net_file",        mj::Value::string(ctx.cfg->net_file));
         return mj::dump(r);
     }
@@ -972,7 +986,8 @@ int main(int argc, char* argv[]) {
     std::string rig_spec_to_use = cli_rig_spec;
     if (rig_spec_to_use.empty() && !cfg.rig_model.empty())
         rig_spec_to_use = build_rig_spec(cfg.rig_model, cfg.rig_host, cfg.rig_port,
-                                         cfg.rig_serial, cfg.rig_baud);
+                                         cfg.rig_serial, cfg.rig_baud,
+                                         cfg.rig_avoid_relay_click);
     if (!rig_spec_to_use.empty()) {
         radio = pal::create_radio(rig_spec_to_use);
         if (radio && radio->initialize() && radio->start()) {
