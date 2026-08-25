@@ -2,22 +2,20 @@
  * \file tone_generator.cpp
  * \brief NCO-based 8-FSK tone generator — pure std::sin(), TPDF dither.
  *
- * The 32-bit phase accumulator advances by a tone-specific increment each
- * sample.  Because all ALE tones are exact multiples of 125 Hz (the symbol
- * rate), every symbol spans an integer number of cycles: after 64 samples the
- * accumulator returns to its starting value, so every symbol boundary falls
- * at the waveform maximum (phase = pi/2, slope = 0) — REQ-WAVEFORM-005.
+ * 32-bit phase accumulator advances by a per-tone increment each sample.
+ * All ALE tones are exact multiples of 125 Hz (symbol rate), so each symbol
+ * spans integer cycles: after 64 samples the accumulator returns to start,
+ * putting every symbol boundary at the waveform max (phase=pi/2, slope=0) —
+ * REQ-WAVEFORM-005.
  *
- * Sine is computed via std::sin(double) per sample.  At 8 kHz × ~5 words/s
- * the per-second call count is in the low tens of thousands — completely
- * negligible.  This eliminates all table-quantisation harmonics and alias
- * products that a 256-entry LUT with linear interpolation would introduce.
+ * Sine via std::sin(double) per sample: at 8 kHz × ~5 words/s that's low
+ * tens of thousands of calls/s — negligible. Avoids the table-quantization
+ * harmonics and alias products a 256-entry LUT + linear interpolation would add.
  *
- * int16 quantization uses TPDF dither + rounding (see tone_generator.h).
- * Without dither, truncation of a periodic signal produces a signal-correlated
- * quantization error: at 8 kHz, harmonics of 2500 Hz fold back in-band
- * (5000→3000 Hz, 7500→500 Hz) and appear as discrete spurs in the waterfall.
- * TPDF decorrelates the error → flat, low-level noise floor instead.
+ * int16 quantization: TPDF dither + rounding (see tone_generator.h). Without
+ * dither, truncating a periodic signal yields signal-correlated quantization
+ * error: at 8 kHz, 2500 Hz harmonics fold in-band (5000→3000, 7500→500) as
+ * discrete waterfall spurs. TPDF decorrelates it → flat low-level noise floor.
  */
 
 #include "FSK/tone_generator.h"
@@ -36,28 +34,26 @@ ToneGenerator::ToneGenerator() : prng_(0x4A4C4555u) {
 }
 
 void ToneGenerator::init_phase_increments() {
-    // Walk tones in ascending-frequency order (rank). FREQ_TO_SYMBOL[rank] gives
-    // the symbol value carried by that tone, so we store the increment in the
-    // matching symbol slot → phase_increment indexed by SYMBOL VALUE.
+    // Walk tones by ascending frequency (rank). FREQ_TO_SYMBOL[rank] = the
+    // symbol that tone carries, so store into that slot → phase_increment is
+    // indexed by SYMBOL VALUE.
     for (uint32_t rank = 0; rank < NUM_TONES; ++rank) {
         uint8_t  symbol  = FREQ_TO_SYMBOL[rank];
         uint32_t freq_hz = TONE_FREQS_HZ[rank];
 
-        // Q32 fixed-point: increment = freq_hz / sample_rate × 2^32.
-        // Integer arithmetic avoids rounding error; result fits in uint32_t
-        // because all ALE frequencies are well below SAMPLE_RATE_HZ.
+        // Q32 fixed-point: increment = freq_hz / sample_rate × 2^32. Integer
+        // math avoids rounding error; fits uint32_t (all ALE freqs << SAMPLE_RATE_HZ).
         uint64_t increment = (static_cast<uint64_t>(freq_hz) << 32) / SAMPLE_RATE_HZ;
         phase_increment[symbol] = static_cast<uint32_t>(increment);
     }
 }
 
 void ToneGenerator::reset() {
-    // pi/2 in 32-bit phase: sin(pi/2) = 1 → first sample is the waveform peak,
-    // slope = 0.  Guaranteed to be reproduced at the start of every subsequent
-    // symbol because all ALE tones complete an integer number of cycles in
-    // SAMPLES_PER_SYMBOL (= 64) samples.
+    // pi/2 in 32-bit phase: sin(pi/2)=1 → first sample is the peak, slope=0.
+    // Reproduced at every subsequent symbol start since all ALE tones complete
+    // integer cycles in SAMPLES_PER_SYMBOL (=64) samples.
     phase_ = 0x40000000u;
-    // Fixed seed keeps dither reproducible across test runs.
+    // Fixed seed → reproducible dither across test runs.
     prng_.seed(0x4A4C4555u);
 }
 
