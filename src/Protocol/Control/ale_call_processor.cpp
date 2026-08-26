@@ -71,10 +71,14 @@ ALECallProcessor::WordRole ALECallProcessor::classify(const ALEStateMachine& sm,
         return r;
     }
 
-    // TO or TWAS to us → call to our own address.  Per A.5.2.5.1 the scanning TO
-    // word carries only the first ≤3 chars of the destination; self_address may be
-    // longer → prefix comparison.
-    if ((word.type == PreambleType::TO || word.type == PreambleType::TWAS)
+    // TO to us → call to our own address.  Per A.5.2.5.1 the scanning TO word
+    // carries only the first ≤3 chars of the destination; self_address may be
+    // longer → prefix comparison. TWAS is deliberately excluded: per
+    // A.5.2.3.1.3 a TWAS word's address is always the identity of whoever is
+    // currently transmitting, never a callee reference, so matching it
+    // against self is a category error (misclassifies a far station's
+    // conclusion as TO_SELF whenever its callsign prefix-matches ours).
+    if (word.type == PreambleType::TO
         && !addr.empty()
         && self.size() >= addr.size()
         && self.compare(0, addr.size(), addr) == 0) {
