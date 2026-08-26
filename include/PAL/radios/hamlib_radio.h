@@ -193,7 +193,7 @@ private:
 
     // Relay-click workaround: puts the rig into (or out of) SPLIT mode via
     // rig_set_split_vfo(). No-op if split_supported_ is false. Only vom Worker.
-    void assert_split(bool on);
+    void assert_split(bool on, const char* reason);
 
     // ── Async-Worker-Kommandotypen ────────────────────────────────────────────
     struct CmdSetChannel   { Channel ch; };

@@ -631,6 +631,10 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
         const bool ok = *ctx.radio && (*ctx.radio)->initialize() && (*ctx.radio)->start();
         if (ok) {
             ctrl.set_radio(ctx.radio->get());
+            if (split != ctx.cfg->rig_avoid_relay_click) {
+                pal::log_info("ale_monitor", "Relay-click avoidance (SPLIT mode while scanning) %s",
+                               split ? "enabled" : "disabled");
+            }
             ctx.cfg->rig_model  = model;
             ctx.cfg->rig_host   = host;
             ctx.cfg->rig_port   = port;
