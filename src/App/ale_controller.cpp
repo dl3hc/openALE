@@ -984,6 +984,10 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.rig_rts           = cfg.rig_rts;
     config_.rig_stab          = cfg.rig_stab;
     config_.rig_ptt           = cfg.rig_ptt;
+    if (cfg.rig_avoid_relay_click != config_.rig_avoid_relay_click) {
+        pal::log_info("ALEController", "Relay-click avoidance (SPLIT mode while scanning) %s",
+                       cfg.rig_avoid_relay_click ? "enabled" : "disabled");
+    }
     config_.rig_avoid_relay_click = cfg.rig_avoid_relay_click;
     config_.rig_auto_connect = cfg.rig_auto_connect;
     config_.audio_in         = cfg.audio_in;

@@ -451,7 +451,7 @@ bool HamlibRadio::impl_set_channel(const Channel& ch) {
     // doesn't cycle the PA's band/lowpass-filter relays. impl_set_ptt() drops
     // SPLIT again right before PTT ON so TX/sounding still switches the
     // correct filter.
-    if (policy_.avoid_relay_click && !split_state_) assert_split(true);
+    if (policy_.avoid_relay_click && !split_state_) assert_split(true, "arming before RX/scan hop retune");
 
     int freq_ret = RIG_OK;
     if (freq_changed) {
@@ -517,7 +517,7 @@ bool HamlibRadio::impl_set_frequency(uint32_t hz) {
     const RadioMode saved_mode = current_channel_.tx_mode;
 
     // Relay-click workaround — see impl_set_channel() for the full rationale.
-    if (policy_.avoid_relay_click && !split_state_) assert_split(true);
+    if (policy_.avoid_relay_click && !split_state_) assert_split(true, "arming before RX/scan hop retune");
 
     const auto t0 = std::chrono::steady_clock::now();
     const int ret = rig_set_freq(rig_, RIG_VFO_CURR, static_cast<freq_t>(hz));
@@ -602,7 +602,7 @@ void HamlibRadio::impl_set_ptt(bool on) {
     // switches the PA's band/lowpass filter for the actual TX frequency —
     // impl_set_channel()/impl_set_frequency() re-arm SPLIT on the next RX
     // retune once PTT goes back off (below).
-    if (policy_.avoid_relay_click && on && split_state_) assert_split(false);
+    if (policy_.avoid_relay_click && on && split_state_) assert_split(false, "dropping before PTT ON / TX");
 
     const auto t0 = std::chrono::steady_clock::now();
     const int ptt_ret = rig_set_ptt(rig_, RIG_VFO_CURR, ptt_mode);
@@ -618,7 +618,7 @@ void HamlibRadio::impl_set_ptt(bool on) {
         trace_cat("set_ptt(%s) -> ERROR (%.0f ms)", on ? "ON" : "OFF", ms);
     }
 
-    if (policy_.avoid_relay_click && !on) assert_split(true);
+    if (policy_.avoid_relay_click && !on) assert_split(true, "re-arming after PTT OFF / back to RX");
 }
 
 bool HamlibRadio::impl_sync_from_radio() {
@@ -816,7 +816,7 @@ int HamlibRadio::assert_power(int pct) {
 // rig's Hamlib backend doesn't advertise split VFO control. Same
 // fire-and-forget shape as assert_mode()/assert_power(): single call, no
 // readback loop. Worker-only.
-void HamlibRadio::assert_split(bool on) {
+void HamlibRadio::assert_split(bool on, const char* reason) {
     if (!split_supported_.load()) return;
 
     const auto t0 = std::chrono::steady_clock::now();
@@ -826,12 +826,14 @@ void HamlibRadio::assert_split(bool on) {
         std::chrono::steady_clock::now() - t0).count();
     split_state_ = on;
     if (ret != RIG_OK) {
-        pal::log_error("HamlibRadio", "  assert_split(%s) -> FAILED: %s",
-                       on ? "ON" : "OFF", rigerror(ret));
-        trace_cat("set_split(%s) -> ERROR %s (%.0f ms)", on ? "ON" : "OFF", rigerror(ret), ms);
+        pal::log_error("HamlibRadio", "  assert_split(%s) -> FAILED: %s (%s)",
+                       on ? "ON" : "OFF", rigerror(ret), reason);
+        trace_cat("set_split(%s) -> ERROR %s (%.0f ms) [%s]",
+                  on ? "ON" : "OFF", rigerror(ret), ms, reason);
     } else {
-        pal::log_debug("HamlibRadio", "  assert_split(%s) -> sent", on ? "ON" : "OFF");
-        trace_cat("set_split(%s) -> OK (%.0f ms)", on ? "ON" : "OFF", ms);
+        pal::log_debug("HamlibRadio", "  assert_split(%s) -> sent (%s)",
+                       on ? "ON" : "OFF", reason);
+        trace_cat("set_split(%s) -> OK (%.0f ms) [%s]", on ? "ON" : "OFF", ms, reason);
     }
 }
 

@@ -58,3 +58,6 @@ temp/
 
 # Root-level screenshots (local UI capture artifacts, never commit)
 /*.png
+
+# Relay deployment howto — infra topology, local-only, never commit
+tools/location-relay-server/HOWTO.md
