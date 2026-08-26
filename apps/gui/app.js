@@ -2137,10 +2137,50 @@ function overlayClose(e) {
   if (e.target === document.getElementById('settingsModal')) closeSettings();
 }
 
-function showSec(sec) {
-  document.querySelectorAll('.snav-item').forEach(el =>
+// Help modal — same slide-open drawer mechanism as Settings (openSettings/
+// closeSettings/showSec above), but a separate modal/nav/section set so the
+// two don't interfere: opening Help must not disturb whatever Settings
+// section was last shown, and vice versa.
+function openHelp() {
+  document.getElementById('helpModal').classList.remove('hidden');
+}
+
+function closeHelp() {
+  const modal = document.getElementById('helpModal');
+  const panel = modal.querySelector('.modal');
+  if (panel) {
+    panel.classList.add('closing');
+    panel.addEventListener('transitionend', function onEnd(e) {
+      if (e.propertyName === 'transform') {
+        panel.classList.remove('closing');
+        panel.removeEventListener('transitionend', onEnd);
+      }
+    });
+  }
+  modal.classList.add('hidden');
+}
+
+function overlayCloseHelp(e) {
+  if (e.target === document.getElementById('helpModal')) closeHelp();
+}
+
+function showHelpSec(sec) {
+  document.querySelectorAll('#helpModal .snav-item').forEach(el =>
     el.classList.toggle('active', el.dataset.sec === sec));
-  document.querySelectorAll('.ssec').forEach(el =>
+  document.querySelectorAll('#helpModal .ssec').forEach(el =>
+    el.classList.toggle('active', el.dataset.sec === sec));
+  const scontent = document.getElementById('helpScontent');
+  if (scontent) scontent.scrollTop = 0;
+}
+
+function showSec(sec) {
+  // Scoped to #settingsModal — #helpModal has its own nav/sections reusing
+  // the same .snav-item/.ssec classes and data-sec values (e.g. "radio",
+  // "location"), so an unscoped query here would cross-contaminate which
+  // section shows active the next time either modal is opened.
+  document.querySelectorAll('#settingsModal .snav-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.sec === sec));
+  document.querySelectorAll('#settingsModal .ssec').forEach(el =>
     el.classList.toggle('active', el.dataset.sec === sec));
   // Auto-expand Advanced nav group when navigating to an advanced section
   const advSecs = ['voice','location','nets','timing','policy','lqa','fec','logging','files','misc'];
@@ -3083,7 +3123,10 @@ function saveSettings() {
 
 // ── Keyboard shortcut ──
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeSettings();
+  if (e.key === 'Escape') {
+    const helpOpen = !document.getElementById('helpModal')?.classList.contains('hidden');
+    if (helpOpen) closeHelp(); else closeSettings();
+  }
   if (e.key === ',' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); openSettings(); }
 });
 
@@ -3132,8 +3175,8 @@ function updateSoundBtn() {
 }
 
 function soundingIntervalSec() {
-  const v = parseInt(document.getElementById('cfgSounding')?.value, 10);
-  return Number.isFinite(v) && v > 0 ? v : 300;
+  const n = nets.find(n => n.name === activeNet);
+  return (n && n.soundIntervalSec > 0) ? n.soundIntervalSec : 300;
 }
 
 function soundPanelOpen() {
@@ -3360,7 +3403,6 @@ function applyTimingToBridge() {
   if (!bridgeConnected) return;
   const num = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v > 0 ? v : null; };
   const args = {};
-  const s  = num('cfgSounding');    if (s)  args.sounding_interval_sec = s;
   const li = num('cfgLinkIdle');    if (li) args.link_idle_timeout_sec = li;
   const ama = num('cfgAmdMaxAttempts'); if (ama) args.amd_send_max_attempts = ama;
   const mt = num('cfgMaxTune');     if (mt) args.max_tune_time_ms = mt;
@@ -3936,7 +3978,6 @@ function syncTimingFromBridge() {
   bridgeSend('TIMING_GET', {}, (r) => {
     if (!r.ok) return;
     const setNum = (id, v) => { const el = document.getElementById(id); if (el && typeof v === 'number') el.value = v; };
-    setNum('cfgSounding',       r.sounding_interval_sec);
     setNum('cfgSoundingLead',   r.sounding_warning_lead_sec);
     setNum('cfgLinkIdle',       r.link_idle_timeout_sec);
     setNum('cfgAmdMaxAttempts', r.amd_send_max_attempts);

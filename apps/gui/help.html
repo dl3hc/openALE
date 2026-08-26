@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Help · openALE</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('openale-theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
 <style>
   html, body { height: auto; min-height: 100vh; overflow-y: auto; }
   .app { height: auto; min-height: 100vh; }
@@ -71,6 +79,7 @@
         <div class="snav-section-hdr">Station</div>
         <div class="snav-item" data-sec="identity" onclick="showSec('identity')"><span class="snav-icon">◆</span><span class="snav-label">Identity</span></div>
         <div class="snav-item" data-sec="radio" onclick="showSec('radio')"><span class="snav-icon">◆</span><span class="snav-label">Radio / CAT</span></div>
+        <div class="snav-item" data-sec="tuner" onclick="showSec('tuner')"><span class="snav-icon">◆</span><span class="snav-label">Tuner</span></div>
         <div class="snav-item" data-sec="location" onclick="showSec('location')"><span class="snav-icon">◆</span><span class="snav-label">Location</span></div>
 
         <div class="snav-section-hdr">ALE</div>
@@ -185,16 +194,45 @@
           <div class="help-field"><span class="flabel">Connection type — Network vs Serial</span><p>Network rigs (e.g. rigctld, IP-connected transceivers) need Host and Port. Serial rigs need a Port name plus Baud Rate and, for some models, DTR/RTS line settings and a stabilization delay after opening the port.</p></div>
           <div class="help-field"><span class="flabel">PTT Method</span><p>Chooses how transmit is keyed: via the CAT command set itself, via a separate serial control line, or via an external PTT port. Use PTT Port to specify that separate line when it isn't CAT.</p></div>
           <div class="help-field"><span class="flabel">TX Audio Input</span><p>On rigs that accept audio over the same CAT/USB link (rather than a sound-card cable), selects which input the transmit audio is injected into.</p></div>
+          <div class="help-field"><span class="flabel">Avoid Relay Click While Scanning</span><p>Puts the rig in Hamlib SPLIT mode while receiving/scanning so the PA's band/lowpass-filter relays don't click on every scan hop; SPLIT is dropped automatically right before transmit or sounding. No effect on rigs whose Hamlib backend doesn't support split VFO control.</p></div>
           <div class="help-field"><span class="flabel">CAT / Rig Traffic trace</span><p>An opt-in diagnostic toggle that prints every raw CAT command/response as "[CAT] ..." lines in the ALE Log — useful when a rig isn't responding as expected.</p></div>
           <div class="help-field"><span class="flabel">Test Connection vs Connect</span><p><strong>Test Connection</strong> opens the port/socket just long enough to confirm the rig answers, then releases it. <strong>Connect</strong> takes and holds control of the radio for actual operation — do this before scanning or calling.</p></div>
         </section>
 
+        <section class="ssec" data-sec="tuner">
+          <div class="help-kicker">Station</div>
+          <div class="help-h">Tuner</div>
+          <p class="help-lead">An optional read-only netrigctl server, for feeding your current frequency to an external auto-tuner or other Hamlib-aware tool without giving it control of the radio.</p>
+          <div class="help-field"><span class="flabel">netrigctl Server</span><p>Serves the current frequency (read-only) over the Hamlib netrigctl protocol. Does not affect openALE's own connection to the radio.</p></div>
+          <div class="help-field"><span class="flabel">Port / Network Access</span><p>The TCP port the server listens on, and whether it's reachable only from this machine or from the whole LAN.</p></div>
+          <div class="help-field"><span class="flabel">Apply</span><p>Starts or restarts the server with the current settings.</p></div>
+        </section>
+
         <section class="ssec" data-sec="location">
           <div class="help-kicker">Station</div>
-          <div class="help-h">Location</div>
-          <p class="help-lead">Your station's geographic position, used to improve LQA-based channel scoring against propagation conditions.</p>
+          <div class="help-h">Location &amp; Propagation</div>
+          <p class="help-lead">Your station's geographic position — used to improve LQA-based channel scoring against propagation conditions, and as the source for ALE-GPR position reports.</p>
           <div class="help-field"><span class="flabel">Position Source</span><p>Choose None (position unused), manual Lat/Lon, a Maidenhead Grid Locator, or a live GPS feed (gpsd or a serial NMEA source).</p></div>
-          <div class="help-field"><span class="flabel">Use SFI in scoring</span><p>When enabled, factors the current Solar Flux Index into LQA channel scoring alongside measured link data.</p></div>
+          <div class="help-field"><span class="flabel">Use SFI in scoring</span><p>When enabled, factors the current Solar Flux Index (daily 10.7 cm solar flux from NOAA SWPC) into LQA channel scoring — channels measured under similar solar/ionospheric conditions get a scoring bonus.</p></div>
+
+          <div class="help-fieldgroup">
+            <div class="ssec-sub-title" style="margin-bottom:8px">Position Reports</div>
+            <p class="help-lead" style="margin-bottom:14px">Off by default. Sends an ALE-GPR (or raw-GGA) position report as an AMD message, using the live GPS fix when available or the configured station position otherwise.</p>
+            <div class="help-field"><span class="flabel">Enable Position Reports</span><p>Master switch gating both automatic and manual "Send Position" sends.</p></div>
+            <div class="help-field"><span class="flabel">Destination — Direct Address / ALLCALL</span><p>Send to one station, or broadcast to everyone listening. ALLCALL is a one-shot broadcast — no reply is expected or waited for.</p></div>
+            <div class="help-field"><span class="flabel">Automatic Reporting — On Change / Interval</span><p>On Change fires whenever you've moved past the configured distance threshold (a 60 s minimum always applies, regardless of threshold); Interval fires on a fixed timer.</p></div>
+            <div class="help-field"><span class="flabel">Format — ALE-GPR / Raw NMEA GGA</span><p>Raw GGA passthrough needs a live NMEA-serial GPS fix; it's unavailable for gpsd, manual, or grid-derived positions.</p></div>
+            <div class="help-field"><span class="flabel">Standing Comment</span><p>Used verbatim by automatic (on-change/interval) sends. The manual "Send Position Now" comment pre-fills from this but can be overridden per send.</p></div>
+          </div>
+
+          <div class="help-fieldgroup">
+            <div class="ssec-sub-title" style="margin-bottom:8px">Location Relay</div>
+            <p class="help-lead" style="margin-bottom:14px">Off by default. Forwards position reports received from other stations to an external HTTPS endpoint — for live mapping outside openALE. Your own transmitted positions are never forwarded.</p>
+            <div class="help-field"><span class="flabel">API Endpoint / Bearer Token / CA Certificate Path</span><p>The relay server's URL, an optional auth token, and (for a self-signed certificate) the path to the server's certificate for pinning.</p></div>
+            <div class="help-field"><span class="flabel">Forward positions received via</span><p>Choose which call types' position reports get forwarded — ALLCALL, Individual, Net, Group, and/or an established Linked session.</p></div>
+            <div class="help-field"><span class="flabel">Position rounding</span><p>Default 6 = full precision. Lower to trade position accuracy for privacy (2 digits ≈ 1 km); also stabilizes deduplication of repeated reports.</p></div>
+          </div>
+
           <div class="help-field"><span class="flabel">Apply</span><p>Pushes the location settings to the running bridge immediately, without waiting for the modal's Save &amp; Apply.</p></div>
         </section>
 
@@ -243,6 +281,11 @@
           <div class="help-field"><span class="flabel">Accept Any Call</span><p>Accepts calls from stations not in any known contact/roster list, not just recognized ones.</p></div>
           <div class="help-field"><span class="flabel">Accept AllCall</span><p>Accepts broadcast calls to the AllCall address in addition to calls addressed specifically to one of your Self Addresses.</p></div>
           <div class="help-field"><span class="flabel">Accept AMD</span><p>Accepts inbound AMD text messages automatically rather than requiring a linked session first.</p></div>
+          <div class="help-fieldgroup">
+            <div class="ssec-sub-title" style="margin-bottom:8px">Link Policy (Outbound Defaults)</div>
+            <p class="help-lead" style="margin-bottom:14px">The TX-side counterpart of Inbound Acceptance above — what this station offers by default when initiating a call.</p>
+            <div class="help-field"><span class="flabel">Individual / Group / ALLCALL</span><p>Default TIS/TWAS conclusion for a fresh AMD send of each call type: TIS keeps the link open, TWAS delivers the message and lets the handshake conclude. The compose-row Link checkbox is pre-filled from this and is always overridable per send.</p></div>
+          </div>
         </section>
 
         <section class="ssec" data-sec="lqa">
@@ -320,8 +363,8 @@
           <div class="help-h">Misc / Sounding</div>
           <p class="help-lead">Miscellaneous behavior that doesn't fit elsewhere: channel-busy detection and scan squelch calibration.</p>
           <div class="help-field"><span class="flabel">Auto-save LQA on Exit</span><p>When on, the LQA database is written to <code>lqa.bin</code> automatically on shutdown, in addition to its automatic load at startup.</p></div>
-          <div class="help-field"><span class="flabel">LBT Busy Detection + margin</span><p>Enables a Listen-Before-Transmit check immediately before keying up; the margin sets how far above the noise floor a signal must be to count as "busy."</p></div>
-          <div class="help-field"><span class="flabel">LBT Override</span><p>Allows transmitting even when LBT reports the channel busy — use with care, as this can step on another station.</p></div>
+          <div class="help-field"><span class="flabel">LBT Busy Detection + margin</span><p>Blocks TX when channel energy exceeds the tracked noise floor by the margin. Raise the margin at noisy locations.</p></div>
+          <div class="help-field"><span class="flabel">LBT Override</span><p>Emergency use: transmit even when the channel appears occupied. Use with care, as this can step on another station.</p></div>
           <div class="help-field"><span class="flabel">Scan Stop Squelch + margin / Calibrate</span><p>Sets the signal threshold that pauses the scanner on a channel with activity. Click Calibrate to have openALE sample the current noise floor and suggest a margin automatically.</p></div>
         </section>
 

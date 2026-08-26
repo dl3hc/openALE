@@ -2170,10 +2170,36 @@ function overlayClose(e) {
   if (e.target === document.getElementById('settingsModal')) closeSettings();
 }
 
-function showSec(sec) {
-  document.querySelectorAll('.snav-item').forEach(el =>
+// Help modal — same drawer mechanism as Settings, but a separate modal/nav/
+// section set so the two don't interfere with each other's active section.
+function openHelp() {
+  document.getElementById('helpModal').classList.remove('hidden');
+}
+
+function closeHelp() {
+  document.getElementById('helpModal').classList.add('hidden');
+}
+
+function overlayCloseHelp(e) {
+  if (e.target === document.getElementById('helpModal')) closeHelp();
+}
+
+function showHelpSec(sec) {
+  document.querySelectorAll('#helpModal .snav-item').forEach(el =>
     el.classList.toggle('active', el.dataset.sec === sec));
-  document.querySelectorAll('.ssec').forEach(el =>
+  document.querySelectorAll('#helpModal .ssec').forEach(el =>
+    el.classList.toggle('active', el.dataset.sec === sec));
+  const scontent = document.getElementById('helpScontent');
+  if (scontent) scontent.scrollTop = 0;
+}
+
+function showSec(sec) {
+  // Scoped to #settingsModal — #helpModal reuses the same .snav-item/.ssec
+  // classes and data-sec values, so an unscoped query would cross-
+  // contaminate which section shows active the next time either opens.
+  document.querySelectorAll('#settingsModal .snav-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.sec === sec));
+  document.querySelectorAll('#settingsModal .ssec').forEach(el =>
     el.classList.toggle('active', el.dataset.sec === sec));
   // Populate the Hamlib model dropdown lazily — only when the operator
   // actually opens the Radio / CAT Control tab, not on every Settings open.
@@ -3117,7 +3143,10 @@ function saveSettings() {
 
 // ── Keyboard shortcut ──
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeSettings();
+  if (e.key === 'Escape') {
+    const helpOpen = !document.getElementById('helpModal')?.classList.contains('hidden');
+    if (helpOpen) closeHelp(); else closeSettings();
+  }
   if (e.key === ',' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); openSettings(); }
 });
 
@@ -3166,8 +3195,8 @@ function updateSoundBtn() {
 }
 
 function soundingIntervalSec() {
-  const v = parseInt(document.getElementById('cfgSounding')?.value, 10);
-  return Number.isFinite(v) && v > 0 ? v : 300;
+  const n = nets.find(n => n.name === activeNet);
+  return (n && n.soundIntervalSec > 0) ? n.soundIntervalSec : 300;
 }
 
 function soundPanelOpen() {
@@ -3394,7 +3423,6 @@ function applyTimingToBridge() {
   if (!bridgeConnected) return;
   const num = (id) => { const v = parseInt(document.getElementById(id)?.value, 10); return Number.isFinite(v) && v > 0 ? v : null; };
   const args = {};
-  const s  = num('cfgSounding');    if (s)  args.sounding_interval_sec = s;
   const li = num('cfgLinkIdle');    if (li) args.link_idle_timeout_sec = li;
   const ama = num('cfgAmdMaxAttempts'); if (ama) args.amd_send_max_attempts = ama;
   const mt = num('cfgMaxTune');     if (mt) args.max_tune_time_ms = mt;
@@ -3959,7 +3987,6 @@ function syncTimingFromBridge() {
   bridgeSend('TIMING_GET', {}, (r) => {
     if (!r.ok) return;
     const setNum = (id, v) => { const el = document.getElementById(id); if (el && typeof v === 'number') el.value = v; };
-    setNum('cfgSounding',       r.sounding_interval_sec);
     setNum('cfgSoundingLead',   r.sounding_warning_lead_sec);
     setNum('cfgLinkIdle',       r.link_idle_timeout_sec);
     setNum('cfgAmdMaxAttempts', r.amd_send_max_attempts);
