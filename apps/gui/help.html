@@ -232,7 +232,7 @@
           <div class="help-field"><span class="flabel">Sounding Warning Lead</span><p>How far in advance of a scheduled sounding to log/flag it, useful when coordinating manual operation around automatic soundings.</p></div>
           <div class="help-field"><span class="flabel">Turn-Around Time</span><p>The gap left between transmit and receive direction changes during a handshake, to allow radio and relay switching to settle.</p></div>
           <div class="help-field"><span class="flabel">Max Tune Time</span><p>Upper bound on how long an antenna tuner is given to complete a tune cycle before ALE proceeds regardless.</p></div>
-          <div class="help-field"><span class="flabel">PTT Lead / PTT Tail</span><p>Extra key-up time before audio starts and extra key-down time after audio ends, to absorb amplifier/relay latency. If handshakes fail intermittently on a slow-switching rig or amp, increasing these first is usually the fix.</p></div>
+          <div class="help-field"><span class="flabel">PTT Lead / PTT Tail</span><p>Extra key-up time before audio starts and extra key-down time after audio ends, to absorb amplifier/relay latency. Keep Lead as low as your hardware allows — it eats into the ~650 ms minimum protocol reply window. SDR/virtual-audio-cable setups typically need a higher Tail (150–250 ms) since that pipeline's buffering is invisible to openALE; raising Tail is always safe, as this station's own reply windows extend to match.</p></div>
         </section>
 
         <section class="ssec" data-sec="policy">
