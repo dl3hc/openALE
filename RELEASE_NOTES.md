@@ -124,6 +124,12 @@ AMD to all stations, not just position reports.
   frame) were silently dropped: the TWAS conclusion never captured the caller's address,
   so the report had no attributed sender. TWAS conclusions now settle the caller identity
   the same way TIS does (multi-word extensions included), then abort without linking.
+- A received TWAS conclusion whose address prefix-matched the receiving station's own
+  self-address (e.g. an ALLCALL broadcaster sharing the receiver's exact callsign) was
+  misclassified as a call to self instead of a conclusion, silently dropping the AMD/GPR
+  payload — the frame only ever died via the 11.76s Tmmax timeout, never dispatching.
+  TWAS words are no longer matched against self-address; per A.5.2.3.1.3 a TWAS word's
+  address always identifies the current transmitter, never a callee.
 - An ALLCALL broadcast whose audio stalled could leave RX disabled permanently — the
   broadcast stays in IDLE/SCANNING the whole time with no state transition to recover it.
   A TX-drain safety net now force-recovers the path.
