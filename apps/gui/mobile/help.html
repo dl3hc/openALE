@@ -214,7 +214,7 @@
           <div class="help-field"><span class="flabel">Link Idle Timeout</span><p>How long an established link may sit idle before being torn down automatically.</p></div>
           <div class="help-field"><span class="flabel">AMD Wait</span><p>Delay before considering an AMD send complete.</p></div>
           <div class="help-field"><span class="flabel">Turn-Around / Max Tune Time</span><p>Gap for TX/RX switching, and the time budget given to an antenna tuner during a handshake.</p></div>
-          <div class="help-field"><span class="flabel">PTT Lead / Tail</span><p>Extra keyed time before/after audio. If handshakes fail intermittently on a slow-switching amp, increase these first.</p></div>
+          <div class="help-field"><span class="flabel">PTT Lead / Tail</span><p>Extra keyed time before/after audio. Keep Lead low — it eats into the ~650 ms minimum protocol reply window. SDR/virtual-audio-cable setups typically need a higher Tail (150–250 ms) since that latency is invisible to openALE; raising Tail is always safe.</p></div>
         </section>
 
         <section class="ssec" data-sec="policy">
