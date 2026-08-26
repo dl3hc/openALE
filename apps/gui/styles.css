@@ -72,6 +72,59 @@
       --ease: cubic-bezier(.16,1,.3,1);
     }
 
+    /* Light theme — same token names, retoned for a white/steel-blue surface.
+       Applied via [data-theme="light"] on <html>, set by toggleTheme() in app.js
+       (persisted to localStorage; read early in <head> to avoid a flash). */
+    :root[data-theme="light"] {
+      --bg:         #f3f5f8;
+      --bg1:        #eef1f6;
+      --bg2:        #ffffff;
+      --bg3:        #e9edf3;
+      --bg4:        #dbe2ec;
+      --bg-hover:   #e4e9f1;
+
+      --hair:       #d8dfe8;
+      --hair2:      #c7d0dc;
+      --border:     #d8dfe8;
+      --border-md:  #c7d0dc;
+      --border-hi:  #a9b6c8;
+
+      --tx:         #1a2330;
+      --tx-muted:   #5b6b80;
+      --tx-dim:     #7c8798;
+      --tx-mute:    #7c8798;
+      --tx-bright:  #0c1420;
+
+      --ac:         #2f5f92;
+      --ac2:        #3f6fa8;
+      --ac-dim:     #6f89a8;
+      --ac-glow:    rgba(47,95,146,0.16);
+      --accent:     #2f5f92;
+      --accent-dim: #6f89a8;
+      --accent-glow:    rgba(47,95,146,0.10);
+      --accent-glow-hi: rgba(47,95,146,0.20);
+
+      --s-idle:     #7c8798;
+      --s-scanning: #3f6fa8;
+      --s-scan:     #3f6fa8;
+      --s-calling:  #a1731f;
+      --s-call:     #a1731f;
+      --s-handshake:#3f6fa8;
+      --s-linked:   #1f8a56;
+      --s-link:     #1f8a56;
+      --s-incoming: #b85f3a;
+      --s-inc:      #b85f3a;
+      --s-error:    #c23f52;
+      --s-err:      #c23f52;
+
+      --shadow-sm: 0 1px 2px rgba(16,21,29,0.08);
+      --shadow-md: 0 8px 24px rgba(16,21,29,0.10);
+      --shadow-lg: 0 16px 36px rgba(16,21,29,0.12);
+      --shadow-xl: 0 28px 64px rgba(16,21,29,0.14);
+      --sh:    0 1px 2px rgba(16,21,29,.10), 0 4px 12px rgba(16,21,29,.08);
+      --sh-lg: 0 10px 30px rgba(16,21,29,.12), 0 2px 6px rgba(16,21,29,.08);
+    }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     html, body {
