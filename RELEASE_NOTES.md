@@ -92,6 +92,11 @@ AMD to all stations, not just position reports.
   In openALE, SPLIT is dropped right before transmit/sounding and re-armed once PTT goes
   back off; ale_monitor never transmits, so it simply stays in SPLIT once armed. No effect
   on rigs whose Hamlib backend doesn't support split VFO control. Hamlib backend only.
+- **Light/dark theme toggle**: both GUIs are no longer dark-only. A toggle in the icon
+  rail (desktop), the Settings sidebar (desktop), and the ☰ More menu (mobile) switches
+  between the existing dark palette and a new light one, using the same design tokens.
+  The choice is saved locally and re-applied on next launch without a flash of the wrong
+  theme.
 
 ## Fixes
 

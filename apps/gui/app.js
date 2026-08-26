@@ -27,6 +27,33 @@ const ICONS = {
   mapPin:    '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>',
 };
 
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   THEME  — light/dark toggle, persisted client-side (no bridge round-trip;
+   this is a display preference, not station configuration).
+   The initial attribute is already set by an inline <head> script (before
+   this file loads) to avoid a flash of the wrong theme.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+function updateThemeToggleLabel() {
+  var isLight = currentTheme() === 'light';
+  var tip = document.getElementById('themeToggleTip');
+  if (tip) tip.textContent = isLight ? 'Switch to dark mode' : 'Switch to light mode';
+  var settingsTip = document.getElementById('themeToggleTipSettings');
+  if (settingsTip) settingsTip.textContent = isLight ? 'Dark mode' : 'Light mode';
+}
+
+function toggleTheme() {
+  var next = currentTheme() === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('openale-theme', next); } catch (e) {}
+  updateThemeToggleLabel();
+}
+
+document.addEventListener('DOMContentLoaded', updateThemeToggleLabel);
+
 function icon(name, size) {
   const paths = ICONS[name] || '';
   const s = size || 14;
