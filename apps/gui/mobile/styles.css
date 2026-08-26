@@ -34,6 +34,12 @@
       --mono: 'JetBrains Mono', 'Cascadia Code', monospace;
       --sans: 'Space Grotesk', system-ui, sans-serif;
 
+      /* Fixed (theme-independent) tokens for the RF waterfall — deliberately
+         dark-only regardless of the light/dark toggle, so never re-defined
+         in the light-theme block below. */
+      --wf-bg:   #05070a;
+      --wf-text: #e8f4ff;
+
       --r-sm: 3px;
       --r-md: 6px;
       --r-lg: 10px;
@@ -805,7 +811,7 @@
     .strip-wf {
       position: relative;
       overflow: hidden;
-      background: var(--bg);
+      background: var(--wf-bg);
     }
     .wf-label {
       position: absolute;
@@ -1212,6 +1218,31 @@
       color: var(--tx-dim);
       margin-bottom: 12px;
     }
+
+    /* ── In-app Help modal content (mirrors former standalone help.html) ── */
+    .help-kicker { font-family: var(--mono); font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--tx-dim); margin-bottom: 4px; }
+    .help-h { font-family: var(--sans); font-size: 19px; font-weight: 600; color: var(--tx-bright); margin: 2px 0 12px; }
+    .help-lead { color: var(--tx-muted); font-size: 12.5px; line-height: 1.6; margin-bottom: 18px; }
+    .help-steps { counter-reset: step; list-style: none; display: flex; flex-direction: column; gap: 16px; margin: 0 0 22px; padding: 0; }
+    .help-steps li { counter-increment: step; position: relative; padding-left: 40px; }
+    .help-steps li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-glow); border: 1px solid rgba(0,220,140,0.30); color: var(--accent); font-family: var(--mono); font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+    .help-steps b { color: var(--tx-bright); }
+    .help-steps p { margin: 3px 0 0; font-size: 12.5px; color: var(--tx-muted); line-height: 1.55; }
+    .help-note { background: var(--bg3); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--r-md); padding: 12px 14px; font-size: 12.5px; color: var(--tx-muted); line-height: 1.55; margin: 14px 0; }
+    .help-note strong { color: var(--tx-bright); }
+    .help-warn { border-left-color: var(--s-error, #e05a5a); }
+    .help-warn strong { color: var(--s-error, #e05a5a); }
+    .help-field { margin-bottom: 16px; }
+    .help-field .flabel { display: block; margin-bottom: 3px; }
+    .help-field p { font-size: 12.5px; color: var(--tx-muted); line-height: 1.55; margin: 0; }
+    .help-fieldgroup { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 16px; }
+    .help-fieldgroup:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+    .help-glossary dt { font-family: var(--mono); color: var(--accent); font-size: 12.5px; font-weight: 700; margin-top: 14px; }
+    .help-glossary dd { color: var(--tx-muted); font-size: 12.5px; margin: 3px 0 0; line-height: 1.55; }
+    .help-glossary dt:first-child { margin-top: 0; }
+    .help-btn-tag { display: inline-block; background: var(--bg3); border: 1px solid var(--border-md); border-radius: var(--r-sm); padding: 1px 7px; font-family: var(--mono); font-size: 11px; color: var(--accent); }
+    .help-toc-link { color: var(--accent); cursor: pointer; text-decoration: none; }
+    .help-toc-link:hover { text-decoration: underline; }
 
     /* Card wrapper for one functional group of fields within an .ssec —
        every group gets its own boundary + title so adjacent groups read as

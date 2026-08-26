@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Help · openALE</title>
 <link rel="stylesheet" href="styles.css">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('openale-theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
 <style>
   html, body { height: auto; min-height: 100vh; overflow-y: auto; }
   .app { height: auto; min-height: 100vh; }
@@ -78,6 +86,7 @@
         <div class="snav-item" data-sec="nets" onclick="showSec('nets')"><span class="snav-icon">◆</span><span class="snav-label">Nets</span></div>
 
         <div class="snav-section-hdr">Station</div>
+        <div class="snav-item" data-sec="tuner" onclick="showSec('tuner')"><span class="snav-icon">◆</span><span class="snav-label">Tuner</span></div>
         <div class="snav-item" data-sec="location" onclick="showSec('location')"><span class="snav-icon">◆</span><span class="snav-label">Location</span></div>
 
         <div class="snav-section-hdr">ALE</div>
@@ -172,8 +181,17 @@
           <div class="help-field"><span class="flabel">Rig Model</span><p>Your transceiver from the Hamlib model list — determines the CAT command set used.</p></div>
           <div class="help-field"><span class="flabel">Network vs Serial</span><p>Network rigs need Host/Port; serial rigs need Port, Baud Rate, and sometimes DTR/RTS + a stabilization delay.</p></div>
           <div class="help-field"><span class="flabel">PTT Method / Port</span><p>How transmit is keyed — via CAT, a separate serial line, or an external PTT port.</p></div>
+          <div class="help-field"><span class="flabel">Avoid Relay Click While Scanning</span><p>Puts the rig in Hamlib SPLIT mode while receiving/scanning so the PA's relays don't click on every hop; dropped automatically before transmit/sounding.</p></div>
           <div class="help-field"><span class="flabel">CAT / Rig Traffic trace</span><p>Opt-in "[CAT] ..." diagnostic lines in the ALE Log — helpful when a rig isn't responding as expected.</p></div>
           <div class="help-field"><span class="flabel">Test Connection vs Connect</span><p>Test Connection only checks reachability. Connect takes and holds control of the radio — required before scanning/calling.</p></div>
+        </section>
+
+        <section class="ssec" data-sec="tuner">
+          <div class="help-kicker">Station</div>
+          <div class="help-h">Tuner</div>
+          <p class="help-lead">An optional read-only netrigctl server for feeding your current frequency to an external auto-tuner or other Hamlib-aware tool.</p>
+          <div class="help-field"><span class="flabel">netrigctl Server</span><p>Serves the current frequency (read-only). Doesn't affect openALE's own radio connection.</p></div>
+          <div class="help-field"><span class="flabel">Port / Network Access</span><p>The TCP port, and whether it's reachable from this machine only or the whole LAN.</p></div>
         </section>
 
         <section class="ssec" data-sec="channels">
@@ -199,10 +217,26 @@
 
         <section class="ssec" data-sec="location">
           <div class="help-kicker">Station</div>
-          <div class="help-h">Location</div>
-          <p class="help-lead">Your station's position, used to improve LQA-based channel scoring.</p>
+          <div class="help-h">Location &amp; Propagation</div>
+          <p class="help-lead">Your station's position — used to improve LQA-based channel scoring, and as the source for ALE-GPR position reports.</p>
           <div class="help-field"><span class="flabel">Position Source</span><p>None, manual Lat/Lon, Grid Locator, or a live GPS feed (gpsd or serial NMEA).</p></div>
-          <div class="help-field"><span class="flabel">Use SFI in scoring</span><p>Factors current Solar Flux Index into LQA channel scoring.</p></div>
+          <div class="help-field"><span class="flabel">Use SFI in scoring</span><p>Factors current Solar Flux Index into LQA channel scoring — channels measured under similar solar/ionospheric conditions get a scoring bonus.</p></div>
+
+          <div class="help-fieldgroup">
+            <div class="ssec-sub-title" style="margin-bottom:8px">Position Reports</div>
+            <p class="help-lead" style="margin-bottom:14px">Off by default. Sends an ALE-GPR (or raw-GGA) position report as an AMD message.</p>
+            <div class="help-field"><span class="flabel">Enable Position Reports</span><p>Master switch gating both automatic and manual sends.</p></div>
+            <div class="help-field"><span class="flabel">Destination — Direct / ALLCALL</span><p>ALLCALL is a one-shot broadcast — no reply is expected or waited for.</p></div>
+            <div class="help-field"><span class="flabel">Automatic Reporting</span><p>On Change fires past a distance threshold (60 s minimum always applies); Interval fires on a fixed timer.</p></div>
+          </div>
+
+          <div class="help-fieldgroup">
+            <div class="ssec-sub-title" style="margin-bottom:8px">Location Relay</div>
+            <p class="help-lead" style="margin-bottom:14px">Off by default. Forwards positions received from other stations to an external HTTPS endpoint for live mapping; your own transmitted positions are never forwarded.</p>
+            <div class="help-field"><span class="flabel">Forward positions received via</span><p>Choose which call types get forwarded — ALLCALL, Individual, Net, Group, and/or Linked.</p></div>
+            <div class="help-field"><span class="flabel">Position rounding</span><p>Default 6 = full precision. Lower to trade accuracy for privacy (2 digits ≈ 1 km).</p></div>
+          </div>
+
           <div class="help-field"><span class="flabel">Apply</span><p>Pushes location settings to the running bridge immediately.</p></div>
         </section>
 
@@ -223,6 +257,10 @@
           <p class="help-lead">Controls how incoming calls are accepted.</p>
           <div class="help-field"><span class="flabel">Auto-Accept</span><p>On: matching calls link automatically. Off: every call needs manual acceptance within the timeout.</p></div>
           <div class="help-field"><span class="flabel">Accept Any Call / AllCall / AMD</span><p>Independently allow calls from unknown stations, broadcast AllCall, and inbound AMD without a linked session first.</p></div>
+          <div class="help-fieldgroup">
+            <div class="ssec-sub-title" style="margin-bottom:8px">Link Policy (Outbound Defaults)</div>
+            <div class="help-field"><span class="flabel">Individual / Group / ALLCALL</span><p>Default TIS/TWAS conclusion for a fresh AMD send of each type — TIS keeps the link open, TWAS delivers and concludes. Always overridable per send via the compose-row Link checkbox.</p></div>
+          </div>
         </section>
 
         <section class="ssec" data-sec="lqa">
@@ -294,7 +332,8 @@
           <div class="help-h">Misc / Sounding</div>
           <p class="help-lead">Channel-busy detection and scan squelch calibration.</p>
           <div class="help-field"><span class="flabel">Auto-save LQA on Exit</span><p>Writes <code>lqa.bin</code> automatically on shutdown.</p></div>
-          <div class="help-field"><span class="flabel">LBT Busy Detection + margin / Override</span><p>Checks the channel before keying up; Override transmits regardless — use with care.</p></div>
+          <div class="help-field"><span class="flabel">LBT Busy Detection + margin</span><p>Blocks TX when channel energy exceeds the noise floor by the margin. Raise the margin at noisy locations.</p></div>
+          <div class="help-field"><span class="flabel">LBT Override</span><p>Emergency use: transmit even when the channel appears occupied.</p></div>
           <div class="help-field"><span class="flabel">Scan Stop Squelch + margin / Calibrate</span><p>Signal threshold that pauses scanning on activity; Calibrate samples the noise floor to suggest a margin.</p></div>
         </section>
 

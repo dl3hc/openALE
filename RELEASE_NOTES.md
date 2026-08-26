@@ -97,6 +97,14 @@ AMD to all stations, not just position reports.
   between the existing dark palette and a new light one, using the same design tokens.
   The choice is saved locally and re-applied on next launch without a flash of the wrong
   theme.
+- **Help is now an in-app panel**: Help opens as the same sliding drawer used by Settings
+  instead of a separate browser tab/window, and gained several previously-undocumented
+  sections (Tuner, Position Reports, Location Relay, outbound Link Policy defaults).
+- **Settings copy cleanup**: verbose field hints across every Settings tab were compressed
+  to the essentials an operator actually needs, dropping internal-implementation asides
+  that had crept into a few of them.
+- **Sounding Interval now lives only in Settings ▸ Nets**: the redundant global default
+  under Timing ▸ Sounding was removed; each net's own interval is authoritative.
 
 ## Fixes
 
@@ -165,6 +173,17 @@ AMD to all stations, not just position reports.
 - Location Relay map's frequency display rounded to 3 decimals, silently dropping
   channels that sit on 100 Hz boundaries (e.g. 10.1455 MHz showed as "10.145 MHz") — now
   shows 6 decimals with trailing zeros trimmed.
+- Switching to light mode left the RF waterfall's overlay labels using the same
+  theme-switching text color as the rest of the UI, turning them dark-on-dark against the
+  (deliberately always-dark) waterfall canvas, and left the console log's background
+  hardcoded dark instead of following the theme. The waterfall now uses fixed
+  theme-independent colors as intended, and the console log follows light/dark like every
+  other panel.
+- The PTT Lead setting's help text claimed protocol handshake windows are "only tens of
+  ms wide" to justify keeping it near-zero — off by 1-2 orders of magnitude (the real
+  minimum reply window is ~650 ms). Corrected, and added guidance that SDR/virtual-audio-
+  cable setups typically need a higher PTT Tail (150-250 ms) since that pipeline's
+  buffering isn't visible to openALE's own latency compensation.
 
 ## Other
 

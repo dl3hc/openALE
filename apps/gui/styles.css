@@ -52,6 +52,13 @@
       --mono: 'JetBrains Mono', 'Cascadia Code', monospace;
       --sans: 'Inter', system-ui, sans-serif;
 
+      /* Fixed (theme-independent) tokens for the RF waterfall — it's a
+         signal-visualization surface, deliberately dark-only regardless of
+         the light/dark toggle (see the light-theme block below), so its own
+         text/background tokens must never be re-defined there. */
+      --wf-bg:   #05070a;
+      --wf-text: #e8f4ff;
+
       --r-sm: 3px;
       --r-md: 6px;
       --r-lg: 10px;
@@ -971,7 +978,7 @@
     .strip-wf {
       position: relative;
       overflow: hidden;
-      background: var(--bg);
+      background: var(--wf-bg);
     }
     /* Crisp dark outline (4-direction, not a blur) so every waterfall overlay
        label stays readable regardless of what's directly behind it — a
@@ -992,7 +999,7 @@
       justify-content: space-between;
       font-family: var(--mono);
       font-size: 8px;
-      color: var(--tx-bright);
+      color: var(--wf-text);
       letter-spacing: 0.1em;
       pointer-events: none;
       z-index: 2;
@@ -1013,7 +1020,7 @@
       white-space: nowrap;
       font-family: var(--mono);
       font-size: 8px;
-      color: var(--tx-bright);
+      color: var(--wf-text);
     }
     .wf-band-tone-a { top: 0; }
     .wf-band-tone-b { top: 10px; }
@@ -1027,7 +1034,7 @@
       font-size: 8px;
       font-weight: 700;
       letter-spacing: 0.12em;
-      color: var(--tx-bright);
+      color: var(--wf-text);
       pointer-events: none;
       z-index: 2;
       white-space: nowrap;
@@ -1064,7 +1071,7 @@
       bottom: 0;
       font-family: var(--mono);
       font-size: 7px;
-      color: var(--tx-bright);
+      color: var(--wf-text);
       transform: translateX(-50%);
     }
 
@@ -1422,6 +1429,32 @@
       color: var(--tx-dim);
       margin-bottom: 12px;
     }
+
+    /* ── In-app Help modal content (mirrors former standalone help.html) ── */
+    .help-kicker { font-family: var(--mono); font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--tx-dim); margin-bottom: 4px; }
+    .help-h { font-family: var(--sans); font-size: 21px; font-weight: 600; color: var(--tx-bright); margin: 2px 0 12px; }
+    .help-lead { color: var(--tx-muted); font-size: 13px; line-height: 1.6; margin-bottom: 20px; max-width: 760px; }
+    .help-steps { counter-reset: step; list-style: none; display: flex; flex-direction: column; gap: 16px; margin: 0 0 24px; max-width: 760px; padding: 0; }
+    .help-steps li { counter-increment: step; position: relative; padding-left: 40px; }
+    .help-steps li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-glow); border: 1px solid rgba(0,220,140,0.30); color: var(--accent); font-family: var(--mono); font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+    .help-steps b { color: var(--tx-bright); }
+    .help-steps p { margin: 3px 0 0; font-size: 12.5px; color: var(--tx-muted); line-height: 1.55; }
+    .help-note { background: var(--bg3); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--r-md); padding: 12px 16px; font-size: 12.5px; color: var(--tx-muted); line-height: 1.55; margin: 16px 0; max-width: 760px; }
+    .help-note strong { color: var(--tx-bright); }
+    .help-warn { border-left-color: var(--s-error, #e05a5a); }
+    .help-warn strong { color: var(--s-error, #e05a5a); }
+    .help-field { margin-bottom: 18px; max-width: 760px; }
+    .help-field .flabel { display: block; margin-bottom: 3px; }
+    .help-field p { font-size: 12.5px; color: var(--tx-muted); line-height: 1.55; margin: 0; }
+    .help-fieldgroup { border-top: 1px solid var(--border); padding-top: 18px; margin-top: 18px; }
+    .help-fieldgroup:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+    .help-glossary dt { font-family: var(--mono); color: var(--accent); font-size: 12.5px; font-weight: 700; margin-top: 14px; }
+    .help-glossary dd { color: var(--tx-muted); font-size: 12.5px; margin: 3px 0 0; line-height: 1.55; max-width: 700px; }
+    .help-glossary dt:first-child { margin-top: 0; }
+    .help-btn-tag { display: inline-block; background: var(--bg3); border: 1px solid var(--border-md); border-radius: var(--r-sm); padding: 1px 7px; font-family: var(--mono); font-size: 11px; color: var(--accent); }
+    .help-toc-link { color: var(--accent); cursor: pointer; text-decoration: none; }
+    .help-toc-link:hover { text-decoration: underline; }
+    #helpModal .scontent { padding: 28px 36px; }
 
     /* Card wrapper for one functional group of fields within an .ssec —
        every group gets its own boundary + title so adjacent groups read as
@@ -2698,7 +2731,7 @@
     .console {
       flex: none; height: 190px; display: grid;
       grid-template-columns: 1fr 320px;
-      background: #07080b;
+      background: var(--bg2);
       border-top: 1px solid var(--border);
     }
     .console > .ale-log { grid-column: 1; grid-row: 1; min-height: 0; height: 100%; margin: 0;
@@ -2706,7 +2739,7 @@
     .console > .cwf { grid-column: 2; grid-row: 1; }
     .cwf {
       position: relative; min-height: 0; height: 100%;
-      background: #05070a;
+      background: var(--wf-bg);
       overflow: hidden;
     }
     .cwf .strip-wf { position: absolute; inset: 0; height: auto; width: auto; }
