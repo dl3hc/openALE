@@ -196,6 +196,14 @@ struct ALEStationConfig {
     std::string rig_rts           = "on";   ///< "on"/"off"/"unset"
     uint32_t    rig_stab          = 200;    ///< post-open line-state settle time (ms)
     std::string rig_ptt           = "normal"; ///< "normal"/"mic"/"data" CAT PTT audio-input select
+    /// PTT *mechanism* — "cat"/"rts"/"dtr"/"none" (hamlib ptt_type_t). Distinct
+    /// from rig_ptt above (CAT-side Mic/Data audio-input select, only relevant
+    /// when rig_ptt_type=="cat"). Never confuse the two keys.
+    std::string rig_ptt_type      = "cat";
+    /// PTT port device (e.g. "COM4" / "/dev/ttyUSB1") when rig_ptt_type is
+    /// "rts"/"dtr" and PTT rides a *separate* serial cable from the CAT port.
+    /// "" (default) = share the CAT port's device (single-cable adapter case).
+    std::string rig_ptt_port      = "";
     /// true = while receiving/scanning, put the rig into SPLIT mode so the
     /// PA's band/lowpass-filter relays don't click on every scan hop. SPLIT
     /// is turned off again right before PTT ON (TX/sounding) and re-armed

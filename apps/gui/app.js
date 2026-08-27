@@ -2450,6 +2450,8 @@ function syncRigFromBridge() {
     setVal('rigRts', r.rts);
     setVal('rigStab', r.stab);
     setVal('rigPttInput', r.ptt);
+    setVal('rigPtt', r.ptt_type);
+    setVal('rigPttPort', r.ptt_port);
     const relayClickEl = document.getElementById('rigAvoidRelayClick');
     if (relayClickEl && r.split !== undefined) relayClickEl.checked = !!r.split;
   });
@@ -2471,6 +2473,8 @@ function rigArgs() {
     stab:    parseInt(document.getElementById('rigStab')?.value, 10) || 200,
     ptt:     document.getElementById('rigPttInput')?.value ?? 'normal',
     split:   document.getElementById('rigAvoidRelayClick')?.checked ?? false,
+    ptt_type: document.getElementById('rigPtt')?.value ?? 'cat',
+    ptt_port: document.getElementById('rigPttPort')?.value ?? '',
   };
 }
 
@@ -4604,7 +4608,7 @@ function closeWizard() {
 }
 
 function renderWizardStep() {
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 6; i++) {
     const s = document.getElementById('wzStep' + i);
     if (s) s.classList.toggle('hidden', i !== wizardStep);
   }
@@ -4615,11 +4619,12 @@ function renderWizardStep() {
   const prevBtn = document.getElementById('wzPrevBtn');
   const nextBtn = document.getElementById('wzNextBtn');
   if (prevBtn) prevBtn.disabled = wizardStep === 0;
-  if (nextBtn) nextBtn.disabled = wizardStep === 4;
+  if (nextBtn) nextBtn.disabled = wizardStep === 5;
   if (wizardStep === 1) wzLoadNetFiles();
   if (wizardStep === 2) wzRenderNets();
   if (wizardStep === 3) wzMirrorRig();
-  if (wizardStep === 4) wzMirrorAudio();
+  if (wizardStep === 4) wzMirrorPtt();
+  if (wizardStep === 5) wzMirrorAudio();
 }
 
 // Fallback list shown when the bridge can't be asked what's actually on disk
@@ -4656,7 +4661,7 @@ function wzLoadNetFiles() {
 // effects (unlike wzNext(), which saves/connects). Lets the operator jump
 // back to fix an earlier field, or peek ahead, without re-triggering saves.
 function wzGoto(step) {
-  if (step < 0 || step > 4) return;
+  if (step < 0 || step > 5) return;
   wizardStep = step;
   renderWizardStep();
 }
@@ -4686,6 +4691,28 @@ function wzMirrorRig() {
   if (prev && [...dst.options].some(o => o.value === prev)) dst.value = prev;
   else dst.value = src.value;
   wzOnRigModelChange();
+  const copy = (srcId, dstId) => {
+    const s = document.getElementById(srcId), d = document.getElementById(dstId);
+    if (s && d) d.value = s.value;
+  };
+  copy('rigDtr', 'wzRigDtr');
+  copy('rigRts', 'wzRigRts');
+  copy('rigStab', 'wzRigStab');
+}
+
+// Same shape as wzMirrorRig(): mirrors the real Settings PTT & Keying fields
+// into the wizard's step-4 fields each time the step is (re-)entered.
+function wzMirrorPtt() {
+  const copy = (srcId, dstId) => {
+    const s = document.getElementById(srcId), d = document.getElementById(dstId);
+    if (!s || !d) return;
+    if (d.type === 'checkbox') d.checked = s.checked;
+    else d.value = s.value;
+  };
+  copy('rigPtt', 'wzRigPtt');
+  copy('rigPttPort', 'wzRigPttPort');
+  copy('rigPttInput', 'wzRigPttInput');
+  copy('rigAvoidRelayClick', 'wzRigAvoidRelayClick');
 }
 
 function wzOnRigModelChange() {
@@ -4768,6 +4795,9 @@ function wzNext() {
     const port   = document.getElementById('wzRigPort')?.value   || '4532';
     const serial = document.getElementById('wzRigSerial')?.value || '';
     const baud   = document.getElementById('wzRigBaud')?.value   || '19200';
+    const dtr    = document.getElementById('wzRigDtr')?.value    || 'on';
+    const rts    = document.getElementById('wzRigRts')?.value    || 'on';
+    const stab   = document.getElementById('wzRigStab')?.value   || '200';
     // Sync wizard selection into the settings form so rigArgs() picks it up
     const rigModelEl = document.getElementById('rigModel');
     if (rigModelEl) { rigModelEl.value = model; updateRigFields(); }
@@ -4777,6 +4807,9 @@ function wzNext() {
     } else if (ptype === 'serial') {
       const s = document.getElementById('rigSerial'); if (s) s.value = serial;
       const b = document.getElementById('rigBaud');   if (b) b.value = baud;
+      const d = document.getElementById('rigDtr');    if (d) d.value = dtr;
+      const r = document.getElementById('rigRts');    if (r) r.value = rts;
+      const st = document.getElementById('rigStab');  if (st) st.value = stab;
     }
     if (!model || !bridgeConnected) { wizardStep++; renderWizardStep(); return; }
     wzSetStatus(3, 'Connecting to radio…');
@@ -4790,6 +4823,31 @@ function wzNext() {
   }
 
   if (wizardStep === 4) {
+    // Mirror wizard PTT fields into the real Settings ids, same pattern as
+    // the Radio step. Only re-sends RIG_CONNECT if a rig is already
+    // connected — otherwise the mirrored values just wait for whenever the
+    // operator connects (Radio step, or later in Settings).
+    const pttType  = document.getElementById('wzRigPtt')?.value       || 'cat';
+    const pttPort  = document.getElementById('wzRigPttPort')?.value   || '';
+    const pttInput = document.getElementById('wzRigPttInput')?.value  || 'normal';
+    const avoidClick = document.getElementById('wzRigAvoidRelayClick')?.checked ?? false;
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    set('rigPtt', pttType);
+    set('rigPttPort', pttPort);
+    set('rigPttInput', pttInput);
+    const relayEl = document.getElementById('rigAvoidRelayClick');
+    if (relayEl) relayEl.checked = avoidClick;
+    if (!bridgeConnected || !(rigConnected)) { wizardStep++; renderWizardStep(); return; }
+    wzSetStatus(4, 'Applying PTT settings…');
+    bridgeSend('RIG_CONNECT', rigArgs(), (r) => {
+      const ok = !!(r.ok && r.connected);
+      wzSetStatus(4, ok ? '✓ PTT settings applied' : '✗ ' + (r.error || r.status || 'Failed — you can Skip'), ok ? 'ok' : 'err');
+      wizardStep++; renderWizardStep();
+    });
+    return;
+  }
+
+  if (wizardStep === 5) {
     const inName  = document.getElementById('wzAudioIn')?.value  || '';
     const outName = document.getElementById('wzAudioOut')?.value || '';
     const ainEl  = document.getElementById('audioIn');
@@ -4797,16 +4855,16 @@ function wzNext() {
     if (ainEl  && inName)  ainEl.value  = inName;
     if (aoutEl && outName) aoutEl.value = outName;
     if (!bridgeConnected) { closeWizard(); return; }
-    wzSetStatus(4, 'Connecting audio…');
+    wzSetStatus(5, 'Connecting audio…');
     bridgeSend('AUDIO_OPEN', { in: inName, out: outName }, (r) => {
       if (r.ok) {
         audioOpen = true; audioInSelected = inName; audioOutSelected = outName;
         const btn = document.getElementById('audioConnectBtn');
         if (btn) { btn.innerHTML = icon('square', 12) + ' Close Audio'; btn.classList.add('scan-on'); }
-        wzSetStatus(4, '✓ Audio connected', 'ok');
+        wzSetStatus(5, '✓ Audio connected', 'ok');
         setTimeout(closeWizard, 600);
       } else {
-        wzSetStatus(4, '✗ ' + (r.error || 'Failed — check device selection or Skip'), 'err');
+        wzSetStatus(5, '✗ ' + (r.error || 'Failed — check device selection or Skip'), 'err');
       }
     });
     return;
@@ -4815,7 +4873,7 @@ function wzNext() {
 
 function wzSkip() {
   wizardStep++;
-  if (wizardStep >= 5) closeWizard();
+  if (wizardStep >= 6) closeWizard();
   else renderWizardStep();
 }
 
