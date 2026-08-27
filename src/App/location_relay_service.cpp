@@ -141,7 +141,8 @@ void LocationRelayService::start(const Config& cfg) {
     }
     {
         std::lock_guard<std::mutex> g(reg_mtx_);
-        reg_state_ = REG_UNKNOWN;
+        reg_state_        = REG_UNKNOWN;
+        reg_last_drained_ = REG_UNKNOWN;
     }
 
     identity_ = load_or_create_relay_identity(cfg_.identity_key_path, cfg_.callsign);
@@ -234,6 +235,16 @@ bool LocationRelayService::pop_conn_state(int& out) {
     if (conn_state_ != last_drained_) {
         last_drained_ = conn_state_;
         out = conn_state_;
+        return true;
+    }
+    return false;
+}
+
+bool LocationRelayService::pop_reg_state(int& out) {
+    std::lock_guard<std::mutex> g(reg_mtx_);
+    if (reg_state_ != reg_last_drained_) {
+        reg_last_drained_ = reg_state_;
+        out = reg_state_;
         return true;
     }
     return false;
