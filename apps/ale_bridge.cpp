@@ -34,6 +34,7 @@
 #include "PAL/crash_handler.h"
 #include "PAL/events.h"
 #include "PAL/logger.h"
+#include "PAL/paths.h"
 #include "PAL/radio.h"
 #include "PAL/radios/hamlib_radio.h"
 #include "PAL/timer.h"
@@ -1712,6 +1713,10 @@ static void print_usage(const char* prog) {
         "  --remote     Bind to 0.0.0.0 (LAN-reachable)\n"
         "  --mobile     Serve apps/gui/mobile/ (for smartphones)\n"
         "  --webroot D  Serve static files from DIR\n"
+        "  --data-dir D Store station.state/lqa.bin/Location Relay identity in DIR\n"
+        "               instead of auto-resolving (portable dir if station.state\n"
+        "               already exists there, else %%APPDATA%%\\openALE or\n"
+        "               ~/.config/openALE)\n"
         "  --tls        Serve HTTPS/WSS instead of plain HTTP/WS (TLS-only on this\n"
         "               port). Required for getUserMedia/AudioWorklet/device listing\n"
         "               to work when the GUI is opened from another device (--remote) —\n"
@@ -1745,11 +1750,14 @@ int main(int argc, char* argv[]) {
     bool             bind_remote = false;
     bool             serve_mobile = false;
     std::string      web_root;            // empty → auto-resolve below
+    std::string      data_dir_flag;       // empty → auto-resolve (portable vs. stable dir)
     bridge::TlsOptions tls_opts;           // enabled=false by default (plain HTTP/WS)
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<uint16_t>(std::atoi(argv[++i]));
+        } else if (std::strcmp(argv[i], "--data-dir") == 0 && i + 1 < argc) {
+            data_dir_flag = argv[++i];
         } else if (std::strcmp(argv[i], "--remote") == 0) {
             bind_remote = true;
         } else if (std::strcmp(argv[i], "--mobile") == 0) {
@@ -1805,7 +1813,26 @@ int main(int argc, char* argv[]) {
     // calls until then, which is correct for an unconfigured station.
     ALEController ctrl;
 
-    const std::string lqa_path = "lqa.bin";
+    // Where station.state/lqa.bin/the Location Relay identity key live.
+    // Precedence: --data-dir override > portable mode (a station.state
+    // already sitting in the launch directory — today's behavior, preserved
+    // so existing installs see zero change on upgrade) > a stable per-user
+    // directory (%APPDATA%\openALE or ~/.config/openALE). Only a genuinely
+    // fresh install lands in the stable directory — that's the case that
+    // actually needs one, since it's the one every future rebuild or
+    // launch-from-elsewhere would otherwise silently orphan (most visibly:
+    // Location Relay generating a brand-new signing identity that needs
+    // re-approval every time).
+    std::string base_dir = data_dir_flag;
+    if (base_dir.empty()) {
+        std::ifstream portable_probe("station.state");
+        if (!portable_probe.good()) base_dir = pal::user_config_dir();
+    }
+    const std::string lqa_path   = base_dir.empty() ? "lqa.bin"       : base_dir + "/lqa.bin";
+    const std::string state_path = base_dir.empty() ? "station.state" : base_dir + "/station.state";
+    pal::log_info("openALE", "Config directory: %s",
+                   base_dir.empty() ? "(portable — current working directory)" : base_dir.c_str());
+
     if (ctrl.load_lqa(lqa_path))
         pal::log_info("openALE", "LQA loaded from %s (%zu entries)",
                        lqa_path.c_str(), ctrl.get_all_lqa_entries().size());
@@ -1815,7 +1842,6 @@ int main(int argc, char* argv[]) {
     // Unified auto-save file: channels/nets/contacts/rosters/allcall + all
     // settings. Unconditional, like LQA above — arms auto-save for the rest
     // of the session regardless of whether the file existed yet (first run).
-    const std::string state_path = "station.state";
     ctrl.load_state(state_path);
     pal::log_info("openALE", "Station state loaded from %s (auto-save armed)", state_path.c_str());
 
