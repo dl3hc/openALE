@@ -179,7 +179,10 @@ struct MonitorConfig {
     // self-address-less listener. The GUI therefore exposes a single enable
     // toggle, not per-call-type checkboxes.
     bool        loc_share_enabled     = false;
-    std::string loc_api_url;
+    // The standard community openALE relay — deliberately pre-set so an
+    // operator gets there by default. Only overwriting this in Settings
+    // sends reports elsewhere instead.
+    std::string loc_api_url = "https://api.openale.dev/api/v1/locations";
     // Ed25519 identity (replaces the old shared bearer token — direct
     // cutover, see docs/LOCATION_SHARING_CONCEPT.md). This monitor has no
     // self address of its own, so the operator must set an explicit
