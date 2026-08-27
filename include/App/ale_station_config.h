@@ -92,7 +92,7 @@ struct ALEStationConfig {
     /// true = CMD LQA / CMD NOISE / LQA Report aktiv senden und auswerten.
     /// false = kein aktiver LQA-Austausch (EMCON / Debug); FROM-Messungen
     ///         (Sounding-Empfang, Kanalqualität) laufen weiter.
-    bool      lqa_exchange_enabled   = true;
+    bool      lqa_exchange_enabled   = false;
 
     // ── Diagnose ──────────────────────────────────────────────────────────
     /// RX-Diagnose-Ausgabe via on_status_changed (Peak-Level + jedes Wort).
