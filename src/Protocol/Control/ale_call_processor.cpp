@@ -431,8 +431,20 @@ void ALECallProcessor::process_received_word(ALEStateMachine& sm, const ALEWord&
         case ALEState::CALLING:   react_calling_(sm, r);         break;
         case ALEState::HANDSHAKE: react_handshake_(sm, r, word); break;
         case ALEState::LINKED:
-            // T-03: TWAS termination from peer → end link immediately (A.5.5.3.5)
-            if (r.type == WordRole::TWAS_WORD)
+            // T-03: TWAS termination from peer → end link immediately (A.5.5.3.5).
+            // r.address is the identity of whoever is transmitting the TWAS
+            // (see classify()'s TO_SELF comment) — it is NOT necessarily our
+            // linked peer. A third station sounding (or terminating some
+            // other link) on the same channel also emits TWAS; without this
+            // check, that foreign TWAS would tear down *our* link too.  Only
+            // a TWAS whose address matches our linked peer counts as a
+            // termination. Prefix-compare since a single word's address may
+            // be truncated to ≤3 chars (multi-word addresses settle via
+            // DATA_EXTENSION, which this early word-by-word check predates).
+            if (r.type == WordRole::TWAS_WORD
+                && !r.address.empty()
+                && sm.active_call_to.size() >= r.address.size()
+                && sm.active_call_to.compare(0, r.address.size(), r.address) == 0)
                 sm.process_event(ALEEvent::LINK_TERMINATED);
             else
                 // AMD delivery-confirmation Response/ACK detection (no-op if idle).
