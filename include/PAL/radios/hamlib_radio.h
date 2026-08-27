@@ -53,6 +53,23 @@ struct SerialLinePolicy {
 };
 
 /**
+ * @brief Konfiguriert, über welchen Mechanismus PTT geschaltet wird.
+ *
+ * Separiert von SerialLinePolicy, weil das ein eigenständiges Hamlib-Konzept
+ * ist: rig_state trägt einen eigenen pttport (eigener hamlib_port_t), getrennt
+ * vom rigport (CAT-Verbindung). CAT = PTT via rig_set_ptt() über die CAT-
+ * Verbindung selbst (Standardfall). RTS/DTR = PTT über eine serielle
+ * Steuerleitung, ggf. auf einem separaten Gerät (Zwei-Kabel-Aufbau); bleibt
+ * `port` leer, wird das Gerät des CAT-Ports (rigport) mitbenutzt (Ein-Kabel-
+ * Aufbau über einen Adapter). NONE = Hamlib-No-Op (VOX-getastete Rigs).
+ */
+struct PttPolicy {
+    enum class Type { CAT, RTS, DTR, NONE };
+    Type        type = Type::CAT;
+    std::string port;  // "" = teilt sich das Gerät des CAT-rigport
+};
+
+/**
  * @brief Hamlib-basierte IRadio-Implementierung.
  *
  * Unterstützt direkte Geräteansteuerung über serielle Schnittstellen
@@ -77,7 +94,7 @@ public:
      * @param baud Baud-Rate (0 = Hamlib-Default, typisch 19200)
      */
     HamlibRadio(const std::string& model, const std::string& port, int baud = 0,
-                SerialLinePolicy policy = {});
+                SerialLinePolicy policy = {}, PttPolicy ptt_policy = {});
 
     ~HamlibRadio() override;
 
@@ -240,6 +257,7 @@ private:
     std::string      port_;
     int              baud_;
     SerialLinePolicy policy_;
+    PttPolicy        ptt_policy_;
 
     RIG* rig_ = nullptr;
 
