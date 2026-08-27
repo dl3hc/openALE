@@ -180,6 +180,48 @@ AMD to all stations, not just position reports.
 - Location Relay map's frequency display rounded to 3 decimals, silently dropping
   channels that sit on 100 Hz boundaries (e.g. 10.1455 MHz showed as "10.145 MHz") — now
   shows 6 decimals with trailing zeros trimmed.
+- Enabling Location Relay without a configured station callsign silently sat at
+  "Enabled, not running" with no explanation — the underlying check already existed and
+  logged correctly to the console/file log, but never reached the GUI's ALE Log. It now
+  also surfaces a clear "configure this station's callsign first" message there.
+- Re-registering an already-approved (or revoked) Ed25519 identity — which happens on
+  every restart, since registration is attempted unconditionally — never updated the
+  client's registration status from the server's `409` response, leaving the Relay
+  Identity panel stuck on "Status: unknown" indefinitely even after an operator had
+  already approved it via `admin-cli.js`.
+- The relay identity (and `station.state`/`lqa.bin`) were stored as bare filenames
+  resolved against the process's launch directory rather than a fixed location —
+  rebuilding into a different output path, or launching from a different directory,
+  silently looked like a first run and generated a brand-new signing identity requiring
+  re-approval. Fresh installs now default to a stable per-user directory
+  (`%APPDATA%\openALE` / `~/.config/openALE`); existing "portable" installs (a
+  `station.state` already next to the exe) are unaffected. A new `--data-dir` flag
+  overrides this explicitly.
+- The vendored Ed25519 library is plain C, but CMake's `project()` only declared the C++
+  language — configure failed outright on Linux/Makefile-style generators
+  (`CMAKE_C_COMPILE_OBJECT` missing) while silently working on Windows/MSVC, whose
+  generator doesn't care about the declared language list.
+- The Relay Identity panel's registration status (pending/approved/rejected/revoked) only
+  ever refreshed on the next Settings-open pull — approving an identity via
+  `admin-cli.js` produced no visible change until the page was reloaded. It now updates
+  live via the same WS push the endpoint connection pill already used.
+- The relay's "Reports" count on the map was a raw, ever-incrementing ingest counter that
+  never reset — a long-lived station would eventually show an unbounded, meaningless
+  number. It now counts the number of *distinct* observers currently reporting that
+  station (already tracked separately for the "heard by" feature), which naturally
+  resets as those observer records age out with the existing 2-day decay sweep.
+- The "Regenerate Identity" button used a CSS class with no matching style rule anywhere,
+  rendering as a bare unstyled browser button inconsistent with the rest of Settings.
+- The Radio and Sound header dropdowns would intermittently fail to open, or immediately
+  close on the same click that opened them — both rebuilt their own button's DOM from
+  inside their click handler, which could orphan the click's actual target mid-bubble and
+  trip the "click outside closes the panel" listener on the very click that opened it.
+  Whether this triggered depended on exactly which pixel was clicked. Fixed to only
+  update the label/caret text, matching how the unaffected Active Net button already
+  worked.
+- The Location Relay API Endpoint defaults to an empty field on a fresh install; it now
+  defaults to the standard community relay (`https://api.openale.dev/api/v1/locations`),
+  with an in-GUI warning that overwriting it stops reports reaching that map.
 
 ### Messaging & Calling
 
@@ -220,6 +262,9 @@ AMD to all stations, not just position reports.
   minimum reply window is ~650 ms). Corrected, and added guidance that SDR/virtual-audio-
   cable setups typically need a higher PTT Tail (150-250 ms) since that pipeline's
   buffering isn't visible to openALE's own latency compensation.
+- Heard Stations cards (desktop) packed the add-to-address-book and remove icons into one
+  ~14px-tall cell, inline and hard to tell apart or click precisely. They now sit at
+  opposite ends of the card with a real ~38px click target each.
 
 ## Other
 
