@@ -2280,6 +2280,22 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Drain Location Relay identity registration-state transitions → live
+        // GUI update of the Relay Identity panel (pending/approved/rejected/
+        // revoked). Without this, approving an identity via admin-cli.js only
+        // ever showed up in the GUI after the next LOCATION_SHARING_GET pull
+        // (e.g. reopening Settings) — same drain pattern as conn_state above.
+        {
+            int rs;
+            while (ctx.loc_svc->pop_reg_state(rs)) {
+                mj::Value e = make_event("location_relay");
+                e.set("running", mj::Value::boolean(ctx.loc_svc->is_running()));
+                e.set("registration_status", mj::Value::string(loc_reg_state_name(rs)));
+                e.set("callsign", mj::Value::string(ctx.loc_svc->identity_callsign()));
+                ws.send_text(mj::dump(e));
+            }
+        }
+
         // Audio first: words must be delivered to the SM before the dwell check
         // so a word decoded in the same tick as expiry sets SCAN_PAUSE on the
         // correct channel rather than the one hopped to (§A.5.3.3 Bug 2 fix).

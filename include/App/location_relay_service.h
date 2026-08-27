@@ -141,6 +141,14 @@ public:
     /// thread (bridge main loop) to emit live WS updates to the GUI pill.
     bool pop_conn_state(int& out);
 
+    /// Same as pop_conn_state() but for registration_state() — without this,
+    /// the Relay Identity panel's "Status: pending/approved/..." only ever
+    /// refreshed on the next LOCATION_SHARING_GET pull (e.g. reopening
+    /// Settings), so an operator approving an identity via admin-cli.js saw
+    /// no change until they reloaded the page. Call from the main thread
+    /// alongside pop_conn_state() to push the same live update.
+    bool pop_reg_state(int& out);
+
     /// Gate a pre-built report through per-source dedup (LRU on dedup_key)
     /// and throttle (min_interval_sec), then queue it. Drops the oldest
     /// queued report if the bounded queue is full (best-effort, Konzept §12).
@@ -186,7 +194,8 @@ private:
     int last_drained_ = CS_UNKNOWN;   ///< last value handed to pop_conn_state()
 
     mutable std::mutex reg_mtx_;
-    int reg_state_ = REG_UNKNOWN;     ///< guarded by reg_mtx_
+    int reg_state_        = REG_UNKNOWN;  ///< guarded by reg_mtx_
+    int reg_last_drained_ = REG_UNKNOWN;  ///< last value handed to pop_reg_state()
 
     // Identity loaded/created by start(); nullopt only before a successful
     // start() (or if identity load/creation failed, in which case the worker

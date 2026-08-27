@@ -358,7 +358,15 @@ function onBridgeEvent(e) {
   switch (e.event) {
     case 'state': applyBridgeState(e.value); break;
     case 'status': aleLogInfo(e.msg); break;
-    case 'location_relay': renderLocStatus(true, e.running, e.conn_state); break;
+    case 'location_relay':
+      if (e.conn_state !== undefined) renderLocStatus(true, e.running, e.conn_state);
+      if (e.registration_status !== undefined) {
+        const idHint = document.getElementById('locShareIdentityHint');
+        if (idHint) {
+          idHint.textContent = `Callsign: ${e.callsign || '(unknown)'} · Status: ${e.registration_status}`;
+        }
+      }
+      break;
     case 'call_received':
       isIncomingCall = true;
       notifyRingStart();
