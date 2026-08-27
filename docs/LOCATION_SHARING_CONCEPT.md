@@ -241,7 +241,9 @@ Der `dedup_key` wird schon beim Enqueue berechnet, sodass der Worker nur noch
 ```http
 POST /api/v1/locations
 Content-Type: application/json
-Authorization: Bearer <token>
+Authorization: Ed25519 <callsign>
+X-Timestamp: <ISO8601>
+X-Signature: <base64 signature over "<timestamp>\n<raw JSON body>">
 ```
 
 ```json
@@ -275,7 +277,7 @@ Authorization: Bearer <token>
 |---|---|---|
 | 2xx | akzeptiert | Report aus Queue entfernen, Log „accepted (200)" |
 | 409 | Server-Duplikat | aus Queue entfernen, still (kein Retry) |
-| 401/403 | Auth-Problem | aus Queue entfernen, WARN loggen, **kein** Endlos-Retry (Token falsch) |
+| 401/403 | Auth-Problem | aus Queue entfernen, WARN loggen, **kein** Endlos-Retry (Signatur ungültig, Callsign unbekannt/pending/revoked, oder observer-Mismatch) |
 | 422 | malformed | aus Queue entfernen, WARN loggen (Client-Bug) |
 | 429 | rate-limit | Backoff, `Retry-After` honorieren |
 | 5xx / timeout | Server/Netz | Backoff-Retry, nach max. Versuchen discard |
@@ -290,13 +292,26 @@ verwirft dann älteste Reports (best-effort).
 
 ## 10. Authentifizierung (Frage 8)
 
-- **Bearer-Token** in Config (`location_api_token`), pro Request als
-  `Authorization: Bearer …`.
+- **Per-Callsign Ed25519-Signierung**, nicht ein geteiltes Bearer-Token: jede
+  openALE-Instanz erzeugt lokal ein Ed25519-Schlüsselpaar (nur der 32-Byte-Seed
+  wird persistiert, in `location_relay_identity.key`, nicht in `station.state`)
+  und signiert jeden Request als `<timestamp>\n<raw JSON body>`.
+- **Registrierung**: `POST /api/v1/register {callsign, public_key}` landet
+  `pending`; ein Operator genehmigt manuell über `admin-cli.js approve
+  <callsign>` auf dem Server (kein Netzwerk-Admin-Endpoint — direkter
+  Dateisystemzugriff ist die Vertrauensgrenze).
+- **Server-Verifikation**: Node's eingebautes `crypto.verify('Ed25519', ...)`
+  gegen den gespeicherten Public Key; verwirft veraltete Timestamps (>300s
+  Skew) und wiederholte `(callsign, signature)`-Paare (Replay).
+- **Autorisierungs-Fix**: der Server erzwingt `body.observer === <callsign aus
+  Header>` — das eigentliche Fix für die Spoofing-Lücke des alten
+  Shared-Token-Modells (ein Token-Inhaber konnte für jede beliebige Station
+  senden). `source` bleibt frei/vouched-for, da ein Relay per Definition
+  fremde Positionen weiterleitet.
 - **HTTPS only**: Client lehnt `http://` ab, Ausnahme `http://127.0.0.1`/`localhost`
   (für lokalen Test-Server).
-- Token **niemals** loggen (Spec §20.19) — der Log-Filter maskiert
-  `Authorization`-Header.
-- Keine Client-Zertifikate in der ersten Version; Token ist bewusst simpel.
+- Der private Schlüssel/Seed wird **niemals** übertragen oder geloggt — nur
+  Callsign, Timestamp und Signatur gehen über die Leitung.
 
 ---
 
@@ -365,7 +380,7 @@ Neu in `ALEStationConfig` (als gekapselter Block, serialisiert wie die
 // ── Location Relay (empfangene GPR-Positionen an Web-API weiterleiten) ───
 bool      location_sharing_enabled        = false;  // Master-Opt-In (Spec §20.2)
 std::string location_api_url              = "";     // https://…/api/v1/locations
-std::string location_api_token            = "";     // Bearer, nie geloggt
+std::string location_relay_identity_path  = "";     // location_relay_identity.key (Ed25519-Seed, neben station.state)
 bool      location_sharing_allcall        = true;   // ALLCALL weiterleiten
 bool      location_sharing_individual     = false;  // Individual Calls
 bool      location_sharing_net            = false;  // NETCALL
@@ -559,9 +574,10 @@ Position unbekannt" → Online ohne Marker).
    verwerfen? Vorschlag: weiterleiten, Server entscheidet. Konfigurierbar machen?
 5. **Idempotency-Key-Header** verlangt Server-Unterstützung. Soll der Client ihn
    trotzdem senden (Server ignoriert unbekannte Header i.d.R.)? Vorschlag: ja.
-6. **Token-Speicherung.** `location_api_token` in `station.state` im Klartext
-   (wie `gpsd_host` etc.). Bei sensiblen Tokens: separater Credential-Speicher
-   oder zumindest Hinweis in der GUI. — offen.
+6. **Schlüssel-Speicherung.** Gelöst: der Ed25519-Seed liegt in
+   `location_relay_identity.key` (0600 auf POSIX, restriktive ACL auf
+   Windows, best-effort), separat von `station.state` — kein Klartext-Secret
+   mehr in der normalen Konfigurationsdatei.
 7. **Mobile Divergenz.** Card bewusst parallel zu Desktop; keine abweichende
    Richtungscodierung (Memory `openale_feedback_mobile_alignment_consistency`).
 
@@ -575,8 +591,8 @@ Position unbekannt" → Online ohne Marker).
 4. **ALLCALL erkannt/transportiert?** Heute fehlt im `AmdData` — wird um `call_context` ergänzt (Abschnitt 7); als `call_type` im API-Payload.
 5. **Datenstruktur?** `LocationReport` (Abschnitt 8).
 6. **Dedup?** Anchor = GPR-TIME + source + gerundete latlon, LRU pro Observer (Abschnitt 11).
-7. **API?** `POST /api/v1/locations`, Bearer, JSON, v1-Pfad (Abschnitt 9).
-8. **Auth?** Bearer-Token, HTTPS-only, Token nie geloggt (Abschnitt 10).
+7. **API?** `POST /api/v1/locations`, Ed25519-signiert, JSON, v1-Pfad (Abschnitt 9).
+8. **Auth?** Per-Callsign Ed25519-Signatur, HTTPS-only, Seed nie übertragen/geloggt (Abschnitt 10).
 9. **API-Ausfälle?** Async Worker-Thread, bounded Queue, Backoff, 4xx sofort discard, nie ALE/Audio/Radio blockierend (Abschnitt 12).
 10. **Reporting-Rate begrenzt?** Per-source `min_interval_sec` + Dedup; Server 429/Retry-After (Abschnitt 11).
 11. **Privacy/Security?** Master-OFF, Per-Call-Type-Toggles, Rundung, Kommentar-Filter, HTTPS, Token (Abschnitt 13).

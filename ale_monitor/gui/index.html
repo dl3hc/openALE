@@ -128,11 +128,17 @@
         <input id="setLocUrl" class="set-input" placeholder="https://example.com/api/v1/locations">
       </div>
       <div class="set-row">
-        <label>Token</label>
-        <input id="setLocToken" class="set-input" type="password" placeholder="(leave blank to keep stored token)">
+        <label>Callsign</label>
+        <input id="setLocCallsign" class="set-input" placeholder="required — this monitor has no self address">
       </div>
       <div class="set-row">
-        <span id="locTokenHint" class="set-status">—</span>
+        <span id="locIdentityHint" class="set-status">—</span>
+      </div>
+      <div class="set-row">
+        <span id="locIdentityPubkey" class="set-status" style="word-break:break-all"></span>
+      </div>
+      <div class="set-row">
+        <button class="set-btn" onclick="doLocationRegenerateIdentity()">Regenerate Identity</button>
       </div>
       <div class="set-row">
         <label>CA Cert</label>

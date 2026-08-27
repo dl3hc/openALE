@@ -240,10 +240,16 @@ function syncLocationSharingFromBridge() {
     setField('setLocCaCert',       r.ca_cert_path || '');
     setField('setLocMinInterval',  r.min_interval_sec);
     setField('setLocRoundDigits',  r.round_digits);
-    // Token is never echoed back (core-side privacy) — the hint just
-    // reflects whether one is already stored.
-    document.getElementById('locTokenHint').textContent =
-      r.token_set ? 'A token is currently stored.' : 'No token stored.';
+    setField('setLocCallsign',     r.callsign || '');
+    // Ed25519 identity replaces the shared bearer token — callsign + public
+    // key shown directly (not secret).
+    const idHint = document.getElementById('locIdentityHint');
+    if (idHint) {
+      const callsign = r.identity_exists ? (r.callsign || '(unknown)') : '(not yet created)';
+      idHint.textContent = `Callsign: ${callsign} · Status: ${r.registration_status || 'unknown'}`;
+    }
+    const pubkeyEl = document.getElementById('locIdentityPubkey');
+    if (pubkeyEl) pubkeyEl.textContent = r.public_key ? `Public key: ${r.public_key}` : '';
     renderLocStatus(r.enabled, r.running, r.conn_state);
   });
 }
@@ -251,18 +257,24 @@ function doLocationSharingSet() {
   bridgeSend('LOCATION_SHARING_SET', {
     enabled:          !!document.getElementById('setLocEnabled').checked,
     url:              document.getElementById('setLocUrl').value.trim(),
-    token:            document.getElementById('setLocToken').value,
+    callsign:         document.getElementById('setLocCallsign').value.trim(),
     ca_cert_path:     document.getElementById('setLocCaCert').value.trim(),
     min_interval_sec: Number(document.getElementById('setLocMinInterval').value || 30),
     round_digits:     Number(document.getElementById('setLocRoundDigits').value || 6),
     include_comment:  !!document.getElementById('setLocIncludeComment').checked,
   }, (r) => {
-    document.getElementById('setLocToken').value = '';   // never keep the token in the DOM
     if (!r || !r.ok) {
       document.getElementById('locStatus').textContent = 'Failed: ' + ((r && r.error) || 'apply error');
       return;
     }
     syncLocationSharingFromBridge();
+  });
+}
+function doLocationRegenerateIdentity() {
+  if (!confirm('Regenerate this monitor\'s relay identity? The old key is discarded and the ' +
+               'server will require re-approval (admin-cli.js approve <callsign>).')) return;
+  bridgeSend('LOCATION_SHARING_SET', { regenerate_identity: true }, (r) => {
+    if (r && r.ok) syncLocationSharingFromBridge();
   });
 }
 

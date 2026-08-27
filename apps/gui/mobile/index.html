@@ -1096,10 +1096,10 @@
                 placeholder="https://example.com/api/v1/locations">
             </div>
             <div class="fg">
-              <label class="flabel" for="cfgLocShareToken">Bearer Token</label>
-              <input class="finput" type="password" id="cfgLocShareToken"
-                placeholder="(leave blank to keep the stored token)">
-              <div class="fhint" id="locShareTokenHint"></div>
+              <label class="flabel">Relay Identity</label>
+              <div class="fhint" id="locShareIdentityHint">Callsign: — · Status: —</div>
+              <div class="fhint" style="word-break:break-all" id="locShareIdentityPubkey"></div>
+              <button type="button" class="fbtn-secondary" onclick="onLocShareRegenerateIdentity()">Regenerate Identity</button>
             </div>
             <div class="fg">
               <label class="flabel" for="cfgLocShareCaCertPath">CA Certificate Path</label>

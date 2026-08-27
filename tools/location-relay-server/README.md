@@ -13,9 +13,6 @@ Zero npm dependencies: plain `node:http` + the built-in `node:sqlite` module
 
 ```sh
 cp .env.example .env
-# edit .env — set LOCATION_API_TOKEN to the same token you put in openALE's
-# Location Relay settings (Privacy/Network card)
-
 node server.js
 ```
 
@@ -23,6 +20,27 @@ Then point openALE's **Location Relay → API Endpoint** at
 `https://your-host:PORT/api/v1/locations` (or `http://127.0.0.1:8766/...` for
 local testing — openALE's client only allows plain `http://` for
 `127.0.0.1`/`localhost`, everything else must be HTTPS).
+
+### Auth: per-callsign Ed25519 identity
+
+There is no shared secret to configure. Each openALE instance generates its
+own Ed25519 keypair on first use and self-registers:
+
+1. openALE auto-POSTs `{callsign, public_key}` to `/api/v1/register` the
+   first time Location Relay sends a report with a fresh identity. The
+   station lands `pending` — ingest requests 401 with `reason: pending_approval`
+   until approved.
+2. Approve it from the server host (direct filesystem access to the sqlite
+   file is the trust boundary — there is no network-facing admin endpoint):
+   ```sh
+   node admin-cli.js list
+   node admin-cli.js approve WX1ABC
+   ```
+3. Ingest then succeeds. To revoke a compromised or decommissioned station:
+   ```sh
+   node admin-cli.js revoke WX1ABC
+   ```
+   Revocation takes effect immediately (checked before rate limiting).
 
 For real HTTPS you have two options — either works with openALE's client:
 
@@ -49,14 +67,24 @@ browser for the live map.
 
 Matches `docs/LOCATION_SHARING_CONCEPT.md` §9 exactly.
 
-- `POST /api/v1/locations` — ingest. Requires `Authorization: Bearer <token>`.
-  Body is the JSON payload openALE's `LocationRelayService` already sends
-  (`observer`, `source`, `relay`, `source_type`, `raw_gpr`, `latitude`/
+- `POST /api/v1/register` — public, unauthenticated by design (the
+  `admin-cli.js` approval step is the actual trust gate). Body:
+  `{callsign, public_key}` (`public_key` = base64 of the raw 32-byte Ed25519
+  public key). `201` new pending registration, `200` already pending
+  (idempotent), `409` already approved or revoked, `422` invalid callsign/key.
+- `POST /api/v1/locations` — ingest. Requires
+  `Authorization: Ed25519 <callsign>`, `X-Timestamp: <ISO8601>`,
+  `X-Signature: <base64>` — the signature covers `<timestamp>\n<raw JSON
+  body>`. Body is the JSON payload openALE's `LocationRelayService` already
+  sends (`observer`, `source`, `relay`, `source_type`, `raw_gpr`, `latitude`/
   `longitude` (nullable), `altitude`/`altitude_unit` (nullable), `timestamp`
-  (nullable), `received_at`, `call_type`). Response codes follow §9's table:
-  `201` accepted, `409` exact duplicate (same observer+source+timestamp seen
-  before — not an error, just already stored), `422` malformed/missing
-  required fields, `401` bad/missing token.
+  (nullable), `received_at`, `call_type`); `observer` must equal the signing
+  callsign or the request is rejected as `403 observer_mismatch`. Response
+  codes follow §9's table plus the new auth cases: `201` accepted, `409` exact
+  duplicate (same observer+source+timestamp seen before — not an error, just
+  already stored), `422` malformed/missing required fields, `401` bad
+  signature/stale timestamp/replay/unknown or pending callsign (see `reason`
+  field), `403` revoked identity or `observer_mismatch`.
 - `GET /api/v1/locations` — public, no auth. Returns a GeoJSON
   `FeatureCollection` of every station with a known position — this is what
   the map frontend polls every 15s. Stations that have only ever sent
@@ -110,8 +138,12 @@ else here depends on Leaflet specifically.
 
 ## Security notes
 
-- The bearer token is required to start the server at all (no accidental
-  open-ingest mode). Compared with `crypto.timingSafeEqual`.
+- Every ingest request is signed per-callsign with Ed25519
+  (`crypto.verify('Ed25519', ...)`, native since Node 12 — no new
+  dependency); a station can only ever claim its own callsign as `observer`.
+  Registration lands `pending` and requires manual `admin-cli.js approve` —
+  there is no way for a client to self-approve. Stale timestamps (>300s skew)
+  and replayed `(callsign, signature)` pairs are rejected.
 - Read endpoints (`GET /api/v1/*`) are intentionally public/unauthenticated —
   the map is meant to be viewable without a credential. If that's not wanted,
   put the whole thing behind a reverse-proxy auth layer.

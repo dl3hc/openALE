@@ -297,6 +297,24 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(mbedtls)
 
+# ── Ed25519 (Location Relay per-callsign signing) ─────────────────────────────
+#
+# mbedTLS at the pinned mbedtls-3.6.7 has no usable classic-API (mbedtls_pk)
+# Ed25519 support, so Location Relay's per-station signing vendors a small,
+# dependency-free implementation instead of adding libsodium as a whole new
+# external dependency. See third_party/ed25519/VERSION.md for provenance.
+add_library(ale_ed25519 STATIC
+    third_party/ed25519/keypair.c
+    third_party/ed25519/sign.c
+    third_party/ed25519/verify.c
+    third_party/ed25519/seed.c
+    third_party/ed25519/sha512.c
+    third_party/ed25519/fe.c
+    third_party/ed25519/ge.c
+    third_party/ed25519/sc.c
+)
+target_include_directories(ale_ed25519 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ed25519)
+
 add_library(ale_pal
     src/PAL/logger.cpp
     src/PAL/crash_handler.cpp
@@ -382,6 +400,7 @@ add_library(ale_app_core
     src/App/gps_service.cpp
     src/App/http_poster.cpp
     src/App/location_relay_service.cpp
+    src/App/relay_identity.cpp
     src/App/sfi_service.cpp
     src/App/sounding_identity_accumulator.cpp
     src/App/voice_path_manager.cpp
@@ -408,6 +427,7 @@ endif()
 # openALE executable target already links these three libs explicitly for the
 # bridge's own TLS support.
 target_link_libraries(ale_app_core mbedtls mbedx509 mbedcrypto)
+target_link_libraries(ale_app_core ale_ed25519)
 
 # ── Audio I/O device (platform-specific) ──────────────────────────────────────
 
@@ -465,6 +485,21 @@ if(HAMLIB_FOUND)
     if(WIN32)
         target_link_libraries(test_hamlib_mock ws2_32)
     endif()
+endif()
+
+# ── Relay identity (Ed25519 signing) smoke tests ──────────────────────────────
+
+# Standalone: sign/verify round-trip, tampered-body rejection, key-file
+# round-trip, deterministic keypair-from-seed known-answer test. No sockets,
+# no ALEController, run manually (matches the project's existing
+# add_executable smoke-test pattern — no CTest/enable_testing()).
+add_executable(test_relay_identity apps/test_relay_identity.cpp src/App/relay_identity.cpp src/PAL/logger.cpp)
+target_include_directories(test_relay_identity PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_relay_identity ale_ed25519)
+if(WIN32)
+    target_link_libraries(test_relay_identity bcrypt)
 endif()
 
 # ── rigctld-compat protocol smoke tests ────────────────────────────────────────

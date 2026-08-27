@@ -48,7 +48,7 @@ AMD to all stations, not just position reports.
   use. A single **Enable Position Reports** switch now gates both automatic and manual
   "Send Position Now" sends, so turning reporting off is always one toggle.
 - **Location Relay**: Settings ▸ Location ▸ Location Relay forwards every position report
-  your station receives to an external HTTP endpoint (URL + optional auth token,
+  your station receives to an external HTTP endpoint (URL + per-callsign Ed25519 identity,
   enable/disable), for live mapping outside openALE itself. The relay client now speaks
   HTTPS on Linux too (previously Windows-only via WinHTTP), via a new mbedTLS-based client;
   a **CA Certificate Path** setting pins the relay server's certificate for self-signed
@@ -62,6 +62,20 @@ AMD to all stations, not just position reports.
   stations by HF band (160 m–10 m + Other) rather than per-exact frequency, drops stations
   not heard in the last two days, and uses a select-to-show allowlist in place of the old
   hide-by-toggle filter.
+- **Location Relay — per-callsign Ed25519 signing replaces the shared bearer token**: each
+  openALE instance now generates its own Ed25519 keypair (`location_relay_identity.key`,
+  next to `station.state`, not inside it) and signs every report as its own callsign,
+  instead of every client sharing one opaque `LOCATION_API_TOKEN`. This closes the
+  spoofing gap in the old model (any token holder could submit a report claiming to be
+  any station) — the server now enforces that the signed callsign matches the report's
+  `observer` field. New stations self-register (`POST /api/v1/register`) and land
+  `pending` until the relay operator approves them with the reference server's new
+  `admin-cli.js list|approve|revoke`, which operates directly on the server's sqlite file
+  (no network-facing admin endpoint). Settings ▸ Location ▸ Location Relay's "Bearer
+  Token" field is replaced by a read-only Relay Identity panel (callsign, public-key
+  fingerprint, registration status) and a **Regenerate Identity** button. This is a
+  direct cutover — the old bearer-token code path has been removed entirely, not
+  deprecated.
 
 ### Messaging & Calling
 

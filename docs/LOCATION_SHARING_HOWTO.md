@@ -71,15 +71,9 @@ cd tools/location-relay-server
 cp .env.example .env
 ```
 
-Edit `.env` and set a real token:
-
-```
-LOCATION_API_TOKEN=<a long random string>
-```
-
-This is the shared secret between openALE and the server — anyone who has
-it can submit position reports, so treat it like a password. Generate one
-with e.g. `openssl rand -hex 32`.
+There is nothing to configure in `.env` for auth — each openALE instance
+generates its own Ed25519 identity and self-registers; you approve new
+stations from the server host with `admin-cli.js` (Part 3 below).
 
 Then run it:
 
@@ -89,7 +83,8 @@ node server.js
 
 ```
 Location Relay server listening on :8766
-  Ingest:  POST http://localhost:8766/api/v1/locations  (Bearer token required)
+  Ingest:  POST http://localhost:8766/api/v1/locations  (Ed25519-signed, per-callsign)
+  Register: POST http://localhost:8766/api/v1/register  (lands 'pending'; approve via admin-cli.js)
   Map:     http://localhost:8766/
   DB:      .../location-relay.sqlite
 ```
@@ -128,7 +123,7 @@ Reports* and *Known Positions* to **Privacy / Network — Location Relay**.
 |---|---|
 | **Enable Location Relay** | Master switch. Off by default — nothing is ever sent until you flip this. |
 | **API Endpoint** | The server's ingest URL, e.g. `https://relay.example.com/api/v1/locations` or `http://127.0.0.1:8766/api/v1/locations` for local testing. |
-| **Bearer Token** | Must match the server's `LOCATION_API_TOKEN`. Write-only in the GUI — once saved, it's never displayed or sent back to the browser again; the field just shows a hint that a token is stored. |
+| **Relay Identity** | Read-only: shows this station's callsign, its Ed25519 public-key fingerprint (read this aloud/paste it to the relay operator to cross-check), and its registration status (`pending` / `approved` / `rejected` / `revoked`). A **Regenerate Identity** button rotates the keypair if needed (requires re-approval). |
 | **CA Certificate Path** | Optional. If the server uses a self-signed certificate, point this at that certificate (PEM) — the client trusts exactly that cert. Leave empty for a real CA-signed cert (system trust store) or for `http://127.0.0.1`/`localhost` local testing. |
 | **Forward positions received via** | Per-call-type gates: ALLCALL, Individual Call, Net Call, Group Call, Linked (over an established connection). Only checked types get forwarded — see the privacy note below. |
 | **Min. interval per source (s)** | Throttle: don't forward more than one report from the same station more often than this, even if it keeps re-sending. Default 30s. |
@@ -138,6 +133,21 @@ Reports* and *Known Positions* to **Privacy / Network — Location Relay**.
 Click **Apply**. The status line next to the button will read *Running* once
 the background worker thread has started — if it stays on *Enabled, not
 running*, see Troubleshooting below.
+
+The first time you enable it with a given callsign, openALE generates an
+Ed25519 keypair (stored in `location_relay_identity.key`, next to
+`station.state`) and auto-registers it with the server. The Relay Identity
+field will show status `pending`. On the **server host**, approve it:
+
+```sh
+cd tools/location-relay-server
+node admin-cli.js list          # see the pending callsign + when it registered
+node admin-cli.js approve WX1ABC
+```
+
+Ingest requests 401 with reason `pending_approval` until you do this — that
+is expected, not a bug. Once approved, the Relay Identity field flips to
+`approved` on the next report/health-check cycle.
 
 Your own transmitted position is **never** forwarded by this feature — only
 positions you receive from other stations. This is a deliberate,
@@ -151,7 +161,7 @@ hear you, if they also run Location Relay).
 Open the server's own URL in a browser, e.g. `http://localhost:8766/` or
 your reverse-proxied `https://relay.example.com/`. No login needed — the
 map/read API is intentionally public so anyone with the link can view it
-(the write/ingest side is the one that needs the token).
+(the write/ingest side is the one that needs a signed, approved identity).
 
 - Markers are colored by how recently the station was last heard:
   **green = Online** (≤15 min), **yellow = Recent** (≤60 min),
@@ -176,7 +186,11 @@ the HTTPS-only policy (must be `https://`, or `http://127.0.0.1` /
 client-side before any network call happens).
 
 **Reports are queued but never show up on the map.**
-- Check the server's console output — `401` means the tokens don't match;
+- Check the server's console output — `401` with `reason: pending_approval`
+  means the identity needs `admin-cli.js approve <callsign>`; `401` with
+  another reason or `403` means the signature/identity was rejected
+  (unknown/revoked callsign, bad signature, stale timestamp, or an
+  observer/callsign mismatch — see the ALE Log for which);
   `422` means a required field was missing/malformed (shouldn't happen with
   an unmodified openALE client — file a bug if you see this).
 - Check that the call-type toggle for how the position was actually
@@ -202,10 +216,13 @@ missing TLS backend:
   connectivity problem (host/port/firewall), not TLS; see the reachability
   troubleshooting above.
 
-**"Auth failed" / 401 shown in the ALE Log.**
-The tokens don't match. Re-enter the token in openALE's Location Relay
-settings (it's write-only, so if you're not sure it's right, just retype it
-and Apply) and confirm it's identical to the server's `LOCATION_API_TOKEN`.
+**"Auth failed" / 401 or 403 shown in the ALE Log.**
+Check the Relay Identity field's status: `pending` means it just needs
+`admin-cli.js approve <callsign>` on the server; `revoked` means the
+operator revoked it (use **Regenerate Identity** and get the new key
+approved); anything else (bad signature, unknown callsign) usually means the
+identity file and the server's registered public key have gotten out of
+sync — **Regenerate Identity** and re-approve is the reliable fix.
 
 **I want to stop sharing entirely.**
 Uncheck **Enable Location Relay** and Apply. This stops the worker thread

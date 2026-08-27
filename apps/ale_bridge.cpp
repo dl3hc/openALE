@@ -319,6 +319,18 @@ static const char* loc_conn_state_name(int s) {
     }
 }
 
+// LocationRelayService::RegState → GUI string. Mirrors the enum order in
+// App/location_relay_service.h.
+static const char* loc_reg_state_name(int s) {
+    switch (s) {
+        case ale::LocationRelayService::REG_PENDING:  return "pending";
+        case ale::LocationRelayService::REG_APPROVED: return "approved";
+        case ale::LocationRelayService::REG_REJECTED: return "rejected";
+        case ale::LocationRelayService::REG_REVOKED:  return "revoked";
+        default:                                       return "unknown";
+    }
+}
+
 // Assemble the pal::create_radio() spec from structured GUI fields (so the GUI
 // never needs to know the hamlib spec syntax). The Hamlib rig MODEL is the single
 // selector; its port type (derived from rig_caps::port_type via pal::rig_port_type)
@@ -559,12 +571,26 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
         if (cfg.location_sharing_enabled && !cfg.location_api_url.empty()) {
             LocationRelayService::Config lcfg;
             lcfg.url               = cfg.location_api_url;
-            lcfg.token              = cfg.location_api_token;
+            lcfg.callsign           = ctrl.get_primary_self_address();
+            // Default: next to station.state, not inside it — the identity
+            // file is a secret (the seed), station.state is not.
+            lcfg.identity_key_path = !cfg.location_relay_identity_path.empty()
+                ? cfg.location_relay_identity_path
+                : (ctx.state_path.empty() ? "location_relay_identity.key"
+                                           : ctx.state_path.substr(0, ctx.state_path.find_last_of("/\\") + 1)
+                                             + "location_relay_identity.key");
             lcfg.ca_cert_path       = cfg.location_ca_cert_path;
             lcfg.queue_size         = cfg.location_sharing_queue_size;
             lcfg.min_interval_sec   = cfg.location_sharing_min_interval_sec;
-            pal::log_info("openALE", "Location Relay: starting (%s)", lcfg.url.c_str());
-            ctx.loc_svc->start(lcfg);
+            if (lcfg.callsign.empty()) {
+                pal::log_warn("openALE",
+                               "Location Relay: no self address configured — cannot create a "
+                               "signing identity, service not started");
+            } else {
+                pal::log_info("openALE", "Location Relay: starting (%s, identity=%s)",
+                               lcfg.url.c_str(), lcfg.callsign.c_str());
+                ctx.loc_svc->start(lcfg);
+            }
         } else {
             pal::log_info("openALE", "Location Relay: disabled");
         }
@@ -1262,10 +1288,15 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         mj::Value r = make_reply(msg, true);
         r.set("enabled",          mj::Value::boolean(cfg.location_sharing_enabled));
         r.set("url",              mj::Value::string(cfg.location_api_url));
-        // Token is deliberately NOT echoed back (Konzept §17 — never log/expose
-        // it once set). The GUI shows a "configured"/"not configured" state
-        // instead of the raw value; POSTing a new value always overwrites.
-        r.set("token_set",        mj::Value::boolean(!cfg.location_api_token.empty()));
+        // Ed25519 identity replaces the shared bearer token — nothing secret
+        // to hide here; the public key is meant to be read aloud/pasted to
+        // the relay operator, and the seed never leaves location_relay_identity.key.
+        r.set("identity_exists",  mj::Value::boolean(ctx.loc_svc && !ctx.loc_svc->identity_callsign().empty()));
+        r.set("callsign",         mj::Value::string(ctx.loc_svc ? ctx.loc_svc->identity_callsign() : std::string()));
+        r.set("public_key",       mj::Value::string(ctx.loc_svc ? ctx.loc_svc->identity_public_key_b64() : std::string()));
+        r.set("registration_status", mj::Value::string(loc_reg_state_name(
+                                    ctx.loc_svc ? ctx.loc_svc->registration_state()
+                                                 : ale::LocationRelayService::REG_UNKNOWN)));
         r.set("ca_cert_path",     mj::Value::string(cfg.location_ca_cert_path));
         r.set("allcall",          mj::Value::boolean(cfg.location_sharing_allcall));
         r.set("individual",       mj::Value::boolean(cfg.location_sharing_individual));
@@ -1294,11 +1325,6 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
             }
             cfg.location_api_url = url;
         }
-        // Empty "token" is a no-op (keep the stored token) — only a non-empty
-        // value overwrites, so the GUI can leave the field blank on re-save
-        // without clobbering an already-configured token.
-        if (msg.has("token") && !msg.get_string("token").empty())
-            cfg.location_api_token = msg.get_string("token");
         if (msg.has("ca_cert_path"))      cfg.location_ca_cert_path = msg.get_string("ca_cert_path");
         if (msg.has("allcall"))          cfg.location_sharing_allcall = msg.get_bool("allcall");
         if (msg.has("individual"))       cfg.location_sharing_individual = msg.get_bool("individual");
@@ -1313,6 +1339,20 @@ static std::string dispatch_command(BridgeCtx& ctx, const mj::Value& msg) {
         if (msg.has("queue_size"))
             cfg.location_sharing_queue_size = static_cast<uint16_t>(msg.get_number("queue_size"));
         ctrl.apply_config(cfg);
+        // "Regenerate Identity" (GUI button): delete the persisted key file
+        // so restart_location_services()'s start() generates a fresh Ed25519
+        // keypair and re-registers as pending. Used when an operator wants
+        // to rotate a compromised or ambiguous identity without touching the
+        // callsign.
+        if (msg.has("regenerate_identity") && msg.get_bool("regenerate_identity")) {
+            const std::string path = !cfg.location_relay_identity_path.empty()
+                ? cfg.location_relay_identity_path
+                : (ctx.state_path.empty() ? "location_relay_identity.key"
+                                           : ctx.state_path.substr(0, ctx.state_path.find_last_of("/\\") + 1)
+                                             + "location_relay_identity.key");
+            std::remove(path.c_str());
+            pal::log_info("openALE", "Location Relay: identity regenerated (old key file removed)");
+        }
         restart_location_services(ctx, ctrl);
         if (!ctx.state_path.empty()) ctrl.save_state(ctx.state_path);
         return mj::dump(make_reply(msg, true));

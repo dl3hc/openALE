@@ -180,7 +180,14 @@ struct MonitorConfig {
     // toggle, not per-call-type checkboxes.
     bool        loc_share_enabled     = false;
     std::string loc_api_url;
-    std::string loc_api_token;
+    // Ed25519 identity (replaces the old shared bearer token — direct
+    // cutover, see docs/LOCATION_SHARING_CONCEPT.md). This monitor has no
+    // self address of its own, so the operator must set an explicit
+    // callsign here — it is both the "observer" field on every relayed
+    // report and the signing identity's name (the server enforces the two
+    // match). loc_identity_path defaults alongside the config file if empty.
+    std::string loc_callsign;
+    std::string loc_identity_path;
     std::string loc_ca_cert_path;
     uint32_t    loc_min_interval_sec  = 30;
     uint8_t     loc_round_digits      = 6;
@@ -224,7 +231,9 @@ static MonitorConfig parse_config(const std::string& path) {
         else if (key == "history_enabled") { cfg.history_enabled = (val == "1" || val == "true"); }
         else if (key == "location_sharing_enabled")     { cfg.loc_share_enabled = (val == "1" || val == "true"); }
         else if (key == "location_api_url")              { cfg.loc_api_url = val; }
-        else if (key == "location_api_token")            { cfg.loc_api_token = val; }
+        else if (key == "location_api_token")            { /* obsolete pre-Ed25519 key — tolerated, unused */ }
+        else if (key == "location_callsign")             { cfg.loc_callsign = val; }
+        else if (key == "location_relay_identity_path")  { cfg.loc_identity_path = val; }
         else if (key == "location_ca_cert_path")         { cfg.loc_ca_cert_path = val; }
         else if (key == "location_sharing_min_interval_sec") { try { cfg.loc_min_interval_sec = static_cast<uint32_t>(std::stoul(val)); } catch (...) {} }
         else if (key == "location_sharing_round_digits") { try { cfg.loc_round_digits = static_cast<uint8_t>(std::stoul(val)); } catch (...) {} }
@@ -272,7 +281,8 @@ static void save_config(const std::string& path, const MonitorConfig& cfg) {
       << "history_enabled = " << (cfg.history_enabled ? 1 : 0) << "\n"
       << "location_sharing_enabled = " << (cfg.loc_share_enabled ? 1 : 0) << "\n"
       << "location_api_url = " << cfg.loc_api_url << "\n"
-      << "location_api_token = " << cfg.loc_api_token << "\n"
+      << "location_callsign = " << cfg.loc_callsign << "\n"
+      << "location_relay_identity_path = " << cfg.loc_identity_path << "\n"
       << "location_ca_cert_path = " << cfg.loc_ca_cert_path << "\n"
       << "location_sharing_min_interval_sec = " << cfg.loc_min_interval_sec << "\n"
       << "location_sharing_round_digits = " << static_cast<unsigned>(cfg.loc_round_digits) << "\n"
@@ -321,7 +331,14 @@ static void write_config_template(const std::string& path) {
       << "# see ALLCALL-broadcast position reports (see docs/LOCATION_SHARING_CONCEPT.md).\n"
       << "location_sharing_enabled = 0\n"
       << "location_api_url =\n"
-      << "location_api_token =\n"
+      << "# location_callsign: required to enable Location Relay — this monitor has\n"
+      << "# no self address, so an explicit identity/observer callsign must be set.\n"
+      << "# It doubles as the Ed25519 signing identity's name (auto-generated keypair,\n"
+      << "# self-registers with the server; approve via the server's admin-cli.js).\n"
+      << "location_callsign =\n"
+      << "# location_relay_identity_path: (optional) where the Ed25519 keypair is\n"
+      << "# stored; defaults to location_relay_identity.key next to this config.\n"
+      << "location_relay_identity_path =\n"
       << "# location_ca_cert_path: (optional) pinned server cert (PEM), required for a\n"
       << "# self-signed relay server; empty = system trust store.\n"
       << "location_ca_cert_path =\n"
@@ -451,6 +468,18 @@ static const char* loc_conn_state_name(int cs) {
     }
 }
 
+// LocationRelayService::RegState → GUI string. Mirrors apps/ale_bridge.cpp's
+// loc_reg_state_name().
+static const char* loc_reg_state_name(int s) {
+    switch (s) {
+        case ale::LocationRelayService::REG_PENDING:  return "pending";
+        case ale::LocationRelayService::REG_APPROVED: return "approved";
+        case ale::LocationRelayService::REG_REJECTED: return "rejected";
+        case ale::LocationRelayService::REG_REVOKED:  return "revoked";
+        default:                                       return "unknown";
+    }
+}
+
 // Build a throwaway ALEStationConfig carrying only the 6 location_sharing_*
 // fields is_shareable() actually reads (verified against
 // src/App/location_relay_service.cpp) — never touches ctrl's real config.
@@ -477,12 +506,23 @@ static void restart_location_relay(MonitorCtx& ctx) {
     ctx.loc_svc->stop();   // always stop first; start() below spawns a fresh thread
     const auto& cfg = *ctx.cfg;
     if (cfg.loc_share_enabled && !cfg.loc_api_url.empty()) {
+        if (cfg.loc_callsign.empty()) {
+            pal::log_warn("ale_monitor",
+                           "Location Relay: no callsign configured — this monitor has no self "
+                           "address, so an explicit location_callsign is required to sign "
+                           "reports; service not started");
+            return;
+        }
         ale::LocationRelayService::Config lcfg;
-        lcfg.url             = cfg.loc_api_url;
-        lcfg.token            = cfg.loc_api_token;
+        lcfg.url               = cfg.loc_api_url;
+        lcfg.callsign          = cfg.loc_callsign;
+        lcfg.identity_key_path = !cfg.loc_identity_path.empty()
+            ? cfg.loc_identity_path
+            : "location_relay_identity.key";  // next to the monitor's working dir
         lcfg.ca_cert_path     = cfg.loc_ca_cert_path;
         lcfg.min_interval_sec = cfg.loc_min_interval_sec;
-        pal::log_info("ale_monitor", "Location Relay: starting (%s)", lcfg.url.c_str());
+        pal::log_info("ale_monitor", "Location Relay: starting (%s, identity=%s)",
+                      lcfg.url.c_str(), lcfg.callsign.c_str());
         ctx.loc_svc->start(lcfg);
     } else {
         pal::log_info("ale_monitor", "Location Relay: disabled");
@@ -822,9 +862,10 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
         mj::Value r = make_reply(msg, true);
         r.set("enabled",          mj::Value::boolean(ctx.cfg->loc_share_enabled));
         r.set("url",              mj::Value::string(ctx.cfg->loc_api_url));
-        // Token is deliberately NOT echoed back — never log/expose it once
-        // set. The GUI shows a "configured"/"not configured" hint instead.
-        r.set("token_set",        mj::Value::boolean(!ctx.cfg->loc_api_token.empty()));
+        r.set("identity_exists",  mj::Value::boolean(!ctx.loc_svc->identity_callsign().empty()));
+        r.set("callsign",         mj::Value::string(ctx.loc_svc->identity_callsign()));
+        r.set("public_key",       mj::Value::string(ctx.loc_svc->identity_public_key_b64()));
+        r.set("registration_status", mj::Value::string(loc_reg_state_name(ctx.loc_svc->registration_state())));
         r.set("ca_cert_path",     mj::Value::string(ctx.cfg->loc_ca_cert_path));
         r.set("min_interval_sec", mj::Value::number(ctx.cfg->loc_min_interval_sec));
         r.set("round_digits",     mj::Value::number(ctx.cfg->loc_round_digits));
@@ -844,17 +885,21 @@ static std::string dispatch_command(MonitorCtx& ctx, const mj::Value& msg) {
             ctx.cfg->loc_api_url = url;
         }
         if (msg.has("enabled"))       ctx.cfg->loc_share_enabled = msg.get_bool("enabled");
-        // Empty "token" is a no-op (keep the stored token) — only a non-empty
-        // value overwrites, so the GUI can leave the field blank on re-save
-        // without clobbering an already-configured token.
-        if (msg.has("token") && !msg.get_string("token").empty())
-            ctx.cfg->loc_api_token = msg.get_string("token");
+        if (msg.has("callsign"))      ctx.cfg->loc_callsign = msg.get_string("callsign");
         if (msg.has("ca_cert_path"))  ctx.cfg->loc_ca_cert_path = msg.get_string("ca_cert_path");
         if (msg.has("min_interval_sec"))
             ctx.cfg->loc_min_interval_sec = static_cast<uint32_t>(msg.get_number("min_interval_sec"));
         if (msg.has("round_digits"))
             ctx.cfg->loc_round_digits = static_cast<uint8_t>(msg.get_number("round_digits"));
         if (msg.has("include_comment")) ctx.cfg->loc_include_comment = msg.get_bool("include_comment");
+        // "Regenerate Identity": delete the persisted key file so the next
+        // start() below generates a fresh Ed25519 keypair and re-registers.
+        if (msg.has("regenerate_identity") && msg.get_bool("regenerate_identity")) {
+            const std::string path = !ctx.cfg->loc_identity_path.empty()
+                ? ctx.cfg->loc_identity_path : "location_relay_identity.key";
+            std::remove(path.c_str());
+            pal::log_info("ale_monitor", "Location Relay: identity regenerated (old key file removed)");
+        }
         restart_location_relay(ctx);
         return mj::dump(make_reply(msg, true));
     }
@@ -1122,7 +1167,11 @@ int main(int argc, char* argv[]) {
             if (!ale::is_shareable(g, source, d->call_context, d->self_addr, gate_cfg)) return;
 
             ale::LocationReport r;
-            r.observer     = d->self_addr;   // always empty — this monitor has no self address
+            // This monitor has no self address of its own (d->self_addr is
+            // always empty) — the operator-configured location_callsign is
+            // both the report's observer identity and the Ed25519 signing
+            // identity's name (the server enforces the two match).
+            r.observer     = ctx.cfg->loc_callsign;
             r.source       = source;
             r.relay        = (source != d->peer_addr) ? d->peer_addr : "";
             r.raw_gpr      = g.raw;
