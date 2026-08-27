@@ -1401,8 +1401,8 @@ function renderHeard() {
     const canAdd = h.addr && h.addr !== '(sounding)';
     const inBook = canAdd && contacts.some(c => c.cs.toUpperCase() === h.addr.toUpperCase());
     const addBtn = !canAdd ? '' : inBook
-      ? `<span class="heard-add heard-added" title="Already in address book">${icon('user',11)}</span>`
-      : `<button class="heard-add" onclick='addHeardToContacts(${JSON.stringify(h.addr)})' title="Add to address book">${icon('userPlus',11)}</button>`;
+      ? `<span class="heard-add heard-added" title="Already in address book">${icon('user',14)}</span>`
+      : `<button class="heard-add" onclick='addHeardToContacts(${JSON.stringify(h.addr)})' title="Add to address book">${icon('userPlus',14)}</button>`;
     return `<tr>` +
       `<td class="lqa-cell" style="text-align:left">${escapeHtml(h.addr)}</td>` +
       `<td class="lqa-cell">${fmtChFreqExact(h.freq_hz)}</td>` +
@@ -1415,7 +1415,7 @@ function renderHeard() {
       qCell(h.mp_to      != null ? h.mp_to.toFixed(0) + 'ms'      : null, mpG) +
       qCell(h.ageMin >= 60 ? '>60m' : h.ageMin + 'm', ageG) +
       tsCell(h.ts_ms) +
-      `<td class="lqa-cell heard-actions">${addBtn}<button class="heard-del" onclick='deleteHeard(${JSON.stringify(h.addr)},${h.freq_hz})' title="Remove">×</button></td>` +
+      `<td class="lqa-cell heard-actions"><button class="heard-del" onclick='deleteHeard(${JSON.stringify(h.addr)},${h.freq_hz})' title="Remove">×</button>${addBtn}</td>` +
       `</tr>`;
   }).join('');
   el.innerHTML =
