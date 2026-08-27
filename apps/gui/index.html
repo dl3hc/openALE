@@ -2236,9 +2236,9 @@
 
 <!-- ══════ FIRST-RUN SETUP WIZARD ══════ -->
 <!-- Shown on first connect when no self address is configured.
-     Five sequential steps: Callsign → Channels → Nets → Radio (optional) →
-     Audio (optional). Not dismissible via backdrop click — operator must
-     complete or ✕. -->
+     Six sequential steps: Callsign → Channels → Nets → Radio (optional) →
+     PTT & Keying (optional) → Audio (optional). Not dismissible via backdrop
+     click — operator must complete or ✕. -->
 <div class="modal-overlay hidden" id="setupWizard">
   <div class="modal" style="max-width:400px;width:92vw">
 
@@ -2252,6 +2252,7 @@
           <div class="wz-pip"></div>
           <div class="wz-pip"></div>
           <div class="wz-pip"></div>
+          <div class="wz-pip"></div>
         </div>
         <button class="wz-nav-btn" id="wzNextBtn" onclick="wzGoto(wizardStep+1)" title="Next step">›</button>
       </div>
@@ -2260,7 +2261,7 @@
 
     <!-- Step 0: Callsign -->
     <div class="wz-step" id="wzStep0">
-      <div class="wz-step-num">Step 1 of 5</div>
+      <div class="wz-step-num">Step 1 of 6</div>
       <div class="wz-step-title">Station Callsign</div>
       <div class="wz-step-desc">Your ALE address — up to 15 characters. Other stations use this to call you. (MIL-STD-188-141B A.4.3.4)</div>
       <input class="wz-cs-input" id="wzCallsign" type="text" maxlength="15"
@@ -2275,7 +2276,7 @@
 
     <!-- Step 1: Channels -->
     <div class="wz-step hidden" id="wzStep1">
-      <div class="wz-step-num">Step 2 of 5</div>
+      <div class="wz-step-num">Step 2 of 6</div>
       <div class="wz-step-title">Load Channels</div>
       <div class="wz-step-desc">Load a <span style="font-family:var(--mono);color:var(--accent)">.ale</span> channel file. Presets ship in the <span style="font-family:var(--mono);color:var(--accent)">nets/</span> folder.</div>
       <label class="flabel" style="margin-top:14px">Channel file</label>
@@ -2292,7 +2293,7 @@
 
     <!-- Step 2: Nets -->
     <div class="wz-step hidden" id="wzStep2">
-      <div class="wz-step-num">Step 3 of 5</div>
+      <div class="wz-step-num">Step 3 of 6</div>
       <div class="wz-step-title">Nets</div>
       <div class="wz-step-desc">Nets group channels for scanning, sounding, and calling.</div>
       <div id="wzNetsList" class="wz-nets-list" style="margin-top:14px"></div>
@@ -2306,7 +2307,7 @@
 
     <!-- Step 3: Radio / CAT (optional) -->
     <div class="wz-step hidden" id="wzStep3">
-      <div class="wz-step-num">Step 4 of 5</div>
+      <div class="wz-step-num">Step 4 of 6</div>
       <div class="wz-step-title">Radio / CAT Control</div>
       <div class="wz-step-desc">Optional — connect a Hamlib-supported radio for automatic frequency management.</div>
       <label class="flabel" style="margin-top:14px">Hamlib Model</label>
@@ -2338,6 +2339,28 @@
             </select>
           </div>
         </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <div style="flex:1">
+            <label class="flabel">DTR State</label>
+            <select class="fselect" id="wzRigDtr" style="margin-top:4px">
+              <option value="on" selected>ON</option>
+              <option value="off">OFF</option>
+              <option value="auto">AUTO</option>
+            </select>
+          </div>
+          <div style="flex:1">
+            <label class="flabel">RTS State</label>
+            <select class="fselect" id="wzRigRts" style="margin-top:4px">
+              <option value="on" selected>ON</option>
+              <option value="off">OFF</option>
+              <option value="auto">AUTO</option>
+            </select>
+          </div>
+          <div style="width:110px">
+            <label class="flabel">Stab. (ms)</label>
+            <input class="finput" id="wzRigStab" type="number" value="200" min="0" max="2000" style="margin-top:4px">
+          </div>
+        </div>
       </div>
       <div id="wzStep3Status" class="wz-status"></div>
       <div class="wz-actions">
@@ -2346,16 +2369,57 @@
       </div>
     </div>
 
-    <!-- Step 4: Audio devices -->
+    <!-- Step 4: PTT & Keying (optional) -->
     <div class="wz-step hidden" id="wzStep4">
-      <div class="wz-step-num">Step 5 of 5</div>
+      <div class="wz-step-num">Step 5 of 6</div>
+      <div class="wz-step-title">PTT &amp; Keying</div>
+      <div class="wz-step-desc">Optional — how the radio keys transmit. Defaults match most CAT-only setups.</div>
+      <div class="fg-row col2" style="margin-top:14px">
+        <div>
+          <label class="flabel">PTT Method</label>
+          <select class="fselect" id="wzRigPtt" style="margin-top:4px">
+            <option value="cat">CAT (radio command)</option>
+            <option value="rts">RTS (serial pin)</option>
+            <option value="dtr">DTR (serial pin)</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+        <div>
+          <label class="flabel">PTT Port</label>
+          <input class="finput" id="wzRigPttPort" type="text" placeholder="Same as rig port" style="margin-top:4px">
+        </div>
+      </div>
+      <div class="fg-row col2" style="margin-top:10px">
+        <div>
+          <label class="flabel">TX Audio Input</label>
+          <select class="fselect" id="wzRigPttInput" style="margin-top:4px">
+            <option value="normal" selected>Normal</option>
+            <option value="mic">Mic</option>
+            <option value="data">Data</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:22px">
+          <label class="ftoggle"><input type="checkbox" id="wzRigAvoidRelayClick"><span class="ftrack"></span></label>
+          <span class="flabel" style="margin:0">Avoid Relay Click</span>
+        </div>
+      </div>
+      <div id="wzStep4Status" class="wz-status"></div>
+      <div class="wz-actions">
+        <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
+        <button class="wz-btn-next" onclick="wzNext()">Continue →</button>
+      </div>
+    </div>
+
+    <!-- Step 5: Audio devices -->
+    <div class="wz-step hidden" id="wzStep5">
+      <div class="wz-step-num">Step 6 of 6</div>
       <div class="wz-step-title">Audio Devices</div>
       <div class="wz-step-desc">Select the sound device connected to your radio's audio in/out.</div>
       <label class="flabel" style="margin-top:14px">RX Input — receiver audio</label>
       <select class="fselect" id="wzAudioIn" style="margin-top:4px"><option>Loading…</option></select>
       <label class="flabel" style="margin-top:10px">TX Output — radio TX line</label>
       <select class="fselect" id="wzAudioOut" style="margin-top:4px"><option>Loading…</option></select>
-      <div id="wzStep4Status" class="wz-status"></div>
+      <div id="wzStep5Status" class="wz-status"></div>
       <div class="wz-actions">
         <button class="wz-btn-skip" onclick="wzSkip()">Skip</button>
         <button class="wz-btn-next" onclick="wzNext()">Connect &amp; Finish ✓</button>

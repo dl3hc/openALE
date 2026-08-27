@@ -54,11 +54,13 @@ static constexpr auto MODE_REASSERT_WINDOW = std::chrono::seconds(5);
 HamlibRadio::HamlibRadio(const std::string& model,
                          const std::string& port,
                          int baud,
-                         SerialLinePolicy policy)
+                         SerialLinePolicy policy,
+                         PttPolicy ptt_policy)
     : model_(model),
       port_(port),
       baud_(baud),
-      policy_(policy) {}
+      policy_(policy),
+      ptt_policy_(ptt_policy) {}
 
 HamlibRadio::~HamlibRadio() {
     shutdown();
@@ -883,6 +885,32 @@ bool HamlibRadio::is_serial_port() const {
 
 bool HamlibRadio::configure_port() {
     if (!rig_) return false;
+
+    // ── PTT-Methode ───────────────────────────────────────────────────────
+    // Separat von rigport (CAT-Verbindung): hamlib trägt einen eigenen
+    // pttport in rig_state. impl_set_ptt() braucht keine Änderung —
+    // rig_set_ptt() dispatcht bereits über den hier konfigurierten ptt_type.
+    // Das CAT-seitige MIC/DATA-Sub-Select (policy_.ptt_input) bleibt davon
+    // unberührt: das ist nur relevant, wenn ptt_type == RIG_PTT_RIG (CAT).
+    switch (ptt_policy_.type) {
+        case PttPolicy::Type::RTS:  rig_->state.ptt_type = RIG_PTT_SERIAL_RTS; break;
+        case PttPolicy::Type::DTR:  rig_->state.ptt_type = RIG_PTT_SERIAL_DTR; break;
+        case PttPolicy::Type::NONE: rig_->state.ptt_type = RIG_PTT_NONE;       break;
+        case PttPolicy::Type::CAT:
+        default:                    rig_->state.ptt_type = RIG_PTT_RIG;       break;
+    }
+    if (ptt_policy_.type == PttPolicy::Type::RTS || ptt_policy_.type == PttPolicy::Type::DTR) {
+        rig_->state.pttport.type.ptt = rig_->state.ptt_type;
+        const std::string& ptt_dev = !ptt_policy_.port.empty() ? ptt_policy_.port : port_;
+        std::strncpy(rig_->state.pttport.pathname, ptt_dev.c_str(), HAMLIB_FILPATHLEN);
+        rig_->state.pttport.pathname[HAMLIB_FILPATHLEN - 1] = '\0';
+        pal::log_info("HamlibRadio", "configure_port: ptt_type=%s ptt_port=%s%s",
+            ptt_policy_.type == PttPolicy::Type::RTS ? "RTS" : "DTR",
+            ptt_dev.c_str(), ptt_policy_.port.empty() ? " (shared with CAT port)" : "");
+    } else {
+        pal::log_info("HamlibRadio", "configure_port: ptt_type=%s",
+            ptt_policy_.type == PttPolicy::Type::NONE ? "NONE" : "CAT");
+    }
 
 // ── Netzwerk-Pfad (rigctld via TCP) ──────────────────────────────────
     // NET_RIGCTL's netrigctl_open() / network_open() erwartet "host:port" —

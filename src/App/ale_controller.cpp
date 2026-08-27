@@ -984,6 +984,8 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.rig_rts           = cfg.rig_rts;
     config_.rig_stab          = cfg.rig_stab;
     config_.rig_ptt           = cfg.rig_ptt;
+    config_.rig_ptt_type      = cfg.rig_ptt_type;
+    config_.rig_ptt_port      = cfg.rig_ptt_port;
     if (cfg.rig_avoid_relay_click != config_.rig_avoid_relay_click) {
         pal::log_info("ALEController", "Relay-click avoidance (SPLIT mode while scanning) %s",
                        cfg.rig_avoid_relay_click ? "enabled" : "disabled");
@@ -3905,6 +3907,8 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "rig_rts=" << config_.rig_rts << "\n";
     f << "rig_stab=" << config_.rig_stab << "\n";
     f << "rig_ptt=" << config_.rig_ptt << "\n";
+    f << "rig_ptt_type=" << config_.rig_ptt_type << "\n";
+    f << "rig_ptt_port=" << config_.rig_ptt_port << "\n";
     f << "rig_avoid_relay_click=" << (config_.rig_avoid_relay_click ? 1 : 0) << "\n";
     f << "rig_auto_connect=" << (config_.rig_auto_connect ? 1 : 0) << "\n";
     f << "audio_in=" << config_.audio_in << "\n";
@@ -4103,6 +4107,10 @@ bool ALEController::import_settings(const std::string& path, bool follow_channel
             cfg.rig_stab = static_cast<uint32_t>(std::stoul(val));
         } else if (key == "rig_ptt") {
             cfg.rig_ptt = val;
+        } else if (key == "rig_ptt_type") {
+            cfg.rig_ptt_type = val;
+        } else if (key == "rig_ptt_port") {
+            cfg.rig_ptt_port = val;
         } else if (key == "rig_avoid_relay_click") {
             cfg.rig_avoid_relay_click = (val == "1");
         } else if (key == "rig_auto_connect") {

@@ -14,9 +14,15 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
 {
 #ifdef HAVE_HAMLIB
     // Format (serial):
-    //   "hamlib:<model>:<port>[,<baud>][,dtr=on|off|auto][,rts=on|off|auto][,stab=<ms>][,ptt=normal|mic|data][,split=0|1]"
+    //   "hamlib:<model>:<port>[,<baud>][,dtr=on|off|auto][,rts=on|off|auto][,stab=<ms>][,ptt=normal|mic|data][,split=0|1][,ptt_type=cat|rts|dtr|none][,ptt_port=<device>]"
     // Format (TCP):
-    //   "hamlib:2:tcp://<host>:<port>[,ptt=normal|mic|data][,split=0|1]"
+    //   "hamlib:2:tcp://<host>:<port>[,ptt=normal|mic|data][,split=0|1][,ptt_type=cat|rts|dtr|none][,ptt_port=<device>]"
+    //
+    // ptt_type/ptt_port select the PTT *mechanism* (hamlib ptt_type_t: CAT vs
+    // a serial RTS/DTR line, possibly on a second device) — distinct from the
+    // pre-existing ptt=normal|mic|data, which only selects the CAT-side audio
+    // input (Mic/Data) used when ptt_type=cat. Default ptt_type=cat/ptt_port=""
+    // (empty = share the CAT port's device) reproduces today's behavior exactly.
     //
     // ptt=mic|data selects the CAT PTT audio input (Kenwood TX0/TX1 etc.) —
     // only rigs with a Mic/Data distinction in Hamlib honor it; others fall
@@ -45,7 +51,8 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
                                   : port_and_rest.substr(0, first_comma);
 
         int baud = 0;
-        SerialLinePolicy policy;  // Defaults: dtr=ON, rts=ON, stab=200
+        SerialLinePolicy policy;      // Defaults: dtr=ON, rts=ON, stab=200
+        PttPolicy        ptt_policy;  // Default: type=CAT, port=""
 
         if (first_comma != std::string::npos) {
             // Segmente hinter dem Port splitten: "9600,dtr=on,rts=on,stab=200"
@@ -79,13 +86,20 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
                         else                    policy.ptt_input = SerialLinePolicy::PttInput::NORMAL;
                     } else if (key == "split") {
                         policy.avoid_relay_click = (val == "1");
+                    } else if (key == "ptt_type") {
+                        if      (val == "rts")  ptt_policy.type = PttPolicy::Type::RTS;
+                        else if (val == "dtr")  ptt_policy.type = PttPolicy::Type::DTR;
+                        else if (val == "none") ptt_policy.type = PttPolicy::Type::NONE;
+                        else                    ptt_policy.type = PttPolicy::Type::CAT;
+                    } else if (key == "ptt_port") {
+                        ptt_policy.port = val;
                     }
                 }
                 first_seg = false;
             }
         }
 
-        return std::make_unique<HamlibRadio>(model, port, baud, policy);
+        return std::make_unique<HamlibRadio>(model, port, baud, policy, ptt_policy);
     }
 #endif
     (void)config;
