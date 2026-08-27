@@ -153,6 +153,14 @@ public:
     /// fire-and-forget log lines rather than state the controller must apply.
     bool pop_status(std::string& out);
 
+    /// Surfaces a configuration problem that prevents start() from ever being
+    /// called (e.g. no self address/callsign configured — there's nothing to
+    /// sign requests as). The bridge already logs these via pal::log_warn for
+    /// the console/file log, but that's invisible to a GUI operator; this
+    /// puts the same message on the pop_status() drain so it also lands in
+    /// the ALE Log, same as every other Location Relay status line.
+    void report_config_error(const std::string& msg) { push_status(msg); }
+
 private:
     std::atomic<bool> running_{false};
     std::thread        worker_;
