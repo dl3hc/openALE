@@ -354,8 +354,18 @@ void LocationRelayService::register_identity() {
     } else if (res.status == 200) {
         update_reg_state(401, "pending_approval");
     } else if (res.status == 409) {
-        // Already approved (or revoked) — the subsequent ingest attempt will
-        // classify it precisely from the 2xx/403 it gets back.
+        // Already known to the server — its body tells us which: registering
+        // an approved or revoked callsign both 409, distinguished by
+        // {"error":"already_approved"|"revoked"}. Classify immediately
+        // rather than waiting for an ingest attempt that may never come
+        // (e.g. this station hasn't relayed anything yet) — otherwise the
+        // GUI is stuck showing "Status: unknown" indefinitely after an
+        // operator has already approved the identity.
+        if (res.body.find("revoked") != std::string::npos) {
+            update_reg_state(403, "revoked");
+        } else {
+            update_reg_state(200, res.body);  // already_approved (or any other 409 shape)
+        }
         pal::log_info("LocationRelay", "registration for %s: %s", cfg_.callsign.c_str(),
                        res.body.c_str());
     } else {
