@@ -244,7 +244,9 @@ function stationToFeature(row) {
       last_seen_at: row.last_seen_at,
       last_observer: row.last_observer,
       frequency_hz: row.last_frequency_hz,
-      report_count: row.report_count,
+      // Distinct observers currently reporting this station (see db.js's
+      // listMappedStations), not a raw ever-incrementing ingest count.
+      report_count: row.observer_count,
       state: stationState(row.last_seen_at),
     },
   };
@@ -465,7 +467,9 @@ async function handleListStations(_req, res) {
     last_seen_at: row.last_seen_at,
     last_observer: row.last_observer,
     frequency_hz: row.last_frequency_hz,
-    report_count: row.report_count,
+    // Distinct observers currently reporting this station (see db.js's
+    // listAllStations), not a raw ever-incrementing ingest count.
+    report_count: row.observer_count,
     state: stationState(row.last_seen_at),
   })));
 }
@@ -489,7 +493,10 @@ async function handleStationDetail(_req, res, id) {
     last_seen_at: row.last_seen_at,
     last_observer: row.last_observer,
     frequency_hz: row.last_frequency_hz,
-    report_count: row.report_count,
+    // Distinct observers currently reporting this station — same value as
+    // observer_count below, exposed under the report_count key too since
+    // that's the field name the map frontend already reads.
+    report_count: r.observer_count,
     state: stationState(row.last_seen_at),
     // Bounded: the N most-recent observers + the TOTAL count, so the client
     // can render "heard by <count> — showing <N> most recent" instead of a
