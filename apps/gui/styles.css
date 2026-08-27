@@ -1159,9 +1159,16 @@
       font-family: var(--mono); font-size: 8px; font-weight: 400; letter-spacing: 0.04em;
       color: var(--tx-mute); margin-top: 2px;
     }
-    /* Actions — spans both rows, revealed on row hover */
+    /* Actions — spans both rows, revealed on row hover. Delete (×) and
+       add-to-address-book pinned to opposite ends (space-between) instead of
+       sitting inline next to each other — at the small icon sizes this cell
+       had they were hard to tell apart and hard to click precisely; keeping
+       them at the extremes of the card gives each a much larger effective
+       hit area, not just a bigger icon. */
     .heard-table td.heard-actions {
-      grid-column: 4; grid-row: 1 / span 2; justify-self: end;
+      grid-column: 4; grid-row: 1 / span 2;
+      display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+      height: 100%; justify-self: end;
       opacity: 0; transition: opacity 0.12s;
     }
     .heard-table tr:hover td.heard-actions { opacity: 1; }
@@ -1175,11 +1182,12 @@
     .heard-table td:nth-child(9),
     .heard-table td:nth-child(10) { display: none; }
 
-    .heard-actions { text-align: center; white-space: nowrap; }
+    .heard-actions { text-align: center; }
     .heard-add { background: none; border: none; color: var(--tx-dim); cursor: pointer;
-                 font-size: 12px; padding: 0 1px; line-height: 1; vertical-align: middle;
-                 display: inline-flex; align-items: center; }
-    .heard-add:hover { color: var(--s-linked); }
+                 font-size: 15px; padding: 6px; line-height: 1; vertical-align: middle;
+                 display: inline-flex; align-items: center; justify-content: center;
+                 min-width: 26px; min-height: 26px; border-radius: var(--r-sm); }
+    .heard-add:hover { color: var(--s-linked); background: rgba(40,214,122,0.1); }
     .heard-add.heard-added { color: var(--s-linked); opacity: .6; cursor: default; }
     .heard-avail  { font-size: 8.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
                     text-align: center; padding: 2px 7px; border-radius: 20px; white-space: nowrap; }
@@ -1187,8 +1195,10 @@
     .heard-avail.ha-no  { color: var(--s-error);  background: rgba(255,82,82,0.12); border: 1px solid rgba(255,82,82,0.3); }
     .heard-avail.ha-unk { color: var(--tx-dim);   background: transparent; border: 1px solid var(--border); }
     .heard-del    { background: none; border: none; color: var(--tx-dim); cursor: pointer;
-                    font-size: 12px; padding: 0 2px; line-height: 1; }
-    .heard-del:hover { color: var(--s-error); }
+                    font-size: 15px; padding: 6px; line-height: 1;
+                    display: inline-flex; align-items: center; justify-content: center;
+                    min-width: 26px; min-height: 26px; border-radius: var(--r-sm); }
+    .heard-del:hover { color: var(--s-error); background: rgba(255,82,82,0.1); }
     .heard-empty  { color: var(--tx-dim); font-family: var(--mono); font-size: 10px; padding: 4px 2px; }
 
     /* Empty-state pattern shared by Heard Stations / Messages / Contacts —
