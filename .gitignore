@@ -61,3 +61,4 @@ temp/
 
 # Relay deployment howto — infra topology, local-only, never commit
 tools/location-relay-server/HOWTO.md
+tools/location-relay-server/ADMIN_APPROVAL_HOWTO.md
