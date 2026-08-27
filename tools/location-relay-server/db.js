@@ -160,15 +160,24 @@ function openDb(path) {
         last_seen_at = excluded.last_seen_at,
         report_count = report_count + 1
     `),
+    // "Reports" as shown to the client is the count of DISTINCT observers
+    // currently reporting this station, not the raw ever-incrementing
+    // stations.report_count (which never resets and would eventually read
+    // as thousands/millions for a long-lived station). station_observers
+    // rows already age out with the 2-day decay sweep (decayOlderThan below
+    // prunes on last_seen_at), so this count naturally decays with it too —
+    // no separate reset logic needed.
     listMappedStations: db.prepare(`
       SELECT source, last_lat, last_lon, last_altitude, last_altitude_unit,
-             last_position_timestamp, last_comment, last_seen_at, last_observer, last_frequency_hz, report_count
+             last_position_timestamp, last_comment, last_seen_at, last_observer, last_frequency_hz,
+             (SELECT COUNT(*) FROM station_observers so WHERE so.source = stations.source) AS observer_count
       FROM stations
       WHERE last_lat IS NOT NULL AND last_lon IS NOT NULL
       ORDER BY last_seen_at DESC
     `),
     listAllStations: db.prepare(`
-      SELECT source, last_lat, last_lon, last_seen_at, last_observer, last_frequency_hz, report_count
+      SELECT source, last_lat, last_lon, last_seen_at, last_observer, last_frequency_hz,
+             (SELECT COUNT(*) FROM station_observers so WHERE so.source = stations.source) AS observer_count
       FROM stations
       ORDER BY last_seen_at DESC
     `),
