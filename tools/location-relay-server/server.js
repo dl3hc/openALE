@@ -14,9 +14,14 @@
 // whose POSTs all arrive at once). Ingests are micro-batched into one
 // transaction per flush (~100x throughput vs per-statement auto-commit).
 //
+// Auth: per-callsign Ed25519 signing (see auth.js, identities.js). Each
+// openALE client generates its own keypair, self-registers via
+// POST /api/v1/register, and is approved by the operator with admin-cli.js
+// (list|approve|revoke) — no shared secret, no network-facing admin surface.
+//
 // Usage:
-//   LOCATION_API_TOKEN=<bearer-token> node server.js
-// Config (env, all optional except the token):
+//   node server.js
+// Config (env, all optional):
 //   PORT                     default 8766
 //   LOCATION_DB_PATH         default ./location-relay.sqlite
 //   LOCATION_TTL_ONLINE_MIN  default 15   (Konzept §14)
@@ -37,14 +42,15 @@
 
 const http = require('node:http');
 const https = require('node:https');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
+const { openIdentitiesDb } = require('./identities');
+const { verifyEd25519Auth } = require('./auth');
 
 const PORT = parseInt(process.env.PORT || '8766', 10);
 const DB_PATH = process.env.LOCATION_DB_PATH || path.join(__dirname, 'location-relay.sqlite');
-const TOKEN = process.env.LOCATION_API_TOKEN || '';
+const CALLSIGN_RE = /^[A-Z0-9/]{2,16}$/;
 const TTL_ONLINE_MIN = parseInt(process.env.LOCATION_TTL_ONLINE_MIN || '15', 10);
 const TTL_RECENT_MIN = parseInt(process.env.LOCATION_TTL_RECENT_MIN || '60', 10);
 const TTL_STALE_MIN  = parseInt(process.env.LOCATION_TTL_STALE_MIN  || '1440', 10);
@@ -89,24 +95,22 @@ function clientIp(req) {
 // Per-IP ingest rate limit (fixed window). Guards against one peer flooding
 // the event loop with POSTs. When LOCATION_TRUST_PROXY=1 all stations may
 // share the proxy IP — raise LOCATION_RATE_LIMIT_PER_MIN or set 0 to disable.
-const rateBuckets = new Map();  // ip -> { count, windowEnd }
-function rateLimitOk(ip) {
-  if (RATE_LIMIT_PER_MIN <= 0 || !ip) return true;
+const rateBuckets = new Map();  // "ip:callsign" -> { count, windowEnd }
+function rateLimitOk(key) {
+  if (RATE_LIMIT_PER_MIN <= 0 || !key) return true;
   const now = Date.now();
-  let b = rateBuckets.get(ip);
+  let b = rateBuckets.get(key);
   if (!b || now > b.windowEnd) {
     b = { count: 0, windowEnd: now + 60000 };
-    rateBuckets.set(ip, b);
+    rateBuckets.set(key, b);
   }
   b.count++;
   return b.count <= RATE_LIMIT_PER_MIN;
 }
 
-if (!TOKEN) {
-  log('ERROR', "LOCATION_API_TOKEN is not set — refusing to start with an open ingest endpoint.");
-  log('ERROR', "Set it to the same bearer token configured in openALE's Location Relay settings.");
-  process.exit(1);
-}
+// Own connection to the identities table (separate from the DB worker's
+// connection to reports/stations/station_observers — see identities.js).
+const identities = openIdentitiesDb(DB_PATH);
 
 // ── DB worker (owns the DatabaseSync; batches writes; serves reads) ─────────
 const worker = new Worker(path.join(__dirname, 'db-worker.js'), { workerData: { dbPath: DB_PATH } });
@@ -216,18 +220,6 @@ function readBody(req, limit) {
   });
 }
 
-// Constant-time bearer check (Konzept §10 — simple opaque token, but no
-// reason to leak comparison timing).
-function isAuthorized(req) {
-  const hdr = req.headers['authorization'] || '';
-  const m = /^Bearer\s+(.+)$/.exec(hdr);
-  if (!m) return false;
-  const given = Buffer.from(m[1]);
-  const want = Buffer.from(TOKEN);
-  if (given.length !== want.length) return false;
-  return crypto.timingSafeEqual(given, want);
-}
-
 function nowIso() { return new Date().toISOString(); }
 
 // Konzept §14's TTL table, applied to last_seen_at.
@@ -262,16 +254,29 @@ function stationToFeature(row) {
 
 async function handleIngest(req, res) {
   const ip = clientIp(req);
-  if (!rateLimitOk(ip)) {
+
+  // Extract the callsign from the Authorization header early (before the
+  // full signature check) purely to short-circuit revoked identities before
+  // they consume a rate-limit slot, and to key the rate-limit bucket per
+  // plan. This is NOT a trust decision — verifyEd25519Auth() below still
+  // does the real signature/timestamp/replay verification.
+  const authHeaderPeek = /^Ed25519\s+(\S+)$/.exec(req.headers['authorization'] || '');
+  const peekedCallsign = authHeaderPeek ? authHeaderPeek[1].toUpperCase() : null;
+  if (peekedCallsign) {
+    const peeked = identities.getIdentity(peekedCallsign);
+    if (peeked && peeked.status === 'revoked') {
+      log('WARN', `ingest 403 from ${ip} callsign=${peekedCallsign} (revoked)`);
+      sendJson(res, 403, { error: 'revoked' });
+      return;
+    }
+  }
+
+  if (!rateLimitOk(`${ip}:${peekedCallsign || 'anon'}`)) {
     log('WARN', `ingest 429 from ${ip} (rate limit ${RATE_LIMIT_PER_MIN}/min)`);
     sendJson(res, 429, { error: 'rate limit exceeded' });
     return;
   }
-  if (!isAuthorized(req)) {
-    log('WARN', `ingest 401 from ${ip} (bad/missing token)`);
-    sendJson(res, 401, { error: 'unauthorized' });
-    return;
-  }
+
   let raw;
   try {
     raw = await readBody(req, MAX_BODY_BYTES);
@@ -283,6 +288,16 @@ async function handleIngest(req, res) {
       log('WARN', `ingest 400 from ${ip} (read error: ${(e && e.message) || e})`);
       sendJson(res, 400, { error: 'bad request' });
     }
+    return;
+  }
+
+  const authResult = verifyEd25519Auth(req, raw, identities);
+  if (!authResult.ok) {
+    const status = authResult.reason === 'pending_approval' ? 401
+      : authResult.reason === 'revoked' ? 403
+      : 401;
+    log('WARN', `ingest ${status} from ${ip} callsign=${peekedCallsign || '?'} (${authResult.reason})`);
+    sendJson(res, status, { error: 'unauthorized', reason: authResult.reason });
     return;
   }
 
@@ -300,6 +315,16 @@ async function handleIngest(req, res) {
   if (!observer || !source) {
     log('WARN', `ingest 422 from ${ip} (missing observer/source)`);
     sendJson(res, 422, { error: 'observer and source are required' });
+    return;
+  }
+
+  // The actual fix for the shared-token spoofing gap: a signed request can
+  // only ever claim to be its own callsign as the observer. `source` stays
+  // free-form (a relay by definition forwards overheard third-party
+  // positions it did not sign itself).
+  if (observer.toUpperCase() !== authResult.callsign) {
+    log('WARN', `ingest 403 from ${ip} callsign=${authResult.callsign} (observer_mismatch: body.observer=${observer})`);
+    sendJson(res, 403, { error: 'observer_mismatch' });
     return;
   }
 
@@ -364,6 +389,62 @@ async function handleIngest(req, res) {
     log('ERROR', `ingest 500 from ${ip} source=${source} (batch: ${r.error || 'storage error'})`);
     sendJson(res, 500, { error: 'storage error' });
   }
+}
+
+// POST /api/v1/register {callsign, public_key} — public/unauthenticated by
+// design. The manual admin-cli.js approval step is the actual trust gate;
+// this endpoint just lands a pending record so the operator doesn't have to
+// hand-edit the database for a brand-new station.
+async function handleRegister(req, res) {
+  const ip = clientIp(req);
+  let raw;
+  try {
+    raw = await readBody(req, MAX_BODY_BYTES);
+  } catch (e) {
+    sendJson(res, e && e.code === 'TOO_LARGE' ? 413 : 400, { error: 'bad request' });
+    return;
+  }
+  let body;
+  try { body = JSON.parse(raw); } catch { body = null; }
+  if (!body || typeof body !== 'object') {
+    sendJson(res, 422, { error: 'malformed JSON body' });
+    return;
+  }
+  const callsign = typeof body.callsign === 'string' ? body.callsign.trim().toUpperCase() : '';
+  const publicKeyB64 = typeof body.public_key === 'string' ? body.public_key.trim() : '';
+  if (!CALLSIGN_RE.test(callsign)) {
+    sendJson(res, 422, { error: 'invalid callsign' });
+    return;
+  }
+  let keyBytes;
+  try { keyBytes = Buffer.from(publicKeyB64, 'base64'); } catch { keyBytes = null; }
+  if (!keyBytes || keyBytes.length !== 32) {
+    sendJson(res, 422, { error: 'public_key must be a base64-encoded 32-byte Ed25519 key' });
+    return;
+  }
+
+  const existing = identities.getIdentity(callsign);
+  if (existing) {
+    if (existing.status === 'approved') {
+      log('INFO', `register 409 from ${ip} callsign=${callsign} (already approved)`);
+      sendJson(res, 409, { error: 'already_approved' });
+      return;
+    }
+    if (existing.status === 'pending') {
+      log('INFO', `register 200 from ${ip} callsign=${callsign} (already pending, idempotent)`);
+      sendJson(res, 200, { status: 'pending' });
+      return;
+    }
+    // revoked: registering again does not silently re-enable it; the
+    // operator must explicitly approve again via admin-cli.js.
+    log('WARN', `register 409 from ${ip} callsign=${callsign} (revoked)`);
+    sendJson(res, 409, { error: 'revoked' });
+    return;
+  }
+
+  identities.insertPendingIdentity(callsign, publicKeyB64);
+  log('INFO', `register 201 from ${ip} callsign=${callsign} (pending admin approval)`);
+  sendJson(res, 201, { status: 'pending' });
 }
 
 async function handleListLocations(_req, res) {
@@ -457,7 +538,7 @@ function requestListener(req, res) {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type, Idempotency-Key',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, Idempotency-Key, X-Timestamp, X-Signature',
     });
     res.end();
     return;
@@ -473,6 +554,7 @@ function requestListener(req, res) {
 
   if (url.pathname === '/healthz') { sendJson(res, 200, { ok: true }); return; }
 
+  if (url.pathname === '/api/v1/register'  && req.method === 'POST') { handleRegister(req, res); return; }
   if (url.pathname === '/api/v1/locations' && req.method === 'POST') { handleIngest(req, res); return; }
   if (url.pathname === '/api/v1/locations' && req.method === 'GET')  { handleListLocations(req, res); return; }
   if (url.pathname === '/api/v1/stations'  && req.method === 'GET')  { handleListStations(req, res); return; }
@@ -540,7 +622,8 @@ process.on('SIGTERM', shutdown);
 server.listen(PORT, () => {
   const scheme = TLS_ENABLED ? 'https' : 'http';
   log('INFO', `Location Relay server listening on :${PORT} (bound 0.0.0.0, TLS ${TLS_ENABLED ? 'on' : 'off'})`);
-  log('INFO', `  Ingest:  POST ${scheme}://<host>:${PORT}/api/v1/locations  (Bearer token required)`);
+  log('INFO', `  Ingest:  POST ${scheme}://<host>:${PORT}/api/v1/locations  (Ed25519-signed, per-callsign)`);
+  log('INFO', `  Register: POST ${scheme}://<host>:${PORT}/api/v1/register  (lands 'pending'; approve via admin-cli.js)`);
   log('INFO', `  Map:     ${scheme}://<host>:${PORT}/`);
   log('INFO', `  DB:      ${DB_PATH}  (owned by db-worker.js)`);
   log('INFO', `  Log:     ${LOG_PATH || '(file disabled, stdout only)'}`);

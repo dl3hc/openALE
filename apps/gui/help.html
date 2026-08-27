@@ -228,7 +228,7 @@
           <div class="help-fieldgroup">
             <div class="ssec-sub-title" style="margin-bottom:8px">Location Relay</div>
             <p class="help-lead" style="margin-bottom:14px">Off by default. Forwards position reports received from other stations to an external HTTPS endpoint — for live mapping outside openALE. Your own transmitted positions are never forwarded.</p>
-            <div class="help-field"><span class="flabel">API Endpoint / Bearer Token / CA Certificate Path</span><p>The relay server's URL, an optional auth token, and (for a self-signed certificate) the path to the server's certificate for pinning.</p></div>
+            <div class="help-field"><span class="flabel">API Endpoint / Relay Identity / CA Certificate Path</span><p>The relay server's URL, this station's auto-generated Ed25519 identity (callsign + public key — self-registers with the server, then needs one-time operator approval via the server's admin-cli.js), and (for a self-signed certificate) the path to the server's certificate for pinning.</p></div>
             <div class="help-field"><span class="flabel">Forward positions received via</span><p>Choose which call types' position reports get forwarded — ALLCALL, Individual, Net, Group, and/or an established Linked session.</p></div>
             <div class="help-field"><span class="flabel">Position rounding</span><p>Default 6 = full precision. Lower to trade position accuracy for privacy (2 digits ≈ 1 km); also stabilizes deduplication of repeated reports.</p></div>
           </div>

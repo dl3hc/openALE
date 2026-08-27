@@ -22,7 +22,9 @@
 #include <unordered_set>
 
 #include "App/ale_station_config.h"
+#include "App/relay_identity.h"
 #include "Protocol/Message/ale_gpr.h"
+#include <optional>
 
 namespace ale {
 
@@ -86,9 +88,24 @@ public:
         CS_SERVER_ERROR  = 3,  ///< reachable but replied non-2xx (auth, 5xx, ...)
     };
 
+    /// Registration status of this instance's Ed25519 identity against the
+    /// configured relay server, inferred from the last ingest/register
+    /// response (no separate server read endpoint needed — see
+    /// apps/ale_bridge.cpp's LOCATION_SHARING_GET). Surfaced to the GUI so
+    /// "pending approval" is distinguishable from "signature rejected" from
+    /// "revoked" instead of one generic auth-failure status.
+    enum RegState : int {
+        REG_UNKNOWN  = 0,  ///< no registration/ingest attempt has completed yet
+        REG_PENDING  = 1,  ///< registered, awaiting operator approval (admin-cli.js)
+        REG_APPROVED = 2,  ///< an ingest has been accepted (2xx) or deduped (409)
+        REG_REJECTED = 3,  ///< server rejected the signature/identity for a reason other than pending/revoked
+        REG_REVOKED  = 4,  ///< operator revoked this callsign (admin-cli.js revoke)
+    };
+
     struct Config {
         std::string url;
-        std::string token;
+        std::string identity_key_path;  ///< location_relay_identity.key path (next to station.state)
+        std::string callsign;           ///< station's own callsign — the identity's signing name
         std::string ca_cert_path;  ///< pinned server cert (PEM); empty = system trust store
         uint16_t    queue_size       = 64;
         uint32_t    min_interval_sec = 30;  ///< per-source throttle
@@ -108,6 +125,16 @@ public:
 
     /// Snapshot of the current endpoint connection state (for LOCATION_SHARING_GET).
     int conn_state() const;
+
+    /// Snapshot of the current registration state (for LOCATION_SHARING_GET).
+    int registration_state() const;
+
+    /// This instance's callsign/public-key fingerprint, if an identity has
+    /// been loaded/created — empty strings before start() succeeds. The
+    /// public key is what an operator reads aloud/pastes to cross-check
+    /// against admin-cli.js's `list` output.
+    std::string identity_callsign() const;
+    std::string identity_public_key_b64() const;
 
     /// Drains the connection state if it has changed since the last call —
     /// returns true and sets out when a transition occurred. Call from the main
@@ -150,12 +177,28 @@ private:
     int conn_state_   = CS_UNKNOWN;   ///< current state (guarded by conn_mtx_)
     int last_drained_ = CS_UNKNOWN;   ///< last value handed to pop_conn_state()
 
+    mutable std::mutex reg_mtx_;
+    int reg_state_ = REG_UNKNOWN;     ///< guarded by reg_mtx_
+
+    // Identity loaded/created by start(); nullopt only before a successful
+    // start() (or if identity load/creation failed, in which case the worker
+    // thread never runs at all — see start()).
+    std::optional<RelayIdentity> identity_;
+
     /// Reclassify the connection from a send/probe outcome and, on transition,
     /// log via pal::logger + push a status line. reachable = a response came
     /// back at all (DNS/connect/TLS/timeout failures set it false).
     void update_conn_state(bool reached, int http_status);
+    /// Reclassify registration state from an ingest response's status/body
+    /// (server includes a "reason" field distinguishing pending/revoked/etc.
+    /// — see tools/location-relay-server/auth.js).
+    void update_reg_state(int http_status, const std::string& response_body);
     /// Periodic idle probe of cfg_.url (http_probe, no data written).
     void run_health_check();
+    /// Best-effort POST to /api/v1/register with this instance's public key.
+    /// Safe to call unconditionally at worker startup — the server treats an
+    /// already-approved or already-pending callsign idempotently.
+    void register_identity();
 
     void worker_loop();
     static std::string to_json(const LocationReport& r);

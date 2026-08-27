@@ -158,7 +158,7 @@ struct ALEStationConfig {
     // which is only effective once location_sharing_enabled (master) is set.
     bool        location_sharing_enabled         = false; ///< master opt-in
     std::string location_api_url                 = "";    ///< https://.../api/v1/locations
-    std::string location_api_token                = "";    ///< Bearer token, never logged
+    std::string location_relay_identity_path     = "";    ///< location_relay_identity.key path; default resolved alongside station.state
     std::string location_ca_cert_path            = "";    ///< pinned server cert (PEM); empty = system trust store
     bool        location_sharing_allcall         = true;  ///< forward ALLCALL-received GPRs
     bool        location_sharing_individual      = false; ///< forward individual-call GPRs

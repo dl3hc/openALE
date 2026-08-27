@@ -3802,10 +3802,17 @@ function syncLocationSharingFromBridge() {
     if (minInp && typeof r.min_interval_sec === 'number') minInp.value = r.min_interval_sec;
     const roundInp = document.getElementById('cfgLocShareRoundDigits');
     if (roundInp && typeof r.round_digits === 'number') roundInp.value = r.round_digits;
-    // Token is never echoed back (core-side privacy — see LOCATION_SHARING_GET);
-    // the hint just reflects whether one is already stored.
-    const tokenHint = document.getElementById('locShareTokenHint');
-    if (tokenHint) tokenHint.textContent = r.token_set ? 'A token is currently stored.' : 'No token stored.';
+    // Ed25519 identity replaces the shared bearer token — callsign + public
+    // key are shown directly (not secret; the seed never leaves the server
+    // over the wire or the identity_exists/callsign/public_key fields here).
+    const idHint = document.getElementById('locShareIdentityHint');
+    if (idHint) {
+      const callsign = r.identity_exists ? (r.callsign || '(unknown)') : '(not yet created)';
+      const status = r.registration_status || 'unknown';
+      idHint.textContent = `Callsign: ${callsign} · Status: ${status}`;
+    }
+    const pubkeyEl = document.getElementById('locShareIdentityPubkey');
+    if (pubkeyEl) pubkeyEl.textContent = r.public_key ? `Public key: ${r.public_key}` : '';
     renderLocStatus(r.enabled, r.running, r.conn_state);
     onLocShareEnabledChange();
   });
@@ -3816,7 +3823,6 @@ function applyLocationSharingToBridge() {
   bridgeSend('LOCATION_SHARING_SET', {
     enabled:          !!document.getElementById('cfgLocShareEnabled')?.checked,
     url:              (document.getElementById('cfgLocShareUrl')?.value || '').trim(),
-    token:            document.getElementById('cfgLocShareToken')?.value || '',
     ca_cert_path:     (document.getElementById('cfgLocShareCaCertPath')?.value || '').trim(),
     allcall:          !!document.getElementById('cfgLocShareAllcall')?.checked,
     individual:       !!document.getElementById('cfgLocShareIndividual')?.checked,
@@ -3827,13 +3833,23 @@ function applyLocationSharingToBridge() {
     round_digits:     parseInt(document.getElementById('cfgLocShareRoundDigits')?.value || '6', 10),
     include_comment:  !!document.getElementById('cfgLocShareIncludeComment')?.checked,
   }, (r) => {
-    const tokenInp = document.getElementById('cfgLocShareToken');
-    if (tokenInp) tokenInp.value = '';   // never keep the token in the DOM after sending it
     if (!r || !r.ok) {
       if (statusEl) statusEl.textContent = 'Failed: ' + ((r && r.error) || 'apply error');
       return;
     }
     syncLocationSharingFromBridge();
+  });
+}
+
+// "Regenerate Identity" button — deletes the persisted Ed25519 keypair so
+// the core generates a fresh one and re-registers as pending with the relay
+// server. Used to rotate a compromised or ambiguous identity.
+function onLocShareRegenerateIdentity() {
+  if (!bridgeConnected) return;
+  if (!confirm('Regenerate this station\'s relay identity? The old key is discarded and the ' +
+               'server will require re-approval (admin-cli.js approve <callsign>).')) return;
+  bridgeSend('LOCATION_SHARING_SET', { regenerate_identity: true }, (r) => {
+    if (r && r.ok) syncLocationSharingFromBridge();
   });
 }
 

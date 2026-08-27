@@ -32,6 +32,19 @@ bool parse_url(const std::string& url, std::string& scheme, std::string& host,
     return !host.empty();
 }
 
+// Builds the three Ed25519 auth header lines (each "Name: value\r\n") for
+// `auth`, or an empty string if auth.callsign is empty (unauthenticated
+// request — e.g. the public register/probe cases). Shared by both platform
+// backends so the wire format can't drift between them.
+std::string build_relay_headers(const ale::RelayAuth& auth) {
+    if (auth.callsign.empty()) return {};
+    std::string h;
+    h += "Authorization: Ed25519 " + auth.callsign + "\r\n";
+    h += "X-Timestamp: " + auth.timestamp + "\r\n";
+    h += "X-Signature: " + auth.signature_b64 + "\r\n";
+    return h;
+}
+
 } // namespace
 
 namespace ale {
@@ -117,7 +130,7 @@ bool winhttp_cert_pin_matches(HINTERNET req, const std::string& ca_cert_path) {
 
 } // namespace
 
-bool http_post_json(const std::string& url, const std::string& token,
+bool http_post_json(const std::string& url, const RelayAuth& auth,
                      const std::string& json_body, const std::string& ca_cert_path,
                      HttpPostResult& out) {
     std::string scheme, host, path;
@@ -155,11 +168,12 @@ bool http_post_json(const std::string& url, const std::string& token,
     if (secure && !ca_cert_path.empty()) winhttp_allow_unknown_ca(req);
 
     std::wstring headers = L"Content-Type: application/json\r\n";
-    if (!token.empty()) {
-        // Bearer tokens are ASCII (base64/opaque) — this narrow->wide widening
-        // is safe and deliberately not a full UTF-8 conversion.
-        const std::wstring wtoken(token.begin(), token.end());
-        headers += L"Authorization: Bearer " + wtoken + L"\r\n";
+    {
+        // Ed25519 auth headers are ASCII (callsign/ISO8601/base64) — this
+        // narrow->wide widening is safe and deliberately not a full UTF-8
+        // conversion.
+        const std::string relay_headers = build_relay_headers(auth);
+        headers += std::wstring(relay_headers.begin(), relay_headers.end());
     }
 
     bool completed = false;
@@ -194,7 +208,7 @@ bool http_post_json(const std::string& url, const std::string& token,
 
 // Connection health check (GET, no body). Same reachability contract as
 // http_post_json: true iff a response round-tripped, regardless of status.
-bool http_probe(const std::string& url, const std::string& token,
+bool http_probe(const std::string& url, const RelayAuth& auth,
                  const std::string& ca_cert_path, HttpPostResult& out) {
     std::string scheme, host, path;
     uint16_t port = 0;
@@ -231,9 +245,9 @@ bool http_probe(const std::string& url, const std::string& token,
     if (secure && !ca_cert_path.empty()) winhttp_allow_unknown_ca(req);
 
     std::wstring headers;
-    if (!token.empty()) {
-        const std::wstring wtoken(token.begin(), token.end());
-        headers += L"Authorization: Bearer " + wtoken + L"\r\n";
+    {
+        const std::string relay_headers = build_relay_headers(auth);
+        headers += std::wstring(relay_headers.begin(), relay_headers.end());
     }
 
     bool completed = false;
@@ -451,7 +465,7 @@ void parse_http_response(const std::string& raw, HttpPostResult& out) {
 
 } // namespace
 
-bool http_post_json(const std::string& url, const std::string& token,
+bool http_post_json(const std::string& url, const RelayAuth& auth,
                      const std::string& json_body, const std::string& ca_cert_path,
                      HttpPostResult& out) {
     std::string scheme, host, path;
@@ -491,7 +505,7 @@ bool http_post_json(const std::string& url, const std::string& token,
         if (ready) {
             std::string req = "POST " + path + " HTTP/1.0\r\nHost: " + host + "\r\n";
             req += "Content-Type: application/json\r\n";
-            if (!token.empty()) req += "Authorization: Bearer " + token + "\r\n";
+            req += build_relay_headers(auth);
             req += "Content-Length: " + std::to_string(json_body.size()) + "\r\n";
             req += "Connection: close\r\n\r\n";
             req += json_body;
@@ -509,7 +523,7 @@ bool http_post_json(const std::string& url, const std::string& token,
 
 // Connection health check (GET, no body). Same TLS/pinning treatment as
 // http_post_json above.
-bool http_probe(const std::string& url, const std::string& token,
+bool http_probe(const std::string& url, const RelayAuth& auth,
                  const std::string& ca_cert_path, HttpPostResult& out) {
     std::string scheme, host, path;
     uint16_t port = 0;
@@ -547,7 +561,7 @@ bool http_probe(const std::string& url, const std::string& token,
         }
         if (ready) {
             std::string req = "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\n";
-            if (!token.empty()) req += "Authorization: Bearer " + token + "\r\n";
+            req += build_relay_headers(auth);
             req += "Connection: close\r\n\r\n";
 
             const std::string raw = posix_transact(s, ssl, req);

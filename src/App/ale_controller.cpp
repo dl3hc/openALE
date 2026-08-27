@@ -1003,7 +1003,7 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.position_report_comment      = cfg.position_report_comment;
     config_.location_sharing_enabled         = cfg.location_sharing_enabled;
     config_.location_api_url                 = cfg.location_api_url;
-    config_.location_api_token               = cfg.location_api_token;
+    config_.location_relay_identity_path     = cfg.location_relay_identity_path;
     config_.location_ca_cert_path            = cfg.location_ca_cert_path;
     config_.location_sharing_allcall         = cfg.location_sharing_allcall;
     config_.location_sharing_individual      = cfg.location_sharing_individual;
@@ -3920,7 +3920,11 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "position_report_comment=" << config_.position_report_comment << "\n";
     f << "location_sharing_enabled=" << (config_.location_sharing_enabled ? 1 : 0) << "\n";
     f << "location_api_url=" << config_.location_api_url << "\n";
-    f << "location_api_token=" << config_.location_api_token << "\n";
+    // Ed25519 identity replaces the old shared bearer token (direct cutover —
+    // see docs/LOCATION_SHARING_CONCEPT.md). Nothing token-shaped is ever
+    // written here again; the identity itself lives in
+    // location_relay_identity.key, not station.state.
+    f << "location_relay_identity_path=" << config_.location_relay_identity_path << "\n";
     f << "location_ca_cert_path=" << config_.location_ca_cert_path << "\n";
     f << "location_sharing_allcall=" << (config_.location_sharing_allcall ? 1 : 0) << "\n";
     f << "location_sharing_individual=" << (config_.location_sharing_individual ? 1 : 0) << "\n";
@@ -4132,7 +4136,11 @@ bool ALEController::import_settings(const std::string& path, bool follow_channel
         } else if (key == "location_api_url") {
             cfg.location_api_url = val;
         } else if (key == "location_api_token") {
-            cfg.location_api_token = val;
+            // Obsolete (pre-Ed25519-cutover) key — tolerated so upgrading
+            // from an older station.state doesn't fail to parse, but the
+            // value is never used or written back out.
+        } else if (key == "location_relay_identity_path") {
+            cfg.location_relay_identity_path = val;
         } else if (key == "location_ca_cert_path") {
             cfg.location_ca_cert_path = val;
         } else if (key == "location_sharing_allcall") {
