@@ -45,8 +45,8 @@ for attribution.
 ## Implementation Status
 
 openALE currently implements the core, basic **2G ALE** functions: scanning, sounding,
-individual calling, linking/handshake, LQA (link quality assessment), and AMD orderwire
-messaging.
+individual calling, linking/handshake, LQA (link quality assessment), AMD orderwire
+messaging and HFLINK GPR format position reports.
 
 The following are **not yet implemented** and remain open items:
 
