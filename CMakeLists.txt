@@ -321,6 +321,7 @@ add_library(ale_pal
     src/PAL/events.cpp
     src/PAL/timer.cpp
     src/PAL/radio.cpp
+    src/PAL/paths.cpp
 )
 
 target_include_directories(ale_pal PUBLIC
