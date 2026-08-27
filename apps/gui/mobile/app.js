@@ -2567,7 +2567,7 @@ function setRadioCtrlEnabled(on) {
     const p = document.getElementById('radioPanel');
     if (p && p.classList.contains('open')) {
       p.classList.remove('open');
-      const t = document.getElementById('radioToggle'); if (t) t.innerHTML = icon('radio',14) + hdrBtnLbl('Radio', false);
+      const caret = document.getElementById('radioCaret'); if (caret) caret.textContent = '▸';
     }
   }
 }
@@ -3194,9 +3194,21 @@ function updateSoundBtn() {
   // The button is now a dropdown toggle (always enabled to open); the single-
   // channel action inside is gated by the bridge reply. Reflect any active
   // periodic-sounding net (= activeNet) in the label.
+  //
+  // Only the label/caret text nodes are mutated here — never b.innerHTML.
+  // Rebuilding the button's own subtree from an event handler triggered ON
+  // that same button orphans whatever child element was e.target (the click
+  // that just fired is still bubbling up to the document-level outside-click
+  // listener below, which checks wrap.contains(e.target); an orphaned target
+  // fails that check and the panel we just opened closes itself on the same
+  // click). netBtn never had this bug because it only ever touches its
+  // separate #netBtnLbl/#netCaret spans by id — do the same here.
   const autoOn = !!activeNet && !!(document.getElementById('cfgAutoSound')?.checked);
   b.disabled = false;
-  b.innerHTML = icon('volume2',14) + hdrBtnLbl(autoOn ? activeNet : 'Sound', soundPanelOpen());
+  const lbl = document.getElementById('soundBtnLbl');
+  if (lbl) lbl.textContent = autoOn ? activeNet : 'Sound';
+  const caret = document.getElementById('soundCaret');
+  if (caret) caret.textContent = soundPanelOpen() ? '▾' : '▸';
   b.title = autoOn
     ? 'Periodic sounding on ' + activeNet + ' every ' + soundingIntervalSec() + ' s'
     : 'Transmit a sounding (LQA probe). Single channel, or periodic over a net.';
@@ -3214,11 +3226,9 @@ function soundPanelOpen() {
 
 function toggleSoundPanel() {
   const p = document.getElementById('soundPanel');
-  const open = p.classList.toggle('open');
-  const autoOn = !!activeNet && !!(document.getElementById('cfgAutoSound')?.checked);
-  document.getElementById('soundBtn').innerHTML =
-    icon('volume2',14) + hdrBtnLbl(autoOn ? activeNet : 'Sound', open);
-  if (open) renderSoundPanel();
+  p.classList.toggle('open');
+  updateSoundBtn();  // label/caret only — see comment there on why not innerHTML
+  if (soundPanelOpen()) renderSoundPanel();
 }
 
 // Build the per-net list from the configured nets + channels. Each row enables
@@ -4143,7 +4153,11 @@ function updateRadioDisplay() {
 
 function toggleRadioPanel() {
   const open = document.getElementById('radioPanel').classList.toggle('open');
-  document.getElementById('radioToggle').innerHTML = icon('radio',14) + hdrBtnLbl('Radio', open);
+  // Caret only — never rebuild radioToggle's innerHTML from its own click
+  // handler, see the comment on updateSoundBtn() for why that self-closes
+  // the panel it just opened.
+  const caret = document.getElementById('radioCaret');
+  if (caret) caret.textContent = open ? '▾' : '▸';
   if (open) updateRadioDisplay();
 }
 // "⋯ More" action sheet — collects secondary header controls (Sound / Radio /
@@ -4191,7 +4205,8 @@ document.addEventListener('click', e => {
   const panel = document.getElementById('radioPanel');
   if (panel && panel.classList.contains('open') && wrap && !wrap.contains(e.target) && !fromMore) {
     panel.classList.remove('open');
-    document.getElementById('radioToggle').innerHTML = icon('radio',14) + hdrBtnLbl('Radio', false);
+    const caret = document.getElementById('radioCaret');
+    if (caret) caret.textContent = '▸';
   }
   const swrap = document.getElementById('soundWrap');
   const spanel = document.getElementById('soundPanel');
