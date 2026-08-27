@@ -157,7 +157,10 @@ struct ALEStationConfig {
     // docs/LOCATION_SHARING_CONCEPT.md §13. Off by default except allcall,
     // which is only effective once location_sharing_enabled (master) is set.
     bool        location_sharing_enabled         = false; ///< master opt-in
-    std::string location_api_url                 = "";    ///< https://.../api/v1/locations
+    /// The standard community openALE relay — deliberately pre-set so an
+    /// operator gets there by default. Only overwriting this field in the
+    /// Location Relay settings sends reports elsewhere instead.
+    std::string location_api_url = "https://api.openale.dev/api/v1/locations";
     std::string location_relay_identity_path     = "";    ///< location_relay_identity.key path; default resolved alongside station.state
     std::string location_ca_cert_path            = "";    ///< pinned server cert (PEM); empty = system trust store
     bool        location_sharing_allcall         = true;  ///< forward ALLCALL-received GPRs
