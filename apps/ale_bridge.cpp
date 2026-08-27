@@ -586,6 +586,9 @@ static void restart_location_services(BridgeCtx& ctx, ALEController& ctrl) {
                 pal::log_warn("openALE",
                                "Location Relay: no self address configured — cannot create a "
                                "signing identity, service not started");
+                ctx.loc_svc->report_config_error(
+                    "Location Relay: not started — configure this station's own callsign "
+                    "(Self Address) first, it's needed to sign relay requests");
             } else {
                 pal::log_info("openALE", "Location Relay: starting (%s, identity=%s)",
                                lcfg.url.c_str(), lcfg.callsign.c_str());
