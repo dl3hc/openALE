@@ -203,7 +203,7 @@
 
       <!-- Sounding — dropdown (single current channel / periodic multi-channel per net) -->
       <div class="radio-wrap" id="soundWrap">
-        <button class="hdr-btn" id="soundBtn" onclick="toggleSoundPanel()" title="Transmit a sounding (LQA probe). Single channel, or periodic multi-channel over a net."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg><span class="hdr-btn-lbl">Sound</span><span class="caret">▸</span></button>
+        <button class="hdr-btn" id="soundBtn" onclick="toggleSoundPanel()" title="Transmit a sounding (LQA probe). Single channel, or periodic multi-channel over a net."><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg><span class="hdr-btn-lbl" id="soundBtnLbl">Sound</span><span class="caret" id="soundCaret">▸</span></button>
         <div class="radio-panel" id="soundPanel">
           <div class="radio-head">Sounding <span>CHANNEL SELECTION</span></div>
           <div class="sound-body">
@@ -223,7 +223,7 @@
 
       <!-- Manual radio control — VFO dropdown -->
       <div class="radio-wrap" id="radioWrap">
-        <button class="hdr-btn" id="radioToggle" onclick="toggleRadioPanel()" title="Manually control radio assets"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg><span class="hdr-btn-lbl">Radio</span><span class="caret">▸</span></button>
+        <button class="hdr-btn" id="radioToggle" onclick="toggleRadioPanel()" title="Manually control radio assets"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg><span class="hdr-btn-lbl">Radio</span><span class="caret" id="radioCaret">▸</span></button>
         <div class="radio-panel" id="radioPanel">
           <div class="radio-head">Radio Control <span>VFO · MANUAL TUNE</span></div>
 
