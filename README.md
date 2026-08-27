@@ -51,7 +51,7 @@ messaging.
 The following are **not yet implemented** and remain open items:
 
 - **AQC-ALE** extensions (Data Elements, traffic classes, slotted response)
-- **ALLCALL / ANYCALL / NETCALL** — group and broadcast call types
+- **~~ALLCALL~~ / ANYCALL / NETCALL** — group and broadcast call types
 - **DBM** (Data Block Message) and **DTM** (Data Text Message)
 - Advanced ALE commands (extended command set beyond basic calling/linking)
 - **Digital Voice** modes
