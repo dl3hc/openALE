@@ -49,16 +49,14 @@ void LQAMetrics::add_sample(const MetricsSample& sample,
     // A.5.4.1.1: accumulate non-unanimous vote count per received word
     ber_acc_.add_word(sample.non_unanimous_count, sample.golay_uncorrectable);
 
-    // Add to averaging window
     samples_.push_back(sample);
 
-    // Store context for database update
     accumulated_.frequency_hz = frequency_hz;
     accumulated_.remote_station = remote_station;
     accumulated_.total_fec_errors += sample.fec_errors_corrected;
     accumulated_.total_words++;
 
-    // When window is full, compute averages and update database
+    // Window full: compute averages + update DB
     if (samples_.size() >= config_.averaging_window) {
         update_database(frequency_hz, remote_station);
 
@@ -75,18 +73,16 @@ void LQAMetrics::update_database(uint32_t frequency_hz,
         return;
     }
     
-    // Compute averaged metrics
     MetricsSample avg = compute_average();
-    
+
     // A.5.4.1.1: BER = averaged non-unanimous vote count over all received words (0–48)
     float ber = static_cast<float>(ber_acc_.ber_score());
-    
-    // A.5.4.1.2: SINAD = time-averaged Goertzel measurement over signal duration.
-    // avg.sinad_db is already averaged across all received words (per compute_average()).
+
+    // A.5.4.1.2: SINAD = time-averaged Goertzel measurement over signal duration;
+    // avg.sinad_db already averaged across all received words (compute_average()).
     // Clamp to LQA code [0,30] before storing (REQ-CHAN-013).
     float sinad_code = static_cast<float>(sinad_to_lqa_code(avg.sinad_db));
 
-    // Detect multipath if enabled
     float multipath_score = 0.0f;
     if (config_.enable_multipath) {
         std::vector<float> signal_samples;
@@ -95,15 +91,13 @@ void LQAMetrics::update_database(uint32_t frequency_hz,
         }
         multipath_score = detect_multipath(signal_samples);
     }
-    
-    // Measure noise floor
+
     std::vector<float> noise_samples;
     for (const auto& s : samples_) {
         noise_samples.push_back(s.noise_power_dbm);
     }
     float noise_floor = measure_noise_floor(noise_samples);
-    
-    // Update database with extended metrics
+
     database_->update_entry_extended(
         frequency_hz,
         remote_station,
@@ -150,25 +144,16 @@ MetricsSample LQAMetrics::compute_average() const {
     avg.noise_power_dbm = sum_noise / n;
     avg.multipath_delay_ms = sum_multipath / n;
     
-    // Use most recent timestamp
-    avg.timestamp_ms = samples_.back().timestamp_ms;
+    avg.timestamp_ms = samples_.back().timestamp_ms;  // most recent
     
     return avg;
 }
 
 float LQAMetrics::calculate_sinad(float snr_db, float distortion_db) const {
-    // SINAD = 10 * log10((S+N+D)/(N+D))
-    // Where S = signal, N = noise, D = distortion
-    
-    // Convert SNR to linear
+    // SINAD = 10*log10((S+N+D)/(N+D)); S=signal, N=noise, D=distortion.
+    // N normalized to 1 (relative to signal at given SNR); D also relative to signal.
     float snr_linear = std::pow(10.0f, snr_db / 10.0f);
-    
-    // Assume distortion is relative to signal
     float distortion_linear = std::pow(10.0f, distortion_db / 10.0f);
-    
-    // SINAD calculation
-    // S+N+D = S + N + D (where N is 1 relative to signal at SNR)
-    // N+D = 1 + D (relative to signal)
     float signal_plus_noise_plus_distortion = snr_linear + 1.0f + distortion_linear;
     float noise_plus_distortion = 1.0f + distortion_linear;
     
@@ -189,12 +174,9 @@ float LQAMetrics::estimate_ber(int errors_corrected, int total_words) const {
         return 0.0f;
     }
     
-    // Golay (24,12) can correct up to 3 bit errors per 24-bit codeword
-    // Each ALE word has 24 bits
-    // BER estimation: errors / (total_bits)
-    
-    // Conservative estimate: assume each correction was 1 bit error
-    // (actual could be 1-3 bits)
+    // Golay(24,12) corrects up to 3 bit errors per 24-bit ALE word.
+    // BER = errors / total_bits; conservatively assumes 1 bit error per
+    // correction (actual could be 1-3 bits).
     float total_bits = total_words * 24.0f;
     float estimated_bit_errors = static_cast<float>(errors_corrected);
     
@@ -209,28 +191,21 @@ float LQAMetrics::detect_multipath(const std::vector<float>& samples) const {
         return 0.0f;
     }
     
-    // Multipath detection via signal variance
-    // High variance in signal power indicates multipath fading
-    
-    // Calculate mean
+    // Multipath detection via signal variance: high variance = multipath fading.
     float mean = std::accumulate(samples.begin(), samples.end(), 0.0f) / samples.size();
-    
-    // Calculate variance
+
     float variance = 0.0f;
     for (float sample : samples) {
         float diff = sample - mean;
         variance += diff * diff;
     }
     variance /= samples.size();
-    
-    // Standard deviation
+
     float std_dev = std::sqrt(variance);
-    
-    // Normalize to 0-1 scale
-    // Threshold: > 3 dB std dev indicates significant multipath
+
+    // Normalize to 0-1; threshold >3dB std dev = significant multipath.
     float multipath_score = std_dev / config_.multipath_threshold_db;
-    
-    // Clamp to 0-1
+
     return std::min(1.0f, std::max(0.0f, multipath_score));
 }
 
@@ -239,8 +214,7 @@ float LQAMetrics::measure_noise_floor(const std::vector<float>& samples) const {
         return -120.0f;  // Default very low noise floor
     }
     
-    // Noise floor is the minimum power level observed
-    float min_power = *std::min_element(samples.begin(), samples.end());
+    float min_power = *std::min_element(samples.begin(), samples.end());  // noise floor = min observed power
     
     return min_power;
 }

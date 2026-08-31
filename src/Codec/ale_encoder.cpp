@@ -8,16 +8,16 @@ namespace ale {
 
 SymbolFrame ALEEncoder::encode_tx49(uint64_t tx49)
 {
-    // Pack the 49-bit wire word into 49 8-FSK symbol values (MSB-first per symbol).
+    // Pack the 49-bit wire word into 49 8-FSK symbol values (MSB-first/symbol).
     //
-    // The on-air stream is three identical copies of tx49 concatenated:
+    // On-air stream = 3 identical copies of tx49 concatenated:
     //   stream[i] = tx49[i % 49]  for i in [0, 147)
     //
     // Symbol k covers stream bits [3k, 3k+1, 3k+2]:
     //   sym[k] = stream[3k]<<2 | stream[3k+1]<<1 | stream[3k+2]
     //
-    // Since stream[i] = tx49[i % 49], the modulo wraps automatically at
-    // k = 17 (3*17 = 51 ≡ 2 mod 49) — confirmed by the reference modem.c.
+    // Since stream[i] = tx49[i % 49], modulo wraps automatically at k=17
+    // (3*17=51 ≡ 2 mod 49) — confirmed against reference modem.c.
     SymbolFrame frame{};
     for (uint32_t k = 0; k < SYMBOLS_PER_WORD; ++k) {
         uint8_t sym = 0;

@@ -27,24 +27,20 @@ bool MessageAssembler::add_word(const ALEWord& word) {
     }
     
     uint32_t current_time = word.timestamp_ms;
-    
-    // Check for timeout if assembly active
+
     if (active && check_timeout(current_time)) {
         reset();  // Timeout, start fresh
     }
-    
-    // Start new message or add to existing
+
     if (!active) {
         current_message.start_time_ms = current_time;
         active = true;
     }
-    
+
     current_words.push_back(word);
     last_word_time_ms = current_time;
-    
-    // Check if sequence is complete
+
     if (is_sequence_complete(current_words)) {
-        // Finalize message
         current_message.words = current_words;
         current_message.duration_ms = current_time - current_message.start_time_ms;
         current_message.call_type = determine_call_type(current_words);
@@ -83,16 +79,15 @@ CallType MessageAssembler::determine_call_type(const std::vector<ALEWord>& words
 bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
     if (words.empty()) return false;
 
-    // A.5.2.3 / A.5.5.4.4: a frame concludes only on TIS or TWAS. FROM is a
-    // mid-frame quick-ID (e.g. an AllCall/AnyCall's "address beginning with a
-    // FROM word immediately after the calling cycle"), never a terminator —
-    // a prior `has_to && has_from` fallback treated it as one and finalized
-    // the frame the instant a FROM word appeared, mid-frame, before any
-    // CMD/DATA/REP message content (notably AMD payloads, A.5.7.2.2) or the
-    // real conclusion had arrived. That split single frames into two bogus
-    // fragments (e.g. an AMD-in-calling-frame got misclassified as
-    // INDIVIDUAL + SOUNDING instead of AMD). Removed; add_word()'s existing
-    // timeout/reset already reclaims a frame that never concludes.
+    // A.5.2.3/A.5.5.4.4: a frame concludes only on TIS or TWAS. FROM is a
+    // mid-frame quick-ID (e.g. AllCall/AnyCall address starting with FROM
+    // right after the calling cycle), never a terminator. A prior
+    // `has_to && has_from` fallback wrongly finalized the frame the instant
+    // FROM appeared, before CMD/DATA/REP content (e.g. AMD payloads,
+    // A.5.7.2.2) or the real conclusion arrived — splitting single frames
+    // into bogus fragments (e.g. AMD-in-calling-frame misclassified as
+    // INDIVIDUAL+SOUNDING). Removed; add_word()'s timeout/reset already
+    // reclaims a frame that never concludes.
     for (const auto& w : words) {
         if (w.type == PreambleType::TIS || w.type == PreambleType::TWAS)
             return true;
@@ -101,13 +96,11 @@ bool MessageAssembler::is_sequence_complete(const std::vector<ALEWord>& words) {
 }
 
 void MessageAssembler::extract_addresses(const std::vector<ALEWord>& words, ALEMessage& msg) {
-    // ALE 2G multi-word addresses: a preamble word (TO/TIS/etc.) carries the
-    // first 3 chars; consecutive DATA/REP words carry chars 4-6, 7-9, etc.
-    // Sounding exception: DATA suffix words appear BEFORE the TIS prefix word,
-    // so we buffer them as "orphan_data" and prepend once TIS arrives.
-    // AMD exception: after CMD the DATA/REP words are message content, not
-    // address extension — the past_any_preamble flag prevents them from
-    // contaminating orphan_data.
+    // ALE 2G multi-word addresses: preamble word (TO/TIS/etc.) carries chars
+    // 1-3; DATA/REP words carry chars 4-6, 7-9, etc. Sounding exception: DATA
+    // suffix words precede the TIS prefix word, so buffer as "orphan_data" and
+    // prepend once TIS arrives. AMD exception: after CMD, DATA/REP are message
+    // content not address extension — past_any_preamble stops them contaminating orphan_data.
     enum class Ctx { NONE, DEST, SRC } ctx = Ctx::NONE;
     std::string current_addr;
     std::string orphan_data;    // DATA/REP before first preamble (sounding suffix)
@@ -117,11 +110,11 @@ void MessageAssembler::extract_addresses(const std::vector<ALEWord>& words, ALEM
         if (a.empty()) return;
         for (auto& ex : msg.to_addresses) {
             if (ex.size() <= a.size() && a.substr(0, ex.size()) == ex) {
-                ex = a;   // Replace shorter prefix-only entry with full address
+                ex = a;   // replace shorter prefix-only entry with full address
                 return;
             }
             if (a.size() < ex.size() && ex.substr(0, a.size()) == a)
-                return;   // New entry is a prefix of an existing longer entry — skip
+                return;   // new entry is a prefix of an existing longer entry — skip
         }
         msg.to_addresses.push_back(a);
     };
@@ -146,8 +139,8 @@ void MessageAssembler::extract_addresses(const std::vector<ALEWord>& words, ALEM
             case PreambleType::FROM:
             case PreambleType::TIS:
                 finalize_current();
-                // Prepend orphaned DATA only if we haven't seen a dest preamble
-                // (sounding sends DATA suffix before TIS; AMD sends DATA after CMD)
+                // Prepend orphaned DATA only if no dest preamble seen yet
+                // (sounding: DATA suffix before TIS; AMD: DATA after CMD)
                 current_addr = trim_ale_address(word.address) + orphan_data;
                 orphan_data.clear();
                 ctx = Ctx::SRC;
@@ -173,9 +166,8 @@ void MessageAssembler::extract_addresses(const std::vector<ALEWord>& words, ALEM
 }
 
 void MessageAssembler::extract_data(const std::vector<ALEWord>& words, ALEMessage& msg) {
-    // Collect orderwire message content: CMD starts the message section;
-    // subsequent DATA/REP words continue it. DATA/REP before any CMD are
-    // address extensions and must not be included.
+    // Collect orderwire content: CMD starts the message section, subsequent
+    // DATA/REP continue it. DATA/REP before any CMD are address extensions — excluded.
     bool collecting = false;
     for (const auto& word : words) {
         if (word.type == PreambleType::CMD) {
@@ -231,11 +223,11 @@ bool CallTypeDetector::is_individual_call(const std::vector<ALEWord>& words) {
 }
 
 bool CallTypeDetector::is_net_call(const std::vector<ALEWord>& words) {
-    // Net calls and individual calls are structurally identical at the frame level
-    // (TO[addr] × N + TIS[self] in both cases).  Distinguishing them requires
-    // comparing the TO address against a net-address registry — context not
-    // available here.  The previous TWAS heuristic was wrong: TWAS also appears
-    // in rejection responses and link-termination frames, not just net conclusions.
+    // Net calls and individual calls are structurally identical at frame level
+    // (TO[addr]×N + TIS[self] in both). Distinguishing requires comparing the TO
+    // address against a net-address registry — unavailable here. Previous TWAS
+    // heuristic was wrong: TWAS also appears in rejection responses and
+    // link-termination frames, not just net conclusions.
     (void)words;
     return false;
 }
@@ -270,9 +262,9 @@ bool CallTypeDetector::is_amd(const std::vector<ALEWord>& words) {
         if (word.type == PreambleType::CMD)  has_cmd  = true;
     }
 
-    // AMD = addressed call (TO) with source (TIS or FROM) and a CMD orderwire word.
-    // Individual calls with long callsigns also carry DATA words (address continuation)
-    // but never CMD — using has_cmd prevents misclassifying them as AMD.
+    // AMD = addressed call (TO) with source (TIS/FROM) and a CMD orderwire word.
+    // Individual calls with long callsigns also carry DATA (address continuation)
+    // but never CMD — has_cmd prevents misclassifying them as AMD.
     return has_to && (has_tis || has_from) && has_cmd;
 }
 

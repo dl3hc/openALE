@@ -9,9 +9,8 @@
 
 namespace ale {
 
-// Build a CMD AMD word: CMD preamble (110) with Expanded-64 payload (A.5.7.2.2).
-// encode_ascii(DATA) uses the Expanded-64 encoding — same 21-bit payload as DATA/REP
-// but transmitted with the CMD preamble so receivers recognise it as an AMD header.
+// CMD AMD word: CMD preamble (110) + Expanded-64 payload (A.5.7.2.2). Uses
+// encode_ascii(DATA) — same 21-bit payload as DATA/REP but CMD preamble marks it as AMD header.
 static ALEWord make_cmd_amd_word(const char chars[3])
 {
     const uint32_t payload = WordParser::encode_ascii(chars, PreambleType::DATA);
@@ -42,7 +41,7 @@ std::vector<ALEWord> encode_amd(const std::string& text)
                     && static_cast<unsigned char>(ch) <= 0x5F) ? ch : '?';
         }
         if (words.empty()) {
-            // First word: CMD AMD with Expanded-64 payload
+            // First word: CMD AMD
             words.push_back(make_cmd_amd_word(c));
         } else {
             // Subsequent words: alternating DATA (odd index) / REP (even index)
@@ -112,9 +111,8 @@ std::vector<ALEWord> encode_dtm(const std::string& text, bool crc_enabled)
 
 // ── DBM — Data Block Message (A.5.7.4) ────────────────────────────────────────
 
-// Build a transparent-binary DATA/REP word from 3 raw bytes.
-// DBM is not restricted to Expanded-64: any byte 0x00–0xFF is valid.
-// The MSB of each byte is masked off (& 0x7F) to fit the 7-bit ALE character slot.
+// Transparent-binary DATA/REP word from 3 raw bytes. DBM isn't restricted to
+// Expanded-64 (any byte 0x00-0xFF valid); MSB masked (&0x7F) to fit 7-bit ALE char slot.
 static ALEWord make_dbm_data_word(PreambleType pt, const uint8_t bytes[3])
 {
     ALEWord w{};
@@ -163,7 +161,7 @@ std::vector<ALEWord> encode_dbm(const std::vector<uint8_t>& payload, bool crc_en
         words.push_back(make_dbm_data_word(pt, bytes));
     }
 
-    // CRC word: CRC-16/CCITT over the payload bytes
+    // CRC word (CRC-16/CCITT)
     if (crc_enabled) {
         const uint16_t crc = compute_dbm_crc(payload.data(), payload.size());
         const uint8_t crc_bytes[3] = {

@@ -50,7 +50,6 @@ static bool http_get_body(const wchar_t* host, const wchar_t* path, std::string&
     } else if (!WinHttpReceiveResponse(req, nullptr)) {
         pal::log_error("SFI", "WinHttpReceiveResponse failed (err=%lu)", GetLastError());
     } else {
-        // Check HTTP status code
         DWORD status = 0;
         DWORD status_size = sizeof(status);
         WinHttpQueryHeaders(req,
@@ -187,7 +186,7 @@ bool SfiService::fetch_sfi(float& out) {
         return false;
 #endif
     if (!parse_sfi_json(body, out)) {
-        // Print first 150 chars of body to help diagnose unexpected formats
+        // First 150 chars, for diagnosing unexpected formats
         const std::string snip = body.size() > 150 ? body.substr(0, 150) + "…" : body;
         pal::log_warn("SFI", "JSON parse failed — body: %s", snip.c_str());
         return false;
@@ -196,8 +195,7 @@ bool SfiService::fetch_sfi(float& out) {
 }
 
 bool SfiService::parse_sfi_json(const std::string& body, float& sfi) {
-    // Current NOAA format: [{"flux":201,"time_tag":"2026-07-01T20:00:00"}]
-    //   key = "flux" (lowercase), value = bare number
+    // Current NOAA format: [{"flux":201,"time_tag":"..."}]; key "flux" lowercase, bare-number value
     size_t p = body.find("\"flux\":");
     if (p != std::string::npos) {
         const size_t vs = body.find_first_of("-0123456789", p + 7);
@@ -208,8 +206,7 @@ bool SfiService::parse_sfi_json(const std::string& body, float& sfi) {
             } catch (...) {}
         }
     }
-    // Legacy NOAA format: {"Flux":"165","A":"3",...}
-    //   key = "Flux" (capitalized), value = quoted string
+    // Legacy NOAA format: {"Flux":"165","A":"3",...}; key "Flux" capitalized, quoted-string value
     p = body.find("\"Flux\":\"");
     if (p != std::string::npos) {
         const size_t vs = p + 8;

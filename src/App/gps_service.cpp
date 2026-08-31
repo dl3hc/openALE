@@ -49,11 +49,10 @@
    static const serial_t kInvalidSerial = INVALID_HANDLE_VALUE;
    static serial_t serial_open(const std::string& port, uint32_t baud) {
        std::string p = "\\\\.\\" + port;
-       // GENERIC_WRITE is required even though we never call WriteFile(): many
-       // USB-CDC virtual COM ports (e.g. a u-blox receiver's USB serial
-       // interface) fail CreateFile or silently no-op SetCommState/
-       // SetCommTimeouts when opened read-only, since the driver's comm-config
-       // IOCTLs need write access to the handle.
+       // GENERIC_WRITE required even though WriteFile() is never called: many
+       // USB-CDC virtual COM ports (e.g. u-blox receiver USB serial) fail
+       // CreateFile or silently no-op SetCommState/SetCommTimeouts when opened
+       // read-only, since driver comm-config IOCTLs need write access.
        serial_t h = CreateFileA(p.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
        if (h == INVALID_HANDLE_VALUE) return h;
@@ -61,9 +60,9 @@
        GetCommState(h, &dcb);
        dcb.BaudRate = static_cast<DWORD>(baud);
        dcb.ByteSize = 8;  dcb.StopBits = ONESTOPBIT;  dcb.Parity = NOPARITY;
-       // Explicit rather than relying on GetCommState's driver-dependent
-       // defaults: USB-CDC ACM devices commonly gate data flow on DTR being
-       // asserted, mirroring RS-232 modem-control semantics.
+       // Explicit rather than GetCommState's driver-dependent defaults:
+       // USB-CDC ACM devices commonly gate data flow on DTR asserted
+       // (RS-232 modem-control semantics).
        dcb.fDtrControl = DTR_CONTROL_ENABLE;
        dcb.fRtsControl = RTS_CONTROL_ENABLE;
        SetCommState(h, &dcb);
@@ -158,7 +157,6 @@ void GpsService::stop() {
     running_ = false;
     if (gpsd_thread_.joinable()) gpsd_thread_.join();
     if (nmea_thread_.joinable()) nmea_thread_.join();
-    // Reset fix state on stop
     std::lock_guard<std::mutex> g(fix_mtx_);
     fix_valid_   = false;
     fix_has_alt_ = false;
@@ -211,10 +209,9 @@ void GpsService::update_fix(bool valid, double lat, double lon, bool has_alt, do
             fix_has_alt_ = true;
             fix_alt_     = alt;
         }
-        // else: valid fix, but this sentence carries no altitude (e.g. $GPRMC,
-        // which alternates with $GPGGA on most receivers) — leave the
-        // last-known altitude from a prior GGA in place rather than clobbering
-        // it to "unavailable" on every RMC line.
+        // else: valid fix but sentence carries no altitude (e.g. $GPRMC,
+        // alternating with $GPGGA on most receivers) — keep last-known GGA
+        // altitude rather than clobbering to "unavailable" every RMC line.
         if (valid) { fix_lat_ = lat; fix_lon_ = lon; }
     }
     if (changed) {
@@ -274,11 +271,11 @@ void GpsService::gpsd_loop(Config cfg) {
 // ── NMEA loop ─────────────────────────────────────────────────────────────────
 
 void GpsService::nmea_loop(Config cfg) {
-    // serial_read() times out after ~1s per call (COMMTIMEOUTS on Windows,
-    // VTIME on POSIX — see serial_open() above), so a run of kSilentLimit
-    // consecutive zero-byte reads means ~kSilentLimit seconds of silence on
-    // an otherwise-open port — used to detect "port open but device stopped
-    // talking" (unplugged mid-session), distinct from "port never opened".
+    // serial_read() times out after ~1s/call (COMMTIMEOUTS on Windows, VTIME
+    // on POSIX — see serial_open() above), so kSilentLimit consecutive
+    // zero-byte reads ~= kSilentLimit seconds of silence on an otherwise-open
+    // port — detects "port open but device stopped talking" (unplugged
+    // mid-session), distinct from "port never opened".
     constexpr int kSilentLimit = 5;
     while (running_.load()) {
         serial_t fd = serial_open(cfg.nmea_port, cfg.nmea_baud);
@@ -306,7 +303,6 @@ void GpsService::nmea_loop(Config cfg) {
             }
             silent_ticks = 0;
             if (ch == '\n') {
-                // Strip trailing \r
                 if (!linebuf.empty() && linebuf.back() == '\r') linebuf.pop_back();
                 if (!linebuf.empty() && linebuf[0] == '$' && !nmea_receiving_.exchange(true))
                     pal::log_info("GPS", "NMEA serial %s: receiving data (no satellite fix yet)",

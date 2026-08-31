@@ -2,15 +2,15 @@
  * \file tone_generator.cpp
  * \brief NCO-based 8-FSK tone generator — pure std::sin(), TPDF dither.
  *
- * 32-bit phase accumulator advances by a per-tone increment each sample.
- * All ALE tones are exact multiples of 125 Hz (symbol rate), so each symbol
- * spans integer cycles: after 64 samples the accumulator returns to start,
- * putting every symbol boundary at the waveform max (phase=pi/2, slope=0) —
+ * 32-bit phase accumulator advances by a per-tone increment each sample. All
+ * ALE tones are exact multiples of 125 Hz (symbol rate) → each symbol spans
+ * integer cycles: after 64 samples the accumulator returns to start, so
+ * every symbol boundary sits at the waveform max (phase=pi/2, slope=0) —
  * REQ-WAVEFORM-005.
  *
- * Sine via std::sin(double) per sample: at 8 kHz × ~5 words/s that's low
- * tens of thousands of calls/s — negligible. Avoids the table-quantization
- * harmonics and alias products a 256-entry LUT + linear interpolation would add.
+ * Sine via std::sin(double) per sample: at 8 kHz × ~5 words/s, low tens of
+ * thousands of calls/s — negligible. Avoids the table-quantization harmonics
+ * and alias products a 256-entry LUT + linear interpolation would add.
  *
  * int16 quantization: TPDF dither + rounding (see tone_generator.h). Without
  * dither, truncating a periodic signal yields signal-correlated quantization
@@ -34,15 +34,15 @@ ToneGenerator::ToneGenerator() : prng_(0x4A4C4555u) {
 }
 
 void ToneGenerator::init_phase_increments() {
-    // Walk tones by ascending frequency (rank). FREQ_TO_SYMBOL[rank] = the
+    // Walk tones by ascending frequency (rank); FREQ_TO_SYMBOL[rank] = the
     // symbol that tone carries, so store into that slot → phase_increment is
     // indexed by SYMBOL VALUE.
     for (uint32_t rank = 0; rank < NUM_TONES; ++rank) {
         uint8_t  symbol  = FREQ_TO_SYMBOL[rank];
         uint32_t freq_hz = TONE_FREQS_HZ[rank];
 
-        // Q32 fixed-point: increment = freq_hz / sample_rate × 2^32. Integer
-        // math avoids rounding error; fits uint32_t (all ALE freqs << SAMPLE_RATE_HZ).
+        // Q32 fixed-point: increment = freq_hz/sample_rate × 2^32. Integer
+        // math avoids rounding error; fits uint32_t (ALE freqs << SAMPLE_RATE_HZ).
         uint64_t increment = (static_cast<uint64_t>(freq_hz) << 32) / SAMPLE_RATE_HZ;
         phase_increment[symbol] = static_cast<uint32_t>(increment);
     }
@@ -50,8 +50,8 @@ void ToneGenerator::init_phase_increments() {
 
 void ToneGenerator::reset() {
     // pi/2 in 32-bit phase: sin(pi/2)=1 → first sample is the peak, slope=0.
-    // Reproduced at every subsequent symbol start since all ALE tones complete
-    // integer cycles in SAMPLES_PER_SYMBOL (=64) samples.
+    // Reproduced at every symbol start since ALE tones complete integer
+    // cycles in SAMPLES_PER_SYMBOL (=64) samples.
     phase_ = 0x40000000u;
     // Fixed seed → reproducible dither across test runs.
     prng_.seed(0x4A4C4555u);

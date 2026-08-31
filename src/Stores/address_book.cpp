@@ -85,15 +85,15 @@ bool AddressBook::is_known_net(const std::string& address) const
 bool AddressBook::match_wildcard(const std::string& pattern,
                                   const std::string& address)
 {
-    // Per A.5.2.4.9 '?' is the wildcard, substituting for any of the 36
-    // alphanumeric characters (A-Z, 0-9).  Pattern and address must have
-    // equal length; each '?' covers exactly one address character position.
+    // Per A.5.2.4.9 '?' is the wildcard for any of the 36 alphanumeric chars
+    // (A-Z, 0-9). Pattern/address must be equal length; each '?' covers
+    // exactly one address character position.
     if (pattern.length() != address.length())
         return false;
 
     for (size_t i = 0; i < pattern.length(); ++i) {
         if (pattern[i] == '?') {
-            // '?' matches A-Z or 0-9 only (the 36-character alphanumeric subset).
+            // '?' matches A-Z/0-9 only (the 36-char alphanumeric subset);
             // '@' and '?' in the address are not matched by a wildcard.
             char c = address[i];
             if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')))

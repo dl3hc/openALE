@@ -1,26 +1,14 @@
 ﻿/**
  * \file ale_word.cpp
- * \brief Implementation of ALE word parser
+ * \brief ALE word parser implementation
  *
- * Key changes vs. previous revision
- * -----------------------------------
- * AC-WORD-001-5  parse_from_bits accepts and stores timestamp_ms.
- *
- * AC-WORD-002-1  ALE_ASCII_64[] table removed (was dead code).
- *                Two separate predicates replace the single is_valid_ale_char():
- *                  is_valid_basic38_char()   — A.5.2.4.2
- *                  is_valid_expanded64_char() — A.5.7.2.1
- *
- * AC-WORD-002-2  decode_ascii() / encode_ascii() now receive the PreambleType and
- *                select the correct predicate automatically via uses_basic38().
- *
- * AC-WORD-002-3  set_self_address() calls is_valid_basic38_char() (addresses
- *                are always Basic 38).
- *
- * AC-WORD-002-4  match_wildcard() documents and enforces the single-character
- *                '@' wildcard per A.5.2.4.2.  Length must still match because
- *                the spec defines '@' as a positional single-character wildcard,
- *                not a Kleene-star.
+ * AC-WORD-001-5: parse_from_bits takes/stores timestamp_ms.
+ * AC-WORD-002-1: removed dead ALE_ASCII_64[]; is_valid_ale_char() split into
+ *   is_valid_basic38_char() (A.5.2.4.2) and is_valid_expanded64_char() (A.5.7.2.1).
+ * AC-WORD-002-2: decode_ascii()/encode_ascii() take PreambleType, pick predicate via uses_basic38().
+ * AC-WORD-002-3: set_self_address() uses is_valid_basic38_char() (addresses always Basic 38).
+ * AC-WORD-002-4: match_wildcard(): '@' is a single-char wildcard per A.5.2.4.2,
+ *   not a Kleene-star — length must still match.
  */
 
 #include "Word/ale_word.h"
@@ -36,21 +24,13 @@ static const char* WORD_TYPE_NAMES[] = {
     "DATA", "THRU", "TO", "TWAS", "FROM", "TIS", "CMD", "REP", "UNKNOWN"
 };
 
-// ── ASCII character-set classification table ─────────────────────────────────
-// Shared verbatim by both reference decoders (LinuxALE modem.c, ALELite
-// ASCII_Set.h): a 128-entry table indexed by ASCII codepoint giving the most
-// restrictive ALE character set the byte belongs to.  Adopted here in place of
-// two explicit-range predicates — a single data table is the canonical, more
-// compact reference-decoder idiom and reads at a glance.
-//
-//   ASCII_INVALID (0) — not a valid ALE character (control bytes, lowercase, 0x60+)
-//   ASCII_64     (1) — member of the Expanded-64 set (0x20-0x5F, minus Basic-38)
-//   ASCII_38     (2) — member of the Basic-38 set (A-Z, 0-9, '@', '?')
-//
-// Derived predicates (see is_valid_basic38_char / is_valid_expanded64_char):
-//   basic38    ⇔ ASCII_SET[u] == 2          (A-Z, 0-9, @, ?)
-//   expanded64 ⇔ ASCII_SET[u] != 0          (full 0x20-0x5F)
-// These are bit-equivalent to the previous explicit-range checks.
+// 128-entry table indexed by codepoint -> most restrictive ALE set the byte
+// belongs to. Matches reference decoders (LinuxALE modem.c, ALELite
+// ASCII_Set.h); replaces two range predicates with one table, bit-equivalent.
+//   0=ASCII_INVALID: control/lowercase/0x60+, not ALE
+//   1=ASCII_64: Expanded-64 (0x20-0x5F minus Basic-38)
+//   2=ASCII_38: Basic-38 (A-Z, 0-9, '@', '?')
+// basic38 ⇔ ASCII_SET[u]==2; expanded64 ⇔ ASCII_SET[u]!=0
 static constexpr uint8_t ASCII_INVALID = 0;
 static constexpr uint8_t ASCII_64     = 1;
 static constexpr uint8_t ASCII_38     = 2;
@@ -64,7 +44,7 @@ static constexpr uint8_t ASCII_SET[128] = {
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     // 0x30-0x3F: 0-9 Basic-38; : ; < = > Expanded-64; ? Basic-38
     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 2,
-    // 0x40-0x4F: @ Basic-38; A-O Basic-38
+    // 0x40-0x4F: @, A-O → Basic-38
     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
     // 0x50-0x5F: P-Z Basic-38; [ \ ] ^ _ Expanded-64
     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1,
@@ -98,7 +78,7 @@ bool WordParser::parse_from_bits(uint32_t word_bits,
 PreambleType WordParser::extract_preamble(uint32_t word_bits)
 {
     uint8_t preamble = (word_bits >> 21) & 0x07;   // bits 23-21
-    // All 3-bit values 0-7 map directly to the enum
+    // values 0-7 map directly to enum
     return static_cast<PreambleType>(preamble);
 }
 
@@ -116,17 +96,14 @@ bool WordParser::decode_ascii(uint32_t payload,
     char c1 = static_cast<char>((payload >>  7) & 0x7F);  // bits 13-7
     char c2 = static_cast<char>((payload >>  0) & 0x7F);  // bits 6-0
 
-    // CMD words carry function codes defined in TABLE A-XVI (A.5.6), not addresses.
-    // A.5.2.6.3 NOTE: CMD validity is determined by "history, status, expectations,
-    // and protocol" — not by character-set membership.  CMD payloads combine a
-    // function-code char (0x60-0x7E) with BINARY argument fields (LQA KA1/SINAD/
-    // BER/MP, noise bytes) and AMD/DTM/DBM text, so no single char set applies; the
-    // payload is accepted as-is on Golay success and interpreted by protocol context.
-    // A CMD is never transmitted in isolation — it only appears mid-frame after TO,
-    // by which time the demodulator grid is already locked — so a CMD seen during
-    // cold acquisition is garbage, rejected by the unanimous-vote gate (criterion 1)
-    // rather than a char-set filter.  The modem therefore applies NO preamble-type
-    // filter for acquisition (see gate_word_); CMD validity is protocol-layer work.
+    // CMD = function code (TABLE A-XVI/A.5.6), not address. A.5.2.6.3: validity
+    // judged by history/status/expectations/protocol, not char-set — mixes
+    // func-code char (0x60-0x7E), BINARY args (LQA KA1/SINAD/BER/MP, noise
+    // bytes), AMD/DTM/DBM text; no single set fits. Accepted as-is on Golay
+    // success, interpreted by protocol layer. Only appears mid-frame after TO
+    // (grid locked), so CMD during cold acquisition is garbage — rejected by
+    // unanimous-vote gate (criterion 1), not char-set. Hence no preamble-type
+    // filter at acquisition (see gate_word_); CMD validity is protocol work.
     if (word_type == PreambleType::CMD) {
         output[0] = c0;
         output[1] = c1;
@@ -176,11 +153,9 @@ uint32_t WordParser::encode_ascii(const char chars[3], PreambleType word_type)
 
 bool WordParser::is_valid_basic38_char(char ch)
 {
-    // A.5.2.4.2: A-Z, 0-9, '@', '?'.  The spec warns against checking only the
-    // three MSBs (48 combinations would be accepted, 10 of them invalid); the
-    // ASCII_SET table encodes the full codepoint membership directly.
-    // ALE characters are 7-bit (bits 6-0); a char with bit 7 set (signed char
-    // ≥ 0x80) is not an ALE character — guard before indexing the 128-entry table.
+    // A.5.2.4.2: A-Z,0-9,'@','?'. Spec warns 3-MSB-only check accepts 48
+    // combos (10 invalid); ASCII_SET encodes full codepoint membership instead.
+    // ALE chars are 7-bit; a bit-7-set char (≥0x80) is non-ALE — guard before indexing.
     const unsigned int u = static_cast<unsigned char>(ch);
     if (u >= 128) return false;
     return ASCII_SET[u] == ASCII_38;
@@ -188,10 +163,8 @@ bool WordParser::is_valid_basic38_char(char ch)
 
 bool WordParser::is_valid_expanded64_char(char ch)
 {
-    // A.5.7.2.1: digital discrimination by two MSBs b7 and b6 — all members with
-    // b7b6 = "01" (0x20-0x3F) or "10" (0x40-0x5F), i.e. the half-open range
-    // [0x20, 0x60).  ASCII_SET marks exactly those codepoints non-zero.
-    // 7-bit guard as in is_valid_basic38_char (bit-7-set chars are non-ALE).
+    // A.5.7.2.1: b7b6="01"(0x20-0x3F) or "10"(0x40-0x5F) → range [0x20,0x60);
+    // ASCII_SET marks these non-zero. Same 7-bit guard as is_valid_basic38_char.
     const unsigned int u = static_cast<unsigned char>(ch);
     if (u >= 128) return false;
     return ASCII_SET[u] != ASCII_INVALID;
@@ -199,10 +172,9 @@ bool WordParser::is_valid_expanded64_char(char ch)
 
 bool WordParser::uses_basic38(PreambleType type)
 {
-    // DATA (0) and REP (7) carry orderwire content → Expanded 64.
-    // CMD carries A.5.6 command payloads (function code + binary args) → no char
-    //   set, accepted unconditionally in decode_ascii() and interpreted by the
-    //   protocol layer.  All other routing/addressing types → Basic 38.
+    // DATA/REP → orderwire content → Expanded64. CMD → A.5.6 payload
+    // (func code+binary args), no char set, accepted unconditionally in
+    // decode_ascii(), interpreted by protocol layer. All other types → Basic38.
     return (type != PreambleType::DATA) && (type != PreambleType::REP);
 }
 

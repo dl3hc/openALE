@@ -24,9 +24,8 @@ std::vector<uint64_t> ALESequence::encode() const {
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
-// Send the given word sequence twice end-to-end.
-// Used for leading call (Tlc = 2×Tc, §A.5.5.3.1) and the addressed
-// part of response/ACK/termination frames (TO×2 prefix).
+// Sends word sequence twice end-to-end: leading call (Tlc=2×Tc, §A.5.5.3.1)
+// and the TO×2 prefix of response/ACK/termination frames.
 static std::vector<ALEWord> sent_twice(const std::vector<ALEWord>& words) {
     std::vector<ALEWord> doubled;
     doubled.reserve(words.size() * 2);
@@ -35,9 +34,8 @@ static std::vector<ALEWord> sent_twice(const std::vector<ALEWord>& words) {
     return doubled;
 }
 
-// Build a complete response-shape frame: the addressed station's word(s)
-// sent twice, followed by the conclusion word(s) of the transmitting station.
-// Used for accept, ACK, and termination frames, which share this shape.
+// Response-shape frame: addressed station's word(s) ×2, then transmitting
+// station's conclusion word(s). Shared shape: accept/ACK/termination.
 static ALESequence addressed_then_conclusion(const std::string& addressed_addr,
                                              PreambleType       addressed_type,
                                              const std::string& self_addr,
@@ -53,8 +51,8 @@ static ALESequence addressed_then_conclusion(const std::string& addressed_addr,
 
 ALESequence ALESequenceBuilder::scanning_call(const std::string& dest,
                                               uint32_t scan_channels) {
-    // §A.5.2.5.1: scanning section = first address word only, no DATA/REP.
-    // Tsc = scan_channels × 2 × Trw → materialize as scan_channels × 2 words.
+    // §A.5.2.5.1: scanning section = first-address word only, no DATA/REP;
+    // Tsc=scan_channels×2×Trw → materialize as scan_channels×2 words.
     if (scan_channels == 0)
         return ALESequence{};
 
@@ -66,8 +64,7 @@ ALESequence ALESequenceBuilder::scanning_call(const std::string& dest,
 
 ALESequence ALESequenceBuilder::scanning_call_group(const std::vector<std::string>& members,
                                                     uint32_t scan_channels) {
-    // §A.5.5.4.3.1: collect first words of all members, drop duplicates
-    // ("sent only once during Tsc"), cap at 5 unique words.
+    // §A.5.5.4.3.1: unique first words of all members ("sent once during Tsc"), max 5.
     if (scan_channels == 0 || members.empty())
         return ALESequence{};
 
@@ -80,17 +77,14 @@ ALESequence ALESequenceBuilder::scanning_call_group(const std::vector<std::strin
             break;
     }
 
-    // Flowchart fallback (A.5.2.5.1, "IS THERE A SINGLE WORD REMAINING?"): once
-    // de-duplicated, a single surviving first word is an individual/net scanning
-    // call (TO), not a THRU/REP rotation — THRU only has meaning when ≥2 distinct
-    // targets are being rotated.
+    // A.5.2.5.1 flowchart ("SINGLE WORD REMAINING?"): 1 surviving first word →
+    // individual/net scanning call (TO), not THRU/REP rotation (needs ≥2 targets).
     if (unique_first.size() == 1)
         return scanning_call(unique_first.front(), scan_channels);
 
-    // Same total airtime as an individual scanning call (Tsc = scan_channels × 2 × Trw),
-    // rotating through the unique first words. THRU/REP strictly alternate by word
-    // position (AC-WORD-006-2) — scan_channels × 2 is always even, so the sequence
-    // always ends on a complete THRU-REP pair.
+    // Same airtime as individual scanning call (Tsc=scan_channels×2×Trw), rotating
+    // unique first words. THRU/REP alternate by position (AC-WORD-006-2);
+    // scan_channels×2 is always even → sequence always ends on a full THRU-REP pair.
     const uint32_t total = scan_channels * 2u;
     const size_t   u     = unique_first.size();
     std::vector<ALEWord> words;
@@ -108,9 +102,9 @@ ALESequence ALESequenceBuilder::leading_call(const std::string& dest) {
 }
 
 ALESequence ALESequenceBuilder::leading_call_group(const std::vector<std::string>& members) {
-    // §A.5.5.4.3.2: complete addresses of all prospective group members, sent
-    // twice, using TO preambles "as usual" — THRU is exclusively a scanning-
-    // section preamble (AC-WORD-006-1/7) and must never appear in the leading call.
+    // §A.5.5.4.3.2: full addresses of all prospective members, sent twice, TO
+    // preambles "as usual" — THRU is scanning-section-only (AC-WORD-006-1/7),
+    // never in leading call.
     return ALESequence(sent_twice(AddressEncoder::encode_group(members, PreambleType::TO)));
 }
 
@@ -137,8 +131,8 @@ ALESequence ALESequenceBuilder::response(const std::string& caller_addr,
 ALESequence ALESequenceBuilder::ack(const std::string& peer_addr,
                                     const std::string& self_addr,
                                     bool no_link) {
-    // §A.5.5.3.4 / Figure A-31: TO peer (×2) + TIS self (link) or TWAS self
-    // (Ion2G-style AMD decline — handshake concludes, no link persists).
+    // §A.5.5.3.4/Fig A-31: TO peer(×2) + TIS self (link) or TWAS self (Ion2G-
+    // style AMD decline: handshake concludes, no link persists).
     const PreambleType conclusion_type = no_link ? PreambleType::TWAS : PreambleType::TIS;
     return addressed_then_conclusion(peer_addr, PreambleType::TO,
                                      self_addr, conclusion_type);
@@ -146,9 +140,8 @@ ALESequence ALESequenceBuilder::ack(const std::string& peer_addr,
 
 ALESequence ALESequenceBuilder::termination(const std::string& peer_addr,
                                             const std::string& self_addr) {
-    // §A.5.5.3.5 / T-07: TO peer (×2) + TWAS self — e.g. "TO JOE TO JOE TWAS SAM".
-    // Degenerate peer (empty) falls back to TWAS [self] only so a malformed
-    // TO @@@ prefix is never put on the air.
+    // §A.5.5.3.5/T-07: TO peer(×2)+TWAS self, e.g. "TO JOE TO JOE TWAS SAM".
+    // Empty peer → TWAS[self] only, avoiding a malformed "TO @@@" on air.
     if (peer_addr.empty())
         return ALESequence(AddressEncoder::encode(self_addr, PreambleType::TWAS));
     return addressed_then_conclusion(peer_addr, PreambleType::TO,
@@ -166,8 +159,8 @@ ALESequence ALESequenceBuilder::lqa_cmd(uint32_t raw_payload24) {
 }
 
 ALESequence ALESequenceBuilder::noise_cmd(uint8_t max_db, uint8_t mean_db) {
-    // 21-bit payload: [20:14]='n'(0x6E) | [13:7]=max_db | [6:0]=mean_db
-    // Preamble 110 lives in w.type = PreambleType::CMD (not in raw_payload).
+    // 21-bit payload: [20:14]='n'(0x6E)|[13:7]=max_db|[6:0]=mean_db; preamble
+    // 110 lives in w.type=CMD, not raw_payload.
     const uint32_t raw = (0x6Eu << 14)
                        | ((max_db  & 0x7Fu) << 7)
                        |  (mean_db & 0x7Fu);

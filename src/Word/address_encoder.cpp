@@ -2,20 +2,19 @@
  * \file address_encoder.cpp
  * \brief AddressEncoder implementation.
  *
- * See address_encoder.h for the full design rationale and usage contract.
+ * See address_encoder.h for full design rationale and usage contract.
  *
  * Core encoding rule (A.5.2.3.2.1 / A.5.2.4.3):
  *
  *   chunk_index  0         1      2      3      4
  *   word type    anchor   DATA   REP   DATA   REP
  *
- * "anchor" = first_word_type supplied by the caller (TO, TIS, TWAS, FROM …).
- * The DATA/REP alternation is fixed and identical for every address and every
- * call phase.  Only the anchor type differs between sites.
+ * "anchor" = first_word_type from the caller (TO, TIS, TWAS, FROM …). The
+ * DATA/REP alternation is fixed and identical for every address and call
+ * phase — only the anchor type differs.
  *
- * encode_first() is not a separate algorithm — it is encode().front().
- * This is intentional: it proves that scanning and leading call use the same
- * underlying rule and differ only in how many words are consumed.
+ * encode_first() = encode().front(), not a separate algorithm: proves
+ * scanning and leading call share the same rule, differing only in word count.
  */
 
 #include "Word/address_encoder.h"
@@ -23,7 +22,7 @@
 
 namespace ale {
 
-// Extension word types for chunks[1..4].  Index 0 = chunk[1], etc.
+// Extension word types for chunks[1..4] (index 0 = chunk[1], etc.).
 // Alternates DATA, REP, DATA, REP per AC-WORD-010-2/3.
 static constexpr PreambleType EXT[4] = {
     PreambleType::DATA, PreambleType::REP,
@@ -52,7 +51,7 @@ std::vector<std::string> AddressEncoder::chunk(const std::string& addr) {
 
 // static
 ALEWord AddressEncoder::make(PreambleType type, const std::string& chunk3) {
-    // WordParser::make_word sets both address[] and raw_payload via parse_from_bits,
+    // WordParser::make_word sets address[] and raw_payload via parse_from_bits,
     // ensuring ALEWord::encode() produces the correct 49-bit output on TX.
     return WordParser::make_word(type, chunk3.c_str());
 }
@@ -78,8 +77,8 @@ std::vector<ALEWord> AddressEncoder::encode(const std::string& addr,
 // static
 ALEWord AddressEncoder::encode_first(const std::string& addr,
                                      PreambleType           first_word_type) {
-    // Use chunk() directly to reuse the same padding/splitting rule as encode()
-    // without allocating the full word vector — only the first chunk is needed.
+    // Reuses chunk()'s padding/splitting rule without allocating the full
+    // word vector — only the first chunk is needed.
     return make(first_word_type, chunk(addr).front());
 }
 
@@ -91,15 +90,15 @@ std::vector<ALEWord> AddressEncoder::encode_group(const std::vector<std::string>
 
     std::vector<ALEWord> result;
 
-    // Track the last non-REP preamble type exactly as reconstruct_to_addresses()
-    // does, so that the "new recipient" decision mirrors the decoder's logic.
+    // Tracks last non-REP preamble type exactly as reconstruct_to_addresses()
+    // does, so the "new recipient" decision mirrors the decoder's logic.
     //
     // Rule (mirrors reconstruct_to_addresses):
-    //   last_non_rep == anchor(TO) after processing address N
-    //     → address N+1 can begin with REP, which decoder treats as new recipient
-    //   last_non_rep == DATA after processing address N
-    //     → address N+1 must begin with a fresh anchor word (TO), because
-    //       REP-after-DATA extends the current address in the decoder
+    //   last_non_rep==TO after address N   → N+1 may begin with REP (decoder
+    //                                         treats REP as new recipient)
+    //   last_non_rep==DATA after address N → N+1 needs a fresh anchor (TO);
+    //                                         REP-after-DATA would extend the
+    //                                         current address instead
     PreambleType last_non_rep = PreambleType::UNKNOWN;
 
     for (size_t a = 0; a < addrs.size(); ++a) {
@@ -112,12 +111,12 @@ std::vector<ALEWord> AddressEncoder::encode_group(const std::vector<std::string>
                 if (a == 0) {
                     t = first_word_type;    // first address always uses anchor
                 } else if (last_non_rep == PreambleType::TO) {
-                    // Previous address ended on TO → decoder treats REP as new recipient
-                    // (reconstruct_to_addresses: REP after TO → new recipient).
+                    // Prev address ended on TO → decoder treats REP as new
+                    // recipient (reconstruct_to_addresses).
                     t = PreambleType::REP;
                 } else {
-                    // Previous address ended on DATA → REP-after-DATA would extend,
-                    // not start a new recipient.  Use a new anchor word instead.
+                    // Prev address ended on DATA → REP-after-DATA would
+                    // extend, not start a new recipient; use a fresh anchor.
                     t = first_word_type;
                 }
             } else {
@@ -126,7 +125,7 @@ std::vector<ALEWord> AddressEncoder::encode_group(const std::vector<std::string>
 
             result.push_back(make(t, chunks[i]));
 
-            // REP does not update last_non_rep (mirrors the decoder's behaviour).
+            // REP does not update last_non_rep (mirrors decoder behaviour).
             if (t != PreambleType::REP)
                 last_non_rep = t;
         }

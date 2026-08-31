@@ -21,8 +21,8 @@ uint64_t now_epoch_ms() {
             .count());
 }
 
-/// Splits a pipe-delimited history line into exactly 6 fields; returns false
-/// (and leaves out untouched) if the line is malformed.
+/// Splits a pipe-delimited line into exactly 6 fields; returns false (out
+/// untouched) if malformed.
 bool parse_line(const std::string& line, LQAHistorySample& out) {
     std::vector<std::string> f;
     f.reserve(6);
@@ -114,8 +114,8 @@ bool LQAHistoryStore::load_from_file(const std::string& path) {
         LQAHistorySample s;
         if (parse_line(line, s)) samples_.push_back(s);
     }
-    // Lines are already chronological (append-only), but sort defensively in
-    // case the file was hand-edited or concatenated out of order.
+    // Already chronological (append-only); sort defensively in case
+    // hand-edited or concatenated out of order.
     std::sort(samples_.begin(), samples_.end(),
               [](const LQAHistorySample& a, const LQAHistorySample& b) { return a.ts_ms < b.ts_ms; });
     prune_locked();

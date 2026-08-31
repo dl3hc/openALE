@@ -13,16 +13,15 @@ const uint32_t SoundingIdentityAccumulator::kTdrwMs = ALETimingConstants::Tdrw_m
 
 PreambleType SoundingIdentityAccumulator::expected_type_for_slot(int slot_1based)
 {
-    // A.5.2.4.3 / AddressEncoder::chunk(): extension words alternate
-    // DATA,REP,DATA,REP by 1-based chunk index (odd=DATA, even=REP).
+    // A.5.2.4.3 / AddressEncoder::chunk(): ext words alternate DATA,REP by
+    // 1-based chunk index (odd=DATA, even=REP).
     return (slot_1based % 2 == 1) ? PreambleType::DATA : PreambleType::REP;
 }
 
 void SoundingIdentityAccumulator::fold_linear(Session& s, const ALEWord& word)
 {
-    // A.5.4.1.1: non_unanimous votes = 48 - unanimous_votes for correctable
-    // words; uncorrectable half(s) -> contribute 48. Unchanged from the
-    // original rx_accumulate_sounding() formulas.
+    // A.5.4.1.1: non_unanimous votes = 48 - unanimous_votes (correctable words);
+    // uncorrectable half(s) -> 48. Same formulas as old rx_accumulate_sounding().
     constexpr float kMaxVotes = 48.0f;
     const float snr_db = word.valid
         ? (word.unanimous_votes / kMaxVotes) * 31.0f : 0.0f;
@@ -59,9 +58,8 @@ SoundingIdentityAccumulator::build_result(const Session& s)
     r.station = s.anchor;
     for (int i = 0; i < kMaxExtSlots; ++i) {
         if (s.slot_votes[i].empty()) break; // stop at first slot with zero observations — never splice past a gap
-        // Max-weight entry wins; std::map iterates ascending by key, so a
-        // strict '>' comparison keeps the lexicographically-first key on a
-        // tie (the map's natural deterministic order — no extra bookkeeping).
+        // Max-weight wins; std::map iterates ascending by key, so strict '>'
+        // keeps the lexicographically-first key on a tie — deterministic, no extra bookkeeping.
         std::string best;
         uint32_t    best_weight = 0;
         for (const auto& kv : s.slot_votes[i]) {
@@ -95,8 +93,8 @@ SoundingIdentityAccumulator::on_word(const ALEWord& word, uint32_t frequency_hz,
             return std::nullopt;
         }
         if (content == session_->anchor) {
-            // Same-station repeat (A.5.3.1 redundancy): only the in-cycle
-            // position resets; slot vote maps and linear accumulators persist.
+            // Same-station repeat (A.5.3.1 redundancy): only in-cycle position
+            // resets; slot-vote maps and linear accumulators persist.
             session_->next_slot    = 1;
             session_->cycle_open   = true;
             fold_linear(*session_, word);
@@ -104,9 +102,8 @@ SoundingIdentityAccumulator::on_word(const ALEWord& word, uint32_t frequency_hz,
             return std::nullopt;
         }
 
-        // Different station started talking: flush the finished session
-        // first (this is the pre-existing same-vs-different-anchor branch,
-        // fixed to flush-before-discard instead of silently discarding).
+        // Different station started talking: flush finished session first
+        // (pre-existing same-vs-different-anchor branch; fixed to flush-before-discard, not silently discard).
         Result flushed = build_result(*session_);
         session_.reset();
         open_session(word, content, frequency_hz, now_ms);
@@ -116,17 +113,16 @@ SoundingIdentityAccumulator::on_word(const ALEWord& word, uint32_t frequency_hz,
 
     if (!session_) return std::nullopt; // no session open, non-conclusion word: ignored entirely
 
-    // Every word event while a session is open refreshes the timer and
-    // folds into the linear accumulators, regardless of whether it can be
-    // slot-assigned — this is the direct fix for the settle timer firing
-    // prematurely mid-burst on an ordinary noisy/invalid word.
+    // Every word while a session is open refreshes the timer and folds into
+    // the linear accumulators regardless of slot-assignability — direct fix
+    // for the settle timer firing prematurely mid-burst on a noisy/invalid word.
     fold_linear(*session_, word);
     session_->last_word_ms = now_ms;
 
     if (session_->cycle_open) {
         if (session_->next_slot > kMaxExtSlots) {
-            // Extension already full (max 4 slots per MIL-STD-188-141B);
-            // nothing more to assign, cycle intentionally left open.
+            // Extension full (max 4 slots, MIL-STD-188-141B); nothing more to
+            // assign, cycle intentionally left open.
         } else {
             const bool matches = word.valid
                 && word.type == expected_type_for_slot(session_->next_slot);
@@ -136,10 +132,9 @@ SoundingIdentityAccumulator::on_word(const ALEWord& word, uint32_t frequency_hz,
                     += word.unanimous_votes;
                 ++session_->next_slot;
             } else {
-                // First mismatch (wrong type, golay_uncorrectable, or
-                // valid==false for any other reason): stop assigning
-                // further words in THIS cycle to any slot. No lookahead —
-                // cross-cycle redundancy recovers the gap via a later repeat.
+                // First mismatch (wrong type, golay_uncorrectable, or other
+                // invalid): stop assigning further words this cycle. No
+                // lookahead — cross-cycle redundancy recovers the gap via a later repeat.
                 session_->cycle_open = false;
             }
         }
