@@ -1,10 +1,13 @@
 /**
  * \file tests/gen/unit/test_amd_orderwire_tx.cpp
- * \brief Tests for AC-GEN-014-002: AMD transmission in ACK frame (A.5.7.2.2)
+ * \brief Tests for AC-GEN-014-002: AMD transmission (Ion2G-style calling frame)
  *
- * MIL-STD-188-141B A.5.7.2.2 requires AMD to be placed in the message section
- * of the ACK frame (third handshake frame), NOT in the calling frame.  The
- * complete calling cycle (call + response) must precede the AMD content.
+ * AMD rides the CALLING frame's MESSAGE section (A.5.2.5.5/Table A-XIV):
+ * TO×2 + FROM[self] + [CMD 'a' + LQA report] + CMD-AMD + TIS[self].  The called
+ * station can identify the caller and read the message without waiting for the
+ * full 3-way handshake; frame 3 (build_ack_words()) is then purely the caller's
+ * link/no-link decision — TO×2 + TIS (link) or TO×2 + TWAS (AMD with
+ * link_after_send=false, no link persists).  No AMD content in the ACK frame.
  *
  * Verifies:
  *   TEST 1  encode_amd() — empty input yields empty word list
@@ -12,9 +15,9 @@
  *   TEST 3  encode_amd() — partial last triplet is padded with SP
  *   TEST 4  encode_amd() — 90-character text produces exactly 30 words
  *   TEST 5  encode_amd() — out-of-range characters sanitised to '?'
- *   TEST 6  TX sequence: calling frame has NO AMD; AMD appears only in ACK frame
- *   TEST 7  TX sequence: without AMD pending, calling frame and ACK frame are plain
- *   TEST 8  Calling phase: with AMD, LEADING_CALL→CONCLUSION (no MESSAGE); ACK frame has AMD
+ *   TEST 6  TX sequence: AMD in calling frame MESSAGE section; ACK frame plain (TWAS)
+ *   TEST 7  TX sequence: without AMD pending, calling frame has no message section
+ *   TEST 8  Calling phase: MESSAGE-section words counted in LEADING_CALL; ACK frame plain
  */
 
 #include "Protocol/Message/ale_orderwire_protocols.h"
@@ -110,10 +113,11 @@ void test_encode_amd_sanitisation()
 }
 
 // ── TEST 6 ───────────────────────────────────────────────────────────────────
-// Integration: calling frame has NO AMD; AMD appears in the ACK frame (A.5.7.2.2).
-void test_amd_only_in_ack_frame()
+// Integration: AMD rides the calling frame MESSAGE section (Ion2G-style);
+// the ACK frame is plain — TO×2 + TWAS for link_after_send=false.
+void test_amd_in_calling_frame()
 {
-    std::cout << "[TEST 6] TX sequence: calling frame has no AMD; AMD only in ACK frame\n";
+    std::cout << "[TEST 6] TX sequence: AMD in calling frame; ACK frame plain (TWAS)\n";
 
     ALEStateMachine sm;
     sm.set_self_address("SAM");
@@ -135,21 +139,24 @@ void test_amd_only_in_ack_frame()
     sm.update(ALETimingConstants::Twt_ms);  // LBT → TUNING
     sm.update(tx0);                          // TUNING → LEADING_CALL, words enqueued
 
-    // Calling frame: leading(2) + conclusion(1) = 3 words, NO AMD
-    // [0] TO "JOE"  [1] TO "JOE"  [2] TIS "SAM"
-    assert(sent.size() == 3 && "calling frame: leading(2)+conclusion(1) = 3 words, no AMD");
-    for (size_t i = 0; i < 3; ++i)
-        assert(sent[i].type != PreambleType::CMD && "calling frame must have no CMD (no AMD)");
+    // Calling frame: leading(2) + FROM(1) + AMD(2) + conclusion(1) = 6 words
+    // [0] TO "JOE"  [1] TO "JOE"  [2] FROM "SAM"  [3] CMD "HEL"  [4] DATA "LO "  [5] TIS "SAM"
+    assert(sent.size() == 6 && "calling frame: leading(2)+FROM(1)+AMD(2)+conclusion(1) = 6 words");
+    assert(sent[0].type == PreambleType::TO   && "calling[0] must be TO");
+    assert(sent[1].type == PreambleType::TO   && "calling[1] must be TO");
+    assert(sent[2].type == PreambleType::FROM && "calling[2] must be FROM (MESSAGE section opens)");
+    assert(sent[3].type == PreambleType::CMD  && "calling[3] must be CMD (AMD start)");
+    assert(sent[4].type == PreambleType::DATA && "calling[4] must be DATA (AMD continuation)");
+    assert(sent[5].type == PreambleType::TIS  && "calling[5] must be TIS (conclusion)");
 
     auto send_slot = [&](uint32_t t) { sm.update(t); sm.on_word_complete(); };
 
-    // Drain calling frame: LEADING_CALL(×2) + CONCLUSION(×1) → LISTENING
-    send_slot(tx0 + 0 * Trw);
-    send_slot(tx0 + 1 * Trw);
-    send_slot(tx0 + 2 * Trw);
+    // Drain calling frame: LEADING_CALL ×5 (leading + MESSAGE section) + CONCLUSION ×1 → LISTENING
+    for (uint32_t i = 0; i < 6; ++i)
+        send_slot(tx0 + i * Trw);
 
     // Simulate JOE's response: TO[SAM] then TIS[JOE]
-    const uint32_t t_listen = tx0 + 3 * Trw;
+    const uint32_t t_listen = tx0 + 6 * Trw;
     sm.update(t_listen);
 
     ALEWord to_sam{};
@@ -168,19 +175,17 @@ void test_amd_only_in_ack_frame()
     sm.update(t_listen + ALETimingConstants::Tdrw_ms);
     sm.update(t_listen + ALETimingConstants::Tdrw_ms + 1);  // build_ack_words() called here
 
-    // ACK frame with AMD "HELLO": TO[JOE]×2 + CMD[HEL] + DATA[LO ] + TIS[SAM] = 5 words
-    // sent[] = calling(3) + ack(5) = 8 total
-    assert(sent.size() == 8 && "calling(3) + ACK(5) = 8 total words");
+    // ACK frame is plain: TO[JOE]×2 + TWAS[SAM] (link_after_send=false → no link)
+    // sent[] = calling(6) + ack(3) = 9 total
+    assert(sent.size() == 9 && "calling(6) + ACK(3) = 9 total words");
 
-    // ACK frame starts at index 3
-    assert(sent[3].type == PreambleType::TO   && "ACK[0] must be TO");
-    assert(sent[4].type == PreambleType::TO   && "ACK[1] must be TO");
-    assert(sent[5].type == PreambleType::CMD  && "ACK[2] must be CMD (AMD start)");
-    assert(sent[6].type == PreambleType::DATA && "ACK[3] must be DATA (AMD continuation)");
-    assert(sent[7].type == PreambleType::TIS  && "ACK[4] must be TIS (conclusion)");
+    // ACK frame starts at index 6
+    assert(sent[6].type == PreambleType::TO   && "ACK[0] must be TO");
+    assert(sent[7].type == PreambleType::TO   && "ACK[1] must be TO");
+    assert(sent[8].type == PreambleType::TWAS && "ACK[2] must be TWAS (AMD, link_after_send=false)");
 
-    std::cout << "  calling: TO×2 TIS (no AMD)\n";
-    std::cout << "  ACK:     TO×2 CMD DATA TIS  PASSED\n\n";
+    std::cout << "  calling: TO×2 FROM CMD DATA TIS (AMD in MESSAGE section)\n";
+    std::cout << "  ACK:     TO×2 TWAS (plain, no AMD)  PASSED\n\n";
 }
 
 // ── TEST 7 ───────────────────────────────────────────────────────────────────
@@ -222,11 +227,11 @@ void test_no_amd_skips_message_phase()
 }
 
 // ── TEST 8 ───────────────────────────────────────────────────────────────────
-// Integration: with AMD pending, calling phase skips MESSAGE (no AMD in calling
-// frame); AMD rides in the ACK frame after the full handshake.
+// Integration: with AMD pending, the MESSAGE-section words (FROM + AMD) are
+// counted inside LEADING_CALL before CONCLUSION; ACK frame is plain.
 void test_calling_phase_transitions_with_amd()
 {
-    std::cout << "[TEST 8] Calling phase: AMD → LEADING_CALL→CONCLUSION (no MESSAGE); ACK has AMD\n";
+    std::cout << "[TEST 8] Calling phase: LEADING_CALL includes MESSAGE section; ACK plain\n";
 
     ALEStateMachine sm;
     sm.set_self_address("SAM");
@@ -250,18 +255,19 @@ void test_calling_phase_transitions_with_amd()
 
     auto send_slot = [&](uint32_t t) { sm.update(t); sm.on_word_complete(); };
 
-    // Calling frame: leading(2) + conclusion(1) — MESSAGE phase skipped (no AMD in calling)
-    send_slot(tx0 + 0 * Trw);  // LEADING_CALL word 1
-    send_slot(tx0 + 1 * Trw);  // LEADING_CALL word 2 → CONCLUSION (not MESSAGE)
+    // Calling frame: LEADING_CALL counts leading(2) + FROM(1) + AMD(2) = 5 slots
+    // ("TEST" = 4 chars → 2 AMD words: CMD "TES", DATA "T  ")
+    for (uint32_t i = 0; i < 5; ++i)
+        send_slot(tx0 + i * Trw);  // LEADING_CALL words (incl. MESSAGE section)
     assert(sm.get_calling_phase() == CallingPhase::CONCLUSION
-           && "with AMD, LEADING_CALL must skip MESSAGE and go directly to CONCLUSION");
+           && "LEADING_CALL (incl. MESSAGE-section words) must reach CONCLUSION after 5 slots");
 
-    send_slot(tx0 + 2 * Trw);  // CONCLUSION word → LISTENING
+    send_slot(tx0 + 5 * Trw);  // CONCLUSION word → LISTENING
     assert(sm.get_calling_phase() == CallingPhase::LISTENING
            && "after conclusion, must enter LISTENING");
 
     // Simulate JOE's response
-    const uint32_t t_listen = tx0 + 3 * Trw;
+    const uint32_t t_listen = tx0 + 6 * Trw;
     sm.update(t_listen);
 
     ALEWord to_sam{};
@@ -280,18 +286,16 @@ void test_calling_phase_transitions_with_amd()
     sm.update(t_listen + ALETimingConstants::Tdrw_ms);
     sm.update(t_listen + ALETimingConstants::Tdrw_ms + 1);
 
-    // ACK frame: "TEST" = 4 chars → 2 AMD words (CMD "TES", DATA "T  ")
-    // sent[] = calling(3) + ACK(5): TO[JOE]×2 + CMD[TES] + DATA[T  ] + TIS[SAM]
-    assert(sent.size() == 8 && "calling(3) + ACK with AMD(5) = 8 total");
+    // ACK frame plain: TO[JOE]×2 + TWAS[SAM] (link_after_send=false → no link)
+    // sent[] = calling(6) + ack(3) = 9 total
+    assert(sent.size() == 9 && "calling(6) + plain ACK(3) = 9 total");
 
-    assert(sent[3].type == PreambleType::TO  && "ACK[0] TO");
-    assert(sent[4].type == PreambleType::TO  && "ACK[1] TO");
-    assert(sent[5].type == PreambleType::CMD && "ACK[2] CMD (AMD start)");
-    assert(sent[6].type == PreambleType::DATA && "ACK[3] DATA (AMD continuation)");
-    assert(sent[7].type == PreambleType::TIS && "ACK[4] TIS (conclusion)");
+    assert(sent[6].type == PreambleType::TO   && "ACK[0] TO");
+    assert(sent[7].type == PreambleType::TO   && "ACK[1] TO");
+    assert(sent[8].type == PreambleType::TWAS && "ACK[2] TWAS (no link_after_send)");
 
-    std::cout << "  Calling: LEADING→CONCLUSION (no MESSAGE)\n";
-    std::cout << "  ACK frame: TO×2 CMD DATA TIS  PASSED\n\n";
+    std::cout << "  Calling: LEADING(incl. MESSAGE)→CONCLUSION→LISTENING\n";
+    std::cout << "  ACK frame: TO×2 TWAS (plain)  PASSED\n\n";
 }
 
 // ── runner ────────────────────────────────────────────────────────────────────
@@ -306,7 +310,7 @@ int main()
     test_encode_amd_padding();
     test_encode_amd_max_length();
     test_encode_amd_sanitisation();
-    test_amd_only_in_ack_frame();
+    test_amd_in_calling_frame();
     test_no_amd_skips_message_phase();
     test_calling_phase_transitions_with_amd();
 

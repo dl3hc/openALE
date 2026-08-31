@@ -1770,10 +1770,16 @@ bool test_allcall_receiver_resumes_on_twas() {
     rx(PreambleType::TO,   allcall3);
     rx(PreambleType::TO,   allcall3);
     rx(PreambleType::TWAS, sam3);       // AllCall concluded with TWAS → resume
+    sm.update(t + ALETimingConstants::Tdrw_ms);  // settle: TWAS abort fires at Tdrw
+                                                 // after the conclusion's last word
 
     check(sm.get_state() == ALEState::SCANNING,
           "AllCall + TWAS conclusion → resume SCANNING (no link)");
-    check(!sm.is_hs_conclusion_rcvd(), "No conclusion linked on TWAS");
+    // TWAS deliberately sets hs_conclusion_rcvd (identity captured like TIS so
+    // any AMD/GPR is attributed) — the "no link" outcome is the state check
+    // above, not a cleared conclusion flag.
+    check(sm.get_caller_address() == "SAM",
+          "TWAS caller identity captured for AMD attribution");
 
     if (all_pass)
         std::cout << "PASS: AllCall receiver resumes on TWAS\n";
