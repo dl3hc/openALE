@@ -606,6 +606,11 @@ target_link_libraries(test_state_machine ale_link ale_protocol ale_fsk_core ale_
 target_include_directories(test_state_machine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME StateMachine COMMAND test_state_machine)
 
+add_executable(test_foreign_twas_link_guard tests/link/unit/test_foreign_twas_link_guard.cpp)
+target_link_libraries(test_foreign_twas_link_guard ale_link ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_foreign_twas_link_guard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ForeignTwasLinkGuard COMMAND test_foreign_twas_link_guard)
+
 add_executable(test_aqc_word_format tests/aqc/unit/test_aqc_word_format.cpp)
 target_link_libraries(test_aqc_word_format ale_aqc ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_aqc_word_format PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
