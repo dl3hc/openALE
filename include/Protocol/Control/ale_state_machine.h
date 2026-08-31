@@ -586,6 +586,9 @@ public:
     bool           is_emergency_active()      const { return emergency_active; }
     const std::string& get_to_address()      const { return to_address; }
     const std::string& get_caller_address()   const { return caller_address; }
+    /// Linked peer (full address). Drives the LINKED-state TWAS peer-match
+    /// guard (A.5.5.3.5): only a TWAS matching this address terminates the link.
+    const std::string& get_active_call_to()   const { return active_call_to; }
     bool           is_hs_conclusion_rcvd()    const { return hs_conclusion_rcvd; }
     bool           is_pending_reject()        const { return pending_reject_; }
     /// true = the handshake currently/just entered is an AllCall (A.5.5.4.4).
@@ -914,6 +917,17 @@ private:
     uint32_t             linked_amd_ack_tlww_ms_     = 0;  ///< receiver: ACK TIS settle anchor
     bool                 linked_amd_retry_pending_   = false; ///< sender: retry queued, waiting out the Tt gap below
     uint32_t             linked_amd_retry_after_ms_  = 0;  ///< sender: resend once current_time_ms reaches this (Tt = TT_NEXT_TRY_MS after the window expired)
+
+    // ── LINKED-state TWAS termination-frame recognition (A.5.5.3.5) ──────
+    // A peer's termination frame concludes TWAS[peer] + DATA/REP address
+    // extensions (AddressEncoder: anchor, DATA, REP, DATA, REP). The anchor
+    // word alone carries only the first ≤3 address chars — not enough to
+    // identify the sender (a foreign DC7XY sounds indistinguishably from
+    // peer DC7SU on the anchor alone). Arm on prefix match, accumulate
+    // extensions, and let handle_linked() decide after the Tdrw settle:
+    // LINK_TERMINATED only on FULL accumulated address == active_call_to.
+    std::string          linked_twas_addr_;            ///< accumulated TWAS-conclusion address ("" = not armed)
+    uint32_t             linked_twas_last_ms_    = 0;  ///< timestamp of the last accumulated word (settle + spacing gate)
 
     // ── Scanning sub-state ───────────────────────────────────────────────
     ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING

@@ -372,6 +372,8 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             link_start_time_ms  = current_time_ms;
             last_word_time_ms   = current_time_ms;
             linked_terminating_ = false;
+            linked_twas_addr_.clear();   // fresh link: no TWAS conclusion accumulating
+            linked_twas_last_ms_ = 0;
             tx_drain_start_ms_ = 0;   // no TX drain pending on a fresh link
             allcall_silent_ = false;          // AllCall concluded → normal linked state
             // Fresh link: arm the idle warning (fires IDLE_WARNING_LEAD_MS before Twa).
@@ -884,6 +886,29 @@ void ALEStateMachine::handle_linked() {
     }
 
     if (linked_terminating_) return;
+
+    // ── Peer TWAS termination-frame settle (T-03, A.5.5.3.5) ──────────────────
+    // A TWAS conclusion prefix-matching active_call_to has been accumulating
+    // (anchor + DATA/REP extensions, see ALECallProcessor LINKED branch). After
+    // Tdrw of silence the sender's FULL address is settled — same window the
+    // handshake uses for multi-word conclusions. Terminate ONLY on an exact
+    // full-address match vs active_call_to; anything else (a foreign station
+    // sharing the peer's first word, e.g. DC7XY vs peer DC7SU) is discarded.
+    // The Tdrw delay on genuine termination is harmless — the peer is gone
+    // either way. Same Trw-settle reasoning as handle_handshake(): a 1×Trw
+    // settle would race the next on-grid extension word and truncate the
+    // address, so the decision waits the full 2×Trw.
+    if (!linked_twas_addr_.empty()
+        && (current_time_ms - linked_twas_last_ms_) >= ALETimingConstants::Tdrw_ms) {
+        if (linked_twas_addr_ == active_call_to) {
+            SM_TRACE("[TRACE] handle_linked: peer TWAS termination frame (full address match) → LINK_TERMINATED\n");
+            linked_twas_addr_.clear();
+            process_event(ALEEvent::LINK_TERMINATED);
+            return;
+        }
+        SM_TRACE("[TRACE] handle_linked: foreign TWAS (address mismatch) — discarded\n");
+        linked_twas_addr_.clear();
+    }
 
     // ── Linked Orderwire (Enhanced Frequency-Select, A.5.6.3.2) ─────────────
     // Sends pending_orderwire_words_ + TIS:SELF (×2) while LINKED so EFS
