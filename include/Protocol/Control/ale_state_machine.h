@@ -1029,12 +1029,19 @@ private:
     void handle_linked();
     void handle_sounding();
 
-    /// OFS FR-06 frame-boundary decision point (docs/FRAMING_STANDARD.md §6
-    /// F-05, Phase 3b): called from update() for every frame the
-    /// FrameReassembler completes this tick, before the per-state handle_*()
-    /// runs. Currently implements only the LINKED-state termination decision
-    /// (§10: the rest of the §8 matrix wiring is Phase 3c/3d).
+    /// OFS FR-06 frame-boundary decision point (docs/FRAMING_STANDARD.md §6,
+    /// Phase 3): called from update() for every frame the FrameReassembler
+    /// completes this tick, before the per-state handle_*() runs. Dispatches
+    /// by current_state to the handlers below.
     void handle_completed_frame_(const AssembledFrame& f);
+    /// F-05 (§6): LINKED termination — exact full-address match vs
+    /// active_call_to (Phase 3b).
+    void handle_completed_frame_linked_(const AssembledFrame& f);
+    /// F-04 (§6): HANDSHAKE/WAIT_ACK "TIS -> link established; TWAS -> AMD
+    /// decline" — the TWAS half, decided against caller_address (Phase 3
+    /// follow-up, §10.1: closes the WAIT_ACK no-address-check gap the OF-0
+    /// audit found).
+    void handle_completed_frame_handshake_(const AssembledFrame& f);
 
     // ── LINKED-state AMD confirmation drivers (called from handle_linked) ──
     void handle_linked_amd_listening_();   ///< sender: LISTEN for the peer Response, then SENDING_ACK

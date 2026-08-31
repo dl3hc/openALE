@@ -319,14 +319,14 @@ void ALECallProcessor::react_handshake_(ALEStateMachine& sm, const WordRole& r, 
             sm.hs_tlww_start_ms = sm.current_time_ms;
             break;
         case WordRole::TWAS_WORD:
-            // TWAS instead of TIS as frame 3's conclusion, Ion2G-style: caller sent
-            // an AMD (already delivered via rx_accumulate_call_amd()) and declined
-            // to link (link_after_send=false on their side). Graceful outcome, not
-            // a failure — a plain call always concludes frame 3 with TIS, so
-            // caller-side TWAS-as-frame-3 only happens here.
-            if (sm.operator_callback)
-                sm.operator_callback(OperatorEvent::AMD_RECEIVED_NO_LINK);
-            sm.process_event(ALEEvent::AMD_DECLINED_LINK);
+            // TWAS instead of TIS as frame 3's conclusion (Ion2G-style AMD
+            // decline) is decided at the frame boundary now, not on this bare
+            // word — ALEStateMachine::handle_completed_frame_() reads the
+            // FrameReassembler's completed conclusion and compares its full
+            // address against caller_address (OFS Phase 3 follow-up,
+            // docs/FRAMING_STANDARD.md §10.1: the old unconditional handling
+            // here had no address check at all — any station's TWAS during
+            // our WAIT_ACK window would abort our own pending call).
             break;
         default:
             break;

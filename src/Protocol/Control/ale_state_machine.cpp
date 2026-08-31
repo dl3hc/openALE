@@ -893,11 +893,21 @@ void ALEStateMachine::handle_handshake() {
     }
 }
 
-// ── OFS FR-06 frame-boundary decision (docs/FRAMING_STANDARD.md §6 F-05) ──
+// ── OFS FR-06 frame-boundary decision (docs/FRAMING_STANDARD.md §6) ──────
 // Called from update() for every frame the FrameReassembler completes this
 // tick (Tdrw settle, FR-01(a), or an out-of-grammar restart, FR-01(b) — both
 // close a candidate the same way a fresh conclusion interrupting one would).
-//
+// Dispatches by current_state; each handler applies its own catalog row's
+// decision rule (F-04/F-05 both need a TWAS-vs-known-peer identity compare
+// the coarse (state,type) matrix cannot express alone — see each handler).
+void ALEStateMachine::handle_completed_frame_(const AssembledFrame& f) {
+    switch (current_state) {
+    case ALEState::LINKED:    handle_completed_frame_linked_(f);    break;
+    case ALEState::HANDSHAKE: handle_completed_frame_handshake_(f); break;
+    default: break;
+    }
+}
+
 // LINKED termination (A.5.5.3.5, Phase 3b): replaces the old
 // linked_twas_addr_/linked_twas_last_ms_ accumulator with the reassembler's
 // own FR-03 address run — the same accumulation, one mechanism instead of
@@ -920,18 +930,50 @@ void ALEStateMachine::handle_handshake() {
 // check. A non-match (or an IGNOREd type) is exactly what the matrix's
 // LINKED×F_SOUND/F_RESPONSE=OBSERVE cells already say to do — discard
 // toward no state change (FR-08).
-void ALEStateMachine::handle_completed_frame_(const AssembledFrame& f) {
-    if (current_state != ALEState::LINKED) return;
+void ALEStateMachine::handle_completed_frame_linked_(const AssembledFrame& f) {
     if (linked_terminating_) return;   // already tearing down — old handle_linked() guard
     if (!f.complete || !f.conclusion_is_twas) return;   // F-05 needs a settled TWAS conclusion
     if (context_matrix_lookup(ALEState::LINKED, f.type) == MatrixAction::IGNORE) return;
 
     if (f.conclusion_identity == active_call_to) {
-        SM_TRACE("[TRACE] handle_completed_frame_: peer TWAS termination frame (full address match) → LINK_TERMINATED\n");
+        SM_TRACE("[TRACE] handle_completed_frame_linked_: peer TWAS termination frame (full address match) → LINK_TERMINATED\n");
         process_event(ALEEvent::LINK_TERMINATED);
         return;
     }
-    SM_TRACE("[TRACE] handle_completed_frame_: foreign TWAS (address mismatch) — discarded\n");
+    SM_TRACE("[TRACE] handle_completed_frame_linked_: foreign TWAS (address mismatch) — discarded\n");
+}
+
+// F-04 (§6): "TIS → link established; TWAS → AMD decline" — the TWAS half.
+// HANDSHAKE is the CALLED station's (JOE's) machinery: SAM called us, we
+// sent our Response in SENDING_RESPONSE, and WAIT_ACK is us waiting for
+// SAM's third frame (TO JOE×2 + TIS/TWAS SAM). caller_address is SAM's
+// identity, known since WAIT_CYCLE_END. Same grammar ambiguity as F-05
+// (handle_completed_frame_linked_ above): RX types
+// this frame F_RESPONSE if the leading TO×2 was caught, F_SOUND if only the
+// conclusion was — never a distinct F_ACK — so the decision keys on
+// conclusion_is_twas + an exact compare against caller_address, not on
+// f.type alone.
+//
+// Closes a gap found during the OFS Phase 3d OF-0 audit
+// (docs/FRAMING_STANDARD.md §10.1): the old word-level TWAS_WORD handler in
+// react_handshake_() WAIT_ACK fired AMD_DECLINED_LINK on ANY TWAS word with
+// no address check — unlike every sibling case in that switch. A foreign
+// station sounding during our WAIT_ACK window would have misfired our own
+// pending call as "peer declined." No test exercised AMD_DECLINED_LINK
+// before this (tests/link/unit/test_wait_ack_twas_guard.cpp is new).
+void ALEStateMachine::handle_completed_frame_handshake_(const AssembledFrame& f) {
+    if (handshake_phase != HandshakePhase::WAIT_ACK) return;
+    if (!f.complete || !f.conclusion_is_twas) return;
+    if (context_matrix_lookup(ALEState::HANDSHAKE, f.type) == MatrixAction::IGNORE) return;
+
+    if (f.conclusion_identity == caller_address) {
+        SM_TRACE("[TRACE] handle_completed_frame_handshake_: WAIT_ACK TWAS from caller (full address match) → AMD_DECLINED_LINK\n");
+        if (operator_callback)
+            operator_callback(OperatorEvent::AMD_RECEIVED_NO_LINK);
+        process_event(ALEEvent::AMD_DECLINED_LINK);
+        return;
+    }
+    SM_TRACE("[TRACE] handle_completed_frame_handshake_: foreign TWAS during WAIT_ACK (address mismatch) — discarded\n");
 }
 
 void ALEStateMachine::handle_linked() {

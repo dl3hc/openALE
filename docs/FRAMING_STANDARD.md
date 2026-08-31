@@ -398,28 +398,42 @@ react paths that fires from a single word, not a frame boundary (grep:
 | `react_calling_`: `TWAS_WORD` → `CALL_REJECTED` + `LINK_TIMEOUT` | CALLING/LISTENING | **intentionally remaining** | pinned immediately after the word (`RxCharacterization` TEST 7); re-pinning to the boundary needs owner approval (§ Hard constraints) |
 | `react_handshake_` (both phases) + `react_sounding`: `CHANNEL_BUSY` → `LINK_TIMEOUT`/`SOUNDING_COMPLETE` | LBT windows | **intentionally remaining** | channel-occupancy fact, not protocol semantics (§4 note) — by design below the reassembler |
 | `on_invalid_word_`: LBT any signal / WAIT_CYCLE_END contiguous-error count → abort | HANDSHAKE, SOUNDING | **intentionally remaining** | invalid words never reach the reassembler at all (`on_word()` returns `NONE` immediately) — FEC/decode-quality signal, structurally has no frame-level equivalent |
-| `react_handshake_` WAIT_ACK: `TWAS_WORD` → `AMD_DECLINED_LINK` (+ `AMD_RECEIVED_NO_LINK` callback) | HANDSHAKE/WAIT_ACK | **⚠ found during this audit — not in the original constraints list, untested** | see below |
+| `react_handshake_` WAIT_ACK: `TWAS_WORD` → `AMD_DECLINED_LINK` (+ `AMD_RECEIVED_NO_LINK` callback) | HANDSHAKE/WAIT_ACK | **FIXED (2026-08-31 follow-up)** | found during this audit, not in the original constraints list — see below |
 
-**New finding, not previously catalogued:** the WAIT_ACK `TWAS_WORD` case
-(`react_handshake_`, "TWAS instead of TIS as frame 3's conclusion,
-Ion2G-style") fires `AMD_DECLINED_LINK` on the bare word with **no address
-check at all** — unlike every sibling case in the same switch (`TIS_CALLER`
-gates on `!hs_ack_tis_rcvd`, `DATA_EXTENSION`/`TO_SELF` only arm timing),
-`TWAS_WORD` here has no guard tying it to *our own* pending call. `classify()`
-sets `WordRole::TWAS_WORD` for **any** TWAS word in **any** state (see its
-unconditional TWAS branch) — so a foreign station sounding on the channel
-while we happen to be in WAIT_ACK for our own outbound call would also abort
-that call as an "AMD declined" outcome. This is the same *shape* of bug as
-the original LINKED-TWAS incident (a word-level reaction to a preamble whose
-identity was never checked against the party we're actually transacting
-with) — WAIT_ACK's narrower window makes it far less likely to fire in
-practice, and no test currently exercises `AMD_DECLINED_LINK` at all (`grep`
-returns zero hits outside this file), so there is no pinned behavior to
-preserve or break. **Not fixed in Phase 3** — it needs its own scoped
-investigation (does WAIT_ACK's TWAS need a peer-address gate the same way
-LINKED's did, or a full-address settle?) and new regression tests, the same
-treatment T-03 got. Left here as an open item for a follow-up pass, not
-silently folded into this refactor's diff.
+**Found during this audit, fixed as a same-day follow-up:** the WAIT_ACK
+`TWAS_WORD` case (`react_handshake_`, "TWAS instead of TIS as frame 3's
+conclusion, Ion2G-style") fired `AMD_DECLINED_LINK` on the bare word with
+**no address check at all** — unlike every sibling case in the same switch
+(`TIS_CALLER` gates on `!hs_ack_tis_rcvd`, `DATA_EXTENSION`/`TO_SELF` only
+arm timing), `TWAS_WORD` had no guard tying it to *our own* pending call.
+`classify()` sets `WordRole::TWAS_WORD` for **any** TWAS word in **any**
+state (its TWAS branch is unconditional) — so a foreign station sounding on
+the channel while we happened to be in WAIT_ACK for our own outbound call
+would also have aborted that call as an "AMD declined" outcome. Same *shape*
+of bug as the original LINKED-TWAS incident (a word-level reaction to a
+preamble whose identity was never checked against the party we're actually
+transacting with), just a narrower window and — unlike T-03 — no pinned
+behavior existed either way (`grep AMD_DECLINED_LINK` outside this file: 0
+hits before the fix).
+
+**Fix (F-04, §6: "TIS → link established; TWAS → AMD decline" — the TWAS
+half):** `handle_completed_frame_()` (the same FR-06 boundary mechanism
+T-03/F-05 uses) is now a small dispatcher by `current_state`, gated to
+`handle_completed_frame_linked_()` (LINKED, unchanged) or
+`handle_completed_frame_handshake_()` (HANDSHAKE, new). The HANDSHAKE
+handler fires only when `handshake_phase == WAIT_ACK` (WAIT_CYCLE_END is
+untouched) and compares the FrameReassembler's completed conclusion against
+`caller_address` — exact full-address match, identical semantics to T-03,
+same F-05/F-06-style grammar-sharing caveat (RX never produces a distinct
+`F_ACK`; the frame types `F_RESPONSE` or `F_SOUND` depending on whether the
+leading `TO×2` was caught, so the decision keys on `conclusion_is_twas`, not
+`f.type`). The word-level `TWAS_WORD` case in `react_handshake_()` WAIT_ACK
+is now a no-op stub pointing at the new location.
+New regression pin: `tests/link/unit/test_wait_ack_twas_guard.cpp` (ctest
+`WaitAckTwasGuard`, 5 tests) — foreign TWAS survives, anchor-alone does not
+decline, the full multi-word conclusion does, a shared-prefix foreign
+station (DL3XY vs caller DL3HC) survives, a 3-char caller declines
+correctly, and the genuine TIS/ACK path is unaffected. Full suite 71/71.
 
 Migration is incremental: each ad-hoc accumulator is already a partial
 reassembler; the standard defines the target shape so future frame work
