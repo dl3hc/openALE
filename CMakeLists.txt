@@ -136,6 +136,7 @@ add_library(ale_link
     src/Protocol/Control/ale_call_processor.cpp
     src/Protocol/Control/ale_channel_manager.cpp
     src/Protocol/Control/ale_freq_select.cpp
+    src/Protocol/Control/context_matrix.cpp
 )
 
 target_include_directories(ale_link PUBLIC
@@ -782,6 +783,11 @@ add_executable(test_frame_reassembler tests/frame/unit/test_frame_reassembler.cp
 target_link_libraries(test_frame_reassembler ale_link ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_frame_reassembler PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME FrameReassembler COMMAND test_frame_reassembler)
+
+add_executable(test_context_matrix tests/link/unit/test_context_matrix.cpp)
+target_link_libraries(test_context_matrix ale_link ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_context_matrix PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME ContextMatrix COMMAND test_context_matrix)
 
 add_executable(test_frame tests/frame/unit/test_frame.cpp)
 target_link_libraries(test_frame ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
