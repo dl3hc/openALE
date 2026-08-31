@@ -33,8 +33,8 @@ LQACmdPayload LqaExchangeManager::build_payload(uint32_t freq_hz,
                                                   const std::string& target) const
 {
     LQACmdPayload p{};  // sentinels: sinad=31, ber=31, mp=7
-    // A.5.4.2: report what WE measured FROM target. Prefer a station-specific
-    // entry; fall back to the channel aggregate when no station data exists yet.
+    // A.5.4.2: report what WE measured FROM target; prefer station-specific
+    // entry, fall back to channel aggregate if none yet.
     auto e = (!target.empty()) ? db_.get_entry(freq_hz, target) : nullptr;
     if (!e || e->total_words == 0)
         e = db_.get_entry(freq_hz, "");
@@ -44,9 +44,9 @@ LQACmdPayload LqaExchangeManager::build_payload(uint32_t freq_hz,
         p.sinad = (s >= 30.0f) ? 30u : static_cast<uint8_t>(s + 0.5f);
     }
     if (e->total_words > 0) {
-        // ber stored as averaged non-unanimous vote count (0.0–48.0, A.5.4.1.1).
-        // total_words>0 means a real measurement: BER=0 is valid (code 0 = best),
-        // not the 31 "no value" sentinel (A.5.4.2.1 / Table A-XIII).
+        // ber = averaged non-unanimous vote count (0.0-48.0, A.5.4.1.1).
+        // total_words>0 means real measurement: BER=0 valid (code 0=best), not
+        // the 31 "no value" sentinel (A.5.4.2.1 / Table A-XIII).
         p.ber = ber_score_to_lqa_code(
             static_cast<uint8_t>(std::min(48.0f, std::max(0.0f, e->ber))));
     }

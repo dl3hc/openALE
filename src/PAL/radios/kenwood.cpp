@@ -33,16 +33,14 @@ bool Kenwood::start() {
 }
 
 void Kenwood::stop() {
-    // Nothing to do
 }
 
 bool Kenwood::set_channel(const Channel& channel) {
     if (!ready_ || !serial_) return false;
     
-    // Set frequency on VFO A
+    // VFO A
     send_command(build_freq_command('A', channel.rx_frequency));
-    
-    // Set mode
+
     send_command(build_mode_command(channel.rx_mode));
     
     current_channel_ = channel;
@@ -88,8 +86,7 @@ void Kenwood::process_response(const uint8_t* data, size_t length) {
         rx_buffer_ += c;
         
         if (c == ';') {
-            // Complete response received
-            // Parse if needed, for now just acknowledge
+            // Response complete; parse if needed, for now just acknowledge
             if (ack_callback_) {
                 ack_callback_();
             }

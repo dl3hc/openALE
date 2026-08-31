@@ -2,15 +2,15 @@
  * \file Modem/ale2g_modem.cpp
  * \brief ALE 2G Modem — Modulator and Demodulator implementations.
  *
- * The grid-lock state machine (gate, refinement, adaptive FEC) moved to
- * WordGridTracker (word_grid_tracker.{h,cpp}).  Demodulator now owns:
+ * Grid-lock state machine (gate, refinement, adaptive FEC) moved to
+ * WordGridTracker (word_grid_tracker.{h,cpp}). Demodulator now owns:
  *   - ring buffer + PCM intake
  *   - Goertzel + symbol_from_block() (signal extraction)
  *   - try_decode_() → DecodedCandidate
  *   - push_samples() dispatch to tracker_.process_candidate()
  *   - silence-gap detection → tracker_.on_silence_gap()
  *
- * All decode math (Goertzel, SINAD measurement) is unchanged.
+ * Decode math (Goertzel, SINAD measurement) unchanged.
  */
 
 #include "Modem/ale2g_modem.h"
@@ -42,12 +42,11 @@ Modulator::Modulator()
 
 void Modulator::enqueue_word(const ALEWord& word)
 {
-    // Diagnostic (2026-08-07): confirms the exact word content handed to the
-    // modulator at the TX boundary, so a real-radio capture can be compared
-    // against this trace to rule out (or confirm) a TX-side drop of the last
-    // word of a conclusion. Called from the SM/main thread (via
-    // ALEController's transmit_callback), not the real-time audio thread —
-    // safe to log here. Silent by default (LogLevel::TRACE).
+    // Diagnostic (2026-08-07): confirms exact word content handed to modulator
+    // at TX boundary, to compare against a real-radio capture and rule out a
+    // TX-side drop of a conclusion's last word. Called from SM/main thread (via
+    // ALEController's transmit_callback), not the real-time audio thread — safe
+    // to log here. Silent by default (LogLevel::TRACE).
     pal::log_trace("TXWord", "enqueue %s [%s]",
                     WordParser::word_type_name(word.type), word.address);
     std::lock_guard<std::mutex> lk(mtx_);
@@ -132,8 +131,8 @@ void Demodulator::reset()
     std::fill(subblk_tone_, subblk_tone_ + TRIPLE_LEN, uint8_t(0xFF));
     for (uint32_t t = 0; t < NUM_TONES; ++t)
         last_triple_pos_[t] = -static_cast<int64_t>(DIVERSITY_WINDOW) - 1;
-    // Full re-init clears the global squelch floor; a per-channel hop does NOT (the
-    // floor is the audio-path noise level, learned across channels).
+    // Full re-init clears the global squelch floor; a per-channel hop does NOT
+    // (floor is the audio-path noise level, learned across channels).
     scan_floor_       = 0.0f;
     scan_floor_valid_ = false;
     tracker_.reset();
@@ -143,9 +142,9 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
 {
     if (!enabled_) return;
 
-    // Apply a pending channel hop atomically at batch boundary (audio-thread only).
-    // mark_channel_hop() (controller thread) only sets hop_pending_; all mutable
-    // demodulator state is reset here so there is no cross-thread data race.
+    // Apply pending channel hop atomically at batch boundary (audio-thread only).
+    // mark_channel_hop() (controller thread) only sets hop_pending_; mutable
+    // demodulator state is reset here so there's no cross-thread data race.
     if (hop_pending_.exchange(false, std::memory_order_acquire)) {
         hop_offset_    = write_pos_;
         energy_fired_  = false;
@@ -166,15 +165,14 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
         // Spectrum analyser (waterfall) — display concern, not decode.
         spectrum_.feed(s);
 
-        // Silence-gap grid reset.
         check_silence_reset_(s);
 
         // §A.5.3.3 stage-1: level-invariant per-symbol-triple + tone-diversity detector.
-        // Every SUBBLOCK_STEP (16 = 2ms, overlapped), test the last ANALYSIS_SAMPLES for
-        // a tonal winner; TRIPLE_LEN consecutive same-winner sub-blocks = a per-symbol
-        // triple (6ms < 8ms symbol).  Fire once ≥ MIN_DISTINCT_TONES tones have a triple
-        // within DIVERSITY_WINDOW — the 8-FSK signature that rejects noise, voice, and a
-        // steady carrier.  See ale2g_modem.h for the design + sim-locked constants.
+        // Every SUBBLOCK_STEP (16 = 2ms, overlapped), test last ANALYSIS_SAMPLES for a
+        // tonal winner; TRIPLE_LEN consecutive same-winner sub-blocks = a per-symbol
+        // triple (6ms < 8ms symbol). Fires once ≥ MIN_DISTINCT_TONES tones have a triple
+        // within DIVERSITY_WINDOW — the 8-FSK signature rejecting noise, voice, and a
+        // steady carrier. See ale2g_modem.h for design + sim-locked constants.
         if (++subblk_accum_ >= SUBBLOCK_STEP) {
             subblk_accum_ = 0;
             if ((write_pos_ - hop_offset_) >= HOP_GUARD_SAMPLES) {
@@ -186,17 +184,17 @@ void Demodulator::push_samples(const int16_t* samples, uint32_t count)
                 const bool tonal = subblock_tonal_(winner, tonal_pow);
 
                 if (!tonal) {
-                    // Non-tonal (noise) block → train the GLOBAL in-band floor.  This is
-                    // the audio-path noise floor, learned across every empty channel a
-                    // scan visits; it is never reset per hop (see mark_channel_hop).
+                    // Non-tonal (noise) block → train the GLOBAL in-band floor: the
+                    // audio-path noise floor learned across every empty channel a scan
+                    // visits, never reset per hop (see mark_channel_hop).
                     if (!scan_floor_valid_) { scan_floor_ = tonal_pow; scan_floor_valid_ = true; }
                     else scan_floor_ += (tonal_pow < scan_floor_ ? SCAN_FLOOR_ALPHA_DOWN
                                                                  : SCAN_FLOOR_ALPHA_UP)
                                         * (tonal_pow - scan_floor_);
                     subblk_tone_[0] = 0xFF;
                 } else {
-                    // Tonal block → optional operator squelch: require the tone to stand
-                    // margin_db above the calibrated floor.  Default OFF ⇒ pass through.
+                    // Tonal block → optional operator squelch: tone must stand margin_db
+                    // above the calibrated floor. Default OFF ⇒ pass through.
                     const bool pass = !scan_squelch_enabled_ || !scan_floor_valid_
                                       || tonal_pow >= scan_floor_ * scan_detect_margin_lin_;
                     subblk_tone_[0] = pass ? winner : uint8_t(0xFF);
@@ -267,15 +265,15 @@ uint8_t Demodulator::symbol_from_block(const int16_t* block, float& sinad_db_out
         const float p = goertzel_power(block, static_cast<float>(TONE_FREQS_HZ[r]));
         if (p > best) { best = p; rank = r; }
     }
-    // Full-block winning-tone power: coherent only when the block is aligned to
-    // the transmitted symbol, so its per-word sum peaks at the true boundary —
-    // the alignment metric for the word-boundary refinement.
+    // Full-block winning-tone power: coherent only when block is aligned to the
+    // transmitted symbol, so per-word sum peaks at the true boundary — the
+    // alignment metric for word-boundary refinement.
     win_power_out = best;
 
     // ── A.5.4.1.2 true-SINAD on a centered guard-limited sub-window ──────────
-    // Measure SINAD on the central 32 samples (drop 16 at each edge where
-    // ringing lives), keeping the decision on the full 64-sample block.
-    // M = 32 preserves 8-tone orthogonality (250 Hz spacing, integer cycles).
+    // SINAD measured on central 32 samples (drop 16 at each edge where ringing
+    // lives); decision still made on full 64-sample block. M=32 preserves
+    // 8-tone orthogonality (250 Hz spacing, integer cycles).
     constexpr uint32_t SINAD_M      = SAMPLES_PER_SYMBOL / 2;   // 32 samples
     constexpr uint32_t SINAD_OFFSET = SAMPLES_PER_SYMBOL / 4;  // 16 → block[16..47]
     const int16_t* win = block + SINAD_OFFSET;
@@ -346,9 +344,9 @@ bool Demodulator::subblock_tonal_(uint8_t& winner, float& tonal_pow) const
     if (best_rank < NUM_TONES - 1) neighbour = std::max(neighbour, p[best_rank + 1]);
 
     // Peakiness = tonal power (winner + strongest neighbour) / total block energy.
-    // 2*goertzel/M² recovers the tone's mean-square power (== amp²/2 for a pure tone);
-    // the +neighbour term absorbs 125 Hz scalloping.  Level-invariant, so no absolute
-    // audio-path calibration is needed on this path (that is a separate operator squelch).
+    // 2*goertzel/M² recovers tone's mean-square power (== amp²/2 for a pure tone);
+    // +neighbour term absorbs 125 Hz scalloping. Level-invariant, so no absolute
+    // audio-path calibration needed here (separate concern from operator squelch).
     tonal_pow =
         2.0f * (best + neighbour) / static_cast<float>(ANALYSIS_SAMPLES * ANALYSIS_SAMPLES);
     float energy = 0.0f;

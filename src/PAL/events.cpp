@@ -2,8 +2,8 @@
  * @file events.cpp
  * @brief SimpleEventHandler — thread-safe subscription dispatch.
  *
- * Data pointers in Event::data are only valid for the synchronous duration
- * of emit() — callbacks must not store raw pointers past their return.
+ * Event::data pointers are valid only for the synchronous duration of
+ * emit() — callbacks must not store raw pointers past their return.
  *
  * @author Alex Pennington, AAM402/KY4OLB
  * @date December 2024

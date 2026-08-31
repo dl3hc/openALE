@@ -4,8 +4,8 @@
  *
  *   Architecture (pull model — mirrors WASAPI implementation)
  *   ──────────────────────────────────────────────────────────
- *   A dedicated RT audio thread uses snd_pcm_wait() as its loop clock.
- *   On each wake-up it services render (TX) and then capture (RX).
+ *   Dedicated RT audio thread uses snd_pcm_wait() as loop clock. Each
+ *   wake-up services render (TX) then capture (RX).
  *
  *   TX data flow:
  *     audio thread → sym_pull_(out_49) → [modem's pull_symbol_frame()]
@@ -16,10 +16,10 @@
  *     main thread → tick() → rx_out
  *
  *   Frame completion:
- *     snd_pcm_delay() gives frames still queued in the hardware ring buffer.
- *     played = total_written_ - delay  mirrors the WASAPI padding formula.
- *     When played crosses a word_play_target_, frames_rendered_ is incremented
- *     and tick() fires the armed callback.
+ *     snd_pcm_delay() gives frames still queued in the hw ring buffer.
+ *     played = total_written_ - delay mirrors the WASAPI padding formula. When
+ *     played crosses a word_play_target_, frames_rendered_ increments and
+ *     tick() fires the armed callback.
  */
 
 #include "PAL/audio_driver.h"
@@ -86,8 +86,8 @@ private:
     std::mutex                    sym_src_mtx_;
     std::function<bool(uint8_t*)> sym_pull_;
     // ── Raw-PCM TX source (transparent-voice passthrough) ───────────────────
-    // Same mutex as sym_pull_. When non-null the render thread pulls 8 kHz PCM
-    // from pcm_pull_ instead of symbols — see service_render().
+    // Same mutex as sym_pull_. If non-null, render thread pulls 8 kHz PCM from
+    // pcm_pull_ instead of symbols (service_render()).
     std::function<size_t(int16_t*, size_t)> pcm_pull_;
 
     // ── TX signal chain (audio-thread-only) ──────────────────────────────────
@@ -104,7 +104,7 @@ private:
     // ── Frame completion (mirrors WASAPI) ────────────────────────────────────
     // total_written_     — cumulative device frames handed to snd_pcm_writei
     // word_play_targets_ — write-end position of each word awaiting completion
-    // played = total_written_ - snd_pcm_delay() → fire when played >= target
+    // played = total_written_ - snd_pcm_delay() -> fire when played >= target
     std::atomic<uint64_t> frames_rendered_{0};
     uint64_t              total_written_ = 0;
     std::deque<uint64_t>  word_play_targets_;
@@ -229,14 +229,14 @@ std::string AlsaDevice::resolve_device(const std::string& hint, bool is_output)
     if (name.size() > 4 && name[2] == ':' && (name.substr(0,2) == "IN" ||
                                                name.substr(0,2) == "OT"))
         name = name.substr(4);
-    // Strip "OUT: " or "IN:  " (5-char prefix with trailing space)
+    // Strip "OUT: " / "IN:  " (5-char prefix, trailing space)
     if (name.size() > 5 && (name.substr(0,5) == "OUT: " ||
                              name.substr(0,5) == "IN:  "))
         name = name.substr(5);
-    // Strip the " — <description>" suffix list_devices() appends. Passing the
-    // full "NAME — DESC" display string straight to snd_pcm_open() feeds ALSA's
-    // config parser a comma-laden DESC (e.g. "UA-25EX, USB Audio Hardware...")
-    // as bogus plughw: arguments, producing "Parameter DEV must be an integer".
+    // Strip " — <description>" suffix from list_devices(). Passing the full
+    // "NAME — DESC" string to snd_pcm_open() feeds ALSA's config parser a
+    // comma-laden DESC (e.g. "UA-25EX, USB Audio Hardware...") as bogus
+    // plughw: arguments, producing "Parameter DEV must be an integer".
     const size_t dash = name.find(" — ");
     if (dash != std::string::npos)
         name = name.substr(0, dash);
@@ -500,8 +500,8 @@ void AlsaDevice::audio_loop()
 //
 // Mirrors WASAPI service_render(): drain at_render_buf_ frame-by-frame, pull
 // new symbol frames on demand, write device-format samples via snd_pcm_writei.
-// Completion targets are pre-computed as (total_written_ + batch_offset + 1)
-// before writei so they remain valid after partial writes.
+// Completion targets pre-computed as (total_written_ + batch_offset + 1)
+// before writei so they stay valid after partial writes.
 
 void AlsaDevice::service_render()
 {
@@ -534,13 +534,13 @@ void AlsaDevice::service_render()
     uint8_t syms[SYMBOLS_PER_WORD];
 
     // Fill scratch buffer frame-by-frame, mirroring WASAPI's per-frame loop.
-    // word_play_targets_ entries are pre-computed here as total_written_ + (i+1)
-    // so they stay correct regardless of whether writei writes all frames at once.
+    // word_play_targets_ entries pre-computed here as total_written_ + (i+1) so
+    // they stay correct regardless of whether writei writes all frames at once.
     for (snd_pcm_sframes_t i = 0; i < avail; ) {
         if (at_render_pos_ >= at_render_buf_.size()) {
             if (pcm_pull) {
-                // Transparent-voice passthrough: raw 8 kHz PCM → resampler →
-                // device, no ToneGenerator/band-pass, no completion accounting.
+                // Transparent-voice passthrough: raw 8 kHz PCM -> resampler ->
+                // device. No ToneGenerator/band-pass, no completion accounting.
                 constexpr size_t PCM_WANT = 160;  // 20 ms @ 8 kHz
                 at_pcm_8k_.resize(PCM_WANT);
                 const size_t got = pcm_pull(at_pcm_8k_.data(), PCM_WANT);
@@ -587,7 +587,7 @@ void AlsaDevice::service_render()
         ++i;
 
         if (at_frame_pending_ && at_render_pos_ >= at_render_buf_.size()) {
-            // total_written_ + i is the absolute position after this frame is written
+            // total_written_ + i = absolute position after this frame is written
             word_play_targets_.push_back(total_written_ + (uint64_t)i);
             at_frame_pending_ = false;
         }

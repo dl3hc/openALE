@@ -1,9 +1,8 @@
-// crash_handler.cpp — writes crash.log on an unhandled exception/fault.
+// crash_handler.cpp — writes crash.log on unhandled exception/fault.
 //
-// Deliberately uses raw fopen/fprintf instead of pal::get_logger(): this code
-// runs after the process is already in an undefined state (corrupted heap,
-// exhausted stack, mid-unwind), so it must depend on as little of the rest of
-// the program as possible — the same rationale documented for logger.cpp in
+// Uses raw fopen/fprintf, not pal::get_logger(): runs when process state is
+// undefined (corrupted heap, exhausted stack, mid-unwind), so must depend on
+// as little of the program as possible — same rationale as logger.cpp in
 // .claude/CLAUDE.md's PAL printf exception list.
 
 #include "PAL/crash_handler.h"
@@ -56,10 +55,9 @@ void write_timestamp(FILE* f) {
 }
 
 #ifdef _WIN32
-// Best-effort: walks the current call stack and resolves symbols via dbghelp
-// when a matching PDB is available (Debug builds). SymInitialize() is cheap
-// enough to call fresh on every crash record — there is at most one per
-// process lifetime in practice.
+// Best-effort: walks call stack, resolves symbols via dbghelp if PDB available
+// (Debug builds). SymInitialize() cheap enough to call fresh per crash
+// record — at most one per process lifetime in practice.
 void write_stack_trace(FILE* f) {
     void*  frames[64];
     HANDLE process = GetCurrentProcess();
@@ -91,12 +89,10 @@ void write_stack_trace(FILE* f) {
     if (syms_ok) SymCleanup(process);
 }
 #else
-// Resolves the running executable's own path via /proc/self/exe, so
-// addr2line_resolve() below can be pointed at it. Linux-only (no /proc on
-// macOS) — self_exe_path() returns "" there and callers degrade gracefully
-// to the un-annotated backtrace_symbols() output. Mirrors the technique
-// ale_monitor/src/ale_monitor.cpp's exe_dir() already uses for the same
-// reason (locating the binary regardless of CWD).
+// Resolves own exe path via /proc/self/exe for addr2line_resolve() below.
+// Linux-only (no /proc on macOS) — returns "" there, callers degrade to
+// un-annotated backtrace_symbols() output. Same technique as
+// ale_monitor/src/ale_monitor.cpp's exe_dir() (locate binary regardless of CWD).
 std::string self_exe_path() {
     char buf[4096];
     const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
@@ -105,19 +101,15 @@ std::string self_exe_path() {
     return buf;
 }
 
-// Best-effort "function at file:line" resolution for one return address via
-// the external `addr2line` tool (binutils — present on essentially every
-// Linux install), the closest POSIX equivalent to the Windows branch's
-// dbghelp SymGetLineFromAddr64 call. Appends nothing if addr2line is
-// missing, the binary has no debug info, or the frame can't be resolved —
-// the raw backtrace_symbols() line printed by the caller is always there as
-// a fallback either way.
+// Best-effort "function at file:line" for one return address via external
+// `addr2line` (binutils, present on essentially every Linux install) —
+// POSIX equivalent of the Windows dbghelp SymGetLineFromAddr64 call. Appends
+// nothing if addr2line is missing, binary has no debug info, or frame can't
+// resolve — caller's raw backtrace_symbols() line remains as fallback.
 //
-// Not async-signal-safe in the strict POSIX sense (popen() forks/execs,
-// which can deadlock if the crash happened while malloc's internal lock was
-// already held) — same "best effort, not a hardened crash reporter"
-// tradeoff already accepted for the rest of this file; the alternative is no
-// location information at all.
+// Not async-signal-safe: popen() forks/execs, can deadlock if crash occurred
+// while malloc's internal lock was held — same best-effort tradeoff as rest
+// of file; alternative is no location info at all.
 void addr2line_resolve(FILE* out, const std::string& exe, void* addr) {
     char cmd[4224];
     std::snprintf(cmd, sizeof(cmd), "addr2line -e \"%s\" -f -C -p %p 2>/dev/null",
@@ -128,8 +120,7 @@ void addr2line_resolve(FILE* out, const std::string& exe, void* addr) {
     if (std::fgets(line, sizeof(line), p)) {
         const size_t len = std::strlen(line);
         if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-        // addr2line prints "?? ??:0" when it has no debug info for a frame —
-        // skip that noise rather than appending a useless "-- ?? ??:0".
+        // addr2line prints "?? ??:0" with no debug info — skip rather than append useless "-- ?? ??:0".
         if (std::strcmp(line, "?? ??:0") != 0)
             std::fprintf(out, " -- %s", line);
     }
@@ -143,9 +134,8 @@ void write_stack_trace(FILE* f) {
         std::fprintf(f, "  (backtrace() returned no frames)\n");
         return;
     }
-    // Needs -rdynamic at link time (see CMakeLists.txt) to name frames inside
-    // the executable itself, not just shared libraries — without it every
-    // in-exe frame shows only "openALE(+0x1234)" instead of a function name.
+    // Needs -rdynamic at link time (CMakeLists.txt) to name in-exe frames, not
+    // just shared libs — else every in-exe frame shows "openALE(+0x1234)" not a name.
     char** symbols = backtrace_symbols(frames, count);
     const std::string exe = self_exe_path();
 
@@ -158,8 +148,7 @@ void write_stack_trace(FILE* f) {
 }
 #endif
 
-// Shared record writer for every handler below — kept tiny and dependency-
-// free on purpose (see file doc comment).
+// Shared record writer for handlers below — tiny, dependency-free on purpose (see file doc comment).
 void write_crash_record(const char* cause, const char* detail) {
     FILE* f = fopen_portable(kCrashLogFile, "a");
     if (!f) return;
@@ -211,20 +200,18 @@ const char* exception_code_name(DWORD code) {
         case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: return "EXCEPTION_ARRAY_BOUNDS_EXCEEDED";
         case EXCEPTION_PRIV_INSTRUCTION:      return "EXCEPTION_PRIV_INSTRUCTION";
         case EXCEPTION_IN_PAGE_ERROR:         return "EXCEPTION_IN_PAGE_ERROR";
-        // 0xE06D7363 ('msc' encoded into the low 3 bytes) is the fixed SEH
-        // exception code the MSVC C++ runtime raises for every `throw` — this
-        // is what an uncaught C++ exception looks like at this level, distinct
-        // from an actual hardware fault. Common enough in practice (e.g. the
-        // lqa.bin std::length_error scenario this handler was written for)
-        // that it deserves a readable label instead of a bare hex code.
+        // 0xE06D7363 ('msc' in low 3 bytes): fixed SEH code MSVC C++ runtime raises
+        // for every `throw` — an uncaught C++ exception at this level, distinct from
+        // a hardware fault. Common enough (e.g. lqa.bin std::length_error case this
+        // handler was written for) to deserve a readable label vs bare hex.
         case 0xE06D7363:                      return "MSVC_CPP_EXCEPTION (uncaught C++ throw)";
         default:                              return "EXCEPTION (see code)";
     }
 }
 
 LONG WINAPI seh_filter(EXCEPTION_POINTERS* ep) {
-    // A stack-overflow filter runs on an exhausted stack — reset the guard
-    // page first or logging/dbghelp calls below can themselves fault.
+    // Stack-overflow filter runs on exhausted stack — reset guard page first or
+    // logging/dbghelp calls below can themselves fault.
     if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW)
         _resetstkoflw();
 

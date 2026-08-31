@@ -18,8 +18,8 @@ void ALEChannelManager::add_channel(const Channel& ch) {
 }
 
 const Channel* ALEChannelManager::current() const {
-    // Sounding-sweep override takes precedence over the scan-list current channel
-    // (see set_override()).
+    // Sounding-sweep override takes precedence over the scan-list current
+    // channel (see set_override()).
     if (override_active_) return &override_ch_;
     if (scan_.scan_list.empty()) return nullptr;
     if (scan_.channel_index >= scan_.scan_list.size()) return nullptr;
@@ -53,8 +53,8 @@ void ALEChannelManager::start(uint32_t current_time_ms) {
         last_hop_ms_ = current_time_ms;
         apply(0, current_time_ms);
     } else {
-        // Re-entry (returning from SOUNDING, failed CALLING, HANDSHAKE, etc.):
-        // resume from the next channel so ch0 doesn't accumulate extra dwells.
+        // Re-entry (from SOUNDING, failed CALLING, HANDSHAKE, etc.): resume
+        // at the next channel so ch0 doesn't accumulate extra dwells.
         hop_next(current_time_ms);
     }
 }

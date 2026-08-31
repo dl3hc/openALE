@@ -29,10 +29,9 @@
 
 namespace {
 
-// Validates a candidate ALE address against the Basic-38 character set and
-// the 3–15 char length limit (A.5.2.4.2 / REQ-ADDR-001/002/004).
-// The AddressEncoder will silently truncate >15-char inputs (DD-007 safety
-// net), but the app boundary must surface invalid input to the caller.
+// Validates addr against Basic-38 charset + 3-15 char limit (A.5.2.4.2 /
+// REQ-ADDR-001/002/004). AddressEncoder silently truncates >15-char inputs
+// (DD-007 safety net); app boundary must surface invalid input to caller.
 static bool is_valid_ale_address(const std::string& addr) {
     if (addr.size() < 3 || addr.size() > 15) return false;
     for (char c : addr)
@@ -40,8 +39,8 @@ static bool is_valid_ale_address(const std::string& addr) {
     return true;
 }
 
-// Great-circle distance in meters (haversine). Used by tick_position_report()'s
-// ON_CHANGE mode to compare the current position against the last-reported one.
+// Great-circle distance in meters (haversine); used by tick_position_report()'s
+// ON_CHANGE mode to compare current position vs last-reported one.
 static double haversine_distance_m(double lat1_deg, double lon1_deg,
                                     double lat2_deg, double lon2_deg) {
     constexpr double kEarthRadiusM = 6371000.0;
@@ -92,8 +91,8 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
     }
     if (toks.empty()) return std::nullopt;
 
-    // optional leading "ID:<id>" token (written by format_channel_line(); old
-    // files/specs without it just get an id auto-assigned by the caller).
+    // optional leading "ID:<id>" token (written by format_channel_line());
+    // older files without it get an id auto-assigned by the caller.
     std::string id;
     if (toks[0].rfind("ID:", 0) == 0) {
         id = toks[0].substr(3);
@@ -102,9 +101,9 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
     }
 
     // first token: rx_hz, or rx_hz:tx_hz (colon-joined). format_channel_line()
-    // writes rx and tx as two separate tokens, so also accept a following
-    // all-digits token as tx_hz (keeps the written form self-consistent and
-    // stays backward-compatible with old `rx tx mode [label]` files).
+    // writes rx/tx as two separate tokens, so also accept a following
+    // all-digits token as tx_hz (keeps written form self-consistent, stays
+    // backward-compatible with old `rx tx mode [label]` files).
     uint32_t rx_hz = 0, tx_hz = 0;
     size_t next = 1;  // index of the next unconsumed token
     try {
@@ -122,8 +121,8 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
             }
         }
     } catch (...) {
-        return std::nullopt;  // not a channel line (e.g. a key=value settings line
-                               // in a merged file) — skip it, don't crash the parser
+        return std::nullopt;  // not a channel line (e.g. key=value settings line
+                               // in a merged file) — skip, don't crash the parser
     }
     if (rx_hz == 0) return std::nullopt;
 
@@ -139,9 +138,9 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
     ch.id = id;
 
     // optional bracketed flags token [OFF,RX,IC,IS,IR,AO] (written by
-    // format_channel_line). Treated as flags only when every comma-separated
-    // code is a known code; otherwise the token is left as part of the label
-    // (so a label that legitimately starts with "[...]" is not swallowed).
+    // format_channel_line). Treated as flags only if every comma-separated
+    // code is known; otherwise left as part of the label (so a label that
+    // legitimately starts with "[...]" is not swallowed).
     if (label_start < toks.size() && !toks[label_start].empty()
         && toks[label_start].front() == '[' && toks[label_start].back() == ']') {
         const std::string body = toks[label_start].substr(1, toks[label_start].size() - 2);
@@ -193,11 +192,11 @@ static std::optional<ale::Channel> parse_channel_spec(const std::string& raw)
 
 // Serialize one Channel to a file line:
 //   [ID:id] rx_hz tx_hz mode [flags] [label]
-// where [flags] is a bracketed, comma-separated code list emitted only when any
-// per-channel flag is non-default (backward-compatible: old files have no token).
+// [flags]: bracketed CSV code list, emitted only when a per-channel flag is
+// non-default (backward-compatible: old files carry no token).
 // Codes: OFF (enabled=false), RX (rx_only), TX (tx_only), IC (inhibit_calling),
-//         IS (inhibit_sounding), IR (inhibit_reporting), AO (ale_only — short LBT),
-//         PWR:<0-100> (power_pct, the one valued code — rest are bare flags).
+//        IS (inhibit_sounding), IR (inhibit_reporting), AO (ale_only — short LBT),
+//        PWR:<0-100> (power_pct; the one valued code — rest are bare flags).
 static std::string format_channel_line(const ale::Channel& ch)
 {
     char buf[64];
@@ -208,7 +207,7 @@ static std::string format_channel_line(const ale::Channel& ch)
     std::string line;
     if (!ch.id.empty()) { line += "ID:"; line += ch.id; line += ' '; }
     line += buf;
-    // Per-channel flags — omitted when all default (keeps old files unchanged).
+    // Per-channel flags — omitted when all default (old files unchanged).
     std::string flags;
     if (!ch.enabled)            flags += "OFF,";
     if (ch.rx_only)             flags += "RX,";
@@ -228,7 +227,7 @@ static std::string format_channel_line(const ale::Channel& ch)
     return line;
 }
 
-// Smallest unused "C-<n>" id (n >= 1) given the current channel list.
+// Smallest unused "C-<n>" id (n >= 1) for the current channel list.
 static std::string next_free_channel_id(const std::vector<ale::Channel>& channels)
 {
     for (uint32_t n = 1; ; ++n) {
@@ -273,7 +272,7 @@ static std::vector<std::string> split_pipe(const std::string& s)
     return out;
 }
 
-// Join channel IDs back into the same comma-separated form split_csv() expects.
+// Join channel IDs into the comma-separated form split_csv() expects.
 static std::string join_csv(const std::vector<std::string>& items)
 {
     std::string out;
@@ -298,8 +297,8 @@ static pal::RadioMode mode_from_string(const std::string& s) {
     return pal::RadioMode::USB;
 }
 
-// Inverse of mode_from_string() — used by the radio-facing getters so the
-// controller never has to keep a second copy of "current mode" itself.
+// Inverse of mode_from_string(); used by radio-facing getters so the
+// controller doesn't keep a second copy of "current mode" itself.
 static std::string mode_to_string(pal::RadioMode m) {
     switch (m) {
         case pal::RadioMode::USB:      return "USB";
@@ -337,14 +336,14 @@ ALEController::ALEController()
 {
     wire_callbacks();
 
-    // LBT occupancy (A.5.4.7.2): the SM polls this in all three LBT windows.
+    // LBT occupancy (A.5.4.7.2): SM polls this in all three LBT windows.
     // Busy transitions are surfaced to the operator via status (no silent
     // blocking); the A.5.4.7.3 override is handled inside the SM.
     sm_.set_channel_busy_query([this]() {
-        // The detector's `busy` flag is the single LBT-busy truth (it already
-        // encodes the LBT-enabled and RX-active gates via set_active).  The
-        // GUI pill reads the same flag (lbt_busy()), so there is exactly one
-        // LBT implementation; this query is just its SM-side consumer.
+        // detector's `busy` flag is the single LBT-busy truth (encodes the
+        // LBT-enabled and RX-active gates via set_active). GUI pill reads
+        // the same flag (lbt_busy()) — one LBT implementation; this query
+        // is just its SM-side consumer.
         const bool busy = occupancy_.is_busy();
         if (busy && !lbt_busy_reported_) {
             char buf[112];
@@ -365,7 +364,7 @@ ALEController::ALEController()
     sm_.set_lqa_metrics(&lqa_db_metrics_);
 
     // LQA auto-sounding: fire sm_.send_sounding() when the scanner is
-    // currently dwelling on a channel that has stale (or absent) LQA data.
+    // dwelling on a channel with stale (or absent) LQA data.
     lqa_analyzer_.set_sounding_callback([this](uint32_t freq) {
         const Channel* ch = sm_.get_current_channel();
         // Per-channel inhibit_sounding / rx_only suppress auto-sounding on this channel.
@@ -377,15 +376,14 @@ ALEController::ALEController()
     });
 
     // Push config_'s built-in defaults (incl. link_idle_timeout_sec=360, see
-    // ale_station_config.h) into the state machine right away. Without this,
-    // sm_'s TimingParameters::Twa_ms sits at its own raw fallback
-    // (ALETimingConstants::Twa_ms = 30s, a spec constant, not the intended
-    // operator default) until load_state()/import_settings() successfully
-    // opens a station.state file and calls apply_config() itself — which
-    // never happens on a fresh install / missing/relocated state file, and
-    // was silently leaving outgoing calls with a 30s idle-timeout instead of
-    // the intended 360s. Safe/idempotent to repeat when load_state() applies
-    // the real persisted config afterward.
+    // ale_station_config.h) into the SM immediately. Without this, sm_'s
+    // TimingParameters::Twa_ms sits at ALETimingConstants::Twa_ms=30s (spec
+    // constant, not the intended operator default) until load_state()/
+    // import_settings() opens a station.state file and calls apply_config()
+    // itself — never happens on a fresh install / missing/relocated state
+    // file, silently leaving outgoing calls with a 30s idle-timeout instead
+    // of the intended 360s. Safe/idempotent to repeat when load_state()
+    // applies the real persisted config afterward.
     apply_config(config_);
 }
 
@@ -410,9 +408,9 @@ float ALEController::lbt_floor_db() const        { return occupancy_.floor_db();
 
 void ALEController::apply_lbt_policy_(const std::vector<Channel>& channels)
 {
-    // A.5.4.7.1: the short Twt (784 ms) is permitted only when every channel
-    // involved is known to carry ALE exclusively; otherwise the LBT pause must
-    // be >= 2 s.  Unknown/empty channel sets are treated as shared (spec-safe).
+    // A.5.4.7.1: short Twt (784 ms) permitted only if every channel involved
+    // is known ALE-exclusive; otherwise LBT pause must be >= 2 s. Unknown/
+    // empty channel sets are treated as shared (spec-safe).
     bool all_ale_only = !channels.empty();
     for (const auto& ch : channels)
         if (!ch.ale_only) { all_ale_only = false; break; }
@@ -421,12 +419,12 @@ void ALEController::apply_lbt_policy_(const std::vector<Channel>& channels)
 
 void ALEController::notify_channel_changed_(const Channel& ch)
 {
-    // The detector's EWMA floor is channel-specific.  When the RX frequency
-    // changes, drop the floor/busy/vote so the new channel is measured on its
-    // own terms instead of inheriting a stale busy from the previous channel
-    // (which during scan hops — RX stays active, no set_active edge — could
-    // otherwise keep the pill on FREQ BUSY until the floor slowly re-tracked).
-    // A same-frequency notification (channel rename) leaves the detector alone.
+    // Detector's EWMA floor is channel-specific. On RX-frequency change, drop
+    // floor/busy/vote so the new channel is measured fresh instead of
+    // inheriting a stale busy from the previous channel (during scan hops —
+    // RX stays active, no set_active edge — this could otherwise keep the
+    // pill on FREQ BUSY until the floor slowly re-tracked). A same-frequency
+    // notification (channel rename) leaves the detector alone.
     if (ch.rx_frequency_hz > 0 && ch.rx_frequency_hz != last_lbt_rx_hz_) {
         occupancy_.reset();
         last_lbt_rx_hz_ = ch.rx_frequency_hz;
@@ -437,16 +435,16 @@ void ALEController::notify_channel_changed_(const Channel& ch)
 
 void ALEController::wire_callbacks()
 {
-    // SM → Modem: enqueue word for TX, and arm one frame-completion notification.
-    // The audio thread pulls symbol frames autonomously via the registered source;
-    // it fires frame completion through AudioDevice::arm_frame_complete → tick().
-    // In offline mode (no audio device) update() drains pending frames directly.
-    // When ptt_lead_deadline_ms_ is active (PTT just asserted, radio not yet in TX),
-    // words are buffered in pending_tx_words_ and flushed by update() after the lead.
+    // SM → Modem: enqueue word for TX, arm one frame-completion notification.
+    // Audio thread pulls symbol frames autonomously via the registered source;
+    // fires frame completion through AudioDevice::arm_frame_complete → tick().
+    // Offline mode (no audio device): update() drains pending frames directly.
+    // When ptt_lead_deadline_ms_ is active (PTT just asserted, radio not yet
+    // TX), words are buffered in pending_tx_words_, flushed by update() after lead.
     sm_.set_transmit_callback([this](const ALEWord& w) {
-        // Passive TX monitor: notify exactly once per SM-emitted word, at emit
-        // time, regardless of PTT-lead buffering. Pairs with on_word_decoded so
-        // the ALE Monitor shows sent and received words with the same layout.
+        // Passive TX monitor: notify exactly once per SM-emitted word, at
+        // emit time, regardless of PTT-lead buffering. Pairs with
+        // on_word_decoded so ALE Monitor shows sent/received words identically.
         {
             ale::WordData wd{ WordParser::word_type_name(w.type), w.address,
                               tx_word_seq_++, w.unanimous_votes, w.fec_errors,
@@ -461,10 +459,10 @@ void ALEController::wire_callbacks()
         modulator_.enqueue_word(w);
         if (audio_device_) {
             // Diagnostic (2026-08-07): confirms this word's audio was actually
-            // rendered by the DAC (arm_frame_complete only fires once
+            // rendered by the DAC (arm_frame_complete fires only once
             // frames_rendered_ reaches this word's target — real playback
             // position, not mere submission; see WasapiDevice::service_render).
-            // Fires on the main thread (tick()), safe to log.
+            // Fires on main thread (tick()), safe to log.
             const char* type_name = WordParser::word_type_name(w.type);
             const std::string addr = w.address;
             audio_device_->arm_frame_complete([this, type_name, addr]() {
@@ -492,7 +490,7 @@ void ALEController::wire_callbacks()
     // SM frame assembler → passive monitor (on_frame_decoded only).
     // Per-word display taps fire from rx_track_signal_quality() in strict
     // on-air arrival order — never reordered or deferred to frame-assembly
-    // time. The assembler concludes a frame on the first TIS/TWAS, so a
+    // time. Assembler concludes a frame on the first TIS/TWAS, so a
     // repeating sound (TWAS DATA TWAS DATA …) would otherwise group every
     // later frame as [DATA, TWAS] and display DATA before TWAS.
     sm_.set_frame_assembled_callback([this](const ALEMessage& frame) {
@@ -513,12 +511,12 @@ void ALEController::wire_callbacks()
         on_received_word(w);
     });
 
-    // SM RX-enable control → pipeline (SM disables RX during TX phases)
-    // PTT transitions mirror RX enable: RX off = TX active = PTT on.
+    // SM RX-enable control → pipeline (SM disables RX during TX phases).
+    // PTT mirrors RX enable: RX off = TX active = PTT on.
     // PTT lead (RX→TX): PTT asserted immediately, audio words buffered for
-    // ptt_lead_ms to let the radio's CAT/CI-V command settle before audio starts.
-    // PTT tail (TX→RX): demodulator and PTT release deferred by ptt_tail_ms to
-    // let the audio buffer drain fully before switching to RX.
+    // ptt_lead_ms so the radio's CAT/CI-V command settles before audio starts.
+    // PTT tail (TX→RX): demodulator and PTT release deferred by ptt_tail_ms
+    // so the audio buffer drains fully before switching to RX.
     sm_.set_rx_enabled_callback([this](bool rx_on) {
         // transition_to() calls this defensively on entry to CALLING/HANDSHAKE/
         // LINKED/SOUNDING regardless of whether RX was already in that state
@@ -529,17 +527,17 @@ void ALEController::wire_callbacks()
         // spurious PTT_OFF event and calls extend_peer_wait_window_for_ptt_
         // release_delay() with a bogus delay, corrupting whatever peer-wait
         // timer (WAIT_ACK/LISTENING) happens to be live by then — surfacing as
-        // PTT appearing to toggle several times for a single logical TX/RX
-        // cycle (seen e.g. around AMD calls, which exercise both transitions).
+        // PTT appearing to toggle several times per logical TX/RX cycle
+        // (seen e.g. around AMD calls, which exercise both transitions).
         //
-        // The redundant-false direction is the dangerous one this guard also
+        // Redundant-false is the dangerous direction this guard also
         // swallows: it would mean a state entered TX without ever re-arming
         // PTT/lead, so words go straight to the modulator with the radio
         // still in RX. Today every in-state false is preceded by an in-state
         // true (see enter_state() in ale_state_machine.cpp), so this is safe
-        // by invariant rather than by construction — log if that invariant
-        // is ever violated by a future SM change, instead of silently
-        // muting the transmitter.
+        // by invariant rather than construction — log if that invariant is
+        // ever violated by a future SM change, instead of silently muting
+        // the transmitter.
         if (!rx_on && !sm_rx_enabled_) {
             pal::log_warn("ALEController",
                 "redundant rx_enabled(false) -- PTT/lead not re-armed, TX may go out silently");
@@ -556,10 +554,10 @@ void ALEController::wire_callbacks()
             ptt_lead_deadline_ms_ = 0;
             pending_tx_words_.clear();
             // arm_frame_complete's "rendered" only proves the last word left
-            // openALE's own WASAPI buffer — on shared-mode audio the engine's
-            // own mix/forward stage adds further latency before real DAC
-            // output (see IAudioDriver::output_latency_ms()). Fold that into
-            // the tail automatically so a configured ptt_tail_ms=0 doesn't
+            // openALE's own WASAPI buffer — shared-mode audio's own
+            // mix/forward stage adds further latency before real DAC output
+            // (see IAudioDriver::output_latency_ms()). Fold that into the
+            // tail automatically so a configured ptt_tail_ms=0 doesn't
             // silently drop it; the user-configured value still covers
             // whatever is downstream of the sound card (radio interface,
             // virtual audio cable, SDR software, etc.), which openALE has no
@@ -583,10 +581,10 @@ void ALEController::wire_callbacks()
             // TX prohibition — refuse to key PTT and keep RX enabled so the
             // station keeps listening. The SM is mid-transition (this callback
             // fires synchronously inside sm_.update()), so we cannot abort it
-            // here without re-entering the SM; set a flag and abort on the next
-            // tick (tick_sm → emergency_manual_control → IDLE, no TWAS in
-            // HANDSHAKE — the only autonomous-TX path reachable on a rx_only
-            // channel since initiate_call is already gated).
+            // here without re-entering the SM; set a flag and abort on the
+            // next tick (tick_sm → emergency_manual_control → IDLE, no TWAS
+            // in HANDSHAKE — the only autonomous-TX path reachable on a
+            // rx_only channel since initiate_call is already gated).
             const Channel cur_tx_ch = get_current_channel();
             if (cur_tx_ch.rx_frequency_hz > 0 && tx_inhibited(cur_tx_ch.rx_frequency_hz)) {
                 abort_tx_pending_ = true;
@@ -602,28 +600,28 @@ void ALEController::wire_callbacks()
             ptt_lead_deadline_ms_ = (config_.ptt_lead_ms > 0)
                 ? now_ms_ + config_.ptt_lead_ms : 0;
         }
-        // Every branch above already dispatches PTT_ON/PTT_OFF itself, via
+        // Every branch above already dispatches PTT_ON/PTT_OFF via
         // set_ptt_and_notify() at the point the radio is actually commanded
         // (immediately here, or later from tick_ptt_timing() when ptt_tail_ms
         // defers the real release) — no unconditional trailing dispatch here,
-        // or the ptt_tail_ms>0 path would emit a premature PTT_OFF event before
-        // the hardware has actually released.
+        // or the ptt_tail_ms>0 path would emit a premature PTT_OFF before the
+        // hardware has actually released.
     });
 
-    // Idle-timeout warning (Twa lead) → forward to the controller callback so
-    // the bridge can push an `idle_warning` event to the GUI popup.
+    // Idle-timeout warning (Twa lead) → forward to controller callback so
+    // bridge can push an `idle_warning` event to the GUI popup.
     sm_.set_idle_warning_callback([this](uint32_t remaining_sec) {
         dispatch(pal::EventType::ALE_IDLE_WARNING, "", static_cast<int32_t>(remaining_sec));
     });
 
     // §A.5.3.3 stage 1: ALE energy on the current channel → open SCAN_PAUSE
-    // before a fully-decoded word arrives.  Completely separate from LBT — this is
-    // the RX-scan detection path; lbt_channel_busy_() / set_channel_busy_query() are untouched.
+    // before a fully-decoded word arrives. Separate from LBT — this is the
+    // RX-scan detection path; lbt_channel_busy_()/set_channel_busy_query() untouched.
     demodulator_.set_ale_energy_callback([this]() {
-        // Ignore energy while a tune is still in flight: mid-tune audio is from
-        // the previous channel, so a detection then would pause on the wrong
-        // channel.  (The modem's 80 ms HOP_GUARD covers the common case; this
-        // makes it robust when settle latency exceeds that guard.)
+        // Ignore energy while a tune is in flight: mid-tune audio is from the
+        // previous channel, so a detection then would pause on the wrong
+        // channel. (Modem's 80 ms HOP_GUARD covers the common case; this
+        // handles settle latency exceeding that guard.)
         if (radio_ && !radio_->is_tune_settled()) return;
         sm_.begin_scan_pause(now_ms_);
     });
@@ -649,18 +647,18 @@ void ALEController::wire_callbacks()
 void ALEController::set_radio(pal::IRadio* r)
 {
     radio_ = r;
-    // Carry the current CAT-trace preference over to a (re)attached radio —
-    // e.g. the operator enabled it before a radio connected, or reconnected
-    // to a different backend mid-session.
+    // Carry current CAT-trace preference to a (re)attached radio — e.g.
+    // enabled before a radio connected, or reconnected to a different
+    // backend mid-session.
     if (radio_) radio_->set_cat_trace_enabled(cat_trace_);
-    // Gate the scanner's hop on the radio actually having settled on the channel.
-    // is_tune_settled() is true for sync backends (mocks, blocking serial radios)
-    // so the gate is a no-op there; async backends (HamlibRadio) return false
-    // while a tune is in flight.  This withholds the next hop until the current
-    // tune settled — which keeps "at most one tune in flight" (a Stop or ALE-
-    // scan pause halts the radio within one physical tune) and restores the
-    // spec dwell cadence, since the dwell is measured from the hop and the tune
-    // latency overlaps it instead of being added on top.
+    // Gate the scanner's hop on the radio having actually settled on the
+    // channel. is_tune_settled() is true for sync backends (mocks, blocking
+    // serial radios) so the gate is a no-op there; async backends
+    // (HamlibRadio) return false while a tune is in flight. Withholds the
+    // next hop until the current tune settles — keeps "at most one tune in
+    // flight" (a Stop or ALE-scan pause halts the radio within one physical
+    // tune) and restores spec dwell cadence, since dwell is measured from
+    // the hop and tune latency overlaps it instead of adding on top.
     sm_.set_hop_ready_query([this]() {
         return !radio_ || radio_->is_tune_settled();
     });
@@ -674,7 +672,7 @@ void ALEController::set_cat_trace(bool on)
 
 // ── Radio / VFO control (manual tuning) ────────────────────────────────────────
 // All queries/commands go straight through radio_ (pal::IRadio) — no shadow
-// frequency/mode state is kept here (see header doc on this section).
+// frequency/mode state kept here (see header doc on this section).
 
 Channel ALEController::get_current_channel() const
 {
@@ -782,9 +780,9 @@ bool ALEController::set_power(int pct)
     // (frequency-match, same idiom as step_channel()'s position lookup) so a
     // live power adjustment survives the next hop/scan back to this channel —
     // makes power_pct a real per-channel setting instead of a channel-hop
-    // resetting it back to whatever was last configured (or the 100% default).
-    // No match (e.g. free VFO tuning off the channel list) → live-only, nothing
-    // to persist, which is correct: there is no channel to remember it on.
+    // resetting it to the last-configured (or 100% default) value. No match
+    // (e.g. free VFO tuning off the channel list) → live-only, nothing to
+    // persist, which is correct: there is no channel to remember it on.
     const pal::Channel cur = radio_->get_channel();
     for (auto& c : calling_channels_) {
         if (c.rx_frequency_hz != cur.rx_frequency) continue;
@@ -814,8 +812,8 @@ bool ALEController::set_vfo_channel(uint32_t hz, const std::string& mode)
 
     // set_channel() sends freq first, mode last. An SDR front-end (Quisk) restores
     // its per-band saved mode asynchronously after the frequency command — often
-    // after assert_mode()'s sub-ms readback loop has already returned. The explicit
-    // set_mode() call below re-asserts mode after the frequency is stable: no
+    // after assert_mode()'s sub-ms readback loop already returned. The explicit
+    // set_mode() call below re-asserts mode once the frequency is stable: no
     // frequency is sent, so no second band-restore is triggered. Mirrors step_channel().
     pal::Channel pc = radio_->get_channel();
     pc.rx_frequency = hz;
@@ -837,11 +835,11 @@ bool ALEController::step_channel(int direction)
 {
     if (!radio_ || calling_channels_.empty()) return false;
 
-    // Build the channel set to step through: the active net's assigned channels
-    // when a net is selected, otherwise all calling_channels_. Mirrors the scoping
-    // applied to start_scanning() / initiate_call() so manual stepping, scanning,
-    // sounding and calling all iterate the same net's channels. The net's
-    // membership (channel_ids) is the set the operator configured in Settings.
+    // Build the channel set to step through: active net's assigned channels
+    // when a net is selected, otherwise all calling_channels_. Mirrors the
+    // scoping in start_scanning()/initiate_call() so manual stepping,
+    // scanning, sounding and calling all iterate the same net's channels.
+    // Net membership (channel_ids) is operator-configured in Settings.
     std::vector<Channel> step_set;
     if (!active_scan_net_.empty()) {
         if (const Net* net = net_store_.find(active_scan_net_)) {
@@ -859,8 +857,8 @@ bool ALEController::step_channel(int direction)
 
     const int n = static_cast<int>(step_set.size());
     // Position = the radio's current channel if it is in the step set, else 0.
-    // Frequency-match is robust to external retunes and net-membership changes
-    // (an index cached across calls would be invalidated by either).
+    // Frequency-match is robust to external retunes and net-membership
+    // changes (a cached index would be invalidated by either).
     pal::Channel cur = radio_->get_channel();
     int idx = 0;
     for (int i = 0; i < n; ++i)
@@ -879,8 +877,8 @@ bool ALEController::step_channel(int direction)
     radio_->set_channel(pc);
     // After a frequency change Quisk's band-restore may fire asynchronously
     // after assert_mode()'s sub-ms retries. A mode-only re-assertion here
-    // catches any revert that has already landed: no frequency is sent, so
-    // no second band-restore is triggered — identical to the panel-button path.
+    // catches any revert already landed: no frequency is sent, so no second
+    // band-restore is triggered — identical to the panel-button path.
     radio_->set_mode(pc.tx_mode);
     schedule_mode_verify();
     notify_channel_changed_(target);
@@ -968,13 +966,13 @@ void ALEController::apply_config(const ALEStationConfig& cfg)
     config_.rigctld_server_enabled       = cfg.rigctld_server_enabled;
     config_.rigctld_server_port          = cfg.rigctld_server_port;
     config_.rigctld_server_bind_remote   = cfg.rigctld_server_bind_remote;
-    // Rig connection + audio device (persisted connection settings — see
-    // rig_auto_connect / audio_auto_open docs in ale_station_config.h). These
-    // are pure data on config_ (no runtime side effect here — the live radio /
-    // audio device is owned by the bridge, not the controller), so a plain
-    // copy is correct. Without this, import_settings() / RIG_CONNECT /
-    // AUDIO_OPEN would parse the fields into a local cfg that apply_config
-    // then drops, and save_state() would persist blanks.
+    // Rig connection + audio device (persisted settings — see rig_auto_connect
+    // / audio_auto_open docs in ale_station_config.h). Pure data on config_
+    // (no runtime side effect here — the live radio/audio device is owned by
+    // the bridge, not the controller), so a plain copy is correct. Without
+    // this, import_settings()/RIG_CONNECT/AUDIO_OPEN would parse the fields
+    // into a local cfg that apply_config then drops, and save_state() would
+    // persist blanks.
     config_.rig_model        = cfg.rig_model;
     config_.rig_host         = cfg.rig_host;
     config_.rig_port         = cfg.rig_port;
@@ -1035,11 +1033,11 @@ void ALEController::start_available()
     emit_status("Available — fixed channel, listening for incoming calls");
     // If we were scanning, drop back to IDLE so callers (e.g. the GUI Scan
     // toggle) get a real state transition + state event. STOP_SCAN is a no-op
-    // from any non-SCANNING state (incl. IDLE — see ale_state_machine.cpp), so
-    // this is safe for ale_cli.cpp's start-from-IDLE use too.
+    // from any non-SCANNING state (incl. IDLE — see ale_state_machine.cpp),
+    // safe for ale_cli.cpp's start-from-IDLE use too.
     sm_.process_event(ALEEvent::STOP_SCAN);
     // SM stays in IDLE; enable RX pipeline directly since enter_state(IDLE)
-    // is not called at construction (only on re-entry via transition_to).
+    // isn't called at construction (only on re-entry via transition_to).
     demodulator_.set_enabled(true);
 }
 
@@ -1047,10 +1045,10 @@ void ALEController::start_scanning()
 {
     emit_status("Starting ALE scanner — channel hopping");
 
-    // Rebuild scan list from calling_channels_ (the single source of truth).
+    // Rebuild scan list from calling_channels_ (single source of truth).
     // add_channel/del_channel keep calling_channels_ current but only push to
-    // sm_.set_calling_channels(); the SM's channel_manager_ scan_list is never
-    // touched there, so we populate it fresh every time scanning starts.
+    // sm_.set_calling_channels(); the SM's channel_manager_ scan_list is
+    // never touched there, so populate it fresh every time scanning starts.
     ScanConfig cfg = sm_.get_scan_config();
     cfg.scan_list.clear();
 
@@ -1110,9 +1108,9 @@ bool ALEController::send_sounding()
     // Re-arm LBT (see initiate_call): drop a stale busy latch from the last
     // 400 ms of dwelling so SoundingPhase::LBT measures fresh; keep the floor.
     occupancy_.clear_busy_latch();
-    // Sounding uses the same "call width" C as calling (Tsrs = (C+2)·Ta) — take it
-    // from the active scan net's calling_length_c, falling back to the global
-    // assumed_scan_channels.  See resolve_sounding_C() and handle_sounding().
+    // Sounding uses the same "call width" C as calling (Tsrs = (C+2)·Ta) —
+    // taken from the active scan net's calling_length_c, falling back to
+    // the global assumed_scan_channels. See resolve_sounding_C()/handle_sounding().
     sm_.set_target_scan_channels(resolve_sounding_C(active_scan_net_));
     if (sm_.get_self_address().empty()) {
         emit_status("Manual sounding rejected — no callsign configured");
@@ -1136,9 +1134,9 @@ bool ALEController::send_sounding_sweep(const std::vector<Channel>& channels)
         emit_status("Sounding sweep rejected — only available while IDLE or scanning");
         return false;
     }
-    // Re-arm the auto-sounding timer so this manual sweep counts as "just sounded".
-    // Without this, an overdue timer fires again the moment the SM returns to IDLE,
-    // causing an immediate double-sounding.
+    // Re-arm the auto-sounding timer so this manual sweep counts as "just
+    // sounded". Without this, an overdue timer fires again the moment the SM
+    // returns to IDLE, causing an immediate double-sounding.
     auto_sounding_last_ms_ = now_ms_;
     sounding_warning_sent_ = false;
     if (sounding_warning_active_) {
@@ -1161,11 +1159,11 @@ bool ALEController::initiate_call(const std::string& target_addr)
                     + "' invalid — must be 3–15 Basic-38 characters (A-Z, 0-9, @, ?)");
         return false;
     }
-    // An AllCall broadcast (see broadcast_position_report()) deliberately stays
-    // in IDLE/SCANNING rather than a dedicated state while its burst drains, so
-    // it cannot block a normal call via the state check alone — guard here too,
-    // or a call placed mid-burst would interleave its words into the same TX
-    // queue as the still-draining broadcast.
+    // An AllCall broadcast (see broadcast_position_report()) deliberately
+    // stays in IDLE/SCANNING rather than a dedicated state while its burst
+    // drains, so it cannot block a normal call via the state check alone —
+    // guard here too, or a call placed mid-burst would interleave its words
+    // into the same TX queue as the still-draining broadcast.
     if (sm_.is_allcall_broadcasting()) {
         emit_status("Cannot call — AllCall broadcast still transmitting");
         return false;
@@ -1173,11 +1171,11 @@ bool ALEController::initiate_call(const std::string& target_addr)
 
     // Channel ordering: always use LQA data when available (A.5.4.5, mandatory).
     // Per-channel inhibit_calling excludes a channel from the outbound call
-    // set (it may still scan / sound). rx_only (Direction=RX) excludes a channel
-    // from calling too — it is a hard TX prohibition. Build the callable subset
-    // first. If the channel list is non-empty but every channel is filtered out,
-    // abort; an empty list (no channels configured) is left to proceed as before
-    // so downstream behaviour is unchanged.
+    // set (it may still scan/sound). rx_only (Direction=RX) excludes a
+    // channel from calling too — a hard TX prohibition. Build the callable
+    // subset first. If the channel list is non-empty but every channel is
+    // filtered out, abort; an empty list (no channels configured) proceeds
+    // as before, downstream behaviour unchanged.
     std::vector<Channel> callable;
     callable.reserve(calling_channels_.size());
     for (const auto& ch : calling_channels_)
@@ -1188,10 +1186,10 @@ bool ALEController::initiate_call(const std::string& target_addr)
     }
 
     // Scope the outbound channel sweep to the active net when one is selected
-    // (mirrors start_scanning()). The operator's Network pill drives this. A
+    // (mirrors start_scanning()); the operator's Network pill drives this. A
     // misconfigured net with no callable channels falls back to all callable
     // channels so calling is never blocked by the selection. C (target scan
-    // channels) is left to the contact's-net resolution below — it is a peer
+    // channels) is left to the contact's-net resolution below — a peer
     // property, not ours.
     if (!active_scan_net_.empty()) {
         if (const Net* net = net_store_.find(active_scan_net_)) {
@@ -1225,7 +1223,7 @@ bool ALEController::initiate_call(const std::string& target_addr)
                         + " (best: " + std::to_string(first_call_freq_hz) + " Hz)");
     } else {
         // No channels configured — pass the (empty) list through unchanged so
-        // the SM handles the no-channel case as it did before inhibit-gating.
+        // the SM handles the no-channel case as before inhibit-gating.
         sm_.set_calling_channels(calling_channels_);
     }
 
@@ -1238,8 +1236,8 @@ bool ALEController::initiate_call(const std::string& target_addr)
 
     // Block A4 — Queue CMD LQA (KA1=1) for the calling station's frame.
     // Gated on lqa_exchange_enabled and the channel's inhibit_reporting flag
-    // (bilateral LQA CMD 'a' exchange suppressed per-channel). Channel ranking
-    // above is always active.
+    // (bilateral LQA CMD 'a' exchange suppressed per-channel). Channel
+    // ranking above is always active.
     if (config_.lqa_exchange_enabled && !reporting_inhibited(first_call_freq_hz))
         lqa_exchange_.encode_outgoing(first_call_freq_hz, target_addr, true);
     else if (config_.lqa_exchange_enabled && reporting_inhibited(first_call_freq_hz))
@@ -1249,11 +1247,11 @@ bool ALEController::initiate_call(const std::string& target_addr)
     // this call is marked ALE-only; any shared channel → >= 2 s pause.
     apply_lbt_policy_(callable);
 
-    // Re-arm the LBT decision: drop a busy latch left over from the last ~400 ms
-    // of idle dwelling so the SM's LBT window measures fresh (a transient hot
-    // block before PTT must not abort the call on tick 0).  The tracked noise
-    // floor is kept — a genuinely busy channel re-latches within Twt.  See
-    // ChannelOccupancyDetector::clear_busy_latch().
+    // Re-arm the LBT decision: drop a busy latch left over from the last
+    // ~400 ms of idle dwelling so the SM's LBT window measures fresh (a
+    // transient hot block before PTT must not abort the call on tick 0).
+    // The tracked noise floor is kept — a genuinely busy channel re-latches
+    // within Twt. See ChannelOccupancyDetector::clear_busy_latch().
     occupancy_.clear_busy_latch();
 
     emit_status("Initiating call to " + target_addr);
@@ -1273,9 +1271,10 @@ bool ALEController::initiate_single_channel_call(const std::string& target_addr)
     }
     Channel cur = get_current_channel();
     // rx_only (Direction=RX) is a hard TX prohibition: the operator-override
-    // single-channel call bypasses inhibit_calling but NOT rx_only — a receive-
-    // only channel cannot place a call. get_current_channel() is radio-backed and
-    // does not carry the flags, so resolve the configured channel by frequency.
+    // single-channel call bypasses inhibit_calling but NOT rx_only — a
+    // receive-only channel cannot place a call. get_current_channel() is
+    // radio-backed and carries no flags, so resolve the configured channel
+    // by frequency.
     if (tx_inhibited(cur.rx_frequency_hz)) {
         emit_status("Single-channel call rejected — channel " + cur.id
                     + " is RX-only (Direction=RX)");
@@ -1287,8 +1286,8 @@ bool ALEController::initiate_single_channel_call(const std::string& target_addr)
     const Channel* cfg_ch = find_channel_by_freq(cur.rx_frequency_hz);
     apply_lbt_policy_(cfg_ch ? std::vector<Channel>{ *cfg_ch } : std::vector<Channel>{});
     // Re-arm LBT (see initiate_call): drop a stale busy latch before the SM's
-    // LBT window, keep the floor.  Also covers the operator-override path that
-    // tick_test_channel() does NOT pre-clear via set_vfo_channel().
+    // LBT window, keep the floor. Also covers the operator-override path
+    // that tick_test_channel() does NOT pre-clear via set_vfo_channel().
     occupancy_.clear_busy_latch();
     uint32_t C = config_.assumed_scan_channels;
     if (const Contact* ct = contact_store_.find(target_addr))
@@ -1325,10 +1324,11 @@ bool ALEController::initiate_group_call(const std::vector<std::string>& members)
     sm_.set_target_scan_channels(C);
     emit_status("Scanning call: C=" + std::to_string(C) + " channel(s)");
 
-    // Scope the outbound sweep to the active net when one is selected (mirrors
-    // initiate_call / start_scanning). The SM's calling channel set is whatever
-    // was last set; set it explicitly so the group call actually sweeps the
-    // active net's channels. Empty net → fall back to all callable channels.
+    // Scope the outbound sweep to the active net when one is selected
+    // (mirrors initiate_call/start_scanning). The SM's calling channel set
+    // is whatever was last set; set it explicitly so the group call
+    // actually sweeps the active net's channels. Empty net → fall back to
+    // all callable channels.
     {
         std::vector<Channel> callable;
         callable.reserve(calling_channels_.size());
@@ -1357,7 +1357,7 @@ bool ALEController::initiate_group_call(const std::vector<std::string>& members)
 
 void ALEController::reject_call()
 {
-    // Manual accept is a POST-link decision (the handshake auto-completed). A
+    // Manual accept is a POST-link decision (handshake auto-completed). A
     // reject therefore tears down the already-established link with a TWAS
     // termination frame and returns to AVAILABLE. Works for both the pending
     // (LINKED_PENDING_OPERATOR) case and an auto-accepted link the operator
@@ -1387,7 +1387,7 @@ void ALEController::set_manual_accept_mode(bool on, uint32_t decision_timeout_ms
 {
     config_.manual_accept_mode = on;
     config_.accept_timeout_ms  = decision_timeout_ms;  // retained for config export; no longer gates the handshake
-    // The SM no longer pauses for manual accept (post-link operator gate instead);
+    // SM no longer pauses for manual accept (post-link operator gate instead);
     // set_require_explicit_accept() is a no-op kept for API compatibility.
     sm_.set_require_explicit_accept(on, decision_timeout_ms);
 }
@@ -1414,17 +1414,17 @@ std::string ALEController::send_amd(const std::string& target, const std::string
     // "ALLCALL" is a friendly sentinel, not a wire address — the actual
     // AllCall address is the spec-literal "@?@" (A.5.2.4.7), built and
     // transmitted by broadcast_position_report()'s one-shot TWAS-only burst,
-    // never through the normal calling/handshake/retry path below.
+    // never via the normal calling/handshake/retry path below.
     if (target == "ALLCALL")
         return broadcast_position_report(text, link_after_send);
 
     // ── LINKED: send AMD over the established link as a single-burst ─────────
-    // orderwire frame.  TO[peer] (+DATA/REP ext) ×2 + CMD AMD + message + TIS self
-    // (the TIS:SELF conclusion is appended by the orderwire path). Delivery
+    // orderwire frame. TO[peer] (+DATA/REP ext) ×2 + CMD AMD + message + TIS
+    // self (TIS:SELF conclusion appended by the orderwire path). Delivery
     // confirmation (Call→Response→ACK + retry) is owned by the SM's LINKED-AMD
     // confirm sub-phases (send_linked_amd) — the same LISTENING/WAIT_ACK timing
-    // and WordRole response/ACK detection the not-linked handshake uses. Outcomes
-    // arrive as OperatorEvent::AMD_DELIVERED / AMD_RETRY / AMD_NOT_DELIVERED.
+    // and WordRole response/ACK detection the not-linked handshake uses.
+    // Outcomes arrive as OperatorEvent::AMD_DELIVERED / AMD_RETRY / AMD_NOT_DELIVERED.
     if (sm_.get_state() == ALEState::LINKED) {
         const std::string peer = active_peer();
         if (peer.empty())
@@ -1445,12 +1445,12 @@ std::string ALEController::send_amd(const std::string& target, const std::string
 
     // ── Not LINKED: queue AMD as the pending message and place a call. ───────
     // Ion2G-style: AMD rides the calling frame (frame 1), delivered before the
-    // handshake even completes. link_after_send controls frame 3's TIS/TWAS
-    // conclusion — default false: message delivered, no link persists. Whether
-    // the called station responds is the delivery indicator; no response → retry
-    // up to amd_send_max_attempts, then notify "not heard" (on_operator_event /
-    // tick_relink drive the verdict). This is the first attempt, so seed the
-    // shared retry budget before the call goes out.
+    // handshake completes. link_after_send controls frame 3's TIS/TWAS
+    // conclusion — default false: message delivered, no link persists.
+    // Whether the called station responds is the delivery indicator; no
+    // response → retry up to amd_send_max_attempts, then notify "not heard"
+    // (on_operator_event/tick_relink drive the verdict). This is the first
+    // attempt, so seed the shared retry budget before the call goes out.
     if (!is_valid_ale_address(target))
         return "ERROR: target address invalid — 3–15 Basic-38 chars (A-Z, 0-9, @, ?)";
     amd_confirm_clear_();
@@ -1462,10 +1462,10 @@ std::string ALEController::send_amd(const std::string& target, const std::string
     return attempt_amd_send_(target, text, link_after_send);
 }
 
-// One not-linked AMD call attempt: queue the AMD as the pending message and place
-// the call. Factored out of send_amd() so the tick-deferred retry path can re-issue
-// an identical attempt without re-seeding the shared retry budget. Returns the same
-// status strings send_amd()'s not-linked branch historically returned.
+// One not-linked AMD call attempt: queue the AMD as pending message, place
+// the call. Factored out of send_amd() so the tick-deferred retry path can
+// re-issue an identical attempt without re-seeding the shared retry budget.
+// Returns the same status strings send_amd()'s not-linked branch historically returned.
 std::string ALEController::attempt_amd_send_(const std::string& target,
                                              const std::string& text,
                                              bool link_after_send)
@@ -1514,13 +1514,13 @@ std::string ALEController::broadcast_position_report(const std::string& text, bo
     if (sm_.is_allcall_broadcasting())
         return "ERROR: AllCall broadcast already in progress";
     // Same "call width" C resolution the normal calling path uses (see
-    // initiate_call()/resolve_sounding_C()) — there's no target contact to
-    // look a net up from for a broadcast, so this falls through the same
+    // initiate_call()/resolve_sounding_C()) — no target contact to look a
+    // net up from for a broadcast, so this falls through the same
     // named-net → auto-sounding-net → active-scan-net → assumed_scan_channels
     // chain, preferring the configured Position Reports net when set.
     // send_allcall_broadcast() reads target_scan_channels to size its
     // scanning call (A.5.2.5.1) — without setting it here it would silently
-    // reuse whatever value the last individual call happened to leave behind.
+    // reuse whatever value the last individual call left behind.
     const uint32_t C = resolve_sounding_C(config_.position_report_net);
     sm_.set_target_scan_channels(C);
     if (!sm_.send_allcall_broadcast(self, text, link_after_send))
@@ -1561,7 +1561,7 @@ void ALEController::set_manual_ptt(bool on)
     if (on) {
         // Immediate TX override: cancel pending timing, disable demod, assert PTT.
         // Also abort any active protocol operation so the SM stops queuing new words.
-        // LINKED is excluded — PTT during a link is for manual voice TX, not abort.
+        // LINKED excluded — PTT during a link is for manual voice TX, not abort.
         ptt_tail_deadline_ms_ = 0;
         ptt_lead_deadline_ms_ = 0;
         pending_tx_words_.clear();
@@ -1598,12 +1598,12 @@ void ALEController::update(uint32_t now_ms)
     // LBT occupancy (A.5.4.7.2): the detector's `busy` flag is the single
     // LBT-busy truth, read by both the SM's LBT decision and the GUI pill.
     // Sync its active state once per tick to "LBT enabled AND an RX stream is
-    // feeding the demodulator".  When either condition drops (operator switch
+    // feeding the demodulator". When either condition drops (operator switch
     // or every TX closes RX), the detector clears its busy flag — so the pill
     // can never latch on FREQ BUSY while no detection is actually running.
-    // Gate: LBT enabled AND demodulator is running (ALE TX disables it) AND
-    // voice PTT is not active (voice TX also feeds the VAC loopback which
-    // would poison the floor — same treatment as ALE TX).
+    // Gate: LBT enabled AND demodulator running (ALE TX disables it) AND
+    // voice PTT not active (voice TX also feeds the VAC loopback, poisoning
+    // the floor — same treatment as ALE TX).
     occupancy_.set_active(lbt_occupancy_enabled_ && demodulator_.enabled() && !voice_tx_active_);
 
     // Diagnostic: log once when the post-reactivation floor-relearn window
@@ -1612,7 +1612,7 @@ void ALEController::update(uint32_t now_ms)
     // A settled floor near 0 dB points at a radio PTT-release mute/squelch tail
     // being mistaken for the new ambient floor; a settled floor close to the
     // pre-TX value with busy still true points elsewhere (relearn not helping,
-    // or a genuine AGC pump larger than the settling window can absorb).
+    // or a genuine AGC pump larger than the settling window absorbs).
     {
         const bool relearning_now = occupancy_.relearning();
         if (lbt_relearn_was_active_ && !relearning_now) {
@@ -1626,16 +1626,18 @@ void ALEController::update(uint32_t now_ms)
         lbt_relearn_was_active_ = relearning_now;
     }
 
-    // §A.5.3.3 stage-1: arm the ALE-energy detector on the settle EDGE, not at the
-    // hop.  With an async radio the audio right after a hop is still the previous
-    // channel until the tune completes; the stage-1 detector is level-invariant and
-    // fires ~30 ms into any 8-FSK, so if it ran on that pre-settle audio it would fire,
-    // get dropped by the is_tune_settled() gate on the energy callback, and its one-shot
-    // latch would then block detection of the real (settled) signal for the rest of the
-    // dwell — the channel would be hopped over.  Re-arming (mark_channel_hop resets the
-    // detector + latch) when is_tune_settled() goes false→true guarantees detection
-    // accumulates only on the channel we are actually listening to.  For sync backends
-    // is_tune_settled() is always true, so there is no edge and behaviour is unchanged.
+    // §A.5.3.3 stage-1: arm the ALE-energy detector on the settle EDGE, not at
+    // the hop. With an async radio the audio right after a hop is still the
+    // previous channel until the tune completes; the stage-1 detector is
+    // level-invariant and fires ~30 ms into any 8-FSK, so if it ran on that
+    // pre-settle audio it would fire, get dropped by the is_tune_settled()
+    // gate on the energy callback, and its one-shot latch would then block
+    // detection of the real (settled) signal for the rest of the dwell — the
+    // channel would be hopped over. Re-arming (mark_channel_hop resets the
+    // detector + latch) when is_tune_settled() goes false→true guarantees
+    // detection accumulates only on the channel we are actually listening to.
+    // For sync backends is_tune_settled() is always true, so there is no
+    // edge and behaviour is unchanged.
     if (sm_.get_state() == ALEState::SCANNING) {
         const bool settled = !radio_ || radio_->is_tune_settled();
         if (settled && !scan_was_settled_)
@@ -1658,11 +1660,11 @@ void ALEController::update(uint32_t now_ms)
     tick_cat_trace(now_ms);
 }
 
-// Check delays after a (non-scanning) channel/mode command: first check catches
-// an SDR front-end's asynchronous band-mode revert (~1-2 GUI timer ticks after
-// the freq change), the later ones cover stragglers. All lie inside the radio
-// backend's re-assert recency window, and each check is a single non-blocking
-// CAT read (sync_from_radio) — no sleeps, nothing on the hop path itself.
+// Check delays after a (non-scanning) channel/mode command: first check
+// catches an SDR front-end's asynchronous band-mode revert (~1-2 GUI timer
+// ticks after the freq change), later ones cover stragglers. All lie inside
+// the radio backend's re-assert recency window, and each check is a single
+// non-blocking CAT read (sync_from_radio) — no sleeps, nothing on the hop path itself.
 static constexpr uint32_t MODE_VERIFY_DELAYS_MS[] = { 300, 700, 1500 };
 static constexpr int      MODE_VERIFY_CHECKS =
     static_cast<int>(sizeof(MODE_VERIFY_DELAYS_MS) / sizeof(MODE_VERIFY_DELAYS_MS[0]));
@@ -1673,16 +1675,16 @@ static constexpr int      MODE_VERIFY_CHECKS =
 // decoupled from the hops: one sync_from_radio() every ~400 ms re-asserts the
 // intended mode if an async band revert pulled it away, catching residual
 // reverts within a few hops. sync_from_radio is a CmdSync — it never touches
-// tunes_in_flight_, so it never gates hop_ready / the hop rate. Quisk's per-band
-// memory trains after the first scan pass, so reverts — and thus these
-// corrections — taper off.
+// tunes_in_flight_, so it never gates hop_ready/the hop rate. Quisk's
+// per-band memory trains after the first scan pass, so reverts — and thus
+// these corrections — taper off.
 static constexpr uint32_t MODE_VERIFY_SCAN_CADENCE_MS = 400;
 
 void ALEController::schedule_mode_verify()
 {
     if (!radio_) return;
-    // While SCANNING the background cadence in tick_mode_verify handles verify;
-    // arming the one-shot here would just be superseded by the next 200 ms hop.
+    // While SCANNING the background cadence in tick_mode_verify handles
+    // verify; arming the one-shot here would just be superseded by the next 200 ms hop.
     if (sm_.get_state() == ALEState::SCANNING) return;
     mode_verify_checks_left_ = MODE_VERIFY_CHECKS;
     mode_verify_deadline_ms_ = now_ms_ + MODE_VERIFY_DELAYS_MS[0];
@@ -1692,7 +1694,7 @@ void ALEController::tick_mode_verify(uint32_t now_ms)
 {
     if (sm_.get_state() == ALEState::SCANNING) {
         // Fixed-cadence background verify, decoupled from the per-hop re-arm.
-        // Lazily arm on the first scanning tick so the cadence is measured from
+        // Lazily arm on the first scanning tick so cadence is measured from
         // the start of scanning, not from whatever value was left behind.
         if (mode_verify_scan_deadline_ms_ == 0)
             mode_verify_scan_deadline_ms_ = now_ms + MODE_VERIFY_SCAN_CADENCE_MS;
@@ -1720,7 +1722,7 @@ void ALEController::tick_mode_verify(uint32_t now_ms)
 // pal::IRadio::drain_cat_trace) into the status stream, each prefixed so they
 // read as a distinct diagnostics category rather than blending into ordinary
 // ALE status lines. No-op — including no lock on the radio's trace buffer —
-// whenever tracing is off or no radio is attached.
+// when tracing is off or no radio is attached.
 void ALEController::tick_cat_trace(uint32_t /*now_ms*/)
 {
     if (!cat_trace_ || !radio_) return;
@@ -1750,7 +1752,7 @@ void ALEController::tick_ptt_timing(uint32_t now_ms)
             demodulator_.set_enabled(true);
         // The SM stamped its own "waiting for peer" timer (e.g. WAIT_ACK's
         // Twr window) back when it decided to listen, not now that it truly
-        // can — replay the delay we just imposed so that timer isn't already
+        // can — replay the delay just imposed so that timer isn't already
         // running down before this station could physically hear anything.
         sm_.extend_peer_wait_window_for_ptt_release_delay(ptt_tail_armed_delay_ms_);
         ptt_tail_armed_delay_ms_ = 0;
@@ -1759,11 +1761,11 @@ void ALEController::tick_ptt_timing(uint32_t now_ms)
 
 void ALEController::tick_sm(uint32_t now_ms)
 {
-    // rx_only: abort an SM-initiated TX (incoming-call handshake response) that
-    // was caught in set_rx_enabled_callback. Drained here to avoid re-entering
+    // rx_only: abort an SM-initiated TX (incoming-call handshake response)
+    // caught in set_rx_enabled_callback. Drained here to avoid re-entering
     // the SM inside that callback. emergency_manual_control() → IDLE; in
-    // HANDSHAKE state this is silent (no TWAS), so the station hears the call
-    // but never transmits — exactly "reception only, transmission disabled".
+    // HANDSHAKE state this is silent (no TWAS), so the station hears the
+    // call but never transmits — exactly "reception only, transmission disabled".
     if (abort_tx_pending_) {
         abort_tx_pending_ = false;
         sm_.emergency_manual_control();
@@ -1774,8 +1776,8 @@ void ALEController::tick_sm(uint32_t now_ms)
 
 void ALEController::tick_frame_settle(uint32_t now_ms)
 {
-    // Commit a settled received-sounding session to the LQA DB (full address +
-    // session-averaged snr/ber). Checked every tick — cheap, and time-sensitive.
+    // Commit a settled received-sounding session to the LQA DB (full address
+    // + session-averaged snr/ber). Checked every tick — cheap, time-sensitive.
     if (sounding_accumulator_.timed_out(now_ms)) {
         if (auto r = sounding_accumulator_.finalize())
             commit_sounding_result(*r);
@@ -1790,7 +1792,7 @@ void ALEController::tick_frame_settle(uint32_t now_ms)
     }
 
     // Linked AMD RX fallback: if a CMD AMD was seen but no TIS conclusion
-    // arrived (corrupted/missed), commit after Tdrw silence.  The TIS path in
+    // arrived (corrupted/missed), commit after Tdrw silence. The TIS path in
     // rx_accumulate_linked_amd() is the primary commit; this is belt-and-suspenders.
     if (linked_amd_.collecting && linked_amd_settle_ms_ > 0
         && (now_ms - linked_amd_settle_ms_) >= ALETimingConstants::Tdrw_ms) {
@@ -1832,12 +1834,13 @@ void ALEController::tick_relink(uint32_t now_ms)
 // tick_relink() for clarity; called once per tick.
 void ALEController::tick_amd_confirm(uint32_t now_ms)
 {
-    // The LINKED-path confirmation (Call→Response→ACK + retry) is now owned by the
-    // SM's LINKED-AMD confirm sub-phases; nothing to drive here for it. This tick
-    // handles only the NOT-linked path's reentrancy-safe deferred re-call:
-    // NO_CHANNELS_LEFT set the pending flag on the SM's own callback stack, so the
-    // actual re-call happens here — never inline in the callback — once the SM has
-    // settled to IDLE/SCANNING and the inter-attempt gap (Tt_next_try) has elapsed.
+    // The LINKED-path confirmation (Call→Response→ACK + retry) is now owned
+    // by the SM's LINKED-AMD confirm sub-phases; nothing to drive here for
+    // it. This tick handles only the NOT-linked path's reentrancy-safe
+    // deferred re-call: NO_CHANNELS_LEFT sets the pending flag on the SM's
+    // own callback stack, so the actual re-call happens here — never inline
+    // in the callback — once the SM has settled to IDLE/SCANNING and the
+    // inter-attempt gap (Tt_next_try) has elapsed.
     if (amd_retry_pending_recall_) {
         const ALEState st = sm_.get_state();
         if ((st == ALEState::IDLE || st == ALEState::SCANNING)
@@ -1853,8 +1856,8 @@ void ALEController::tick_amd_confirm(uint32_t now_ms)
 void ALEController::tick_sounding_sweep(uint32_t now_ms)
 {
     // Periodic multi-channel sounding sweep (set_automatic_sounding). Start a
-    // sweep over the configured net's channels every interval, gated on IDLE/
-    // SCANNING. A running sweep holds the SM in SOUNDING, which blocks re-entry.
+    // sweep over the configured net's channels every interval, gated on
+    // IDLE/SCANNING. A running sweep holds the SM in SOUNDING, blocking re-entry.
     if (!auto_sounding_on_ || auto_sounding_net_.empty() || auto_sounding_interval_ms_ == 0)
         return;
 
@@ -1883,8 +1886,8 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
     if (remaining_ms <= 0 && (st == ALEState::IDLE || st == ALEState::SCANNING)) {
         auto channels = resolve_net_sounding_channels(auto_sounding_net_);
         // Sounding uses the same "call width" C as calling (Tsrs = (C+2)·Ta) —
-        // take it from the auto-sounding net's calling_length_c.  See
-        // resolve_sounding_C() and handle_sounding().
+        // taken from the auto-sounding net's calling_length_c. See
+        // resolve_sounding_C()/handle_sounding().
         sm_.set_target_scan_channels(resolve_sounding_C(auto_sounding_net_));
         if (sm_.get_self_address().empty()) {
             pal::log_warn("Ctrl", "Auto-sounding deferred: no callsign configured");
@@ -1897,8 +1900,8 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
             emit_status("Auto-sounding sweep on net '" + auto_sounding_net_
                         + "' (" + std::to_string(channels.size()) + " channels)");
             // Defer the timer re-arm to cycle END (on_sm_state_change leaving
-            // SOUNDING) so the next interval is the gap AFTER the sounding cycle,
-            // not after it started.  Do NOT stamp auto_sounding_last_ms_ here.
+            // SOUNDING) so the next interval is the gap AFTER the sounding
+            // cycle, not after it started. Do NOT stamp auto_sounding_last_ms_ here.
             sounding_cycle_active_ = true;
         } else {
             // No soundable channels / sweep rejected — re-arm now to avoid
@@ -1920,11 +1923,11 @@ void ALEController::tick_sounding_sweep(uint32_t now_ms)
 
 void ALEController::tick_position_report(uint32_t now_ms)
 {
-    // Automatic ALE-GPR/GGA position reporting (docs/ALE_GPR_SPEC.md), direct
-    // template: tick_sounding_sweep() above. Manual "Send Position" (bridge
-    // GPR_BUILD + AMD commands) shares the same position_report_enabled master
-    // gate (checked in ale_bridge.cpp's GPR_BUILD handler) but is otherwise
-    // independent of this timer/mode.
+    // Automatic ALE-GPR/GGA position reporting (docs/ALE_GPR_SPEC.md),
+    // modeled on tick_sounding_sweep() above. Manual "Send Position" (bridge
+    // GPR_BUILD + AMD commands) shares the same position_report_enabled
+    // master gate (checked in ale_bridge.cpp's GPR_BUILD handler) but is
+    // otherwise independent of this timer/mode.
     using Mode   = ALEStationConfig::PositionReportMode;
     using Format = ALEStationConfig::PositionReportFormat;
     if (!config_.position_report_enabled)
@@ -1956,11 +1959,11 @@ void ALEController::tick_position_report(uint32_t now_ms)
         if (interval_ms == 0) return;
         fire = (now_ms - last_report_ms_) >= interval_ms;
     } else { // ON_CHANGE
-        // Hard-coded 60 s safety floor, independent of the configured threshold —
-        // guards against channel congestion from ordinary GPS jitter repeatedly
-        // re-crossing a tiny threshold (the GUI's threshold picker carries the
-        // same warning). Always fires once on the very first fix seen so the
-        // peer/network has an initial position to work from.
+        // Hard-coded 60 s safety floor, independent of the configured
+        // threshold — guards against channel congestion from ordinary GPS
+        // jitter repeatedly re-crossing a tiny threshold (the GUI's
+        // threshold picker carries the same warning). Always fires once on
+        // the first fix seen so the peer/network has an initial position to work from.
         constexpr uint32_t kChangeFloorMs = 60000;
         if (!has_last_reported_position_) {
             fire = true;
@@ -1971,7 +1974,7 @@ void ALEController::tick_position_report(uint32_t now_ms)
     }
     if (!fire) return;
 
-    // Build the report text. GGA passthrough is only ever available for a live
+    // Build the report text. GGA passthrough is only available for a live
     // NMEA-serial fix (raw_gga_ is only ever populated by that source) — the
     // GUI already gates the format picker on this, but re-check here since
     // config can outlive the fix that made GGA valid.
@@ -2001,15 +2004,15 @@ void ALEController::tick_position_report(uint32_t now_ms)
 
 // ── Test-Channel sweep (active per-peer LQA collection) ──────────────────────
 // Per-channel no-reply backstop. The SM's own calling timeout
-// (compute_calling_timeout_ms) normally aborts a no-reply call first; this is a
-// safety net for a stuck SM.
+// (compute_calling_timeout_ms) normally aborts a no-reply call first; this
+// is a safety net for a stuck SM.
 static constexpr uint32_t TEST_CHANNEL_LINK_TIMEOUT_MS = 30000;
 
 std::vector<Channel> ALEController::resolve_net_call_channels(const std::string& net_name) const
 {
     std::vector<Channel> out;
     // Callable = enabled && may call (not inhibit_calling) && may TX (not rx_only).
-    // A test channel must be able to place a call, so sounding-only filters do not apply.
+    // A test channel must be able to place a call, so sounding-only filters don't apply.
     auto collect_net = [&](const Net& net) {
         for (const auto& ch_id : net.channel_ids)
             for (const auto& ch : calling_channels_)
@@ -2224,9 +2227,9 @@ void ALEController::tick_test_channel(uint32_t now_ms)
     case TestPhase::NEXT: {
         if (st != ALEState::IDLE && st != ALEState::SCANNING) return;
         // Inter-channel settle: give the peer Tdrw to detect our TWAS and
-        // return to scanning before we place the next call. test_phase_start_ms_
+        // return to scanning before placing the next call. test_phase_start_ms_
         // is stamped by TERMINATING on exit; for failure paths (CALLING→NEXT,
-        // TUNE→NEXT) the elapsed time already exceeds Tdrw so there is no delay.
+        // TUNE→NEXT) elapsed time already exceeds Tdrw, so no delay.
         if (now_ms - test_phase_start_ms_ < ALETimingConstants::Tdrw_ms) return;
         ++test_idx_;
         if (test_idx_ >= test_channels_.size()) { test_phase_ = TestPhase::DONE; return; }
@@ -2314,9 +2317,9 @@ void ALEController::tick_lqa_update(uint32_t now_ms)
 void ALEController::maybe_emit_call_alert()
 {
     // Fire the incoming-call alert (and any collected AMD) exactly once per
-    // handshake, the moment the caller's conclusion has fully settled. That is
-    // when the SM leaves WAIT_CYCLE_END (→ AWAIT_ACCEPT in manual-accept mode,
-    // → SLOT_WAIT otherwise), at which point sm_.get_caller_address() holds the
+    // handshake, when the caller's conclusion has fully settled — the moment
+    // the SM leaves WAIT_CYCLE_END (→ AWAIT_ACCEPT in manual-accept mode,
+    // → SLOT_WAIT otherwise), when sm_.get_caller_address() holds the
     // complete, reassembled address (TIS + DATA/REP). Emitting earlier (at the
     // TIS word) would report a truncated caller for >3-char addresses.
     //
@@ -2333,15 +2336,15 @@ void ALEController::maybe_emit_call_alert()
     const std::string caller = sm_.get_caller_address();
 
     // GAP 2 fix (A.5.4.1.1): JOE commits calling-frame FROM measurement NOW
-    // (before encode_outgoing reads the DB) so the fresh data is available
-    // for CMD 'a'. Reset the accumulator; on_sm_state_change provides the
+    // (before encode_outgoing reads the DB) so fresh data is available for
+    // CMD 'a'. Reset the accumulator; on_sm_state_change provides the
     // safety-net reset if the alert fires but LINKED is never reached.
     if (op_params_.lqa_enabled && hs_call_acc_.word_count() > 0) {
         if (!caller.empty() && !self_address_store_.matches_self(caller)) {
-            // Commit uses hs_call_freq_hz_ (set by the accumulator above via the
-            // radio-backed get_current_channel()), so guard on that — not on
-            // sm_.get_current_channel(), which is nullptr on no-scan links and would
-            // silently drop the calling-frame FROM measurement (cf. 1562ea9).
+            // Commit uses hs_call_freq_hz_ (set by the accumulator above via
+            // the radio-backed get_current_channel()), so guard on that —
+            // not sm_.get_current_channel(), which is nullptr on no-scan
+            // links and would silently drop the calling-frame FROM measurement (cf. 1562ea9).
             if (hs_call_freq_hz_ > 0) {
                 lqa_database_.update_entry_extended(hs_call_freq_hz_, caller,
                     hs_call_acc_.snr_avg(),
@@ -2362,7 +2365,7 @@ void ALEController::maybe_emit_call_alert()
 
     // Block A4 (responder) — queue CMD LQA (KA1=0) for the response frame.
     // encode_outgoing reads the fresh calling-frame measurement committed above.
-    // Done here (once, at alert time) so it applies for both auto-accept and manual-accept.
+    // Done here (once, at alert time) so it applies to both auto-accept and manual-accept.
     if (config_.lqa_exchange_enabled) {
         const Channel cur_blka4_ch = get_current_channel();
         // Per-channel inhibit_reporting suppresses the bilateral CMD 'a'
@@ -2407,8 +2410,8 @@ void ALEController::commit_rx_ber_sample()
     }
 
     // Resolve the station that sent the measured transmission (the peer): the
-    // station we called (to_address) when we initiated, else the caller
-    // (caller_address) when we were called — same rule as the LQA-report path.
+    // station we called (to_address) if we initiated, else the caller
+    // (caller_address) if we were called — same rule as the LQA-report path.
     // get_to_address()/get_caller_address() already return cleaned addresses.
     const std::string sender = !sm_.get_to_address().empty()
         ? sm_.get_to_address() : sm_.get_caller_address();
@@ -2520,9 +2523,9 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
                   ALEStateMachine::state_name(to));
     emit_status(buf);
 
-    // Pre-empt: if a call begins while the idle-sounding countdown popup is open,
-    // cancel the popup. Keep sounding_warning_sent_=true so we don't re-warn for
-    // this same cycle; the overdue sweep will fire silently once the call ends.
+    // Pre-empt: if a call begins while the idle-sounding countdown popup is
+    // open, cancel the popup. Keep sounding_warning_sent_=true so we don't
+    // re-warn this cycle; the overdue sweep fires silently once the call ends.
     if (sounding_warning_active_
         && (to == ALEState::CALLING || to == ALEState::HANDSHAKE
             || to == ALEState::LINKED)) {
@@ -2538,7 +2541,7 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         // link (A.5.7.2.3 — "upon arrival", regardless of outcome). By this
         // point sm_.get_caller_address() already holds the fully-settled
         // address (populated word-by-word during WAIT_CYCLE_END, well before
-        // this transition fires) for both the normal call→response→ACK path
+        // this transition fires), for both the normal call→response→ACK path
         // and the AllCall/AnyCall direct-to-LINKED path.
         {
             std::string tail = amd_flush(call_amd_);   // in-progress text, if any (e.g. TIS never arrived)
@@ -2576,8 +2579,8 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
     // would leave the decoder stuck active and silently corrupt this new call.
     // Response-frame AMD (A.5.7.2.2): same rationale as the calling-frame
     // dispatch above — display must not depend on whether the call goes on to
-    // link. sm_.get_to_address()/get_caller_address() are settled by now (the
-    // response's own conclusion was fully processed before this transition).
+    // link. sm_.get_to_address()/get_caller_address() are settled by now
+    // (response's own conclusion fully processed before this transition).
     if (from == ALEState::CALLING) {
         std::string tail = amd_flush(resp_amd_);
         if (!tail.empty()) resp_amd_pending_.push_back(std::move(tail));
@@ -2599,16 +2602,16 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         lqa_exchange_.reset();
     }
 
-    // The Block C5 report-RX path has no state gate and keeps running
-    // through the whole LINKED session (AMD/EFS DATA words are routine
-    // there). Reset on entry so a report interrupted during the preceding
+    // Block C5 report-RX path has no state gate and keeps running through
+    // the whole LINKED session (AMD/EFS DATA words are routine there).
+    // Reset on entry so a report interrupted during the preceding
     // HANDSHAKE/CALLING doesn't stay stuck active_=true and splice later
     // unrelated DATA words into a stale buffer.
     if (to == ALEState::LINKED) {
         lqa_exchange_.reset();
     }
 
-    // Entering SOUNDING = we are about to *transmit* our own sounding. Per
+    // Entering SOUNDING = about to *transmit* our own sounding. Per
     // A.5.4.1.1/A.5.4.1.2 a transmitted sounding produces no received words and
     // MUST NOT create an LQA entry (only stations that *receive* a sounding
     // perform channel measurements — see commit_sounding_result()). The sounding
@@ -2641,10 +2644,10 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         }
     }
 
-    // Auto-sounding timer re-arm at cycle END.  The SM stays in SOUNDING between
+    // Auto-sounding timer re-arm at cycle END. The SM stays in SOUNDING between
     // sweep channels (it re-arms LBT directly, no transition_to) and only leaves
     // SOUNDING once — at sweep exhaustion (→ IDLE/SCANNING) or on CALL_DETECTED/
-    // ERROR — so this fires exactly once per auto-sounding cycle.  Stamping here
+    // ERROR — so this fires exactly once per auto-sounding cycle. Stamping here
     // (not at fire time in tick_sounding_sweep) makes the configured interval the
     // gap AFTER the cycle, matching the spec's "reset to sound-interval when a
     // sound is sent" read as when the sound completes.
@@ -2706,7 +2709,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // Flush any pending response-frame word metrics BEFORE marking bilateral
             // attempted: finalizing here stores the TIS:peer FROM-direction
             // quality so mark_bilateral_attempted finds a real entry to annotate
-            // instead of creating a zero-score stub (which scores ~6 recency-only).
+            // instead of creating a zero-score stub (scores ~6 recency-only).
             if (auto r = sounding_accumulator_.finalize()) commit_sounding_result(*r);
             if (config_.lqa_exchange_enabled)
                 lqa_exchange_.on_call_concluded();
@@ -2718,9 +2721,9 @@ void ALEController::on_operator_event(OperatorEvent ev)
                 : sm_.get_caller_address();
             // Manual-accept post-link gate: the handshake already completed (link
             // is up); in manual mode the operator must still Accept/Reject the
-            // established link. on_link_established fires either way (the link is
-            // genuinely up); the GUI uses its auto-accept setting to decide whether
-            // to show the active-call panel or the pending Answer/Decline panel.
+            // established link. on_link_established fires either way (link is
+            // genuinely up); the GUI uses its auto-accept setting to decide
+            // whether to show the active-call panel or the pending Answer/Decline panel.
             if (config_.manual_accept_mode) {
                 pending_operator_accept_ = true;
                 emit_status("LINK ESTABLISHED with " + peer
@@ -2763,7 +2766,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // called station was heard → counts as delivered (operator's ruling).
             // Reuses ALE_AMD_DELIVERED (silent, no extra state cleanup in the GUI —
             // link_terminated above already does that) purely so the GUI can mark
-            // the sent message's badge; no-op if there was no pending AMD.
+            // the sent message's badge; no-op if no pending AMD.
             dispatch(pal::EventType::ALE_AMD_DELIVERED, sm_.get_to_address());
             if (amd_retry_active_) amd_confirm_clear_();
             break;
@@ -2788,7 +2791,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // any channel → not heard. Retry (up to amd_send_max_attempts) or give
             // up. This fires on the SM's OWN callback stack, so NEVER re-call the SM
             // here — only set a pending flag + inter-attempt deadline; tick_relink()
-            // performs the actual re-call once the SM has settled to IDLE/SCANNING.
+            // performs the actual re-call once the SM settles to IDLE/SCANNING.
             if (amd_retry_active_) {
                 const std::string peer = amd_retry_target_;
                 if (amd_attempts_remaining_ > 1) {
@@ -2814,10 +2817,10 @@ void ALEController::on_operator_event(OperatorEvent ev)
             break;
         case OperatorEvent::AMD_SENT_NO_LINK: {
             // Caller side: frame 3 concluded with TWAS by request (Ion2G-style AMD
-            // send, link_after_send=false) — the message was already delivered from
-            // the calling frame; this is a graceful "handshake done, no link wanted"
+            // send, link_after_send=false) — message already delivered from
+            // the calling frame; graceful "handshake done, no link wanted"
             // outcome, not a rejection. Same response-frame-quality cleanup as
-            // CALL_REJECTED (a real handshake occurred, response-frame metrics may
+            // CALL_REJECTED (real handshake occurred, response-frame metrics may
             // have been measured) but a distinct status line / event so it never
             // reads as a failure in the ALE Log or contact history.
             if (op_params_.lqa_enabled && hs_resp_acc_.word_count() > 0) {
@@ -2849,8 +2852,8 @@ void ALEController::on_operator_event(OperatorEvent ev)
             break;
         }
         case OperatorEvent::AMD_RECEIVED_NO_LINK: {
-            // Callee side: caller's frame 3 was TWAS instead of TIS. The AMD text
-            // (if any) was already dispatched via ALE_AMD_RECEIVED from the calling
+            // Callee side: caller's frame 3 was TWAS instead of TIS. AMD text
+            // (if any) already dispatched via ALE_AMD_RECEIVED from the calling
             // frame; this only reports the link decision. No response-frame
             // metrics to clean up here — hs_resp_acc_ is caller-side only.
             const std::string peer = sm_.get_caller_address();
@@ -2863,7 +2866,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // the ACK (Call→Response→ACK complete). Silent success — a plain status
             // line, no chime (mirrors the not-linked silent-success path). The
             // dedicated event (distinct from the log-only status line) lets the
-            // GUI mark the specific sent message bubble as delivered.
+            // GUI mark the specific sent message bubble delivered.
             const std::string peer = active_peer();
             emit_status("AMD delivered to " + peer + " — confirmed");
             dispatch(pal::EventType::ALE_AMD_DELIVERED, peer);
@@ -2871,7 +2874,7 @@ void ALEController::on_operator_event(OperatorEvent ev)
         }
         case OperatorEvent::AMD_RETRY: {
             // LINKED-state confirmed AMD: reply window elapsed with no Response,
-            // attempts remain → the SM is resending the burst. attempts_left was
+            // attempts remain → SM is resending the burst. attempts_left was
             // already decremented for this retry (see linked_amd_retry_or_fail_()),
             // so it directly gives this attempt's ordinal.
             const std::string peer = active_peer();
@@ -2955,8 +2958,8 @@ void ALEController::rx_accumulate_caller_identity(const ALEWord& word)
     //   - DATA/REP alternates for chars 4-6, 7-9, 10-12, 13-15
     //   - Trailing '@' stuffing is stripped by trim_ale_address()
     //
-    // Identity is accumulated here but NOT emitted yet — the single alert fires
-    // in tick_sm() once the conclusion has fully settled (WAIT_CYCLE_END exits).
+    // Accumulated here but NOT emitted yet — the single alert fires in
+    // tick_sm() once the conclusion has fully settled (WAIT_CYCLE_END exits).
     if (sm_.get_state() != ALEState::HANDSHAKE
         || sm_.get_handshake_phase() != HandshakePhase::WAIT_CYCLE_END)
         return;
@@ -2965,7 +2968,7 @@ void ALEController::rx_accumulate_caller_identity(const ALEWord& word)
     // AMD content (CMD…DATA/REP…) may also ride in this frame (A.5.7.2.2) —
     // rx_accumulate_call_amd() reassembles it separately. No conflict: this
     // accumulator only extends last_caller_ once TIS has already been seen,
-    // so it never picks up AMD payload words (which always precede TIS).
+    // so it never picks up AMD payload words (always precede TIS).
     if (word.valid) {
         const std::string chunk = trim_ale_address(word.address);
 
@@ -2982,7 +2985,7 @@ void ALEController::rx_accumulate_caller_identity(const ALEWord& word)
 // One CMD-discrimination + accumulate state machine, reused by all four
 // standard-mandated AMD windows (calling frame, response frame, ACK frame,
 // linked orderwire — see AmdAccumulator in ale_controller.h). AMD has no fixed
-// CMD identifier (its first 3 chars are message content, Expanded-64), so we
+// CMD identifier (first 3 chars are message content, Expanded-64), so we
 // exclude CMD words owned by other protocols — EFS 'f', LQA 'a'/'n'/'r'
 // (handled by rx_handle_lqa_exchange / rx_handle_freq_select) and the DTM/DBM
 // identifiers ("DTM"/"DBM", decoded as Basic-38). This mirrors the inherent
@@ -3048,10 +3051,10 @@ void ALEController::amd_dispatch(const std::string& peer, const std::string& tex
 }
 
 // ── Calling-frame AMD RX (A.5.7.2.2, called-station side) ───────────────────
-// DC7SU-style AMD: TO[self] FROM[peer] CMD AMD DATA/REP…(text) TIS[peer] — the
-// message is embedded in the very first (calling) frame, the primary place
+// DC7SU-style AMD: TO[self] FROM[peer] CMD AMD DATA/REP…(text) TIS[peer] —
+// message embedded in the very first (calling) frame, the primary place
 // A.5.7.1 puts it. Active while HANDSHAKE/WAIT_CYCLE_END (also covers AllCall/
-// AnyCall message sections — A.5.5.4.4/4.5 — same window). The peer address is
+// AnyCall message sections — A.5.5.4.4/4.5 — same window). Peer address is
 // often not fully known until the TIS conclusion settles (multi-word
 // addresses), so completed messages are buffered in call_amd_pending_ and
 // dispatched centrally from on_sm_state_change() once HANDSHAKE is left —
@@ -3069,7 +3072,7 @@ void ALEController::rx_accumulate_call_amd(const ALEWord& word)
 
 // ── Response-frame AMD RX (A.5.7.2.2, calling-station side) ─────────────────
 // JOE may embed AMD in its response frame: TO[SAM] CMD AMD DATA/REP… TIS[JOE].
-// Active while CALLING/LISTENING. The peer isn't confirmed until JOE's own
+// Active while CALLING/LISTENING. Peer isn't confirmed until JOE's own
 // TIS is processed by the SM (after this function runs — see the field
 // comment in ale_controller.h), so completed messages are buffered and
 // dispatched centrally in on_sm_state_change() when CALLING is left.
@@ -3084,10 +3087,10 @@ void ALEController::rx_accumulate_resp_amd(const ALEWord& word)
 }
 
 // ── Linked AMD orderwire RX (A.5.7.2 over an established link) ───────────────
-// Reassembles an AMD message that arrives in a linked-orderwire frame
+// Reassembles an AMD message arriving in a linked-orderwire frame:
 //   TO[peer] (+DATA/REP ext) ×2 + CMD AMD + message DATA/REP + TIS[peer]
-// We ignore the TO/address-extension prefix (the peer is already known from the
-// link state) and collect from the CMD AMD header onward.  A new CMD or the TIS
+// We ignore the TO/address-extension prefix (peer already known from the
+// link state) and collect from the CMD AMD header onward. A new CMD or the TIS
 // conclusion commits the message; Tdrw silence is the fallback (tick_frame_settle).
 void ALEController::rx_accumulate_linked_amd(const ALEWord& word)
 {
@@ -3106,7 +3109,7 @@ void ALEController::rx_accumulate_linked_amd(const ALEWord& word)
         linked_amd_settle_ms_ = now_ms_;
     amd_dispatch(linked_amd_peer_, done, "LINKED");
     // Delivery confirmation (receiver side, primary commit): a complete AMD just
-    // arrived over the link → have the SM reply with the Response frame and run
+    // arrived over the link → have SM reply with the Response frame and run
     // its WAIT_ACK. Guarded on non-empty so only a real message triggers it.
     if (!done.empty())
         reply_to_linked_amd_(linked_amd_peer_);
@@ -3127,8 +3130,8 @@ void ALEController::commit_linked_amd()
 // ── ACK-frame AMD RX (A.5.7.2.2, responder side) ─────────────────────────────
 // The caller places AMD in the ACK frame (the third handshake frame):
 //   TO[self] ×2 + [CMD 'a'] + [CMD 'r'+DATA…] + [CMD AMD + DATA/REP…] + TIS[caller]
-// We receive that frame while in HANDSHAKE/WAIT_ACK.  The leading TO[self] words
-// are ignored (the caller identity is already known from WAIT_CYCLE_END); we
+// We receive that frame while in HANDSHAKE/WAIT_ACK. Leading TO[self] words
+// are ignored (caller identity already known from WAIT_CYCLE_END); we
 // reassemble from the CMD AMD header onward and commit at the TIS conclusion.
 void ALEController::rx_accumulate_ack_amd(const ALEWord& word)
 {
@@ -3152,7 +3155,7 @@ void ALEController::commit_ack_amd()
 }
 
 // ── LINKED-state AMD delivery confirmation (receiver reply) ──────────────────
-// The wait/detect/ACK/retry logic lives in the SM's LINKED-AMD confirm sub-phases
+// Wait/detect/ACK/retry logic lives in the SM's LINKED-AMD confirm sub-phases
 // (see ale_state_machine.cpp), reusing the CALLING/LISTENING + HANDSHAKE/WAIT_ACK
 // timing and WordRole detection. The controller only kicks off the receiver reply
 // (it owns the LQA measurement the optional CMD 'a' carries) and maps the SM's
@@ -3161,7 +3164,7 @@ void ALEController::reply_to_linked_amd_(const std::string& sender)
 {
     if (sender.empty() || self_address_store_.matches_self(sender)) return;
     // Optional bilateral LQA piggyback: the CMD 'a' word (what WE measured FROM
-    // the sender) rides the Response frame; the SM builds TO[sender]×2 + … + TIS,
+    // the sender) rides the Response frame; SM builds TO[sender]×2 + … + TIS,
     // we supply only the CMD 'a' word (LQA measurement lives above the SM).
     std::vector<ALEWord> cmd_words;
     const Channel ch = get_current_channel();
@@ -3174,7 +3177,7 @@ void ALEController::reply_to_linked_amd_(const std::string& sender)
     sm_.respond_to_linked_amd(sender, std::move(cmd_words));
 }
 
-// Clear the NOT-linked AMD retry state (the linked path's state now lives in the
+// Clear the NOT-linked AMD retry state (linked path's state now lives in the
 // SM). Called on success/exhaustion of a not-linked confirmed AMD and on
 // emergency_stop().
 void ALEController::amd_confirm_clear_()
@@ -3195,7 +3198,7 @@ void ALEController::rx_handle_lqa_exchange(const ALEWord& word)
     // ── Block A5 — CMD LQA (char 'a') bilateral RX ───────────────────────
     // Captures in HANDSHAKE/WAIT_CYCLE_END (JOE receiving SAM's CMD 'a')
     // and in CALLING/LISTENING (SAM receiving JOE's CMD 'a' in the response).
-    // cmd_char_code() reads raw_payload bits directly so CMD detection is
+    // cmd_char_code() reads raw_payload bits directly, so CMD detection is
     // independent of the char-set gate and the decoded address[] content;
     // raw_payload is always the authoritative CMD function code.
     {
@@ -3207,7 +3210,7 @@ void ALEController::rx_handle_lqa_exchange(const ALEWord& word)
                 && sm_.get_calling_phase() == CallingPhase::LISTENING)
             // LINKED: capture the CMD 'a' carried in the AMD delivery-confirmation
             // Response frame (and any bilateral CMD 'a' received while linked) —
-            // without this the word is on the wire but silently dropped by RX.
+            // without this, the word is on the wire but silently dropped by RX.
             || cur_st == ALEState::LINKED;
         if (word.type == PreambleType::CMD && cmd_char_code(word) == 'a'
                 && in_bilateral_window) {
@@ -3288,10 +3291,10 @@ void ALEController::rx_accumulate_frame_ber(const ALEWord& word)
 
     if (cur_st == ALEState::LINKED) {
         // Radio-backed channel (cf. 1562ea9): sm_.get_current_channel() returns
-        // nullptr on no-scan / single-channel links, which would silently drop
+        // nullptr on no-scan/single-channel links, which would silently drop
         // every LINKED-traffic measurement. get_current_channel() falls back to
-        // radio_->get_channel() (cached), which reports the tuned frequency even
-        // without a scan list, so the FROM-direction SINAD/BER is accumulated.
+        // radio_->get_channel() (cached), reporting the tuned frequency even
+        // without a scan list, so FROM-direction SINAD/BER is accumulated.
         const Channel cur_ch = get_current_channel();
         if (cur_ch.rx_frequency_hz == 0) return;
         constexpr float kMaxVotes = 48.0f;
@@ -3313,7 +3316,7 @@ void ALEController::rx_accumulate_frame_ber(const ALEWord& word)
         // the last (best) copy and failed-cycle noise is discarded.
         //
         // Radio-backed channel (cf. 1562ea9): sm_.get_current_channel() is nullptr
-        // on no-scan / single-channel links; without this fallback the response-frame
+        // on no-scan/single-channel links; without this fallback the response-frame
         // FROM measurement is never accumulated and only a bilateral stub survives.
         const Channel cur_ch = get_current_channel();
         if (cur_ch.rx_frequency_hz == 0) return;
@@ -3332,7 +3335,7 @@ void ALEController::rx_accumulate_frame_ber(const ALEWord& word)
         // encode_outgoing() reads fresh data.
         //
         // Radio-backed channel (cf. 1562ea9): sm_.get_current_channel() is nullptr
-        // on no-scan / single-channel links; without this fallback the calling-frame
+        // on no-scan/single-channel links; without this fallback the calling-frame
         // FROM measurement (JOE side) is never accumulated.
         const Channel cur_ch = get_current_channel();
         if (cur_ch.rx_frequency_hz == 0) return;
@@ -3350,11 +3353,11 @@ std::string ALEController::display_state() const
     if (st == ALEState::HANDSHAKE) {
         // Called station: WAIT_CYCLE_END (listening for the caller's conclusion)
         // and AWAIT_ACCEPT (operator decision gate) are the "incoming" phase —
-        // the call has been detected but the response exchange hasn't begun. The
+        // call detected but the response exchange hasn't begun. The
         // response-exchange phases (SLOT_WAIT → CHANNEL_CHECK → SENDING_RESPONSE
         // → WAIT_ACK) are the active "handshake". Splitting here gives the GUI
         // pill the sequence Incoming → Handshake → Linked the operator expects
-        // (the call_received alert fires only after WAIT_CYCLE_END, so without
+        // (call_received alert fires only after WAIT_CYCLE_END, so without
         // this the pill would show Handshake first, then Incoming overwriting
         // it for the rest of the exchange).
         const HandshakePhase hp = sm_.get_handshake_phase();
@@ -3488,7 +3491,7 @@ void ALEController::set_automatic_sounding(bool on, const std::string& net_name)
     // multi-channel sounding on/off", burying real ALE events in status spam,
     // and reset the sounding timer on every no-op "on" reassertion. Interval-
     // only changes are picked up separately via refresh_auto_sounding_interval()
-    // (NET_UPDATE / net-rename handlers), so skipping here is safe.
+    // (NET_UPDATE/net-rename handlers), so skipping here is safe.
     const bool new_on = on && !net_name.empty();
     const std::string new_net = on ? net_name : std::string{};
     if (new_on == auto_sounding_on_ && new_net == auto_sounding_net_) return;
@@ -3578,8 +3581,8 @@ std::vector<Channel> ALEController::resolve_net_sounding_channels(
 uint32_t ALEController::resolve_sounding_C(const std::string& net_name) const
 {
     // Same "call width" C calling uses (Tsc = C·2·Trw), from the net's
-    // calling_length_c policy.  Precedence: the named net, then the auto-sounding
-    // net, then the active scan net, then the global assumed_scan_channels default.
+    // calling_length_c policy. Precedence: named net, then auto-sounding
+    // net, then active scan net, then global assumed_scan_channels default.
     auto C_of = [this](const std::string& nm) -> uint32_t {
         if (!nm.empty())
             if (const Net* n = net_store_.find(nm)) return n->calling_length_c;
@@ -3646,8 +3649,8 @@ std::vector<std::string> ALEController::get_all_lqa_entries() const
         if (e.remote_station.empty()) continue;  // internal channel-aggregate; not for GUI
         // Skip penalty-only stubs (record_handshake_fail creates an entry with
         // no FROM measurements and no bilateral data solely for A.5.4.5.1
-        // deprioritisation).  They have no displayable quality data and would
-        // appear as phantom rows in the GUI heard panel.
+        // deprioritisation). No displayable quality data — would appear as
+        // phantom rows in the GUI heard panel.
         if (e.total_words == 0 && e.bilateral_ber == 31u && e.bilateral_sinad == 31u) continue;
         const uint32_t age_ms = (now > e.last_activity_ms()) ? (now - e.last_activity_ms()) : 0u;
         // Fields: freq|station|snr_db|ber|sinad_db|score|age_ms
@@ -3659,7 +3662,7 @@ std::vector<std::string> ALEController::get_all_lqa_entries() const
         // available: sounding-conclusion availability flag — 1 = TIS (available
         // for active link establishment), 0 = TWAS (not available), -1 = no
         // sounding heard from this station (entry from a contact only).
-        // last_activity_ms (P1-12): the LQA database's own raw timestamp (ms
+        // last_activity_ms (P1-12): LQA database's own raw timestamp (ms
         // since epoch, LQADatabase::get_current_time_ms() clock — the same
         // clock age_ms above is derived from) so the GUI can show an absolute
         // "received at" time, not just a relative age.
@@ -3846,8 +3849,8 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "# ALE settings export\n";
     for (const auto& e : self_address_store_.all())
         f << "self_address=" << e.address << "\n";
-    // NOTE: station_file= is deliberately NOT written here — it is added only
-    // by export_settings() (a distinct external ale.conf pointing at a separate
+    // NOTE: station_file= is deliberately NOT written here — added only by
+    // export_settings() (a distinct external ale.conf pointing at a separate
     // channel file). Composed into save_state()'s single merged file it would
     // be self-referential: import_settings()'s legacy cascade would re-parse
     // this same file as a pure station file, and any key=value settings line
@@ -3882,8 +3885,8 @@ void ALEController::write_settings_body(std::ostream& f) const
     // places — for a 2-3 integer-digit coordinate that leaves only ~4 decimal
     // places (~11 m), silently degrading a manual/grid-locator position on
     // every settings save regardless of how precisely it was entered. Widen
-    // to 9 significant digits (sub-millimeter at these magnitudes) for just
-    // these two fields, then restore the stream's prior precision so no
+    // to 9 significant digits (sub-millimeter at these magnitudes) for these
+    // two fields only, then restore the stream's prior precision so no
     // other f << writes above/below are affected.
     {
         const auto old_precision = f.precision();
@@ -3928,9 +3931,9 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "location_sharing_enabled=" << (config_.location_sharing_enabled ? 1 : 0) << "\n";
     f << "location_api_url=" << config_.location_api_url << "\n";
     // Ed25519 identity replaces the old shared bearer token (direct cutover —
-    // see docs/LOCATION_SHARING_CONCEPT.md). Nothing token-shaped is ever
-    // written here again; the identity itself lives in
-    // location_relay_identity.key, not station.state.
+    // see docs/LOCATION_SHARING_CONCEPT.md). Nothing token-shaped is written
+    // here again; the identity itself lives in location_relay_identity.key,
+    // not station.state.
     f << "location_relay_identity_path=" << config_.location_relay_identity_path << "\n";
     f << "location_ca_cert_path=" << config_.location_ca_cert_path << "\n";
     f << "location_sharing_allcall=" << (config_.location_sharing_allcall ? 1 : 0) << "\n";
@@ -3947,8 +3950,8 @@ void ALEController::write_settings_body(std::ostream& f) const
     f << "link_default_allcall=" << (config_.link_default_allcall ? 1 : 0) << "\n";
     // Overlay-persistence references (see save_state/load_state): when a preset
     // channel file is sourced, station.state records its path here plus the IDs
-    // the operator deleted from it, instead of every frequency row. The added/
-    // modified channel rows themselves are written by write_station_body()'s
+    // the operator deleted from it, instead of every frequency row. Added/
+    // modified channel rows are written by write_station_body()'s
     // overlay_only mode. Empty when no file is loaded (legacy full save).
     if (!loaded_channel_file_.empty()) {
         f << "channel_file=" << loaded_channel_file_ << "\n";
@@ -4190,7 +4193,7 @@ bool ALEController::import_settings(const std::string& path, bool follow_channel
             if (!fields.empty() && !fields[0].empty())
                 conf_stations.push_back({fields[0], fields.size() > 1 ? fields[1] : ""});
         }
-        // net= / net_channel=: legacy keys, silently ignored (nets now in station file)
+        // net=/net_channel=: legacy keys, silently ignored (nets now in station file).
         // voice_armed=: bridge-level (ctx.voice_armed), silently ignored here —
         // only meaningful together with an actually-opened audio device, which
         // this layer never owns (see audio_in/audio_out above and
@@ -5008,7 +5011,7 @@ std::string ALEController::process_command(const std::string& raw)
         if (chans.empty())
             return "ERROR: net '" + net_name + "' not found or has no soundable channels";
         // Sounding uses the same "call width" C as calling (Tsrs = (C+2)·Ta) —
-        // take it from this net's calling_length_c.  See resolve_sounding_C().
+        // taken from this net's calling_length_c. See resolve_sounding_C().
         sm_.set_target_scan_channels(resolve_sounding_C(net_name));
         if (!send_sounding_sweep(chans))
             return std::string("ERROR: cannot sweep in state ")

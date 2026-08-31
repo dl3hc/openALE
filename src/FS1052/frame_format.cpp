@@ -30,19 +30,19 @@ static uint32_t crc32_byte(uint8_t data, uint32_t crc) {
 }
 
 uint32_t FrameFormatter::calculate_crc32(const uint8_t* data, size_t length) {
-    uint32_t crc = 0xFFFFFFFF;  // Initial value
-    
+    uint32_t crc = 0xFFFFFFFF;
+
     for (size_t i = 0; i < length; i++) {
         crc = crc32_byte(data[i], crc);
     }
-    
-    return ~crc;  // Final XOR
+
+    return ~crc;  // final XOR (complement)
 }
 
 size_t FrameFormatter::append_crc32(uint8_t* buffer, size_t length) {
     uint32_t crc = calculate_crc32(buffer, length);
     
-    // Append CRC in big-endian format
+    // CRC appended big-endian
     buffer[length + 0] = (crc >> 24) & 0xFF;
     buffer[length + 1] = (crc >> 16) & 0xFF;
     buffer[length + 2] = (crc >> 8) & 0xFF;
@@ -62,15 +62,11 @@ int FrameFormatter::format_control_frame(const ControlFrame& frame, uint8_t* buf
     
     size_t index = 0;
     
-    // Byte 0: Header byte
-    // Bit 0: Sync mismatch (always 1 per spec)
-    // Bit 1: Control frame indicator (1 for control)
-    // Bits 2-3: Protocol version
-    // Bits 4-5: ARQ mode
-    // Bit 6: Negotiation mode
-    // Bit 7: Address mode
-    buffer[index] = 0x01;  // Sync mismatch bit
-    buffer[index] |= 0x02;  // Control frame bit
+    // Byte 0 header: b0 sync mismatch (always 1 per spec), b1 control-frame
+    // indicator (1=control), b2-3 protocol version, b4-5 ARQ mode,
+    // b6 negotiation mode, b7 address mode
+    buffer[index] = 0x01;
+    buffer[index] |= 0x02;
     buffer[index] |= (frame.protocol_version & 0x03) << 2;
     buffer[index] |= (static_cast<uint8_t>(frame.arq_mode) & 0x03) << 4;
     buffer[index] |= (static_cast<uint8_t>(frame.neg_mode) & 0x01) << 6;
@@ -79,7 +75,7 @@ int FrameFormatter::format_control_frame(const ControlFrame& frame, uint8_t* buf
     
     // Addresses
     if (frame.address_mode == AddressMode::SHORT_2_BYTE) {
-        // 2-byte abbreviated addresses (last 2 chars of each)
+        // 2-byte abbreviated addresses: last 2 chars of each
         if (frame.src_address_length >= 1) {
             buffer[index++] = frame.src_address[frame.src_address_length - 1];
         } else {
@@ -125,10 +121,9 @@ int FrameFormatter::format_control_frame(const ControlFrame& frame, uint8_t* buf
         (frame.ack_nak_type == AckNakType::DATA_ACK)) {
         
         if (frame.address_mode == AddressMode::SHORT_2_BYTE) {
-            // Copy bitmap
             memcpy(&buffer[index], frame.bit_map, ACK_MAP_SIZE);
-            
-            // Set flow control bit in last byte if needed
+
+            // Flow control bit: 0x80 in bitmap's last byte
             if (frame.flow_control) {
                 buffer[index + ACK_MAP_SIZE - 1] |= 0x80;
             }
@@ -186,9 +181,8 @@ int FrameFormatter::format_control_frame(const ControlFrame& frame, uint8_t* buf
         buffer[index++] = frame.function_bits[1] & 0xFF;
     }
     
-    // Append CRC-32
     index = append_crc32(buffer, index);
-    
+
     return static_cast<int>(index);
 }
 
@@ -203,40 +197,31 @@ int FrameFormatter::format_data_frame(const DataFrame& frame, uint8_t* buffer, s
     
     size_t index = 0;
     
-    // Byte 0: Header byte
-    // Bit 0: Sync mismatch (always 1)
-    // Bit 1: Data frame indicator (0 for data)
-    // Bits 2-3: Reserved
-    // Bits 4-6: Data rate (format depends on bit 7)
-    // Bit 7: Data rate format
-    buffer[index] = 0x01;  // Sync mismatch bit
+    // Byte 0 header: b0 sync mismatch (always 1), b1 data-frame indicator (0),
+    // b2-3 reserved, b4-6 data rate (format depends on b7), b7 data rate format
+    buffer[index] = 0x01;
     buffer[index] |= (static_cast<uint8_t>(frame.data_rate_format) << 7);
     buffer[index] |= (frame.data_rate & 0x07) << 4;
     index++;
     
-    // Interleaver length
     buffer[index++] = static_cast<uint8_t>(frame.interleaver_length);
-    
-    // Sequence number
     buffer[index++] = frame.sequence_number;
-    
-    // Message byte offset (4 bytes)
+
+    // msg_byte_offset, 4 bytes BE
     buffer[index++] = (frame.msg_byte_offset >> 24) & 0xFF;
     buffer[index++] = (frame.msg_byte_offset >> 16) & 0xFF;
     buffer[index++] = (frame.msg_byte_offset >> 8) & 0xFF;
     buffer[index++] = frame.msg_byte_offset & 0xFF;
-    
-    // Data length (2 bytes)
+
+    // data_length, 2 bytes BE
     buffer[index++] = (frame.data_length >> 8) & 0xFF;
     buffer[index++] = frame.data_length & 0xFF;
-    
-    // Data payload
+
     memcpy(&buffer[index], frame.data, frame.data_length);
     index += frame.data_length;
     
-    // Append CRC-32
     index = append_crc32(buffer, index);
-    
+
     return static_cast<int>(index);
 }
 
@@ -246,8 +231,7 @@ int FrameFormatter::format_data_frame(const DataFrame& frame, uint8_t* buffer, s
 
 FrameType FrameParser::detect_frame_type(const uint8_t* buffer) {
     if (buffer[0] & 0x02) {
-        // Control frame - need more bytes to determine type
-        // For now, return generic control
+        // Control frame; exact subtype needs more bytes — returns generic T1 for now
         return FrameType::T1_CONTROL;
     } else {
         return FrameType::DATA;
@@ -259,10 +243,10 @@ bool FrameParser::validate_crc32(const uint8_t* buffer, size_t length) {
         return false;
     }
     
-    // Calculate CRC on all bytes except last 4
+    // CRC over all bytes except trailing 4 (the CRC itself)
     uint32_t calculated_crc = FrameFormatter::calculate_crc32(buffer, length - 4);
-    
-    // Extract CRC from last 4 bytes
+
+    // received CRC: last 4 bytes, BE
     uint32_t received_crc = (static_cast<uint32_t>(buffer[length - 4]) << 24) |
                             (static_cast<uint32_t>(buffer[length - 3]) << 16) |
                             (static_cast<uint32_t>(buffer[length - 2]) << 8) |
@@ -273,17 +257,15 @@ bool FrameParser::validate_crc32(const uint8_t* buffer, size_t length) {
 
 bool FrameParser::parse_control_frame(const uint8_t* buffer, size_t length, ControlFrame& frame) {
     if (length < 10) {
-        return false;  // Too short
+        return false;
     }
-    
-    // Validate CRC first
+
     if (!validate_crc32(buffer, length)) {
         return false;
     }
-    
+
     size_t index = 0;
-    
-    // Parse header byte
+
     frame.protocol_version = (buffer[index] >> 2) & 0x03;
     frame.arq_mode = static_cast<ARQMode>((buffer[index] >> 4) & 0x03);
     frame.neg_mode = static_cast<NegotiationMode>((buffer[index] >> 6) & 0x01);
@@ -309,17 +291,15 @@ bool FrameParser::parse_control_frame(const uint8_t* buffer, size_t length, Cont
         index += 18;
     }
     
-    // Parse link management
     if (index + 3 > length - 4) return false;
     frame.link_state = static_cast<LinkState>(buffer[index++]);
     frame.link_timeout = (static_cast<uint16_t>(buffer[index]) << 8) | buffer[index + 1];
     index += 2;
-    
-    // Parse data transfer fields
+
     if (index >= length - 4) return false;
     frame.ack_nak_type = static_cast<AckNakType>(buffer[index++] & 0x03);
-    
-    // Parse bitmap if present (simplified - check remaining length)
+
+    // Bitmap presence inferred from remaining length, not an explicit flag
     if (index + ACK_MAP_SIZE <= length - 4) {
         if (frame.address_mode == AddressMode::SHORT_2_BYTE) {
             memcpy(frame.bit_map, &buffer[index], ACK_MAP_SIZE);
@@ -327,9 +307,8 @@ bool FrameParser::parse_control_frame(const uint8_t* buffer, size_t length, Cont
             index += ACK_MAP_SIZE;
         }
     }
-    
-    // Herald and message fields parsing would continue here
-    // Simplified for now - mark as not present
+
+    // Herald/message/extension parsing not yet implemented; always marked absent
     frame.herald_present = false;
     frame.message_present = false;
     frame.extension_function_present = false;
@@ -342,42 +321,35 @@ bool FrameParser::parse_data_frame(const uint8_t* buffer, size_t length, DataFra
         return false;
     }
     
-    // Validate CRC
     if (!validate_crc32(buffer, length)) {
         return false;
     }
-    
+
     size_t index = 0;
-    
-    // Parse header
+
     frame.data_rate_format = static_cast<DataRateFormat>((buffer[index] >> 7) & 0x01);
     frame.data_rate = (buffer[index] >> 4) & 0x07;
     index++;
-    
-    // Interleaver length
+
     frame.interleaver_length = static_cast<InterleaverLength>(buffer[index++]);
-    
-    // Sequence number
     frame.sequence_number = buffer[index++];
-    
-    // Message byte offset
+
     frame.msg_byte_offset = (static_cast<uint32_t>(buffer[index]) << 24) |
                             (static_cast<uint32_t>(buffer[index + 1]) << 16) |
                             (static_cast<uint32_t>(buffer[index + 2]) << 8) |
                             static_cast<uint32_t>(buffer[index + 3]);
     index += 4;
-    
-    // Data length
+
     frame.data_length = (static_cast<uint16_t>(buffer[index]) << 8) | buffer[index + 1];
     index += 2;
-    
-    // Validate data length
-    if (frame.data_length > MAX_DATA_BLOCK_LENGTH || 
+
+    // frame.data_length must not exceed MAX_DATA_BLOCK_LENGTH and must exactly
+    // account for the remaining buffer length
+    if (frame.data_length > MAX_DATA_BLOCK_LENGTH ||
         index + frame.data_length + 4 != length) {
         return false;
     }
-    
-    // Copy data
+
     memcpy(frame.data, &buffer[index], frame.data_length);
     
     return true;

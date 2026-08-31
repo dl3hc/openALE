@@ -2,8 +2,8 @@
  * \file App/null_audio.cpp
  * \brief NullAudioDriver — stub for platforms without a real-time audio backend.
  *
- * Simulates pull consumption from tick() so the modem and state machine can
- * run offline (test mode, macOS, other POSIX).  No actual I/O is performed.
+ * Simulates pull consumption from tick() so the modem/state machine can run
+ * offline (test mode, macOS, other POSIX). No actual I/O is performed.
  */
 
 #include "PAL/audio_driver.h"
@@ -46,7 +46,7 @@ public:
     }
 
     void tick(std::vector<int16_t>& /*rx_out*/) override {
-        // PCM passthrough path takes precedence when set: drain whatever the
+        // PCM passthrough takes precedence when set: drain whatever the
         // source offers so the pull model is exercised offline (test mode).
         if (pcm_pull_) {
             int16_t buf[160];
