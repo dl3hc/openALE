@@ -904,6 +904,7 @@ void ALEStateMachine::handle_completed_frame_(const AssembledFrame& f) {
     switch (current_state) {
     case ALEState::LINKED:    handle_completed_frame_linked_(f);    break;
     case ALEState::HANDSHAKE: handle_completed_frame_handshake_(f); break;
+    case ALEState::CALLING:   handle_completed_frame_calling_(f);   break;
     default: break;
     }
 }
@@ -974,6 +975,35 @@ void ALEStateMachine::handle_completed_frame_handshake_(const AssembledFrame& f)
         return;
     }
     SM_TRACE("[TRACE] handle_completed_frame_handshake_: foreign TWAS during WAIT_ACK (address mismatch) — discarded\n");
+}
+
+// F-05 catalog row (§6), "Receiver decision" column: "peer rejection" — the
+// TWAS half of what CALLING/LISTENING awaits (the TIS half is the F-03
+// response, handled by react_calling_'s existing TIS_CALLER/DATA_EXTENSION
+// accumulation, untouched here). Mirrors handle_completed_frame_handshake_()
+// exactly: full-address compare against active_call_to (the station we
+// actually dialed — same field T-03/handle_completed_frame_linked_() uses
+// for the LINKED peer) instead of firing on the bare word.
+//
+// Re-pins tests/link/unit/test_rx_characterization.cpp TEST 7 with owner
+// approval (2026-08-31 follow-up to the WAIT_ACK fix, docs/
+// FRAMING_STANDARD.md §10.1 — that entry's "keep word-level unless the
+// owner approves the re-pin" condition is now satisfied). The OUTCOME for a
+// genuine full-address rejection is unchanged; only the timing moved from
+// the bare word to the Tdrw frame boundary.
+void ALEStateMachine::handle_completed_frame_calling_(const AssembledFrame& f) {
+    if (calling_phase != CallingPhase::LISTENING) return;
+    if (!f.complete || !f.conclusion_is_twas) return;
+    if (context_matrix_lookup(ALEState::CALLING, f.type) == MatrixAction::IGNORE) return;
+
+    if (f.conclusion_identity == active_call_to) {
+        SM_TRACE("[TRACE] handle_completed_frame_calling_: TWAS rejection from dialed peer (full address match) → CALL_REJECTED\n");
+        if (operator_callback)
+            operator_callback(OperatorEvent::CALL_REJECTED);
+        process_event(ALEEvent::LINK_TIMEOUT);
+        return;
+    }
+    SM_TRACE("[TRACE] handle_completed_frame_calling_: foreign TWAS during LISTENING (address mismatch) — discarded\n");
 }
 
 void ALEStateMachine::handle_linked() {

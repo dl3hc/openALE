@@ -395,7 +395,7 @@ react paths that fires from a single word, not a frame boundary (grep:
 | Site | Trigger | Verdict | Reason |
 |---|---|---|---|
 | `detect_incoming_call_`: `TO_SELF`/`ALLCALL` → `CALL_DETECTED` | any state's incoming-call arm | **compliant (FR-06.1)** | construct-completion *arm*, not an act/terminate decision — legal by OF-0 itself |
-| `react_calling_`: `TWAS_WORD` → `CALL_REJECTED` + `LINK_TIMEOUT` | CALLING/LISTENING | **intentionally remaining** | pinned immediately after the word (`RxCharacterization` TEST 7); re-pinning to the boundary needs owner approval (§ Hard constraints) |
+| `react_calling_`: `TWAS_WORD` → `CALL_REJECTED` + `LINK_TIMEOUT` | CALLING/LISTENING | **FIXED (2026-08-31, owner-approved re-pin)** | was pinned immediately after the word (`RxCharacterization` TEST 7); owner approved re-pinning to the boundary — see below |
 | `react_handshake_` (both phases) + `react_sounding`: `CHANNEL_BUSY` → `LINK_TIMEOUT`/`SOUNDING_COMPLETE` | LBT windows | **intentionally remaining** | channel-occupancy fact, not protocol semantics (§4 note) — by design below the reassembler |
 | `on_invalid_word_`: LBT any signal / WAIT_CYCLE_END contiguous-error count → abort | HANDSHAKE, SOUNDING | **intentionally remaining** | invalid words never reach the reassembler at all (`on_word()` returns `NONE` immediately) — FEC/decode-quality signal, structurally has no frame-level equivalent |
 | `react_handshake_` WAIT_ACK: `TWAS_WORD` → `AMD_DECLINED_LINK` (+ `AMD_RECEIVED_NO_LINK` callback) | HANDSHAKE/WAIT_ACK | **FIXED (2026-08-31 follow-up)** | found during this audit, not in the original constraints list — see below |
@@ -434,6 +434,30 @@ New regression pin: `tests/link/unit/test_wait_ack_twas_guard.cpp` (ctest
 decline, the full multi-word conclusion does, a shared-prefix foreign
 station (DL3XY vs caller DL3HC) survives, a 3-char caller declines
 correctly, and the genuine TIS/ACK path is unaffected. Full suite 71/71.
+
+**CALLING/LISTENING sibling fix, owner-approved same day:** `react_calling_`'s
+`TWAS_WORD` case (AC-LINK-019-10, responder rejects with TWAS) had the
+identical missing-address-check shape — unlike `TO_SELF`/`TIS_CALLER`/
+`DATA_EXTENSION` in the same switch, it fired `CALL_REJECTED` + `LINK_TIMEOUT`
+on **any** TWAS word, with no compare against the station we actually
+dialed. This one WAS pinned (`RxCharacterization` TEST 7, immediate word-
+level timing) and was explicitly left word-level in the original Phase-3
+kickoff prompt pending owner approval to re-pin — approval given 2026-08-31,
+same day as the WAIT_ACK fix. Same treatment: new
+`ALEStateMachine::handle_completed_frame_calling_()` (dispatched from
+`handle_completed_frame_()` alongside the LINKED/HANDSHAKE handlers, gated
+to `calling_phase == CallingPhase::LISTENING`) compares the FrameReassembler's
+completed TWAS conclusion against `active_call_to` (the dialed station —
+same field T-03 uses for the LINKED peer) before firing `CALL_REJECTED`; a
+mismatch discards. `react_calling_`'s word-level case is now a no-op stub.
+`RxCharacterization` TEST 7 is re-pinned to cross the Tdrw settle before
+asserting — the OUTCOME (JOE's full-address rejection still fires) is
+unchanged, only the timing. New regression pin:
+`tests/link/unit/test_calling_twas_guard.cpp` (ctest `CallingTwasGuard`,
+5 tests) — same shape as `WaitAckTwasGuard`: foreign TWAS survives,
+anchor-alone does not reject, the full multi-word conclusion does, a
+shared-prefix foreign station survives, genuine Response/ACK unaffected.
+Full suite green.
 
 Migration is incremental: each ad-hoc accumulator is already a partial
 reassembler; the standard defines the target shape so future frame work

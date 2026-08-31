@@ -794,6 +794,11 @@ target_link_libraries(test_wait_ack_twas_guard ale_link ale_protocol ale_fsk_cor
 target_include_directories(test_wait_ack_twas_guard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME WaitAckTwasGuard COMMAND test_wait_ack_twas_guard)
 
+add_executable(test_calling_twas_guard tests/link/unit/test_calling_twas_guard.cpp)
+target_link_libraries(test_calling_twas_guard ale_link ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_calling_twas_guard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME CallingTwasGuard COMMAND test_calling_twas_guard)
+
 add_executable(test_frame tests/frame/unit/test_frame.cpp)
 target_link_libraries(test_frame ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_frame PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

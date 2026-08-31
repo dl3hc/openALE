@@ -224,10 +224,14 @@ void ALECallProcessor::react_calling_(ALEStateMachine& sm, const WordRole& r)
         sm.active_call_from = sm.to_address;
         sm.tlww_start_ms    = sm.current_time_ms;
         break;
-    case WordRole::TWAS_WORD:  // TWAS rejection from called station (AC-LINK-019-10)
-        if (sm.operator_callback)
-            sm.operator_callback(OperatorEvent::CALL_REJECTED);
-        sm.process_event(ALEEvent::LINK_TIMEOUT);
+    case WordRole::TWAS_WORD:
+        // TWAS rejection from the called station (AC-LINK-019-10) is decided
+        // at the frame boundary now, not on this bare word —
+        // ALEStateMachine::handle_completed_frame_calling_() reads the
+        // FrameReassembler's completed conclusion and compares its full
+        // address against active_call_to (OFS Phase 3 follow-up, sibling fix
+        // to the WAIT_ACK/F-04 gap, docs/FRAMING_STANDARD.md §10.1 — owner
+        // approved re-pinning RxCharacterization TEST 7 for this).
         break;
     default:
         break;

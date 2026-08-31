@@ -40,7 +40,9 @@
  *           collecting_remote_conclusion accumulates the responder identity;
  *           the ACK frame addresses the FULL multi-word responder; drain → LINKED.
  *   TEST 7  Caller (LISTENING): TWAS rejection (AC-LINK-019-10) — operator
- *           CALL_REJECTED + LINK_TIMEOUT → pre-link state.
+ *           CALL_REJECTED + LINK_TIMEOUT → pre-link state. Re-pinned
+ *           2026-08-31 (owner approved) to the Tdrw settle-based decision;
+ *           see the test's own comment.
  *
  * All tests drive the SM standalone (no CMake-heavy radio stack, no audio):
  * process_received_word() at Trw word cadence + update() to cross the Tdrw
@@ -511,6 +513,18 @@ bool test_calling_multiword_response_conclusion() {
 // Caller SAM: responder JOE rejects with TWAS[JOE] in the Response frame
 // (AC-LINK-019-10). Operator gets CALL_REJECTED; LINK_TIMEOUT returns the
 // caller to its pre-link state. No ACK is transmitted.
+//
+// Re-pinned 2026-08-31 (owner approved, docs/FRAMING_STANDARD.md §10.1): the
+// decision moved from firing on the bare TWAS word to
+// ALEStateMachine::handle_completed_frame_calling_(), a Tdrw frame-boundary
+// settle keyed on a full-address match against active_call_to — the sibling
+// fix to the WAIT_ACK/F-04 gap (tests/link/unit/test_wait_ack_twas_guard.cpp).
+// The OUTCOME here is unchanged (JOE is the full dialed address, "JOE" ==
+// active_call_to, so it still rejects) — only the timing gained one Tdrw
+// settle, mirrored by the extra update() below. Address-check semantics
+// (foreign TWAS survives, anchor-alone doesn't reject, shared-prefix
+// survives) are pinned separately in test_calling_twas_guard.cpp
+// (ctest CallingTwasGuard).
 bool test_calling_twas_rejection() {
     std::cout << "\n[TEST 7] LISTENING: TWAS rejection → CALL_REJECTED, no ACK\n";
     std::cout << "==============================================================\n";
@@ -521,9 +535,10 @@ bool test_calling_twas_rejection() {
     };
 
     Harness h("SAM");                              // caller, from IDLE → pre-link = IDLE
-    const uint32_t Twt = ALETimingConstants::Twt_ms;
-    const uint32_t Tt  = ALETimingConstants::Tt_ms;
-    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    const uint32_t Twt  = ALETimingConstants::Twt_ms;
+    const uint32_t Tt   = ALETimingConstants::Tt_ms;
+    const uint32_t Trw  = ALETimingConstants::Trw_ms;
+    const uint32_t Tdrw = ALETimingConstants::Tdrw_ms;
     const char sam[3] = {'S','A','M'};
     const char joe[3] = {'J','O','E'};
 
@@ -549,6 +564,9 @@ bool test_calling_twas_rejection() {
     rx(PreambleType::TO,   sam);   // rejection frame still leads with TO[SAM]×2
     rx(PreambleType::TO,   sam);
     rx(PreambleType::TWAS, joe);   // TWAS[JOE] — JOE's self identity, the rejection
+
+    const uint32_t joe_t = t - Trw;                // the TWAS[JOE] word's own timestamp
+    h.sm.update(joe_t + Tdrw + 1);                  // Tdrw settle → handle_completed_frame_calling_()
 
     check(h.sm.get_state() == ALEState::IDLE,
           "TWAS rejection → LINK_TIMEOUT → pre-link state (IDLE)");

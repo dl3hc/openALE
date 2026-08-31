@@ -1042,6 +1042,11 @@ private:
     /// follow-up, §10.1: closes the WAIT_ACK no-address-check gap the OF-0
     /// audit found).
     void handle_completed_frame_handshake_(const AssembledFrame& f);
+    /// F-05 catalog row's "Receiver decision" (§6): CALLING/LISTENING peer
+    /// rejection — decided against active_call_to (the station we dialed).
+    /// Sibling fix to handle_completed_frame_handshake_(), re-pinning
+    /// RxCharacterization TEST 7 with owner approval (§10.1).
+    void handle_completed_frame_calling_(const AssembledFrame& f);
 
     // ── LINKED-state AMD confirmation drivers (called from handle_linked) ──
     void handle_linked_amd_listening_();   ///< sender: LISTEN for the peer Response, then SENDING_ACK
