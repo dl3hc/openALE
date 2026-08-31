@@ -70,6 +70,7 @@ add_library(ale_protocol
     src/Word/address_encoder.cpp
     src/Protocol/Message/ale_message.cpp
     src/Protocol/Message/frame_validator.cpp
+    src/Protocol/Message/ale_frame_builder.cpp
     src/Protocol/Message/ale_orderwire_protocols.cpp
     src/Protocol/Message/ale_gpr.cpp
     src/LQA/lqa_report.cpp
@@ -770,6 +771,11 @@ add_executable(test_ale_calling tests/word/unit/test_ale_calling.cpp)
 target_link_libraries(test_ale_calling ale_link ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_ale_calling PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ALECalling COMMAND test_ale_calling)
+
+add_executable(test_frame_builder tests/word/unit/test_frame_builder.cpp)
+target_link_libraries(test_frame_builder ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_frame_builder PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME FrameBuilder COMMAND test_frame_builder)
 
 add_executable(test_frame tests/frame/unit/test_frame.cpp)
 target_link_libraries(test_frame ale_link ale_modem ale_protocol ale_fsk_core ale_fec)

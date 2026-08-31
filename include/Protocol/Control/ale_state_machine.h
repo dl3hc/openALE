@@ -1088,6 +1088,18 @@ private:
     void enqueue_call_sequence_();
 
     /**
+     * OFS FR-09 (docs/FRAMING_STANDARD.md §7): validate the complete F_CALL
+     * frame the pre-computed TX sequences will render — scanning section +
+     * leading call + message section (FROM/LQA/AMD snapshots) + conclusion —
+     * before CALL_REQUEST commits the SM to CALLING. This is the spec's
+     * "INVALID ADDRESS SEQUENCE … ALERT OPERATOR OR CONTROLLER" flowchart
+     * exit (A.5.2.5.1/3) collapsed to build time: an illegal frame is refused
+     * and nothing is transmitted.
+     * \return true when the frame is legal; false refuses the call.
+     */
+    bool call_frame_is_legal_() const;
+
+    /**
      * SENDING_ACK: third handshake frame §A.5.5.3.4 / Figure A-31.
      * Sequence: TO [to_address] × 2 + TIS [self] (link) or TWAS [self] (no link).
      * No message content here — AMD (if any) was already sent in the calling

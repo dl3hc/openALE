@@ -14,6 +14,8 @@
 #pragma once
 
 #include "Word/ale_word.h"
+#include "Word/frame_catalog.h"
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -179,6 +181,52 @@ public:
      * \return Ordered list of reconstructed address strings.
      */
     static std::vector<std::string> reconstruct_to_addresses(const std::vector<ALEWord>& words);
+
+    // ── OFS catalog-frame validation (docs/FRAMING_STANDARD.md §7, FR-09) ───
+    //
+    // The per-rule checks above validate isolated structural properties and
+    // are applied selectively (some only to scanning sections, some only to
+    // logical word lists — several are not redundancy-safe and would reject
+    // legal repeated/doubled TX sections). validate_frame() is the TX-side
+    // grammar gate: a section-aware single pass over a COMPLETE frame that
+    // the FrameBuilder catalog constructors run before encoding (FR-09 —
+    // the spec's "INVALID ADDRESS SEQUENCE!" flowchart exits, A.5.2.5.1/3,
+    // become a hard failure at build time).
+
+    /**
+     * Validate a complete frame of the given catalog type against the OFS
+     * grammar rules:
+     *
+     *   FR-05  TIS and TWAS never occur in one frame (A.5.2.5.3).
+     *   FR-03  Every address run (anchor + DATA/REP extensions, outside the
+     *          message section) is ≤ 5 words / 15 chars (A.5.2.4.4).
+     *   FR-03  Extensions alternate DATA, REP, DATA, REP — DATA directly
+     *          after DATA is rejected (A.5.2.4.4.2). REP after REP is legal
+     *          in the group leading call (REP = new-recipient marker,
+     *          A.5.5.4.3.2); for TIS/TWAS conclusions the first extension is
+     *          DATA, never REP (A.5.2.5.3).
+     *   FR-03  '@' stuffing appears only in the LAST extension word of an
+     *          address run (A.5.2.4.3). Anchor words are exempt — the special
+     *          addresses (@?@, @@?, ?@?, @A@, @@A, @@@) legitimately carry
+     *          '@' in the anchor itself (A.5.2.4.7-12).
+     *   §6.1   Payload blocks: a non-DTM/DBM (i.e. AMD-family) block carries
+     *          ≤ 29 DATA/REP words — 90 chars of message text including the
+     *          first 3 the CMD word carries (A.5.7.2.3 Tm max; "59 words
+     *          counting CMD" = 29 data + 30 CMD); ≤ 30 CMD words per frame.
+     *          DTM/DBM blocks are exempt from the data-word cap here — their
+     *          size rules live in their own (partially implemented)
+     *          protocols per FR-11.
+     *
+     * Redundancy is transport, not content (FR-02): doubled leading calls,
+     * repeated scanning words and repeated sound conclusions all pass. A
+     * DATA/REP before any anchor, or an empty word list, is rejected.
+     *
+     * \return std::nullopt when the frame is legal; otherwise a short error
+     *         description naming the violated rule (for the caller to log or
+     *         refuse with).
+     */
+    static std::optional<std::string> validate_frame(FrameType type,
+                                                     const std::vector<ALEWord>& words);
 };
 
 } // namespace ale

@@ -5,7 +5,9 @@
 
 #include "Protocol/Control/ale_state_machine.h"
 #include "Protocol/Control/ale_call_processor.h"
+#include "Protocol/Message/ale_frame_builder.h"
 #include "Protocol/Message/ale_orderwire_protocols.h"
+#include "Protocol/Message/frame_validator.h"
 #include "Word/ale_sequence.h"
 #include "Word/address_encoder.h"
 #include "LQA/lqa_metrics.h"
@@ -926,23 +928,15 @@ void ALEStateMachine::handle_linked() {
         orderwire_pending_      = false;
         orderwire_transmitting_ = true;
         if (rx_enabled_callback) rx_enabled_callback(false);
-        std::vector<ALEWord> tx = pending_orderwire_words_;
-        // Hold the conclusion in a named local: ALESequence::words() returns a
-        // const reference, so iterating
-        // `ALESequenceBuilder::conclusion(...).words()` directly would dangle
-        // — the temporary ALESequence is destroyed before the range-for body
-        // runs, silently dropping the TIS:SELF conclusion from the orderwire burst.
-        const ALESequence concl = ALESequenceBuilder::conclusion(
-            address_book.get_self_address());
-        for (const auto& w : concl.words())
-            tx.push_back(w);
-        // EFS doubles the whole burst for reliability; AMD passes double_burst=false
-        // so the peer displays the text once (a doubled AMD frame concatenates twice).
-        if (orderwire_double_burst_) {
-            const auto once = tx;
-            tx.insert(tx.end(), once.begin(), once.end());
-        }
-        transmit_words(tx);
+        // F-08 orderwire burst (OFS FR-09): content words + TIS:SELF conclusion,
+        // grammar-validated and catalog-tagged by the builder. An empty return
+        // (validation refused) transmits nothing — fail-safe, and the drain
+        // deadline below stays disarmed since words_pending stays 0.
+        const ALESequence burst = ALEFrameBuilder::orderwire_burst(
+            std::move(pending_orderwire_words_),
+            address_book.get_self_address(),
+            orderwire_double_burst_);
+        transmit_words(burst.words());
         // Arm the drain deadline (skipped harmlessly if nothing was enqueued —
         // the words_pending == 0 branch above clears it next tick). Scale the
         // deadline to the burst just queued (tx.size() == words_pending here,
@@ -1022,7 +1016,7 @@ void ALEStateMachine::handle_linked() {
     if ((current_time_ms - last_word_time_ms) >= timing_.Twa_ms) {
         linked_terminating_ = true;
         if (!active_call_to.empty() && !address_book.get_self_address().empty())
-            transmit_words(ALESequenceBuilder::termination(
+            transmit_words(ALEFrameBuilder::termination(
                 active_call_to, address_book.get_self_address()).words());
         // Transmits TO×2+TWAS, then transitions out immediately (process_event
         // leaves LINKED; the frame still goes out via the modulator). No
@@ -1222,30 +1216,18 @@ void ALEStateMachine::handle_sounding() {
                 // bare redundant sound Trs).
                 const size_t n    = target_scan_channels;
                 const size_t reps = (n > 0) ? (n + 2) : 2;
-                const ALESequence conclusion_seq =
-                    ALESequenceBuilder::conclusion(address_book.get_self_address(),
-                                                   sounding_use_twas_);
-                const auto& cw = conclusion_seq.words();
-                std::vector<ALEWord> tx;
-                tx.reserve(cw.size() * reps);
-                for (size_t i = 0; i < reps; ++i)
-                    tx.insert(tx.end(), cw.begin(), cw.end());
-                // Append CMD NOISE when pending (AC-CHAN-004-002 / Block B3)
+                // F-06 sound burst (OFS FR-09): catalog-built, grammar-validated
+                // and tagged by the builder; the pending CMD NOISE word rides
+                // along as its trailing fragment (AC-CHAN-004-002 / Block B3).
+                uint32_t noise_raw = 0;
                 if (pending_noise_cmd_set_) {
-                    const auto noise_seq = ALESequenceBuilder::lqa_cmd(pending_noise_cmd_raw_);
-                    // Noise uses noise_cmd encoding; lqa_cmd strips preamble but the
-                    // raw word was built by noise_cmd so the address field differs —
-                    // rebuild the noise_cmd word directly from the pending raw payload.
-                    ALEWord nw{};
-                    nw.type        = PreambleType::CMD;
-                    nw.raw_payload = pending_noise_cmd_raw_ & 0x1FFFFFu;
-                    nw.address[0]  = 'n'; nw.address[1] = ' ';
-                    nw.address[2]  = ' '; nw.address[3]  = '\0';
-                    nw.valid       = true;
-                    tx.push_back(nw);
+                    noise_raw              = pending_noise_cmd_raw_;
                     pending_noise_cmd_set_ = false;
                 }
-                transmit_words(tx);
+                const ALESequence burst = ALEFrameBuilder::sound(
+                    address_book.get_self_address(), sounding_use_twas_,
+                    static_cast<uint32_t>(reps), noise_raw);
+                transmit_words(burst.words());
             } else {
                 // No callsign → nothing to transmit → don't key PTT, skip channel.
                 SM_TRACE("[TRACE] handle_sounding: no self-address — SOUNDING_COMPLETE\n");
@@ -1340,6 +1322,9 @@ bool ALEStateMachine::initiate_call(const std::string& target) {
         ? pending_lqa_report_seq_ : ALESequence{};
     pending_lqa_report_set_ = false;
 
+    if (!call_frame_is_legal_())
+        return false;   // FR-09 grammar gate: refuse, nothing transmitted
+
     return process_event(ALEEvent::CALL_REQUEST);
 }
 
@@ -1358,6 +1343,9 @@ bool ALEStateMachine::initiate_net_call(const std::string& net_address) {
     scanning_seq_   = ALESequenceBuilder::scanning_call(net_address, target_scan_channels);
     leading_seq_    = ALESequenceBuilder::leading_call(net_address);
     conclusion_seq_ = ALESequenceBuilder::conclusion(address_book.get_self_address());
+
+    if (!call_frame_is_legal_())
+        return false;   // FR-09 grammar gate: refuse, nothing transmitted
 
     return process_event(ALEEvent::CALL_REQUEST);
 }
@@ -1411,7 +1399,33 @@ bool ALEStateMachine::initiate_group_call(const std::vector<std::string>& member
         ? pending_lqa_report_seq_ : ALESequence{};
     pending_lqa_report_set_ = false;
 
+    if (!call_frame_is_legal_())
+        return false;   // FR-09 grammar gate: refuse, nothing transmitted
+
     return process_event(ALEEvent::CALL_REQUEST);
+}
+
+// ── OFS FR-09: F_CALL build-time grammar validation ──────────────────────────
+// The calling frame is rendered section-by-section (enqueue_call_sequence_)
+// because the phase advance is word-count driven, so the complete frame is
+// validated here as one concatenated list — exactly the words that will go
+// on air — before CALL_REQUEST commits the SM to CALLING.
+bool ALEStateMachine::call_frame_is_legal_() const {
+    std::vector<ALEWord> full;
+    full.reserve(scanning_seq_.size() + leading_seq_.size()
+                 + active_amd_from_seq_.size() + active_lqa_cmd_seq_.size()
+                 + active_lqa_report_seq_.size() + active_amd_words_.size()
+                 + conclusion_seq_.size());
+    auto append = [&full](const ALESequence& s) {
+        full.insert(full.end(), s.words().begin(), s.words().end()); };
+    append(scanning_seq_);   // group calls: unified entry point (== group_scan_seq_)
+    append(leading_seq_);
+    append(active_amd_from_seq_);
+    append(active_lqa_cmd_seq_);
+    append(active_lqa_report_seq_);
+    append(active_amd_words_);
+    append(conclusion_seq_);
+    return !FrameValidator::validate_frame(FrameType::F_CALL, full).has_value();
 }
 
 bool ALEStateMachine::respond_to_call() {
@@ -1488,7 +1502,8 @@ bool ALEStateMachine::send_allcall_broadcast(const std::string& self_addr, const
     // A.5.2.4.7: the global AllCall address is the literal 3-char "@?@" —
     // already valid Basic-38 (A-Z, 0-9, @, ?), no length/charset special-case
     // needed anywhere else in the address path.
-    static constexpr const char* kGlobalAllCallAddr = "@?@";
+    // (The literal "@?@" AllCall address itself lives in the builder —
+    // ALESequenceBuilder::allcall_broadcast(), OFS FR-09 catalog entry.)
     // Full standard calling routine (A.5.2.5.1 scanning call + A.5.5.3.1
     // leading call) — a scanning call section MUST precede the leading call,
     // sized to the same "call width" C the normal calling path uses
@@ -1497,18 +1512,17 @@ bool ALEStateMachine::send_allcall_broadcast(const std::string& self_addr, const
     // only catches the broadcast if its scan dwell already happens to be on
     // this channel at this instant — the scanning call lets a station mid-hop
     // elsewhere still lock on before the leading call starts.
-    std::vector<ALEWord> words   = ALESequenceBuilder::scanning_call(kGlobalAllCallAddr, target_scan_channels).words();
-    const auto leading = ALESequenceBuilder::leading_call(kGlobalAllCallAddr).words();
-    const auto from    = ALESequenceBuilder::from_id(self_addr).words();
-    const auto twas    = ALESequenceBuilder::conclusion(self_addr, /*is_reject=*/!link_after_send).words();
-    words.insert(words.end(), leading.begin(), leading.end());
-    words.insert(words.end(), from.begin(), from.end());
-    words.insert(words.end(), amd.begin(), amd.end());
-    words.insert(words.end(), twas.begin(), twas.end());
+    // F-07 AllCall broadcast frame (OFS FR-09): assembled, grammar-validated
+    // and catalog-tagged by the builder (scanning @?@ + leading @?@ ×2 +
+    // FROM[self] + AMD payload + TWAS/TIS conclusion). An empty return refuses
+    // the broadcast (nothing on air).
+    const ALESequence frame = ALEFrameBuilder::allcall_broadcast(
+        self_addr, amd, link_after_send, target_scan_channels);
+    if (frame.empty()) return false;   // grammar gate refused (FR-09) — nothing sent
 
     allcall_broadcasting_ = true;
     if (rx_enabled_callback) rx_enabled_callback(false);
-    transmit_words(words);
+    transmit_words(frame.words());
     // Arm the TX-drain safety net (see the ALLCALL branch in update(), right
     // after check_link_timeout()) — without it, an audio stall or a
     // transmit_callback that never arms on_word_complete() would leave RX
@@ -1532,7 +1546,7 @@ void ALEStateMachine::terminate_link() {
     if (current_state != ALEState::LINKED) return;
     linked_terminating_ = true;
     // T-07: TO [peer] × 2 + TWAS [self] — peer returns to available state immediately
-    transmit_words(ALESequenceBuilder::termination(
+    transmit_words(ALEFrameBuilder::termination(
         active_call_to, address_book.get_self_address()).words());
     if (rx_enabled_callback) rx_enabled_callback(false);
     if (words_pending == 0) {
@@ -1562,7 +1576,7 @@ void ALEStateMachine::emergency_manual_control() {
     if (current_state == ALEState::LINKED && !linked_terminating_
         && !active_call_to.empty() && !address_book.get_self_address().empty()) {
         linked_terminating_ = true;
-        transmit_words(ALESequenceBuilder::termination(
+        transmit_words(ALEFrameBuilder::termination(
             active_call_to, address_book.get_self_address()).words());
     }
     // Abort any ongoing operation; transition_to(IDLE) is a no-op if already IDLE.
@@ -1744,7 +1758,7 @@ void ALEStateMachine::build_ack_words() {
     // so it's encoded here at send time, not pre-computed.
     const bool no_link = (active_message_.type == PendingMessage::Type::AMD)
                        && !active_message_.link_after_send;
-    transmit_words(ALESequenceBuilder::ack(
+    transmit_words(ALEFrameBuilder::ack(
         to_address, address_book.get_self_address(), no_link).words());
 
     // Arm the TX-drain deadline: on_word_complete() normally fires
@@ -1781,14 +1795,14 @@ void ALEStateMachine::build_response_words() {
     }
 
     if (pending_reject_ || (lqa_seq.empty() && report_seq.empty())) {
-        transmit_words(ALESequenceBuilder::response(
+        transmit_words(ALEFrameBuilder::response(
             caller_address, address_book.get_self_address(), pending_reject_).words());
     } else {
         // A.5.5.3.3/Fig A-30 base frame: TO caller×2 + TIS self [+ DATA/REP ext].
         // Optional message section (A.5.2.5.5/Fig A-14 + A.5.3.4 Tmmax):
         //   [CMD 'a'] [CMD 'r' + DATA...] inserted BEFORE the conclusion (TIS/TWAS).
         // → Full: TO caller×2 + [CMD 'a'] + [CMD 'r' + DATA...] + TIS self [+ DATA/REP ext]
-        const auto base = ALESequenceBuilder::response(
+        const auto base = ALEFrameBuilder::response(
             caller_address, address_book.get_self_address(), false);
         const auto& bw = base.words();
         // Find where the conclusion section begins (first TIS or TWAS word).

@@ -30,6 +30,7 @@
 #pragma once
 
 #include "Word/ale_word.h"
+#include "Word/frame_catalog.h"
 #include "LQA/lqa_report.h"
 #include <string>
 #include <vector>
@@ -54,6 +55,14 @@ public:
     explicit ALESequence(std::vector<ALEWord> words) : words_(std::move(words)) {}
 
     /**
+     * Tagged constructor — used by the FrameBuilder catalog constructors
+     * (FR-09 §7): every complete frame records its catalog type for logging
+     * and test assertions. Sections/fragments use the default (UNTAGGED).
+     */
+    ALESequence(std::vector<ALEWord> words, FrameType type)
+        : words_(std::move(words)), frame_type_(type) {}
+
+    /**
      * Encode all words to their 49-bit tx49 representations.
      *
      * For each ALEWord:
@@ -73,8 +82,12 @@ public:
     size_t size()  const { return words_.size(); }
     bool   empty() const { return words_.empty(); }
 
+    /// Catalog frame type (OFS §6); UNTAGGED for sections/fragments (FR-09).
+    FrameType frame_type() const { return frame_type_; }
+
 private:
     std::vector<ALEWord> words_;
+    FrameType frame_type_ = FrameType::UNTAGGED;
 };
 
 /**

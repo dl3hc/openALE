@@ -350,7 +350,7 @@ change that behavior; it names it and applies it to everything else.
 | OFS concept | Current code | Gap |
 |---|---|---|
 | Word syntax layer | `WordParser` (src/Word/ale_word.cpp) | compliant |
-| TX catalog + sections | `ALESequenceBuilder` (src/Word/ale_sequence.cpp) | constructors exist; missing grammar validator + catalog tags (FR-09) |
+| TX catalog + sections | `ALESequenceBuilder` (src/Word/ale_sequence.cpp) + `ALEFrameBuilder` (src/Protocol/Message/ale_frame_builder.cpp) | **converged (2026-08-31, FR-09)**: catalog constructors gate every TX frame through `FrameValidator::validate_frame()` (build-time "INVALID ADDRESS SEQUENCE" hard failure — empty sequence = refuse), sections/frames carry `FrameType` tags (`Word/frame_catalog.h`); F_CALL validated by `ALEStateMachine::call_frame_is_legal_()` at initiate time. Payload encoders (`encode_amd/dtm/dbm`, freq-select, version-caps) remain message-section internals by design (§6.1 P-rows, FR-11) |
 | Address accumulation | `AddressEncoder` (TX); hand-rolled per case (RX): `collecting_remote_conclusion`, `hs_conclusion_rcvd`, `linked_twas_addr_`+`linked_twas_last_ms_` (src/Protocol/Control/ale_call_processor.cpp:54-64,444-467) | one accumulator, driven by FR-03/04, replaces the four ad-hoc ones |
 | Role assignment | `classify()` + `WordRole` (ale_call_processor.cpp:37-114) | roles from parse position instead of state-flag ORs |
 | Orderwire/message frames | `MessageAssembler` → `ALEMessage`, `CallTypeDetector` (include/Protocol/Message/ale_message.h) | becomes a Frame view; `CallTypeDetector` is the grammar classifier to fold into the reassembler |

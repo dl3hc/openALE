@@ -36,7 +36,10 @@ static std::vector<ALEWord> sent_twice(const std::vector<ALEWord>& words) {
 
 // Response-shape frame: addressed station's word(s) ×2, then transmitting
 // station's conclusion word(s). Shared shape: accept/ACK/termination.
-static ALESequence addressed_then_conclusion(const std::string& addressed_addr,
+// Catalog-tagged (FR-09); the grammar gate lives one layer up in
+// ALEFrameBuilder (Protocol layer — Word must not depend on Protocol).
+static ALESequence addressed_then_conclusion(FrameType           frame_type,
+                                             const std::string& addressed_addr,
                                              PreambleType       addressed_type,
                                              const std::string& self_addr,
                                              PreambleType       conclusion_type) {
@@ -44,7 +47,7 @@ static ALESequence addressed_then_conclusion(const std::string& addressed_addr,
         AddressEncoder::encode(addressed_addr, addressed_type));
     const auto conc = AddressEncoder::encode(self_addr, conclusion_type);
     words.insert(words.end(), conc.begin(), conc.end());
-    return ALESequence(std::move(words));
+    return ALESequence(std::move(words), frame_type);
 }
 
 // ── ALESequenceBuilder ───────────────────────────────────────────────────────
@@ -122,9 +125,11 @@ ALESequence ALESequenceBuilder::response(const std::string& caller_addr,
                                          bool is_reject) {
     // Reject (§AC-FRAME-010-1): TWAS self only — no TO prefix.
     if (is_reject)
-        return ALESequence(AddressEncoder::encode(self_addr, PreambleType::TWAS));
+        return ALESequence(AddressEncoder::encode(self_addr, PreambleType::TWAS),
+                           FrameType::F_RESPONSE);
     // Accept (§A.5.5.3.3 / Figure A-30): TO caller (×2) + TIS self.
-    return addressed_then_conclusion(caller_addr, PreambleType::TO,
+    return addressed_then_conclusion(FrameType::F_RESPONSE,
+                                     caller_addr, PreambleType::TO,
                                      self_addr,   PreambleType::TIS);
 }
 
@@ -134,7 +139,8 @@ ALESequence ALESequenceBuilder::ack(const std::string& peer_addr,
     // §A.5.5.3.4/Fig A-31: TO peer(×2) + TIS self (link) or TWAS self (Ion2G-
     // style AMD decline: handshake concludes, no link persists).
     const PreambleType conclusion_type = no_link ? PreambleType::TWAS : PreambleType::TIS;
-    return addressed_then_conclusion(peer_addr, PreambleType::TO,
+    return addressed_then_conclusion(FrameType::F_ACK,
+                                     peer_addr, PreambleType::TO,
                                      self_addr, conclusion_type);
 }
 
@@ -143,8 +149,10 @@ ALESequence ALESequenceBuilder::termination(const std::string& peer_addr,
     // §A.5.5.3.5/T-07: TO peer(×2)+TWAS self, e.g. "TO JOE TO JOE TWAS SAM".
     // Empty peer → TWAS[self] only, avoiding a malformed "TO @@@" on air.
     if (peer_addr.empty())
-        return ALESequence(AddressEncoder::encode(self_addr, PreambleType::TWAS));
-    return addressed_then_conclusion(peer_addr, PreambleType::TO,
+        return ALESequence(AddressEncoder::encode(self_addr, PreambleType::TWAS),
+                           FrameType::F_TERMINATION);
+    return addressed_then_conclusion(FrameType::F_TERMINATION,
+                                     peer_addr, PreambleType::TO,
                                      self_addr, PreambleType::TWAS);
 }
 

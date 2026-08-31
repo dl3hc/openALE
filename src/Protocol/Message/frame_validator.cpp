@@ -7,8 +7,134 @@
  */
 
 #include "Protocol/Message/frame_validator.h"
+#include <cstring>
 
 namespace ale {
+
+// ── OFS catalog-frame validation (docs/FRAMING_STANDARD.md §7, FR-09) ────────
+
+std::optional<std::string> FrameValidator::validate_frame(FrameType type,
+                                                           const std::vector<ALEWord>& words)
+{
+    // Catalog type is part of the signature so per-frame-type rules have a
+    // place to live (§6 decision rules are reception-context, not grammar —
+    // they stay on the RX side). The grammar below is type-independent.
+    (void)type;
+
+    if (words.empty())
+        return std::string("empty frame");
+
+    if (!tis_twas_mutually_exclusive(words))
+        return std::string("TIS and TWAS in one frame (A.5.2.5.3)");
+
+    constexpr size_t ADDR_MAX_WORDS = 5;   // ≤5 words / 15 chars (A.5.2.4.4)
+    // A.5.7.2.3 Tm: 90 chars of message text = the CMD word's first 3 chars
+    // + 29 DATA/REP words ("30 data words / 90 chars" counts the CMD-carrying
+    // word; "59 words counting CMD" = 29 data + 30 CMD).
+    constexpr size_t AMD_MAX_DATA   = 29;
+    constexpr size_t CMD_MAX_WORDS  = 30;  // ≤30 CMD words per message section (A.5.7.2.3)
+
+    // Single section-aware pass (FR-03/FR-04/FR-11):
+    //   - Address run: anchor (TO/THRU/FROM/TIS/TWAS) + following DATA/REP
+    //     extensions. Any anchor closes the previous run AND the message
+    //     section (the conclusion ends it; a TO after a conclusion is a new
+    //     frame copy — the doubled EFS/orderwire pattern).
+    //   - Message section: from a CMD word until the next anchor. Payload
+    //     DATA/REP never attach to address runs (FR-04).
+    bool   in_message        = false;
+    size_t cmd_count         = 0;
+    size_t block_data        = 0;    // DATA/REP words since the last CMD
+    bool   block_is_dtm_dbm  = false;
+
+    PreambleType anchor      = PreambleType::UNKNOWN;
+    size_t       run_len     = 0;
+    PreambleType last_ext    = PreambleType::UNKNOWN;
+    bool         run_stuffed = false;  // an extension word carried '@'
+
+    for (const ALEWord& w : words) {
+        switch (w.type) {
+            case PreambleType::TO:
+            case PreambleType::THRU:
+            case PreambleType::FROM:
+            case PreambleType::TIS:
+            case PreambleType::TWAS:
+                in_message = false;
+                block_data = 0;
+                anchor     = w.type;
+                run_len     = 1;
+                last_ext    = PreambleType::UNKNOWN;
+                run_stuffed = false;
+                break;
+
+            case PreambleType::CMD: {
+                in_message = true;
+                ++cmd_count;
+                if (cmd_count > CMD_MAX_WORDS)
+                    return std::string(">30 CMD words in the message section (A.5.7.2.3)");
+                block_data = 0;
+                // FR-11: the CMD names the payload protocol that owns the
+                // block. DTM/DBM carry their own size rules (partially
+                // implemented protocols) and are exempt from the AMD cap.
+                // An AMD message whose first three characters happen to be
+                // "DTM"/"DBM" is misread as exempt here — fail-open and
+                // harmless: encode_amd() already truncates to 90 chars, so
+                // this cap is defense-in-depth for future encoders only.
+                block_is_dtm_dbm =
+                    (strncmp(w.address, "DTM", 3) == 0) ||
+                    (strncmp(w.address, "DBM", 3) == 0);
+                break;
+            }
+
+            case PreambleType::DATA:
+            case PreambleType::REP: {
+                if (in_message) {
+                    // Payload word — owned by the block's CMD (FR-11); never
+                    // an address extension (FR-04).
+                    ++block_data;
+                    if (!block_is_dtm_dbm && block_data > AMD_MAX_DATA)
+                        return std::string("AMD block exceeds Tm max "
+                                          "(90 chars / 29 data words, A.5.7.2.3)");
+                    break;
+                }
+                // Address extension (FR-03).
+                if (run_len == 0)
+                    return std::string("DATA/REP extension before any anchor word");
+                ++run_len;
+                if (run_len > ADDR_MAX_WORDS)
+                    return std::string("address run exceeds 5 words / 15 chars (A.5.2.4.4)");
+                // Stuffing belongs in the run's LAST word only (A.5.2.4.3):
+                // once an extension carried '@', no further extension may
+                // follow in the same run (anchor words are exempt — special
+                // addresses carry '@' in the anchor itself, A.5.2.4.7-12).
+                if (run_stuffed)
+                    return std::string("'@' stuffing only in the last address word (A.5.2.4.3)");
+                if (memchr(w.address, '@', 3) != nullptr)
+                    run_stuffed = true;
+                // Alternation (A.5.2.4.4.2): DATA directly after DATA is
+                // always illegal (AC-WORD-009-1). REP after REP is NOT
+                // rejected here: in the group leading call REP is a
+                // new-recipient marker and consecutive REPs are legal
+                // (A.5.5.4.3.2 — encode_group() emits them, pinned by
+                // test_ale_calling); in a conclusion the first-extension-
+                // must-be-DATA rule below already rejects a REP before a
+                // second one could occur.
+                if (w.type == PreambleType::DATA && last_ext == PreambleType::DATA)
+                    return std::string("DATA directly after DATA extension (A.5.2.4.4.2)");
+                if (last_ext == PreambleType::UNKNOWN
+                        && (anchor == PreambleType::TIS || anchor == PreambleType::TWAS)
+                        && w.type == PreambleType::REP)
+                    return std::string("REP directly after conclusion — "
+                                      "first extension must be DATA (A.5.2.5.3)");
+                last_ext = w.type;
+                break;
+            }
+
+            default:
+                break;
+        }
+    }
+    return std::nullopt;
+}
 
 bool FrameValidator::tis_twas_mutually_exclusive(const std::vector<ALEWord>& words)
 {

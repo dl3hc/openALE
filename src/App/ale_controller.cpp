@@ -1429,14 +1429,14 @@ std::string ALEController::send_amd(const std::string& target, const std::string
         const std::string peer = active_peer();
         if (peer.empty())
             return "ERROR: LINKED but no active peer address available";
-        const auto to_words = AddressEncoder::encode(peer, PreambleType::TO);
-        // A.5.5.3.1-style leading address: TO (+DATA/REP ext) sent twice, same
-        // as leading_call()/termination() — only the address portion doubles.
-        std::vector<ALEWord> words = to_words;
-        words.insert(words.end(), to_words.begin(), to_words.end());
         const auto amd = encode_amd(text);   // authoritative encoder (sanitise/truncate)
         if (amd.empty())
             return "ERROR: AMD text has no encodable characters";
+        // A.5.5.3.1-style leading address via the builder (TO (+DATA/REP ext)
+        // sent twice, same words as leading_call()/termination()) + AMD
+        // payload. The TIS:SELF conclusion is appended by the SM's orderwire
+        // path (send_linked_amd -> trigger_linked_orderwire).
+        std::vector<ALEWord> words = ALESequenceBuilder::leading_call(peer).words();
         words.insert(words.end(), amd.begin(), amd.end());
         sm_.send_linked_amd(std::move(words), peer,
                             std::max(1u, config_.amd_send_max_attempts));
