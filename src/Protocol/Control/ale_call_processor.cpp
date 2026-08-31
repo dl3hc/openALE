@@ -48,13 +48,14 @@ ALECallProcessor::WordRole ALECallProcessor::classify(const ALEStateMachine& sm,
 
     // collecting/expected_caller are STATE-SCOPED (see former note in SM's
     // process_received_word): ORing across states leaks stale flags.
-    // LINKED: armed only while a TWAS termination-frame conclusion matching
-    // our peer's prefix is being accumulated (linked_twas_addr_) — its
-    // DATA/REP words are address extensions, not AMD payload.
+    // LINKED has no clause here: TWAS termination-frame accumulation moved to
+    // the FrameReassembler (fed independently below, OFS Phase 3b) — LINKED's
+    // DATA/REP words classify NONE and are simply not acted on by classify()'s
+    // caller (ALEStateMachine::handle_completed_frame_() reads the
+    // reassembler's own address run at the frame boundary instead).
     const bool collecting =
         (sm.current_state == ALEState::CALLING   && sm.collecting_remote_conclusion)
-        || (sm.current_state == ALEState::HANDSHAKE && (sm.hs_conclusion_rcvd || sm.hs_ack_tis_rcvd))
-        || (sm.current_state == ALEState::LINKED  && !sm.linked_twas_addr_.empty());
+        || (sm.current_state == ALEState::HANDSHAKE && (sm.hs_conclusion_rcvd || sm.hs_ack_tis_rcvd));
 
     // DATA/REP after TIS → multi-part address of the peer.
     if (collecting && (word.type == PreambleType::DATA || word.type == PreambleType::REP)) {
@@ -434,42 +435,13 @@ void ALECallProcessor::process_received_word(ALEStateMachine& sm, const ALEWord&
         case ALEState::CALLING:   react_calling_(sm, r);         break;
         case ALEState::HANDSHAKE: react_handshake_(sm, r, word); break;
         case ALEState::LINKED:
-            // T-03: peer TWAS termination frame (A.5.5.3.5). r.address is whoever
-            // is transmitting the TWAS (see classify()'s TO_SELF comment), NOT
-            // necessarily our linked peer — a third station sounding/terminating
-            // on the same channel also emits TWAS. The anchor word alone can't
-            // discriminate (a foreign DC7XY is indistinguishable from peer DC7SU
-            // on the first ≤3 chars), so NEVER terminate on the anchor alone:
-            // arm on prefix match, let the following DATA/REP extension words
-            // (classify() DATA_EXTENSION while armed) complete the sender's
-            // full address, and let handle_linked()'s Tdrw settle decide — only
-            // a full match vs active_call_to is a termination. Any TWAS not
-            // prefix-matching the peer disarms: the armed anchor belonged to a
-            // different sender and its accumulation is void.
-            if (r.type == WordRole::TWAS_WORD) {
-                if (!r.address.empty()
-                    && sm.active_call_to.size() >= r.address.size()
-                    && sm.active_call_to.compare(0, r.address.size(), r.address) == 0) {
-                    sm.linked_twas_addr_    = r.address;   // (re)arm
-                    sm.linked_twas_last_ms_ = sm.current_time_ms;
-                } else {
-                    sm.linked_twas_addr_.clear();
-                }
-            } else if (r.type == WordRole::DATA_EXTENSION && !sm.linked_twas_addr_.empty()) {
-                // Extension of the armed TWAS conclusion — same sender, next
-                // 3 address chars (AddressEncoder alternates DATA/REP). Gate on
-                // word spacing (~Trw on air): a DATA arriving long after the
-                // last accumulated word belongs to a later frame, not to this
-                // address.
-                if (sm.current_time_ms - sm.linked_twas_last_ms_
-                        <= 2u * ALETimingConstants::Trw_ms) {
-                    sm.linked_twas_addr_    += r.address;
-                    sm.linked_twas_last_ms_  = sm.current_time_ms;
-                }
-            } else {
-                // AMD delivery-confirmation Response/ACK detection (no-op if idle).
-                react_linked_amd_confirm_(sm, r);
-            }
+            // T-03 peer TWAS termination-frame recognition (A.5.5.3.5) moved to
+            // the FrameReassembler + ALEStateMachine::handle_completed_frame_()
+            // (OFS Phase 3b, docs/FRAMING_STANDARD.md §6 F-05) — the reassembler
+            // accumulates the conclusion's full address independently of
+            // classify(), so no per-word arming lives here any more.
+            // AMD delivery-confirmation Response/ACK detection (no-op if idle).
+            react_linked_amd_confirm_(sm, r);
             break;
         case ALEState::SOUNDING:
             if (r.type == WordRole::CHANNEL_BUSY) {

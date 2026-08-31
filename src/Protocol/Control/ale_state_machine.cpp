@@ -237,14 +237,18 @@ void ALEStateMachine::update(uint32_t now_ms) {
     }
     this->current_time_ms = now_ms;
 
-    // ── OFS FrameReassembler shadow feed (Phase 2, docs/FRAMING_STANDARD.md) ──
-    // Observes the word stream in parallel; nothing consumes its Frame events
-    // yet (Phase 3 wires them into the §8 context matrix). Completed frames
-    // are drained here and traced at frame level — FR-10: RX diagnostics
-    // name the frame type and the completed addresses, not just the last word.
+    // ── OFS FrameReassembler feed (docs/FRAMING_STANDARD.md) ──────────────
+    // Observes the word stream in parallel. Completed frames are drained
+    // here, traced at frame level (FR-10: RX diagnostics name the frame type
+    // and the completed addresses, not just the last word), and routed to
+    // the FR-06 frame-boundary decision point — ahead of the per-state
+    // handle_*() below, same as the old word-level accumulators decided
+    // before their settle checks ran.
     frame_reassembler_.tick(current_time_ms);
-    for (const auto& f : frame_reassembler_.take_completed())
+    for (const auto& f : frame_reassembler_.take_completed()) {
         SM_TRACE(frame_trace_line(f));
+        handle_completed_frame_(f);
+    }
 
     if (check_link_timeout()) {
         process_event(ALEEvent::LINK_TIMEOUT);
@@ -406,8 +410,11 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             link_start_time_ms  = current_time_ms;
             last_word_time_ms   = current_time_ms;
             linked_terminating_ = false;
-            linked_twas_addr_.clear();   // fresh link: no TWAS conclusion accumulating
-            linked_twas_last_ms_ = 0;
+            // Fresh link: no stale candidate carries over (OFS Phase 3b — the
+            // FrameReassembler replaces linked_twas_addr_/linked_twas_last_ms_
+            // as the termination accumulator; this mirrors their old
+            // per-link clear).
+            frame_reassembler_.reset();
             tx_drain_start_ms_ = 0;   // no TX drain pending on a fresh link
             allcall_silent_ = false;          // AllCall concluded → normal linked state
             // Fresh link: arm the idle warning (fires IDLE_WARNING_LEAD_MS before Twa).
@@ -888,6 +895,41 @@ void ALEStateMachine::handle_handshake() {
     }
 }
 
+// ── OFS FR-06 frame-boundary decision (docs/FRAMING_STANDARD.md §6 F-05) ──
+// Called from update() for every frame the FrameReassembler completes this
+// tick (Tdrw settle, FR-01(a), or an out-of-grammar restart, FR-01(b) — both
+// close a candidate the same way a fresh conclusion interrupting one would).
+//
+// LINKED termination (A.5.5.3.5, Phase 3b): replaces the old
+// linked_twas_addr_/linked_twas_last_ms_ accumulator with the reassembler's
+// own FR-03 address run — the same accumulation, one mechanism instead of
+// two. The catalog's F-05 row ("TO×2 peer + TWAS self") and F-06 ("TIS/TWAS
+// self" only) share one grammar element (the TWAS conclusion) and the
+// reassembler cannot tell them apart by frame TYPE alone: a genuine
+// termination whose leading TO×2 was missed types identically to a foreign
+// station's sound (both close as a conclusion-only F_SOUND candidate), and
+// one whose TO×2 was caught types F_RESPONSE (the same shared grammar F-03/
+// F-04/F-05 collapse to, §6 note) — never a distinct F_TERMINATION (nothing
+// in assign_frame_type_() ever assigns it; §8's separate F-03/F-04/F-05
+// columns are the catalog's conceptual split, not distinct RX types). So
+// this decision is keyed on `conclusion_is_twas`, not on `f.type`: the exact
+// full-address compare against active_call_to IS the FR-07 disambiguator for
+// this pair, the one case the coarse (state,type) matrix cannot express. A
+// mismatch is exactly what the matrix's LINKED×F_SOUND=OBSERVE cell already
+// says to do — discard toward no state change (FR-08).
+void ALEStateMachine::handle_completed_frame_(const AssembledFrame& f) {
+    if (current_state != ALEState::LINKED) return;
+    if (linked_terminating_) return;   // already tearing down — old handle_linked() guard
+    if (!f.complete || !f.conclusion_is_twas) return;   // F-05 needs a settled TWAS conclusion
+
+    if (f.conclusion_identity == active_call_to) {
+        SM_TRACE("[TRACE] handle_completed_frame_: peer TWAS termination frame (full address match) → LINK_TERMINATED\n");
+        process_event(ALEEvent::LINK_TERMINATED);
+        return;
+    }
+    SM_TRACE("[TRACE] handle_completed_frame_: foreign TWAS (address mismatch) — discarded\n");
+}
+
 void ALEStateMachine::handle_linked() {
     // ── TX-drain safety net (AC-LINK-023-adjacent) ──────────────────────────
     // terminate_link() and the orderwire burst both rely on on_word_complete()
@@ -921,28 +963,10 @@ void ALEStateMachine::handle_linked() {
 
     if (linked_terminating_) return;
 
-    // ── Peer TWAS termination-frame settle (T-03, A.5.5.3.5) ──────────────────
-    // A TWAS conclusion prefix-matching active_call_to has been accumulating
-    // (anchor + DATA/REP extensions, see ALECallProcessor LINKED branch). After
-    // Tdrw of silence the sender's FULL address is settled — same window the
-    // handshake uses for multi-word conclusions. Terminate ONLY on an exact
-    // full-address match vs active_call_to; anything else (a foreign station
-    // sharing the peer's first word, e.g. DC7XY vs peer DC7SU) is discarded.
-    // The Tdrw delay on genuine termination is harmless — the peer is gone
-    // either way. Same Trw-settle reasoning as handle_handshake(): a 1×Trw
-    // settle would race the next on-grid extension word and truncate the
-    // address, so the decision waits the full 2×Trw.
-    if (!linked_twas_addr_.empty()
-        && (current_time_ms - linked_twas_last_ms_) >= ALETimingConstants::Tdrw_ms) {
-        if (linked_twas_addr_ == active_call_to) {
-            SM_TRACE("[TRACE] handle_linked: peer TWAS termination frame (full address match) → LINK_TERMINATED\n");
-            linked_twas_addr_.clear();
-            process_event(ALEEvent::LINK_TERMINATED);
-            return;
-        }
-        SM_TRACE("[TRACE] handle_linked: foreign TWAS (address mismatch) — discarded\n");
-        linked_twas_addr_.clear();
-    }
+    // Peer TWAS termination-frame recognition (T-03, A.5.5.3.5): migrated to
+    // handle_completed_frame_(), called from update() as each FrameReassembler
+    // candidate closes — same Tdrw settle window, now the reassembler's FR-01
+    // boundary rather than a parallel word-level accumulator (OFS Phase 3b).
 
     // ── Linked Orderwire (Enhanced Frequency-Select, A.5.6.3.2) ─────────────
     // Sends pending_orderwire_words_ + TIS:SELF (×2) while LINKED so EFS

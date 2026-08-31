@@ -927,17 +927,6 @@ private:
     bool                 linked_amd_retry_pending_   = false; ///< sender: retry queued, waiting out the Tt gap below
     uint32_t             linked_amd_retry_after_ms_  = 0;  ///< sender: resend once current_time_ms reaches this (Tt = TT_NEXT_TRY_MS after the window expired)
 
-    // ── LINKED-state TWAS termination-frame recognition (A.5.5.3.5) ──────
-    // A peer's termination frame concludes TWAS[peer] + DATA/REP address
-    // extensions (AddressEncoder: anchor, DATA, REP, DATA, REP). The anchor
-    // word alone carries only the first ≤3 address chars — not enough to
-    // identify the sender (a foreign DC7XY sounds indistinguishably from
-    // peer DC7SU on the anchor alone). Arm on prefix match, accumulate
-    // extensions, and let handle_linked() decide after the Tdrw settle:
-    // LINK_TERMINATED only on FULL accumulated address == active_call_to.
-    std::string          linked_twas_addr_;            ///< accumulated TWAS-conclusion address ("" = not armed)
-    uint32_t             linked_twas_last_ms_    = 0;  ///< timestamp of the last accumulated word (settle + spacing gate)
-
     // ── Scanning sub-state ───────────────────────────────────────────────
     ScanningPhase scanning_phase_;           ///< Aktuelle Phase innerhalb SCANNING
     uint32_t      scan_pause_settle_ms_ = 0;   ///< Last-word time during SCAN_PAUSE (A.5.3.1)
@@ -1040,6 +1029,13 @@ private:
     void handle_handshake();
     void handle_linked();
     void handle_sounding();
+
+    /// OFS FR-06 frame-boundary decision point (docs/FRAMING_STANDARD.md §6
+    /// F-05, Phase 3b): called from update() for every frame the
+    /// FrameReassembler completes this tick, before the per-state handle_*()
+    /// runs. Currently implements only the LINKED-state termination decision
+    /// (§10: the rest of the §8 matrix wiring is Phase 3c/3d).
+    void handle_completed_frame_(const AssembledFrame& f);
 
     // ── LINKED-state AMD confirmation drivers (called from handle_linked) ──
     void handle_linked_amd_listening_();   ///< sender: LISTEN for the peer Response, then SENDING_ACK
