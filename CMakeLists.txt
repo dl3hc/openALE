@@ -611,6 +611,11 @@ target_link_libraries(test_foreign_twas_link_guard ale_link ale_protocol ale_fsk
 target_include_directories(test_foreign_twas_link_guard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME ForeignTwasLinkGuard COMMAND test_foreign_twas_link_guard)
 
+add_executable(test_rx_characterization tests/link/unit/test_rx_characterization.cpp)
+target_link_libraries(test_rx_characterization ale_link ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_rx_characterization PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME RxCharacterization COMMAND test_rx_characterization)
+
 add_executable(test_aqc_word_format tests/aqc/unit/test_aqc_word_format.cpp)
 target_link_libraries(test_aqc_word_format ale_aqc ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_aqc_word_format PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
