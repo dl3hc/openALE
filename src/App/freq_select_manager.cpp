@@ -12,13 +12,11 @@ FreqSelectManager::FreqSelectManager(
     ALEStateMachine&                        sm,
     LQAAnalyzer&                            lqa,
     std::function<std::string()>            get_self_addr,
-    std::function<bool(const std::string&)> is_self,
     std::function<void(const std::string&)> on_relink,
     std::function<void(const std::string&)> on_status)
     : sm_(sm)
     , lqa_(lqa)
     , get_self_addr_(std::move(get_self_addr))
-    , is_self_(std::move(is_self))
     , on_relink_(std::move(on_relink))
     , on_status_(std::move(on_status))
 {}
@@ -31,7 +29,9 @@ void FreqSelectManager::evaluate(uint32_t now_ms, uint32_t ber_settle_ms, float 
 
     const std::string peer = !sm_.get_to_address().empty()
         ? sm_.get_to_address() : sm_.get_caller_address();
-    if (peer.empty() || is_self_(peer)) return;
+    // No self-check here (2026-08-31, same fix as reply_to_linked_amd_):
+    // an address match is not a protocol reason to skip EFS evaluation.
+    if (peer.empty()) return;
 
     const Channel* ch = sm_.get_current_channel();
     if (!ch || ch->rx_frequency_hz == 0) return;
@@ -78,7 +78,10 @@ void FreqSelectManager::on_word(const ALEWord& word, uint32_t now_ms, float thre
                 ? sm_.get_to_address() : sm_.get_caller_address();
             if (phase_ == Phase::PROPOSED) {
                 handle_response(freq_hz, now_ms);
-            } else if (!peer.empty() && !is_self_(peer)) {
+            } else if (!peer.empty()) {
+                // No self-check here (2026-08-31, same fix as
+                // reply_to_linked_amd_): a peer's EFS proposal must be
+                // handled regardless of whether its address matches ours.
                 handle_proposal(freq_hz, peer, now_ms, threshold);
             }
         }

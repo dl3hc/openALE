@@ -330,7 +330,6 @@ ALEController::ALEController()
     , freq_select_(sm_,
                    lqa_analyzer_,
                    [this](){ return self_address_store_.primary(); },
-                   [this](const std::string& a){ return self_address_store_.matches_self(a); },
                    [this](const std::string& peer){ pending_relink_addr_ = peer; },
                    [this](const std::string& m){ emit_status(m); })
 {
@@ -2451,7 +2450,9 @@ void ALEController::evaluate_relink(uint32_t now_ms) {
 
     const std::string peer = !sm_.get_to_address().empty()
         ? sm_.get_to_address() : sm_.get_caller_address();
-    if (peer.empty() || self_address_store_.matches_self(peer)) return;
+    // No self-check here (2026-08-31, same fix as reply_to_linked_amd_):
+    // an address match is not a protocol reason to skip relink evaluation.
+    if (peer.empty()) return;
 
     const Channel* ch = sm_.get_current_channel();
     if (!ch || ch->rx_frequency_hz == 0) return;
@@ -2547,7 +2548,10 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
             std::string tail = amd_flush(call_amd_);   // in-progress text, if any (e.g. TIS never arrived)
             if (!tail.empty()) call_amd_pending_.push_back(std::move(tail));
             const std::string caller = sm_.get_caller_address();
-            if (!caller.empty() && !self_address_store_.matches_self(caller))
+            // No self-check here (2026-08-31, same fix as reply_to_linked_amd_):
+            // received AMD text must display regardless of whether the
+            // caller's address happens to match ours.
+            if (!caller.empty())
                 for (const auto& text : call_amd_pending_) amd_dispatch(caller, text, handshake_call_context_);
             call_amd_pending_.clear();
         }
@@ -2586,7 +2590,10 @@ void ALEController::on_sm_state_change(ALEState from, ALEState to)
         if (!tail.empty()) resp_amd_pending_.push_back(std::move(tail));
         const std::string peer = !sm_.get_to_address().empty()
             ? sm_.get_to_address() : sm_.get_caller_address();
-        if (!peer.empty() && !self_address_store_.matches_self(peer)) {
+        // No self-check here (2026-08-31, same fix as reply_to_linked_amd_):
+        // received AMD text must display regardless of whether the peer's
+        // address happens to match ours.
+        if (!peer.empty()) {
             const char* resp_context = sm_.is_active_call_group() ? "GROUP"
                 : sm_.is_active_call_net() ? "NET" : "INDIVIDUAL";
             for (const auto& text : resp_amd_pending_) amd_dispatch(peer, text, resp_context);

@@ -37,7 +37,6 @@ public:
      *                      driven for terminate_link() and trigger_linked_orderwire().
      * @param lqa           LQA analyzer — queried to rank channels per station.
      * @param get_self_addr Returns this station's primary call sign (collision tiebreak).
-     * @param is_self       Returns true for a local self-address (guards peer DB writes).
      * @param on_relink     Called with peer address when peer accepts a proposal;
      *                      controller sets pending_relink_addr_ so the TWAS → re-call
      *                      path fires on the next update() tick.
@@ -47,7 +46,6 @@ public:
         ALEStateMachine&                        sm,
         LQAAnalyzer&                            lqa,
         std::function<std::string()>            get_self_addr,
-        std::function<bool(const std::string&)> is_self,
         std::function<void(const std::string&)> on_relink,
         std::function<void(const std::string&)> on_status);
 
@@ -92,7 +90,6 @@ private:
     ALEStateMachine&                        sm_;
     LQAAnalyzer&                            lqa_;
     std::function<std::string()>            get_self_addr_;
-    std::function<bool(const std::string&)> is_self_;
     std::function<void(const std::string&)> on_relink_;
     std::function<void(const std::string&)> on_status_;
 
