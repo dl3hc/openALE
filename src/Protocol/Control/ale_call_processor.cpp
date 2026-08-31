@@ -46,15 +46,37 @@ ALECallProcessor::WordRole ALECallProcessor::classify(const ALEStateMachine& sm,
     // Every valid word during LBT = channel busy.
     if (lbt_active) { r.type = WordRole::CHANNEL_BUSY; return r; }
 
+    // OFS Phase 3c: CALLING's "still collecting the responder's conclusion"
+    // question is exactly the reassembler's own parse-position fact (FR-03) —
+    // it has already completed a conclusion run in the current candidate
+    // (candidate()->complete) and the word classify() is looking at right
+    // now was accepted extending it (last_role()==ADDRESS_EXTENSION, since
+    // the reassembler is fed this same word first, see process_received_word
+    // below). Replaces collecting_remote_conclusion, which is now gone —
+    // classify() no longer needs a second bookkeeping flag for a fact the
+    // reassembler already tracks.
+    const bool reassembler_extends_conclusion =
+        sm.frame_reassembler_.candidate()
+        && sm.frame_reassembler_.candidate()->complete
+        && sm.frame_reassembler_.last_role() == ParseRole::ADDRESS_EXTENSION;
+
     // collecting/expected_caller are STATE-SCOPED (see former note in SM's
     // process_received_word): ORing across states leaks stale flags.
+    // HANDSHAKE keeps its own flags, not the reassembler predicate above:
+    // hs_conclusion_rcvd/hs_ack_tis_rcvd are public API
+    // (ALEStateMachine::is_hs_conclusion_rcvd(), consumed by
+    // App/ale_controller.cpp) with pinned cross-phase persistence semantics
+    // unrelated to parse position (test_ale_calling.cpp: hs_conclusion_rcvd
+    // deliberately STAYS true after a HANDSHAKE abort, cleared only on the
+    // next HANDSHAKE entry — the reassembler's candidate has no such
+    // memory). See docs/FRAMING_STANDARD.md §10 "intentionally remaining".
     // LINKED has no clause here: TWAS termination-frame accumulation moved to
     // the FrameReassembler (fed independently below, OFS Phase 3b) — LINKED's
     // DATA/REP words classify NONE and are simply not acted on by classify()'s
     // caller (ALEStateMachine::handle_completed_frame_() reads the
     // reassembler's own address run at the frame boundary instead).
     const bool collecting =
-        (sm.current_state == ALEState::CALLING   && sm.collecting_remote_conclusion)
+        (sm.current_state == ALEState::CALLING   && reassembler_extends_conclusion)
         || (sm.current_state == ALEState::HANDSHAKE && (sm.hs_conclusion_rcvd || sm.hs_ack_tis_rcvd));
 
     // DATA/REP after TIS → multi-part address of the peer.
@@ -189,20 +211,18 @@ void ALECallProcessor::react_calling_(ALEStateMachine& sm, const WordRole& r)
         break;
     case WordRole::TIS_CALLER:
         if (sm.response_to_detected && sm.tlww_start_ms == 0) {
-            sm.to_address                   = r.address;
-            sm.active_call_from             = r.address;
-            sm.tlww_start_ms                = sm.current_time_ms;
-            sm.collecting_remote_conclusion = true;
+            sm.to_address        = r.address;
+            sm.active_call_from  = r.address;
+            sm.tlww_start_ms     = sm.current_time_ms;
         }
         break;
     case WordRole::DATA_EXTENSION:
-        // Only extend once responder's TIS started the conclusion, else a stray
-        // DATA before TIS would pollute to_address.
-        if (sm.collecting_remote_conclusion) {
-            sm.to_address      += r.address;
-            sm.active_call_from = sm.to_address;
-            sm.tlww_start_ms    = sm.current_time_ms;
-        }
+        // classify() only emits DATA_EXTENSION here once the reassembler has
+        // an open conclusion run (see reassembler_extends_conclusion above),
+        // so this is always a legitimate extension — no separate gate needed.
+        sm.to_address      += r.address;
+        sm.active_call_from = sm.to_address;
+        sm.tlww_start_ms    = sm.current_time_ms;
         break;
     case WordRole::TWAS_WORD:  // TWAS rejection from called station (AC-LINK-019-10)
         if (sm.operator_callback)

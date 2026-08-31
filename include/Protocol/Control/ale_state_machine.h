@@ -841,7 +841,6 @@ private:
     bool         response_to_detected;         ///< true once "TO SAM" received from JOE
     uint32_t     response_rx_start_ms;         ///< When "TO SAM" was first seen (diagnostic; the AC-LINK-019-8 conclusion wait is silence-based on last_word_time_ms)
     uint32_t     tlww_start_ms;                ///< When "TIS JOE" conclusion was received; 0 = not yet
-    bool         collecting_remote_conclusion; ///< TIS received; still collecting DATA/REP (Fix 5)
     std::string  to_address;                  ///< Identity of responding station (from TIS word)
 
     // ── Handshake sub-state (MIL-STD A.5.5.3.2–4, JOE side) ─────────────

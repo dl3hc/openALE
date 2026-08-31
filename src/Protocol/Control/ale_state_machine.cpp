@@ -89,7 +89,6 @@ ALEStateMachine::ALEStateMachine()
       response_to_detected(false),
       response_rx_start_ms(0),
       tlww_start_ms(0),
-      collecting_remote_conclusion(false),
       emergency_active(false),
       target_scan_channels(1),
       state_entry_time_ms(0),
@@ -366,7 +365,6 @@ void ALEStateMachine::enter_state(ALEState new_state) {
             response_to_detected           = false;
             response_rx_start_ms           = 0;
             tlww_start_ms                  = 0;
-            collecting_remote_conclusion   = false;
         to_address.clear();
 
             // Activate first calling channel if a list was set
@@ -647,7 +645,6 @@ void ALEStateMachine::handle_calling() {
                 if ((current_time_ms - tlww_start_ms) >= ALETimingConstants::Tdrw_ms) {
                     calling_phase                = CallingPhase::SENDING_ACK;
                     call_cycles_in_phase         = 0;
-                    collecting_remote_conclusion = false;
                     if (rx_enabled_callback)
                         rx_enabled_callback(false); // close RX before TX
                 }
