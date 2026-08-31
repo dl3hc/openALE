@@ -177,4 +177,97 @@ std::vector<ALEWord> encode_dbm(const std::vector<uint8_t>& payload, bool crc_en
     return words;
 }
 
+// ── CMD function decode (A.5.6 / TABLE A-XVI) ────────────────────────────────
+
+// TABLE A-XVI one-character CMD functions (first character, W4-W10).
+static const struct { char c; const char* name; } kSingleCharCmds[] = {
+    { '`',  "Advanced LQA (A.5.6.3.7)" },
+    { 'a',  "LQA (bilateral LQA data)" },
+    { 'b',  "Data block analysis" },
+    { 'c',  "Channels" },
+    { 'd',  "DTM (data text message)" },
+    { 'f',  "Frequency select (A.5.6.3.2)" },
+    { 'n',  "Noise report" },
+    { 'p',  "Power control (A.5.6.2)" },
+    { 'r',  "LQA report (Block C5)" },
+    { '|',  "User-unique functions (UI-1/UI-2, A.5.6.9)" },
+    { '~',  "Time exchange (A.5.6.4.3)" },
+};
+
+// TABLE A-XVI two-character CMD functions: first character selects the group,
+// second character (W11-W17) the function within it.
+static const struct { char first; char second; const char* name; } kTwoCharCmds[] = {
+    { 'm', 'a', "Mode: analog port selection" },
+    { 'm', 'c', "Mode: crypto negotiation" },
+    { 'm', 'd', "Mode: data port selection" },
+    { 'm', 'n', "Mode: modem negotiation" },
+    { 'm', 'q', "Mode: digital squelch" },
+    { 't', 'a', "Scheduling: adjust slot width" },
+    { 't', 'b', "Scheduling: station busy" },
+    { 't', 'c', "Scheduling: channel busy" },
+    { 't', 'd', "Scheduling: set dwell time" },
+    { 't', 'h', "Scheduling: halt and wait" },
+    { 't', 'l', "Scheduling: contact later" },
+    { 't', 'm', "Scheduling: meet me" },
+    { 't', 'n', "Scheduling: poll operator (default NAK)" },
+    { 't', 'o', "Scheduling: request operator ACK" },
+    { 't', 'p', "Scheduling: schedule periodic function" },
+    { 't', 'q', "Scheduling: quiet contact" },
+    { 't', 'r', "Scheduling: respond and wait" },
+    { 't', 's', "Scheduling: set sounding interval" },
+    { 't', 't', "Scheduling: tune and wait" },
+    { 't', 'w', "Scheduling: set slot width" },
+    { 't', 'x', "Scheduling: do not respond (A.5.6.7)" },
+    { 't', 'y', "Scheduling: year and date" },
+    { 't', 'z', "Scheduling: zulu time" },
+    { 'v', 'c', "Capabilities (A.5.6.6.2)" },
+    { 'v', 's', "Version (A.5.6.6.1)" },
+};
+
+CmdFunctionInfo decode_cmd_function(uint32_t raw_payload)
+{
+    CmdFunctionInfo f;
+    f.first  = static_cast<char>((raw_payload >> 14) & 0x7Fu);
+    f.second = static_cast<char>((raw_payload >>  7) & 0x7Fu);
+
+    // CRC word (A.5.6.1 / TABLE A-XVII): 'x'/'y'/'z'/'{' as first character,
+    // the remaining 14 bits carry FCS bits X13..X0 (X15/X14 sit in the first
+    // character's two LSBs, which is what distinguishes the four).
+    if (f.first == 'x' || f.first == 'y' || f.first == 'z' || f.first == '{') {
+        f.name   = "CRC (16-bit FCS, A.5.6.1)";
+        f.second = 0;
+        return f;
+    }
+
+    for (const auto& e : kTwoCharCmds)
+        if (e.first == f.first && e.second == f.second) {
+            f.name = e.name;
+            return f;
+        }
+    for (const auto& e : kSingleCharCmds)
+        if (e.c == f.first) {
+            f.name   = e.name;
+            f.second = 0;
+            return f;
+        }
+
+    // Below the 0x60 function range lies the message-word range: TABLE A-XVI
+    // gives AMD any Expanded-64 first character, and DTM/DBM may be
+    // identified either by their CMD character ('d') or by their Basic-38
+    // text "DTM"/"DBM" (encode_dtm()/encode_dbm() emit the latter).
+    if (f.first >= 0x20 && f.first <= 0x5F) {
+        char basic38[4] = {};
+        if (WordParser::decode_ascii(raw_payload, PreambleType::CMD, basic38)) {
+            const std::string id(basic38, 3);
+            if (id == "DTM") { f.name = "DTM (data text message)"; f.second = 0; return f; }
+            if (id == "DBM") { f.name = "DBM (data block message)"; f.second = 0; return f; }
+        }
+        f.name   = "AMD (message header)";
+        f.second = 0;
+        return f;
+    }
+
+    return f;   // name == nullptr: no TABLE A-XVI entry for this first character
+}
+
 } // namespace ale

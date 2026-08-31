@@ -132,4 +132,39 @@ struct DbmBlock {
  */
 std::vector<ALEWord> encode_dbm(const std::vector<uint8_t>& payload, bool crc_enabled = true);
 
+// ── CMD word function decode (MIL-STD-188-141B A.5.6 / TABLE A-XVI) ──────────
+
+/**
+ * Decoded function of a received CMD word, per TABLE A-XVI (Summary of CMD
+ * functions).
+ *
+ * Word layout (24-bit ALE word, W1-MSB .. W24-LSB):
+ *   W1-W3   CMD preamble (110)
+ *   W4-W10  first character, 7-bit ASCII (CMD function range 0x60-0x7F)
+ *   W11-W17 second character, 7-bit ASCII (two-character functions only)
+ *   W18-W24 / W11-W24  function payload bits
+ *
+ * One-character functions cover the whole 0x60-0x7F range ('`' through '~');
+ * the groups 'm' (mode selection), 't' (scheduling) and 'v' (capabilities/
+ * version) carry a second character. 'x'/'y'/'z'/'{' are CRC words whose
+ * remaining bits are FCS bits (A.5.6.1). Below 0x60 lies the message-word
+ * range: AMD may use any Expanded-64 first character, and DTM/DBM are
+ * identified by their Basic-38 text.
+ */
+struct CmdFunctionInfo {
+    const char* name   = nullptr; ///< Function name, or nullptr when the first
+                                  ///< character has no TABLE A-XVI entry
+    char        first  = 0;       ///< First character code (W4-W10)
+    char        second = 0;       ///< Second character code (W11-W17) for the
+                                  ///< two-character groups; 0 otherwise
+};
+
+/**
+ * Decode a CMD word's raw 21-bit payload into its TABLE A-XVI function.
+ * Works purely from the payload bits (same rationale as cmd_char_code():
+ * the 0x60-0x7F character codes fail Basic-38/Expanded-64 validation in
+ * parse_from_bits(), so word.address[] is not usable for them).
+ */
+CmdFunctionInfo decode_cmd_function(uint32_t raw_payload);
+
 } // namespace ale

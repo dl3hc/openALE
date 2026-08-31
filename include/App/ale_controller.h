@@ -1713,6 +1713,7 @@ private:
 
     // ── on_received_word() concern handlers ──────────────────────────────────
     void rx_log_word(const ALEWord& word);                   ///< debug_rx_ trace line
+    void rx_log_cmd_word(const ALEWord& word);               ///< TABLE A-XVI CMD decode via pal logger (RxCMD)
     void rx_track_signal_quality(const ALEWord& word);       ///< last_sinad_db_ (Goertzel) / last_snr_db_ (votes proxy) / ber_ + passive monitor tap
     void rx_accumulate_caller_identity(const ALEWord& word); ///< HANDSHAKE caller address reassembly
     void rx_handle_lqa_exchange(const ALEWord& word);        ///< CMD 'a' / CMD 'n' / CMD 'r'+DATA

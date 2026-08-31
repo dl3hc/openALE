@@ -694,6 +694,11 @@ target_link_libraries(test_dbm_orderwire_tx ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_dbm_orderwire_tx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME DBMOrderwireTx COMMAND test_dbm_orderwire_tx)
 
+add_executable(test_cmd_function_decode tests/gen/unit/test_cmd_function_decode.cpp)
+target_link_libraries(test_cmd_function_decode ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_cmd_function_decode PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME CmdFunctionDecode COMMAND test_cmd_function_decode)
+
 add_executable(test_lqa_database tests/gen/unit/test_lqa_database.cpp)
 target_link_libraries(test_lqa_database ale_lqa ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_lqa_database PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

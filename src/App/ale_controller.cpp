@@ -2906,6 +2906,7 @@ void ALEController::on_received_word(const ALEWord& word)
 {
     if (word.valid) last_word_decoded_ms_ = now_ms_;  // P1-11: drives SignalQuality::decoding
     rx_log_word(word);
+    rx_log_cmd_word(word);
     rx_track_signal_quality(word);
     rx_accumulate_caller_identity(word);
     rx_handle_lqa_exchange(word);
@@ -2931,6 +2932,46 @@ void ALEController::rx_log_word(const ALEWord& word)
                   word.valid ? 1 : 0,
                   ALEStateMachine::state_name(sm_.get_state()));
     emit_status(buf);
+}
+
+// TABLE A-XVI CMD-word decode (A.5.6): every valid received CMD word is
+// decoded and logged via the standard pal logger (module "RxCMD"), so CMD
+// functions/structures this stack does not implement — or does not expect on
+// air — are visible in the log console/openALE.log for debugging and
+// reverse-engineering. The raw 21-bit payload rides along on every line,
+// unfiltered, so an unknown word can be re-analyzed bit by bit offline.
+void ALEController::rx_log_cmd_word(const ALEWord& word)
+{
+    if (!word.valid || word.type != PreambleType::CMD) return;
+
+    const ale::CmdFunctionInfo f = ale::decode_cmd_function(word.raw_payload);
+    // 0x20-0x7E renders as ASCII; anything else (control/DEL) as '?' so the
+    // log line stays printable whatever the on-air bits were.
+    const auto pr = [](char c) { return (c >= 0x20 && c < 0x7F) ? c : '?'; };
+
+    if (f.name) {
+        if (f.second)
+            pal::log_info("RxCMD", "CMD '%c%c' (%s) raw=0x%05X",
+                          pr(f.first), pr(f.second), f.name,
+                          static_cast<unsigned>(word.raw_payload));
+        else
+            pal::log_info("RxCMD", "CMD '%c' (%s) raw=0x%05X",
+                          pr(f.first), f.name,
+                          static_cast<unsigned>(word.raw_payload));
+    } else {
+        // No TABLE A-XVI entry for this first character — dump the full
+        // payload as bits (first char W4-W10, second char W11-W17 for the
+        // two-character groups, payload bits W18-W24/W11-W24).
+        char bits[22];
+        for (int i = 20; i >= 0; --i)
+            bits[20 - i] = ((word.raw_payload >> i) & 1u) ? '1' : '0';
+        bits[21] = '\0';
+        pal::log_info("RxCMD",
+                      "CMD 0x%02X (unknown function — not in TABLE A-XVI) "
+                      "raw=0x%05X bits=%s",
+                      static_cast<unsigned>(static_cast<unsigned char>(f.first)),
+                      static_cast<unsigned>(word.raw_payload), bits);
+    }
 }
 
 void ALEController::rx_track_signal_quality(const ALEWord& word)
