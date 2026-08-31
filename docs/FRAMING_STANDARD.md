@@ -306,7 +306,7 @@ FR-07 as a table. ✓ = frame type may act in that state; ○ = observation only
 | IDLE / SCANNING | ✓ (arm on TO self) | ✗ | ✗ | ○ | ○ | ✓ | ✓* (AMD inside F-01) | ✗ | ○ |
 | CALLING | ○ | ✓ | ✗ | ✓ (peer rejection) | ○ | ○ | ○ | ✗ | ○ |
 | HANDSHAKE | ✓ (handshake legs) | ✓ | ✓ | ○ | ○ | ○ | ✓* (AMD in F-03/F-04 legs) | ✗ | ○ |
-| LINKED | ○ | ✗ | ✗ | ✓ (full-address only) | ○ | ○ | ✓ | ✓ | ○ |
+| LINKED | ○ | ✗† | ✗ | ✓ (full-address only) | ○ | ○ | ✓ | ✓ | ○ |
 | SOUNDING | ○ | ✗ | ✗ | ○ | ○ | ○ | ○ | ✗ | ○ |
 
 \* A.5.7.2.2: AMD (and other P-payloads) are receivable inside **any** frame —
@@ -314,6 +314,17 @@ the F-08 cells marked ✓* are payloads of the carrying frame's row, not
 independent frame detections. The state change (if any) is the carrying
 frame's (F-01 call → HANDSHAKE, F-03 response → LINKED); the payload itself
 only delivers content.
+
+† Conceptually F-03 Response semantics never apply in LINKED (no response is
+awaited) — the ✗ is correct at the catalog level. But `FrameType::F_RESPONSE`
+is the RX-side type shared by F-03/F-04/**F-05** (§6 note): a genuine peer
+termination whose leading `TO×2` was caught types `F_RESPONSE`, not a
+distinct `F_TERMINATION` (found during Phase 3b, `context_matrix.cpp`'s
+runtime table; see §10's F-05/F-06 note). So the *code* matrix's LINKED row
+maps `F_RESPONSE` to **OBSERVE**, not IGNORE — worth a look (it might carry
+F-05), never a blanket ACT by type alone; the exact full-address compare
+against `active_call_to` is what actually decides. The conceptual ✗ above
+still holds for anything that ISN'T that shared-grammar case.
 
 Read the incident against the LINKED row: F-06 is ○. A sound — from any
 station, sharing any prefix with anyone — cannot reach a state transition

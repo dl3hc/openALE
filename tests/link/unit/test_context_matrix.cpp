@@ -83,7 +83,8 @@ void linked_row() {
     std::cout << "\n[LINKED] only full-address termination + orderwire/inlink act; sound observes\n";
     const ALEState s = ALEState::LINKED;
     expect(s, FrameType::F_CALL,        MatrixAction::OBSERVE, "F_CALL");
-    expect(s, FrameType::F_RESPONSE,    MatrixAction::IGNORE,  "F_RESPONSE");
+    expect(s, FrameType::F_RESPONSE,    MatrixAction::OBSERVE,
+           "F_RESPONSE (§8 footnote †: RX-shared F-03/F-04/F-05 grammar — OBSERVE, not the conceptual ✗, so a TO×2-caught termination is still inspected)");
     expect(s, FrameType::F_ACK,         MatrixAction::IGNORE,  "F_ACK");
     expect(s, FrameType::F_TERMINATION, MatrixAction::ACT,     "F_TERMINATION (full-address only)");
     expect(s, FrameType::F_SOUND,       MatrixAction::OBSERVE, "F_SOUND — the 2026-08-31 incident's row/column");

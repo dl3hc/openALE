@@ -31,7 +31,13 @@ using MA = MatrixAction;
 constexpr Row kIdleScanning  { MA::ACT,     MA::IGNORE,  MA::IGNORE,  MA::OBSERVE, MA::OBSERVE, MA::ACT,     MA::ACT,     MA::IGNORE,  MA::OBSERVE };
 constexpr Row kCalling       { MA::OBSERVE, MA::ACT,     MA::IGNORE,  MA::ACT,     MA::OBSERVE, MA::OBSERVE, MA::OBSERVE, MA::IGNORE,  MA::OBSERVE };
 constexpr Row kHandshake     { MA::ACT,     MA::ACT,     MA::ACT,     MA::OBSERVE, MA::OBSERVE, MA::OBSERVE, MA::ACT,     MA::IGNORE,  MA::OBSERVE };
-constexpr Row kLinked        { MA::OBSERVE, MA::IGNORE,  MA::IGNORE,  MA::ACT,     MA::OBSERVE, MA::OBSERVE, MA::ACT,     MA::ACT,     MA::OBSERVE };
+// F_RESPONSE is OBSERVE, not the conceptual table's literal IGNORE (§8
+// footnote †): FrameReassembler::assign_frame_type_() types the shared F-03/
+// F-04/F-05 grammar F_RESPONSE, so a genuine termination whose leading TO×2
+// was caught arrives typed F_RESPONSE, not a distinct F_TERMINATION (which
+// RX never produces). OBSERVE lets handle_completed_frame_()'s identity
+// check see it; it is never an unconditional ACT by type alone.
+constexpr Row kLinked        { MA::OBSERVE, MA::OBSERVE, MA::IGNORE,  MA::ACT,     MA::OBSERVE, MA::OBSERVE, MA::ACT,     MA::ACT,     MA::OBSERVE };
 constexpr Row kSounding      { MA::OBSERVE, MA::IGNORE,  MA::IGNORE,  MA::OBSERVE, MA::OBSERVE, MA::OBSERVE, MA::OBSERVE, MA::IGNORE,  MA::OBSERVE };
 
 MatrixAction row_lookup(const Row& row, FrameType type) {

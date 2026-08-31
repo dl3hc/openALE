@@ -21,6 +21,14 @@
  * not an independent F-08 detection in those states. LINKED's F_ORDERWIRE
  * ACT is the real in-link exchange (F-08 proper).
  *
+ * LINKED's F_RESPONSE cell is OBSERVE, not the conceptual table's literal
+ * IGNORE (§8 footnote †): F_RESPONSE is the RX type shared by F-03/F-04/F-05
+ * (§6 note), so a genuine peer termination whose leading TO×2 was caught
+ * types F_RESPONSE, never a distinct F_TERMINATION (RX never produces that
+ * type — found during Phase 3b). OBSERVE lets ALEStateMachine::
+ * handle_completed_frame_()'s identity check see it; it is never an
+ * unconditional ACT by type alone — the exact full-address compare decides.
+ *
  * UNTAGGED (incomplete candidate, FR-08 discard) is IGNORE in every state.
  * ALEState::ERROR has no §8 row; it defaults to OBSERVE everywhere (FR-08's
  * fail-safe direction — never act from an undefined state).

@@ -5,6 +5,7 @@
 
 #include "Protocol/Control/ale_state_machine.h"
 #include "Protocol/Control/ale_call_processor.h"
+#include "Protocol/Control/context_matrix.h"
 #include "Protocol/Message/ale_frame_builder.h"
 #include "Protocol/Message/ale_orderwire_protocols.h"
 #include "Protocol/Message/frame_validator.h"
@@ -909,15 +910,21 @@ void ALEStateMachine::handle_handshake() {
 // F-04/F-05 collapse to, §6 note) — never a distinct F_TERMINATION (nothing
 // in assign_frame_type_() ever assigns it; §8's separate F-03/F-04/F-05
 // columns are the catalog's conceptual split, not distinct RX types). So
-// this decision is keyed on `conclusion_is_twas`, not on `f.type`: the exact
-// full-address compare against active_call_to IS the FR-07 disambiguator for
-// this pair, the one case the coarse (state,type) matrix cannot express. A
-// mismatch is exactly what the matrix's LINKED×F_SOUND=OBSERVE cell already
-// says to do — discard toward no state change (FR-08).
+// this decision is keyed on `conclusion_is_twas`, not solely on `f.type`:
+// the exact full-address compare against active_call_to IS the FR-07
+// disambiguator the coarse (state,type) matrix cannot express by itself for
+// this pair (docs/FRAMING_STANDARD.md §8 footnote †, §10 F-05/F-06 note).
+// The matrix still gates entry — context_matrix_lookup(LINKED, f.type)==
+// IGNORE (only F_ACK, which RX never produces) skips straight past, so a
+// frame type LINKED has no business inspecting never reaches the identity
+// check. A non-match (or an IGNOREd type) is exactly what the matrix's
+// LINKED×F_SOUND/F_RESPONSE=OBSERVE cells already say to do — discard
+// toward no state change (FR-08).
 void ALEStateMachine::handle_completed_frame_(const AssembledFrame& f) {
     if (current_state != ALEState::LINKED) return;
     if (linked_terminating_) return;   // already tearing down — old handle_linked() guard
     if (!f.complete || !f.conclusion_is_twas) return;   // F-05 needs a settled TWAS conclusion
+    if (context_matrix_lookup(ALEState::LINKED, f.type) == MatrixAction::IGNORE) return;
 
     if (f.conclusion_identity == active_call_to) {
         SM_TRACE("[TRACE] handle_completed_frame_: peer TWAS termination frame (full address match) → LINK_TERMINATED\n");
