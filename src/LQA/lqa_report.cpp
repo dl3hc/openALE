@@ -28,12 +28,12 @@ std::vector<uint32_t> LQAReportEncoder::pack_reports(
         const std::vector<LQAReport>& reports) {
     if (reports.empty()) return {};
 
-    // Each report is 36 bits; concatenate into a single bit stream then
-    // slice into 21-bit chunks.
+    // Each report is 36 bits; concatenate into one bit stream, slice into
+    // 21-bit chunks.
     const size_t total_bits = reports.size() * 36u;
     const size_t n_words    = (total_bits + 20u) / 21u;  // ceil
 
-    // Work with a flat bit array (MSB first within each report).
+    // Flat bit array (MSB first within each report).
     std::vector<bool> bits;
     bits.reserve(n_words * 21u);
 
@@ -65,7 +65,7 @@ std::vector<uint32_t> LQAReportEncoder::pack_reports(
 
 void LQAReportDecoder::start(uint32_t header_raw) {
     reset();
-    // Extract count from lower 8 bits of header payload.
+    // Count = lower 8 bits of header payload.
     expected_count_ = static_cast<uint8_t>(header_raw & 0xFFu);
     if (expected_count_ == 0) return;
     bits_needed_ = expected_count_ * 36u;
@@ -100,7 +100,7 @@ std::vector<LQAReport> LQAReportDecoder::unpack_reports(
 
 std::vector<LQAReport> LQAReportDecoder::unpack(
         const std::vector<uint32_t>& payloads, uint8_t count) {
-    // Flatten payloads into bit stream (MSB-first within each 21-bit word).
+    // Flatten payloads into bit stream (MSB-first per 21-bit word).
     std::vector<bool> bits;
     bits.reserve(payloads.size() * 21u);
     for (uint32_t p : payloads)

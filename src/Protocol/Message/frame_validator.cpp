@@ -2,9 +2,8 @@
  * \file Protocol/Message/frame_validator.cpp
  * \brief ALE frame-structure validator implementations (moved from Word/ale_word.cpp).
  *
- * These whole-frame conformance checks operate on a std::vector<ALEWord>; they
- * are frame-level protocol validation, not signal/word decoding, so they live
- * in the Protocol/Message layer.
+ * Whole-frame conformance checks on std::vector<ALEWord>: frame-level protocol
+ * validation, not signal/word decoding — hence Protocol/Message layer, not Word.
  */
 
 #include "Protocol/Message/frame_validator.h"
@@ -74,9 +73,8 @@ bool FrameValidator::thru_in_scanning_section_only(const std::vector<ALEWord>& w
 
 bool FrameValidator::thru_rep_alternates(const std::vector<ALEWord>& scanning_words)
 {
-    // Scanning section must consist of complete THRU, REP pairs.
-    // expect_thru starts true; after each complete pair it returns to true.
-    // Returning true requires expect_thru == true (all pairs complete).
+    // Scanning section must be complete THRU,REP pairs; expect_thru toggles
+    // per word and must end true (all pairs complete) for a valid frame.
     bool expect_thru = true;
     for (const auto& w : scanning_words) {
         if (w.type != PreambleType::THRU && w.type != PreambleType::REP) continue;
@@ -108,8 +106,8 @@ bool FrameValidator::group_call_target_count_valid(const std::vector<ALEWord>& s
 
 bool FrameValidator::cmd_not_before_address_section(const std::vector<ALEWord>& words)
 {
-    // AC-WORD-008-3: CMD must only appear after the address section has started.
-    // Any CMD that precedes the first TO/FROM/TIS/TWAS word is a violation.
+    // AC-WORD-008-3: CMD must only appear after the address section has started;
+    // any CMD preceding the first TO/FROM/TIS/TWAS word is a violation.
     bool address_seen = false;
     for (const auto& word : words) {
         switch (word.type) {
@@ -131,8 +129,7 @@ bool FrameValidator::cmd_not_before_address_section(const std::vector<ALEWord>& 
 
 bool FrameValidator::cmd_has_call_and_conclusion(const std::vector<ALEWord>& words)
 {
-    // AC-WORD-008-4: a frame with CMD must have a preceding call and a following
-    // conclusion.  Find the first CMD and check both sides.
+    // AC-WORD-008-4: a frame with CMD must have a preceding call and a following conclusion.
     size_t cmd_idx = words.size();
     for (size_t i = 0; i < words.size(); ++i) {
         if (words[i].type == PreambleType::CMD) { cmd_idx = i; break; }
@@ -175,9 +172,8 @@ bool FrameValidator::message_sections_begin_with_cmd(const std::vector<ALEWord>&
 
 bool FrameValidator::first_cmd_begins_message_section(const std::vector<ALEWord>& words)
 {
-    // AC-WORD-008-5: the first CMD marks the boundary between the Calling Cycle
-    // and the Message section.  Calling-section word types (TO, FROM, TIS, THRU)
-    // must not appear after the first CMD.
+    // AC-WORD-008-5: first CMD is the boundary between Calling Cycle and Message
+    // section; calling-section word types (TO, FROM, TIS, THRU) must not recur after it.
     bool past_first_cmd = false;
     for (const auto& word : words) {
         if (word.type == PreambleType::CMD) {
@@ -211,7 +207,7 @@ bool FrameValidator::rep_not_preceded_by_self_tis_twas(const std::vector<ALEWord
 
 bool FrameValidator::no_consecutive_same_preamble(const std::vector<ALEWord>& words)
 {
-    // AC-WORD-010-2/3: consecutive words must have different preamble types so
+    // AC-WORD-010-2/3: consecutive words must differ in preamble type so
     // receivers can distinguish data changes from repeated transmissions.
     for (size_t i = 1; i < words.size(); ++i) {
         if (words[i].type == words[i-1].type) return false;
@@ -221,10 +217,10 @@ bool FrameValidator::no_consecutive_same_preamble(const std::vector<ALEWord>& wo
 
 bool FrameValidator::rep_not_used_in_multiple_sender_situation(const std::vector<ALEWord>& words)
 {
-    // AC-WORD-010-7: not enforceable at single-frame level.
-    // "Multiple sender situation" is a network-state concept (net call, simultaneous
-    // TX from several stations) that requires cross-station context unavailable here.
-    // Enforcement deferred to ALEStateMachine net-call handling (NET_CALL_STUB).
+    // AC-WORD-010-7: not enforceable at single-frame level. "Multiple sender
+    // situation" is a network-state concept (net call, simultaneous TX from
+    // several stations) needing cross-station context unavailable here;
+    // deferred to ALEStateMachine net-call handling (NET_CALL_STUB).
     (void)words;
     return true;
 }
@@ -241,10 +237,10 @@ bool FrameValidator::data_not_after_data(const std::vector<ALEWord>& words)
 
 bool FrameValidator::address_section_word_count_valid(const std::vector<ALEWord>& words)
 {
-    // AC-FRAME-006-002 / REQ-FRAME-013: Ta max = 5 words = 5 × Trw = 1960 ms (Table A-XII).
+    // AC-FRAME-006-002 / REQ-FRAME-013: Ta max = 5 words = 5×Trw = 1960 ms (Table A-XII).
     // An address sequence begins on an anchor word (TO/TIS/TWAS/FROM/THRU) and continues
-    // through immediately following DATA / REP extension words.  Every such sequence in
-    // the frame must contain at most 5 words (= 15-char address / 3 chars per word).
+    // through immediately-following DATA/REP extension words; every such sequence must be
+    // ≤5 words (15-char address, 3 chars/word).
     constexpr size_t MAX = 5u;
     size_t current = 0;
     for (const auto& w : words) {

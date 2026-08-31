@@ -7,8 +7,7 @@
 namespace ale {
 
 // ── Portable civil calendar <-> days-since-epoch (Howard Hinnant's algorithm) ──
-// Avoids timegm()/_mkgmtime(), neither of which is standard/portable across
-// the Windows and Linux targets this project builds for.
+// Avoids timegm()/_mkgmtime() — neither is portable across this project's Windows/Linux targets.
 
 static int64_t days_from_civil(int y, unsigned m, unsigned d) {
     y -= (m <= 2);
@@ -259,12 +258,11 @@ static std::string zero_pad(long value, int width) {
     return s;
 }
 
-// '*' is the field delimiter (§ "All fields are de-limited by a single *
-// character... no de-limiter at the beginning or end"); free-text fields
-// (OBJECT, COMMENT) must never be allowed to smuggle one in, or the message
-// splits into more than 7 fields and a receiver's parse_gpr() rejects the
-// whole report as structurally invalid. '#' is the spec's own placeholder/
-// spacer character for exactly this situation.
+// '*' is the field delimiter (§ "fields de-limited by a single * char... no
+// de-limiter at beginning or end"); free-text fields (OBJECT, COMMENT) must
+// never smuggle one in, or the message splits into >7 fields and a
+// receiver's parse_gpr() rejects it as structurally invalid. '#' is the
+// spec's placeholder/spacer character for exactly this situation.
 static std::string strip_delimiter(const std::string& s) {
     std::string out = s;
     for (char& c : out) if (c == '*') c = '#';

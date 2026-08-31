@@ -24,9 +24,9 @@ namespace pal {
 static rmode_t        to_hamlib_mode(RadioMode mode);
 static RadioMode      from_hamlib_mode(rmode_t m);
 
-// Maps the GUI log-level integer (0=Off 1=Error 2=Info 3=Debug 4=Trace) to the
-// PAL logger level and forwards it.  Info shows channel/freq transitions +
-// assert_mode readback detail; Debug adds sync detail.
+// Maps the GUI log-level integer (0=Off 1=Error 2=Info 3=Debug 4=Trace) to
+// the PAL logger level and forwards it. Info shows channel/freq transitions
+// + assert_mode readback detail; Debug adds sync detail.
 void hamlib_set_log_level(int level) {
     auto* logger = pal::get_logger();
     if (!logger) return;
@@ -41,14 +41,13 @@ void hamlib_set_log_level(int level) {
     logger->set_level(kMap[idx]);
 }
 
-// sync_from_radio() re-asserts the intended mode only within this window after
-// the last intentional mode command. An SDR front-end (Quisk) applies its
-// band-memory mode restore asynchronously — it can land AFTER assert_mode()'s
-// bounded readback loop has already returned, silently reverting a one-shot
-// channel activation (manual step / net select). The 2 s VFO_GET sync poll is
-// the only later observer, so it must correct the revert. The window keeps
-// that correction scoped to the aftermath of our own command: a mode the
-// operator changes on the rig/SDR minutes later is NOT fought.
+// sync_from_radio() re-asserts the intended mode only within this window
+// after the last mode command. An SDR front-end (Quisk) applies its
+// band-memory mode restore asynchronously, possibly AFTER assert_mode()'s
+// readback loop returned — silently reverting a one-shot channel activation
+// (manual step/net select). The 2 s VFO_GET poll is the only later observer
+// so it must correct the revert; the window scopes that correction to the
+// aftermath of our own command — a mode the operator changes minutes later is NOT fought.
 static constexpr auto MODE_REASSERT_WINDOW = std::chrono::seconds(5);
 
 HamlibRadio::HamlibRadio(const std::string& model,
@@ -71,8 +70,8 @@ bool HamlibRadio::initialize() {
 
     rig_set_debug(RIG_DEBUG_ERR);
 
-    // Stellt sicher, dass alle statisch eingebundenen Backends registriert sind.
-    // Bei monolithischem libhamlib-4.dll meist redundant, schadet aber nicht.
+    // Ensures all statically-linked backends are registered; usually
+    // redundant with a monolithic libhamlib-4.dll but harmless.
     rig_load_all_backends();
 
     rig_ = rig_init(std::stoi(model_));
@@ -86,7 +85,7 @@ bool HamlibRadio::initialize() {
         return false;
     }
 
-    // ready_ bleibt false bis start() rig_open() erfolgreich aufgerufen hat.
+    // ready_ stays false until start() calls rig_open() successfully.
     pal::log_info("HamlibRadio", "rig_init(%s) -> rig_open pending", model_.c_str());
     return true;
 }
@@ -95,8 +94,8 @@ void HamlibRadio::stop_worker_() {
     if (!worker_running_.exchange(false)) return;  // already stopped
     queue_cv_.notify_all();
     if (worker_.joinable()) worker_.join();
-    // Drain any commands that remain in the queue after the worker exited.
-    // Complete pending CmdFlush promises so callers of flush() don't block forever.
+    // Drain remaining queued commands; complete pending CmdFlush promises so
+    // flush() callers don't block forever.
     std::lock_guard<std::mutex> lk(queue_mtx_);
     while (!cmd_queue_.empty()) {
         auto& cmd = cmd_queue_.front();
@@ -128,48 +127,48 @@ bool HamlibRadio::start() {
         return false;
     }
 
-    // Over TCP/netrigctl: shorten the hamlib cache TTL so that rig_get_freq/
+    // Over TCP/netrigctl: shorten the hamlib cache TTL so rig_get_freq/
     // rig_get_mode queries made ≥500 ms after the last set go live to the
-    // rigctld server instead of returning hamlib's internally cached intended
-    // value.  The 2-second VFO_GET poll interval exceeds 500 ms, guaranteeing
-    // a live read on every GUI sync cycle.  Serial backends keep their default
-    // TTL (no override needed — cache churn on serial CAT is undesirable).
+    // rigctld server instead of returning hamlib's cached intended value. The
+    // 2 s VFO_GET poll interval exceeds 500 ms, guaranteeing a live read on
+    // every GUI sync cycle. Serial backends keep default TTL (no override —
+    // cache churn on serial CAT is undesirable).
     if (!is_serial_port()) {
         rig_set_cache_timeout_ms(rig_, HAMLIB_CACHE_ALL, 500);
         // Mode reads must be LIVE (no cache). The deferred background verify
         // (sync_from_radio) reads the mode back to detect an SDR front-end's
-        // (Quisk's) asynchronous band-memory restore and re-assert openALE's
-        // intended mode. A cached read would just echo the value we set and
-        // defeat that detection. (assert_mode() itself no longer reads back —
-        // it is a single force — but sync_from_radio does, so the live TTL still
-        // matters.)
+        // (Quisk's) async band-memory restore and re-assert openALE's
+        // intended mode; a cached read would just echo the value we set and
+        // defeat that detection. (assert_mode() itself no longer reads back
+        // — it's a single force — but sync_from_radio does, so live TTL still matters.)
         rig_set_cache_timeout_ms(rig_, HAMLIB_CACHE_MODE, 0);
 
-        // hamlib's rig_set_mode() begins with an UNINITIALIZED `int locked_mode`,
-        // fills it via rig_get_lock_mode() (return code ignored) and silently
-        // returns RIG_OK WITHOUT transmitting when it is nonzero. Over netrigctl
-        // the \get_lock_mode transaction fails against servers that don't
-        // implement it (Quisk: "RPRT -4"; sscanf on that buffer writes nothing),
-        // so whether ANY mode command reaches the radio depends on stack garbage
-        // (hamlib 4.5 rig.c:2218; still present in upstream master rig.c:2812).
-        // Nulling the backend hook makes rig_get_lock_mode() fall back to
-        // rig->state.lock_mode — a real, zero-initialized field — so the elision
-        // path is deterministically dead and every rig_set_mode() transmits.
-        // Bonus: removes one wire round-trip per mode set (scan path gets faster).
+        // hamlib's rig_set_mode() starts with an UNINITIALIZED `int
+        // locked_mode`, fills it via rig_get_lock_mode() (return code
+        // ignored), and silently returns RIG_OK WITHOUT transmitting when
+        // it's nonzero. Over netrigctl the \get_lock_mode transaction fails
+        // against servers that don't implement it (Quisk: "RPRT -4"; sscanf
+        // on that buffer writes nothing), so whether ANY mode command
+        // reaches the radio depends on stack garbage (hamlib 4.5 rig.c:2218;
+        // still present in upstream master rig.c:2812). Nulling the backend
+        // hook makes rig_get_lock_mode() fall back to rig->state.lock_mode —
+        // a real, zero-initialized field — so the elision path is
+        // deterministically dead and every rig_set_mode() transmits. Bonus:
+        // removes one wire round-trip per mode set (scan path gets faster).
         rig_->caps->get_lock_mode = nullptr;
         rig_->state.lock_mode = 0;
     }
 
     // RF-power capability check (RIG_LEVEL_RFPOWER) — pure capability lookup,
-    // no I/O, safe here before the worker thread launches. Cached for the
-    // lifetime of this connection: set_power()/impl_set_channel() gate on
+    // no I/O, safe before the worker thread launches. Cached for the
+    // connection's lifetime: set_power()/impl_set_channel() gate on
     // power_supported_ (SET) so an unsupported rig is never silently sent a
-    // power command it will ignore (RF-safety requirement — see
+    // power command it ignores (RF-safety — see
     // IRadio::supports_power_control()). power_readback_supported_ (GET) is
-    // checked separately — see its doc comment in the header — because many
-    // real rigs support setting RFPOWER over CAT but never implement reading
-    // it back at all; without this split, impl_sync_from_radio() would poll
-    // a GET the backend never advertised, failing on every ~2 s tick.
+    // checked separately (see header doc) because many real rigs support
+    // setting RFPOWER over CAT but never implement reading it back; without
+    // this split, impl_sync_from_radio() would poll a GET the backend never
+    // advertised, failing on every ~2 s tick.
     power_supported_.store(rig_has_set_level(rig_, RIG_LEVEL_RFPOWER) != 0);
     power_readback_supported_.store(rig_has_get_level(rig_, RIG_LEVEL_RFPOWER) != 0);
     pal::log_info("HamlibRadio", "RF power control: set=%s get=%s",
@@ -184,8 +183,8 @@ bool HamlibRadio::start() {
     pal::log_info("HamlibRadio", "split VFO control: %s",
                   split_supported_.load() ? "supported" : "not supported");
 
-    // Serielle Schnittstelle: DTR/RTS-Leitungszustand nach Open setzen,
-    // dann stabilization_ms warten bevor der erste CAT-Befehl gesendet wird.
+    // Serial: set DTR/RTS line state after open, then wait stabilization_ms
+    // before sending the first CAT command.
     if (is_serial_port()) {
         apply_line_policy();
         if (policy_.stabilization_ms > 0)
@@ -223,8 +222,8 @@ void HamlibRadio::stop() {
 // ── Non-blocking public interface ────────────────────────────────────────────
 //
 // Each method performs an optimistic cache update (visible immediately to
-// get_channel() / is_transmitting() callers on the main thread) and then
-// enqueues the actual Hamlib command for the worker thread.
+// get_channel()/is_transmitting() callers on the main thread), then enqueues
+// the actual Hamlib command for the worker thread.
 
 bool HamlibRadio::set_channel(const Channel& channel) {
     {
@@ -275,8 +274,8 @@ bool HamlibRadio::set_power(int pct) {
 }
 
 bool HamlibRadio::sync_from_radio() {
-    // Fire-and-forget: actual sync happens on the worker thread, cache is updated
-    // there.  All callers (tick_mode_verify, VFO_GET) ignore the return value.
+    // Fire-and-forget: actual sync happens on the worker thread, cache is
+    // updated there. All callers (tick_mode_verify, VFO_GET) ignore the return value.
     enqueue(CmdSync{});
     return false;
 }
@@ -358,12 +357,11 @@ void HamlibRadio::enqueue(RadioCommand cmd) {
     {
         std::lock_guard<std::mutex> lk(queue_mtx_);
         if (is_urgent(cmd)) {
-            // Insert after any already-queued urgent commands but ahead of the
-            // first non-urgent one (CmdSync/CmdSetPower), so a scan hop or PTT
-            // command never sits queued behind the ~400 ms background
-            // sync_from_radio() poll — see enqueue()'s header doc comment.
-            // Preserves relative order among urgent commands (no reordering of
-            // e.g. a PTT-off behind a PTT-on).
+            // Insert after already-queued urgent commands but ahead of the
+            // first non-urgent one (CmdSync/CmdSetPower), so a scan hop or
+            // PTT command never sits queued behind the ~400 ms background
+            // sync_from_radio() poll — see enqueue()'s header doc. Preserves
+            // relative order among urgent commands (no reordering of e.g. a PTT-off behind a PTT-on).
             auto it = std::find_if(cmd_queue_.begin(), cmd_queue_.end(),
                                     [](const RadioCommand& c) { return !is_urgent(c); });
             cmd_queue_.insert(it, std::move(cmd));
@@ -427,32 +425,34 @@ bool HamlibRadio::impl_set_channel(const Channel& ch) {
                   ch.tx_frequency, mname ? mname : "?",
                   freq_changed ? "set" : "skipped");
 
-    // Order: frequency FIRST, mode LAST. Some SDR front-ends (Quisk) restore a
-    // per-band saved mode on a frequency change; sending mode last makes
-    // openALE's channel mode authoritative for the synchronous case. The single
-    // rig_set_mode in assert_mode() is the per-hop force — NO synchronous
-    // readback loop (that loop was 3-8 TCP round-trips per hop and is what made
-    // netrigctl scanning take 500-1000 ms instead of the configured dwell). If
-    // the SDR's band restore lands asynchronously AFTER assert_mode() returned,
-    // the deferred background verify (ALEController::tick_mode_verify while
-    // SCANNING -> sync_from_radio, fixed ~400 ms cadence) corrects it — no
-    // sleeps here, no readback on the hop path. Both mechanisms only work
-    // because start() neutralized hamlib's get_lock_mode probe: otherwise the
-    // mode command may be silently elided inside rig_set_mode() (see start()).
-    // Mode is sent only when it CHANGES (or on the first hop). Over netrigctl each
-    // rig_set_mode is a full TCP round-trip; forcing it every hop made a same-mode scan
-    // 2 round-trips/hop (~2R), which with the settle-anchored dwell doubled the per-channel
-    // period. A same-mode hop is now freq-only (1R). Correctness of the skip: if the rig
-    // drifts off the intended mode (Quisk's ASYNC per-band restore — which the per-hop force
-    // could never catch anyway since it lands after this returns — or an external operator
-    // change), the background verify (ALEController::tick_mode_verify -> sync_from_radio,
-    // ~400 ms while SCANNING) reads the live mode and re-asserts. We still refresh
-    // last_mode_cmd_ on the skip so that verify's 5 s re-assert window stays armed through a
-    // long same-mode scan. VFO = RIG_VFO_CURR; passband = RIG_PASSBAND_NORMAL.
+    // Order: frequency FIRST, mode LAST. Some SDR front-ends (Quisk) restore
+    // a per-band saved mode on a frequency change; sending mode last makes
+    // openALE's channel mode authoritative for the synchronous case. The
+    // single rig_set_mode in assert_mode() is the per-hop force — NO
+    // synchronous readback loop (that loop was 3-8 TCP round-trips per hop
+    // and is what made netrigctl scanning take 500-1000 ms instead of the
+    // configured dwell). If the SDR's band restore lands async AFTER
+    // assert_mode() returned, the deferred background verify
+    // (ALEController::tick_mode_verify while SCANNING -> sync_from_radio,
+    // fixed ~400 ms cadence) corrects it — no sleeps, no readback on the hop
+    // path. Both mechanisms only work because start() neutralized hamlib's
+    // get_lock_mode probe: otherwise the mode command may be silently elided
+    // inside rig_set_mode() (see start()).
+    // Mode is sent only when it CHANGES (or on the first hop). Over
+    // netrigctl each rig_set_mode is a full TCP round-trip; forcing it every
+    // hop made a same-mode scan 2 round-trips/hop (~2R), which with the
+    // settle-anchored dwell doubled the per-channel period. A same-mode hop
+    // is now freq-only (1R). Correctness of the skip: if the rig drifts off
+    // the intended mode (Quisk's ASYNC per-band restore — which the per-hop
+    // force could never catch anyway since it lands after this returns — or
+    // an external operator change), the background verify
+    // (tick_mode_verify -> sync_from_radio, ~400 ms while SCANNING) reads
+    // the live mode and re-asserts. We still refresh last_mode_cmd_ on the
+    // skip so verify's 5 s re-assert window stays armed through a long
+    // same-mode scan. VFO = RIG_VFO_CURR; passband = RIG_PASSBAND_NORMAL.
     // Relay-click workaround: arm SPLIT before retuning so this RX/scan hop
-    // doesn't cycle the PA's band/lowpass-filter relays. impl_set_ptt() drops
-    // SPLIT again right before PTT ON so TX/sounding still switches the
-    // correct filter.
+    // doesn't cycle the PA's band/lowpass-filter relays; impl_set_ptt() drops
+    // SPLIT again right before PTT ON so TX/sounding still switches the correct filter.
     if (policy_.avoid_relay_click && !split_state_) assert_split(true, "arming before RX/scan hop retune");
 
     int freq_ret = RIG_OK;
@@ -481,18 +481,18 @@ bool HamlibRadio::impl_set_channel(const Channel& ch) {
         last_mode_cmd_ = std::chrono::steady_clock::now();  // same mode → skip CAT (1R), keep
     }                                                       // the reassert window armed
 
-    // Power: only sent when it changes (per-channel power_pct, one CAT round-trip
-    // saved on every same-power hop — same reasoning as the mode skip above).
+    // Power: only sent when it changes (per-channel power_pct, one CAT
+    // round-trip saved on every same-power hop — same reasoning as the mode skip above).
     const bool power_changed = power_supported_.load() && ch.power != current_channel_.power;
     const int  prev_power    = current_channel_.power;
     int power_ret = RIG_OK;
     if (power_changed) power_ret = assert_power(ch.power);
 
     // Always track the intended state regardless of return codes. Over TCP,
-    // hamlib can report failure even when rigctld applied the command (e.g. a
-    // slow rig makes the RPRT read time out after rigctld already set it).
+    // hamlib can report failure even when rigctld applied the command (e.g.
+    // a slow rig makes the RPRT read time out after rigctld already set it).
     current_channel_ = ch;
-    // Power is the one exception: unlike freq/mode, a rig that lacks RFPOWER
+    // Power is the one exception: unlike freq/mode, a rig lacking RFPOWER
     // support (or a genuine CAT failure) must NOT be reported as having
     // changed power — that would mislead the operator into thinking a power
     // reduction took effect when the hardware never received it.
@@ -513,8 +513,8 @@ bool HamlibRadio::impl_set_channel(const Channel& ch) {
 bool HamlibRadio::impl_set_frequency(uint32_t hz) {
     if (!rig_ || hz == 0) return false;
 
-    // Store intended mode to re-assert after frequency change.
-    // An SDR front-end (Quisk) restores a per-band saved mode on freq change;
+    // Store intended mode to re-assert after frequency change: an SDR
+    // front-end (Quisk) restores a per-band saved mode on freq change, so
     // openALE's mode must be authoritative — always assert it.
     const RadioMode saved_mode = current_channel_.tx_mode;
 
@@ -577,9 +577,9 @@ bool HamlibRadio::impl_set_power(int pct) {
     const int ret = assert_power(pct);
     // Unlike freq/mode (which track "intended state" through transient
     // netrigctl failures), only trust the new value on RIG_OK: assert_power()
-    // returns a dedicated failure when the rig lacks RFPOWER support at all,
-    // and get_channel()/the GUI must keep reporting the last real value in
-    // that case rather than a power level that was never actually applied.
+    // returns a dedicated failure when the rig lacks RFPOWER support, and
+    // get_channel()/the GUI must keep reporting the last real value rather
+    // than a power level that was never actually applied.
     if (ret == RIG_OK) {
         current_channel_.power = pct;
         std::lock_guard<std::mutex> lk(channel_mtx_);
@@ -601,7 +601,7 @@ void HamlibRadio::impl_set_ptt(bool on) {
     }
 
     // Relay-click workaround: drop SPLIT right before PTT ON so TX/sounding
-    // switches the PA's band/lowpass filter for the actual TX frequency —
+    // switches the PA's band/lowpass filter for the actual TX frequency;
     // impl_set_channel()/impl_set_frequency() re-arm SPLIT on the next RX
     // retune once PTT goes back off (below).
     if (policy_.avoid_relay_click && on && split_state_) assert_split(false, "dropping before PTT ON / TX");
@@ -667,8 +667,9 @@ bool HamlibRadio::impl_sync_from_radio() {
         changed = true;
     }
 
-    // NOTE: Do NOT update current_channel_.tx_mode/rx_mode with the radio's actual mode.
-    // The current_channel_ represents openALE's intended state, not what the radio reports.
+    // NOTE: do NOT update current_channel_.tx_mode/rx_mode with the radio's
+    // actual mode — current_channel_ represents openALE's intended state,
+    // not what the radio reports.
     const RadioMode new_mode = from_hamlib_mode(mode);
     if (new_mode != current_channel_.tx_mode) {
         const char* actual_mname = rig_strrmode(mode);
@@ -677,9 +678,9 @@ bool HamlibRadio::impl_sync_from_radio() {
                        actual_mname ? actual_mname : "?", intend_mname ? intend_mname : "?");
         // Backstop correction: Quisk's per-band saved-mode restore fires
         // ASYNCHRONOUSLY after a frequency change and can land after both
-        // assert_mode()'s readback loop AND the immediate set_mode() re-assertion
-        // in step_channel()/set_vfo_channel() have already returned. Re-send the
-        // intended mode here, but only when:
+        // assert_mode()'s readback loop AND the immediate set_mode()
+        // re-assertion in step_channel()/set_vfo_channel() already returned.
+        // Re-send the intended mode here, but only when:
         //  (a) the radio is still on the intended frequency (`!changed` — an
         //      external retune means the operator took over; don't fight), and
         //  (b) we commanded a mode recently (window) — a mode the operator
@@ -687,7 +688,7 @@ bool HamlibRadio::impl_sync_from_radio() {
         // Single fire-and-forget send, no readback loop: the next sync tick
         // (2 s) re-checks, and the window bounds any pathological ping-pong.
         // last_mode_cmd_ is deliberately NOT re-stamped here, so the window
-        // cannot be extended indefinitely by our own corrections.
+        // can't be extended indefinitely by our own corrections.
         if (!changed &&
             std::chrono::steady_clock::now() - last_mode_cmd_ < MODE_REASSERT_WINDOW) {
             const rmode_t target = to_hamlib_mode(current_channel_.tx_mode);
@@ -702,10 +703,10 @@ bool HamlibRadio::impl_sync_from_radio() {
         }
     }
 
-    // RF power readback — the "reflects the actual/current value" half of power
-    // control. Gated on power_readback_supported_ (GET), NOT power_supported_
-    // (SET) — see the header doc comment: a rig can accept power commands
-    // over CAT while never implementing readback of them, and polling a GET
+    // RF power readback — the "reflects the actual/current value" half of
+    // power control. Gated on power_readback_supported_ (GET), NOT
+    // power_supported_ (SET) — see header doc: a rig can accept power
+    // commands over CAT while never implementing readback, and polling a GET
     // it never advertised would fail on every sync tick.
     if (power_readback_supported_.load()) {
         value_t val{};
@@ -734,24 +735,24 @@ bool HamlibRadio::impl_sync_from_radio() {
     return changed;
 }
 
-// Send the channel mode exactly ONCE — the authoritative per-hop force. This is
-// deliberately a single rig_set_mode with NO synchronous readback loop: over
-// netrigctl each rig_get_mode is a full TCP round-trip (~80-150 ms), so a 3-pass
-// readback/re-send loop added 3-8 round-trips per scan hop and blew the 200 ms
-// dwell up to 500-1000 ms. The readback loop was only ever compensating for two
-// things that are now fixed elsewhere:
+// Send the channel mode exactly ONCE — the authoritative per-hop force.
+// Deliberately a single rig_set_mode with NO synchronous readback loop: over
+// netrigctl each rig_get_mode is a full TCP round-trip (~80-150 ms), so a
+// 3-pass readback/re-send loop added 3-8 round-trips per scan hop and blew
+// the 200 ms dwell up to 500-1000 ms. The readback loop only ever
+// compensated for two things now fixed elsewhere:
 //   - hamlib's get_lock_mode elision bug — neutralized in start() (caps hook
 //     nulled), so the single M reliably reaches the wire;
-//   - Quisk's asynchronous per-band mode restore — lands AFTER any synchronous
-//     readback would have returned anyway, so the loop could not catch it. The
-//     deferred background verify (ALEController::tick_mode_verify while SCANNING
-//     -> sync_from_radio, throttled to a fixed ~400 ms cadence) re-asserts the
-//     intended mode if a revert slipped in, without touching the hop hot path.
+//   - Quisk's async per-band mode restore — lands AFTER any synchronous
+//     readback would have returned anyway, so the loop couldn't catch it.
+//     The deferred background verify (ALEController::tick_mode_verify while
+//     SCANNING -> sync_from_radio, throttled to ~400 ms cadence) re-asserts
+//     the intended mode if a revert slipped in, without touching the hop hot path.
 // Freq-first/mode-last ordering means this single M also overrides Quisk's
 // on-freq-change restore for the synchronous case.
 //
-// Worker-only: last_mode_cmd_ is accessed here without a mutex because it is
-// always read and written exclusively by the worker thread.
+// Worker-only: last_mode_cmd_ is accessed without a mutex — always read and
+// written exclusively by the worker thread.
 int HamlibRadio::assert_mode(RadioMode mode) {
     const rmode_t target = to_hamlib_mode(mode);
     const char* mname = rig_strrmode(target);
@@ -777,15 +778,13 @@ int HamlibRadio::assert_mode(RadioMode mode) {
     return mode_ret;
 }
 
-// Send RF power exactly ONCE — the power analogue of assert_mode() above, same
-// single-fire-and-forget shape (no readback loop; readback is the separate
-// periodic rig_get_level() in impl_sync_from_radio()). Returns -RIG_ENAVAIL
-// without touching the wire if the connected rig doesn't advertise RFPOWER —
-// callers (impl_set_power/impl_set_channel) use that distinct code to avoid
-// ever reporting a power change that was never actually sent (RF-safety: see
-// IRadio::supports_power_control()).
-//
-// Worker-only.
+// Send RF power exactly ONCE — power analogue of assert_mode() above, same
+// fire-and-forget shape (no readback loop; readback is the separate periodic
+// rig_get_level() in impl_sync_from_radio()). Returns -RIG_ENAVAIL without
+// touching the wire if the connected rig doesn't advertise RFPOWER — callers
+// (impl_set_power/impl_set_channel) use that distinct code to avoid ever
+// reporting a power change that was never actually sent (RF-safety: see
+// IRadio::supports_power_control()). Worker-only.
 int HamlibRadio::assert_power(int pct) {
     if (!power_supported_.load()) {
         pal::log_warn("HamlibRadio",
@@ -814,10 +813,9 @@ int HamlibRadio::assert_power(int pct) {
 }
 
 // Puts the rig into (or out of) SPLIT mode — the relay-click workaround (see
-// rig_avoid_relay_click doc in ale_station_config.h). No-op if the connected
-// rig's Hamlib backend doesn't advertise split VFO control. Same
-// fire-and-forget shape as assert_mode()/assert_power(): single call, no
-// readback loop. Worker-only.
+// rig_avoid_relay_click doc in ale_station_config.h). No-op if the rig's
+// Hamlib backend doesn't advertise split VFO control. Same fire-and-forget
+// shape as assert_mode()/assert_power(): single call, no readback loop. Worker-only.
 void HamlibRadio::assert_split(bool on, const char* reason) {
     if (!split_supported_.load()) return;
 
@@ -879,19 +877,19 @@ static pal::RadioMode from_hamlib_mode(rmode_t m) {
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 bool HamlibRadio::is_serial_port() const {
-    // TCP/network Specs beginnen mit "tcp://" oder "rigctld://"
+    // TCP/network specs start with "tcp://" or "rigctld://"
     return port_.rfind("tcp://", 0) != 0 && port_.rfind("rigctld://", 0) != 0;
 }
 
 bool HamlibRadio::configure_port() {
     if (!rig_) return false;
 
-    // ── PTT-Methode ───────────────────────────────────────────────────────
-    // Separat von rigport (CAT-Verbindung): hamlib trägt einen eigenen
-    // pttport in rig_state. impl_set_ptt() braucht keine Änderung —
-    // rig_set_ptt() dispatcht bereits über den hier konfigurierten ptt_type.
-    // Das CAT-seitige MIC/DATA-Sub-Select (policy_.ptt_input) bleibt davon
-    // unberührt: das ist nur relevant, wenn ptt_type == RIG_PTT_RIG (CAT).
+    // ── PTT method ────────────────────────────────────────────────────────
+    // Separate from rigport (CAT connection): hamlib carries its own pttport
+    // in rig_state. impl_set_ptt() needs no change — rig_set_ptt() already
+    // dispatches via the ptt_type configured here. The CAT-side MIC/DATA
+    // sub-select (policy_.ptt_input) is unaffected by this — relevant only
+    // when ptt_type == RIG_PTT_RIG (CAT).
     switch (ptt_policy_.type) {
         case PttPolicy::Type::RTS:  rig_->state.ptt_type = RIG_PTT_SERIAL_RTS; break;
         case PttPolicy::Type::DTR:  rig_->state.ptt_type = RIG_PTT_SERIAL_DTR; break;
@@ -912,9 +910,9 @@ bool HamlibRadio::configure_port() {
             ptt_policy_.type == PttPolicy::Type::NONE ? "NONE" : "CAT");
     }
 
-// ── Netzwerk-Pfad (rigctld via TCP) ──────────────────────────────────
-    // NET_RIGCTL's netrigctl_open() / network_open() erwartet "host:port" —
-    // das tcp:// bzw. rigctld:// Präfix muss vor der Übergabe entfernt werden.
+// ── Network path (rigctld via TCP) ────────────────────────────────────
+    // NET_RIGCTL's netrigctl_open()/network_open() expects "host:port" — the
+    // tcp:// or rigctld:// prefix must be stripped before passing it in.
     if (port_.rfind("tcp://", 0) == 0 || port_.rfind("rigctld://", 0) == 0) {
         rig_->state.rigport.type.rig = RIG_PORT_NETWORK;
         std::string endpoint = port_;
@@ -926,38 +924,38 @@ bool HamlibRadio::configure_port() {
         return true;
     }
 
-    // ── Kein Port (Dummy / USB / Audio-Backends) ─────────────────────────
-    // Empty port: leave the backend's declared port type (the rig_caps default)
-    // intact. Forcing RIG_PORT_SERIAL with no device would make rig_open() fail
-    // for backends that don't use a port at all (Dummy, USB, Audio). The unified
-    // GUI sends no device for "other" port-type models, so this is the path they
-    // take; real serial rigs always carry a non-empty device string.
+    // ── No port (Dummy/USB/Audio backends) ────────────────────────────────
+    // Empty port: leave the backend's declared port type (rig_caps default)
+    // intact. Forcing RIG_PORT_SERIAL with no device would make rig_open()
+    // fail for backends that don't use a port at all (Dummy, USB, Audio).
+    // The unified GUI sends no device for "other" port-type models, so this
+    // is the path they take; real serial rigs always carry a non-empty device string.
     if (port_.empty()) {
         pal::log_info("HamlibRadio", "configure_port: empty port — using backend default port type");
         return true;
     }
 
-    // ── Serieller Pfad ────────────────────────────────────────────────────
+    // ── Serial path ───────────────────────────────────────────────────────
     rig_->state.rigport.type.rig = RIG_PORT_SERIAL;
 
     std::strncpy(rig_->state.rigport.pathname, port_.c_str(), HAMLIB_FILPATHLEN);
     rig_->state.rigport.pathname[HAMLIB_FILPATHLEN - 1] = '\0';
 
-    // Baud-Rate: 0 → Backend-Default (nicht überschreiben)
+    // Baud rate: 0 → backend default (don't override)
     if (baud_ > 0)
         rig_->state.rigport.parm.serial.rate = baud_;
 
-    // Datenformat: 8N1, kein Flow-Control-Handshake.
+    // Data format: 8N1, no flow-control handshake.
     rig_->state.rigport.parm.serial.data_bits = 8;
     rig_->state.rigport.parm.serial.stop_bits = 1;
     rig_->state.rigport.parm.serial.parity    = RIG_PARITY_NONE;
     rig_->state.rigport.parm.serial.handshake = RIG_HANDSHAKE_NONE;
 
-    // DTR/RTS VOR rig_open() als conf-Token setzen (KRITISCH für TS-480 und
-    // ähnliche USB-CAT-Adapter):  hamlib liest diese Werte in rig_open() beim
-    // DCB-Setup und öffnet den Port mit den richtigen Leitungszuständen.
-    // apply_line_policy() setzt sie zusätzlich noch einmal NACH rig_open()
-    // als Absicherung (Windows-HANDLE-Fallback).
+    // Set DTR/RTS as conf tokens BEFORE rig_open() (CRITICAL for TS-480 and
+    // similar USB-CAT adapters): hamlib reads these values during rig_open()'s
+    // DCB setup and opens the port with the correct line states.
+    // apply_line_policy() sets them again AFTER rig_open() as a safety net
+    // (Windows-HANDLE fallback).
     if (policy_.dtr != SerialLinePolicy::State::AUTO) {
         const char* val = (policy_.dtr == SerialLinePolicy::State::ON) ? "ON" : "OFF";
         token_t tok = rig_token_lookup(rig_, "dtr_state");
@@ -982,9 +980,9 @@ bool HamlibRadio::configure_port() {
 }
 
 void HamlibRadio::apply_line_policy() {
-    // ── Versuch 1: Hamlib-Token-API (rig_set_conf nach rig_open) ─────────
-    // Funktioniert für Backends die "dtr_state"/"rts_state" implementieren.
-    // Muss nach rig_open() aufgerufen werden, da der Port sonst noch zu ist.
+    // ── Attempt 1: Hamlib token API (rig_set_conf after rig_open) ─────────
+    // Works for backends that implement "dtr_state"/"rts_state". Must run
+    // after rig_open(), otherwise the port is still closed.
     if (policy_.dtr != SerialLinePolicy::State::AUTO) {
         const char* val = (policy_.dtr == SerialLinePolicy::State::ON) ? "ON" : "OFF";
         token_t tok = rig_token_lookup(rig_, "dtr_state");
@@ -997,14 +995,14 @@ void HamlibRadio::apply_line_policy() {
     }
 
 #ifdef _WIN32
-    // ── Versuch 2 (Windows-Fallback): direkt über hamlibs internen HANDLE ─
-    // hamlib speichert den HANDLE in rigport.fd als (int)(intptr_t)HANDLE.
-    // Wir lesen ihn mit demselben Cast zurück — kein zweites CreateFile nötig,
-    // da hamlib den Port bereits exklusiv geöffnet hat.
+    // ── Attempt 2 (Windows fallback): direct via hamlib's internal HANDLE ─
+    // hamlib stores the HANDLE in rigport.fd as (int)(intptr_t)HANDLE. Read
+    // it back with the same cast — no second CreateFile needed since hamlib
+    // already opened the port exclusively.
     if (policy_.dtr == SerialLinePolicy::State::AUTO &&
         policy_.rts == SerialLinePolicy::State::AUTO) {
         pal::log_debug("HamlibRadio", "DTR/RTS: AUTO (no action)");
-        return;  // Nichts zu tun
+        return;  // nothing to do
     }
 
     const HANDLE h = (HANDLE)(intptr_t)rig_->state.rigport.fd;
@@ -1025,11 +1023,11 @@ void HamlibRadio::apply_line_policy() {
         policy_.rts == SerialLinePolicy::State::OFF ? "OFF" : "AUTO");
 }
 
-// Coarse connection category from a rig's declared port type. This is the
-// single source of truth for whether a model connects over the network or a
-// serial device — both the GUI (field visibility) and the bridge (spec grammar)
-// derive from it. Everything that is neither network nor serial (Dummy, USB,
-// Audio, None, …) collapses to "other" (no connection fields).
+// Coarse connection category from a rig's declared port type. Single source
+// of truth for whether a model connects over network or serial — both the
+// GUI (field visibility) and the bridge (spec grammar) derive from it.
+// Everything neither network nor serial (Dummy, USB, Audio, None, …)
+// collapses to "other" (no connection fields).
 static std::string port_type_str(rig_port_t t) {
     switch (t) {
         case RIG_PORT_NETWORK: return "network";
@@ -1038,11 +1036,12 @@ static std::string port_type_str(rig_port_t t) {
     }
 }
 
-// rig_list_foreach only iterates backends that have been registered, and
-// rig_load_all_backends() is otherwise only called from HamlibRadio::initialize()
-// (i.e. when a rig is actually opened). RIG_LIST / rig_port_type fire from the GUI
-// before any rig is connected, so we must register the backends ourselves — once
-// per process — or the dropdown stays empty on a fresh bridge session.
+// rig_list_foreach only iterates registered backends, and
+// rig_load_all_backends() is otherwise only called from
+// HamlibRadio::initialize() (i.e. when a rig is actually opened). RIG_LIST/
+// rig_port_type fire from the GUI before any rig is connected, so we must
+// register the backends ourselves — once per process — or the dropdown stays
+// empty on a fresh bridge session.
 static void ensure_backends_loaded() {
     static bool backends_loaded = false;
     if (!backends_loaded) {

@@ -32,10 +32,9 @@ bool parse_url(const std::string& url, std::string& scheme, std::string& host,
     return !host.empty();
 }
 
-// Builds the three Ed25519 auth header lines (each "Name: value\r\n") for
-// `auth`, or an empty string if auth.callsign is empty (unauthenticated
-// request — e.g. the public register/probe cases). Shared by both platform
-// backends so the wire format can't drift between them.
+// Builds the 3 Ed25519 auth header lines ("Name: value\r\n") for `auth`;
+// empty string if auth.callsign empty (unauthenticated, e.g. public
+// register/probe). Shared by both backends so wire format can't drift.
 std::string build_relay_headers(const ale::RelayAuth& auth) {
     if (auth.callsign.empty()) return {};
     std::string h;
@@ -79,7 +78,7 @@ namespace ale {
 
 namespace {
 
-// Loads a PEM certificate file and returns its DER bytes (empty on failure).
+// Loads a PEM cert file -> DER bytes (empty on failure).
 std::vector<BYTE> load_pem_cert_der(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return {};
@@ -96,19 +95,18 @@ std::vector<BYTE> load_pem_cert_der(const std::string& path) {
     return der;
 }
 
-// Relaxes WinHTTP's default chain validation just enough to let an unknown
-// (e.g. self-signed) CA through the handshake, so the pin check below gets a
-// chance to run at all — hostname/date/usage checks stay enforced. Only
-// called when the caller supplied a specific cert to pin against; without
-// ca_cert_path, default full system-trust-store validation is untouched.
+// Relaxes WinHTTP chain validation to admit an unknown/self-signed CA so the
+// pin check below can run (hostname/date/usage checks still enforced). Only
+// called when caller pinned a cert; without ca_cert_path, default full
+// system-trust-store validation is untouched.
 void winhttp_allow_unknown_ca(HINTERNET req) {
     DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA;
     WinHttpSetOption(req, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof(flags));
 }
 
-// True iff the certificate the server actually presented on `req` matches
-// ca_cert_path exactly (DER byte-for-byte) — exact-cert pinning rather than
-// chain-of-trust validation, appropriate for a known self-signed LAN cert.
+// True iff the server cert presented on `req` matches ca_cert_path exactly
+// (DER byte-for-byte) — exact-cert pinning, not chain-of-trust; for known
+// self-signed LAN certs.
 bool winhttp_cert_pin_matches(HINTERNET req, const std::string& ca_cert_path) {
     const std::vector<BYTE> pinned_der = load_pem_cert_der(ca_cert_path);
     if (pinned_der.empty()) {
@@ -169,9 +167,8 @@ bool http_post_json(const std::string& url, const RelayAuth& auth,
 
     std::wstring headers = L"Content-Type: application/json\r\n";
     {
-        // Ed25519 auth headers are ASCII (callsign/ISO8601/base64) — this
-        // narrow->wide widening is safe and deliberately not a full UTF-8
-        // conversion.
+        // Ed25519 headers are ASCII (callsign/ISO8601/base64): narrow->wide
+        // widening is safe here, deliberately not a full UTF-8 conversion.
         const std::string relay_headers = build_relay_headers(auth);
         headers += std::wstring(relay_headers.begin(), relay_headers.end());
     }
@@ -280,9 +277,8 @@ bool http_probe(const std::string& url, const RelayAuth& auth,
 } // namespace ale
 
 #else
-// POSIX: raw HTTP/1.0 framing. https:// is wrapped in mbedTLS (already a
-// project dependency — see apps/bridge/tls_support.cpp for the server-side
-// counterpart); http:// stays a plain socket, unchanged.
+// POSIX: raw HTTP/1.0 framing. https:// wrapped in mbedTLS (already a project
+// dep; see apps/bridge/tls_support.cpp for server-side counterpart); http:// plain socket.
 #  include <sys/socket.h>
 #  include <netdb.h>
 #  include <netinet/in.h>
@@ -302,12 +298,11 @@ namespace ale {
 
 namespace {
 
-// mbedTLS BIO callbacks for a blocking POSIX socket — ctx is a pointer to
-// the connection's fd. Blocking send()/read() never produce mbedTLS's
-// WANT_READ/WANT_WRITE sentinels (those are for non-blocking sockets), so
-// these are simple passthroughs; any negative return is treated as a fatal
-// I/O error by mbedTLS regardless of its exact value, so a plain -1 suffices
-// without pulling in mbedtls/net_sockets.h just for its named constants.
+// mbedTLS BIO callbacks for a blocking POSIX socket; ctx = pointer to conn fd.
+// Blocking send()/read() never yield WANT_READ/WANT_WRITE (non-blocking-only
+// sentinels), so these are plain passthroughs. mbedTLS treats any negative
+// return as fatal I/O error regardless of value, so plain -1 suffices
+// (avoids pulling in mbedtls/net_sockets.h just for its named constants).
 int posix_tls_send(void* ctx, const unsigned char* buf, size_t len) {
     const int fd = *static_cast<int*>(ctx);
     const ssize_t n = ::send(fd, buf, len, 0);
@@ -319,10 +314,9 @@ int posix_tls_recv(void* ctx, unsigned char* buf, size_t len) {
     return n < 0 ? -1 : static_cast<int>(n);  // 0 == orderly close, valid for mbedTLS too
 }
 
-// One-shot mbedTLS client session for a single request — this file never
-// keeps connections alive between calls, so a fresh session per call (like
-// the fresh WinHTTP session/connection/request objects in the Windows
-// backend above) is simplest.
+// One-shot mbedTLS client session per request — this file never keeps
+// connections alive between calls (mirrors the fresh WinHTTP session/
+// connection/request objects in the Windows backend above).
 struct PosixTlsSession {
     mbedtls_entropy_context  entropy;
     mbedtls_ctr_drbg_context ctr_drbg;
@@ -348,19 +342,18 @@ struct PosixTlsSession {
     PosixTlsSession& operator=(const PosixTlsSession&) = delete;
 };
 
-// Common Linux system CA bundle locations, tried in order when the caller
-// hasn't pinned a specific certificate. The first one that parses wins.
+// Linux system CA bundle paths, tried in order when caller hasn't pinned a
+// cert. First one that parses wins.
 constexpr const char* kSystemCaBundlePaths[] = {
     "/etc/ssl/certs/ca-certificates.crt",  // Debian/Ubuntu
     "/etc/pki/tls/certs/ca-bundle.crt",    // RHEL/Fedora/CentOS
     "/etc/ssl/cert.pem",                   // Alpine and others
 };
 
-// Loads the trust anchor into `sess` per the ca_cert_path policy (see the
-// file doc comment in http_poster.h): a configured path pins exactly that
-// certificate; otherwise fall back to whichever system CA bundle exists.
-// Returns false only when nothing could be loaded — the handshake still
-// runs with VERIFY_REQUIRED and an empty chain in that case, so it fails
+// Loads trust anchor into `sess` per ca_cert_path policy (see http_poster.h
+// file doc comment): configured path pins that exact cert; else falls back
+// to first system CA bundle found. Returns false only when nothing loaded —
+// handshake still runs with VERIFY_REQUIRED and empty chain, so it fails
 // closed rather than silently trusting an unverified peer.
 bool posix_tls_load_trust(PosixTlsSession& sess, const std::string& ca_cert_path) {
     if (!ca_cert_path.empty()) {
@@ -381,9 +374,9 @@ bool posix_tls_load_trust(PosixTlsSession& sess, const std::string& ca_cert_path
     return false;
 }
 
-// Drives the TLS handshake to completion over an already-connected blocking
-// socket `s`. Returns true iff the handshake completed and the peer's
-// certificate verified against the loaded trust anchor.
+// Drives TLS handshake to completion over an already-connected blocking
+// socket `s`. Returns true iff handshake completed and peer cert verified
+// against the loaded trust anchor.
 bool posix_tls_handshake(PosixTlsSession& sess, int& s, const std::string& host,
                           const std::string& ca_cert_path) {
     const char* pers = "openALE-LocationRelay";
@@ -401,7 +394,7 @@ bool posix_tls_handshake(PosixTlsSession& sess, int& s, const std::string& host,
     mbedtls_ssl_conf_min_tls_version(&sess.conf, MBEDTLS_SSL_VERSION_TLS1_2);
     mbedtls_ssl_conf_authmode(&sess.conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 
-    posix_tls_load_trust(sess, ca_cert_path);  // best-effort; VERIFY_REQUIRED covers a total miss
+    posix_tls_load_trust(sess, ca_cert_path);  // best-effort; VERIFY_REQUIRED covers total miss
     mbedtls_ssl_conf_ca_chain(&sess.conf, &sess.ca_cert, nullptr);
 
     if (mbedtls_ssl_setup(&sess.ssl, &sess.conf) != 0) {
@@ -426,12 +419,11 @@ bool posix_tls_handshake(PosixTlsSession& sess, int& s, const std::string& host,
     return true;
 }
 
-// Sends `req` fully then reads the response until the peer closes the
-// connection (this file's HTTP/1.0 requests are always "Connection: close"),
-// either directly on the socket or through an established TLS session.
-// Returns the raw response bytes; empty on any I/O failure — indistinguish-
-// able from "closed before responding", which callers already treat as "no
-// response".
+// Sends `req` fully, reads response until peer closes connection (this
+// file's HTTP/1.0 requests always "Connection: close"), directly on the
+// socket or via TLS session. Returns raw response bytes; empty on I/O
+// failure — indistinguishable from "closed before responding", which
+// callers already treat as "no response".
 std::string posix_transact(int s, mbedtls_ssl_context* ssl, const std::string& req) {
     std::string raw;
     char buf[4096];

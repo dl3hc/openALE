@@ -1,7 +1,4 @@
-﻿/**
- * @file lqa_analyzer.cpp
- * @brief Implementation of LQA Analyzer
- */
+﻿/** @file lqa_analyzer.cpp — LQA Analyzer implementation */
 
 #include "LQA/lqa_analyzer.h"
 #include <algorithm>
@@ -33,7 +30,7 @@ float LQAAnalyzer::compute_propagation_factor(const LQAEntry& entry) const {
         prop_ctx_.lat_deg, prop_ctx_.lon_deg,
         ms_to_unix_sec(prop_ctx_.now_ms));
     const float elev_diff = std::abs(elev_now - entry.solar_elevation_deg_at_measurement);
-    // 45° difference → zero solar similarity; clamp to [0, 1]
+    // 45° diff → zero solar similarity; clamp to [0,1]
     const float solar_sim = std::max(0.0f, 1.0f - elev_diff / 45.0f);
 
     float sfi_sim = 1.0f;
@@ -42,7 +39,7 @@ float LQAAnalyzer::compute_propagation_factor(const LQAEntry& entry) const {
         sfi_sim = std::max(0.0f, 1.0f - sfi_diff / 100.0f);
     }
 
-    // Floor at 0.5 — a channel with real LQA data is never zeroed by propagation mismatch
+    // Floor 0.5: real LQA data never fully zeroed by propagation mismatch
     return 0.5f + 0.5f * (solar_sim * sfi_sim);
 }
 
@@ -75,21 +72,20 @@ void LQAAnalyzer::process_sounding(const std::string& station,
 
     uint32_t now = (timestamp_ms == 0) ? get_current_time_ms() : timestamp_ms;
 
-    // A.5.4.1.2: write measured SINAD via update_entry_extended so the sinad_db
-    // field is populated for both the channel entry and the station entry.
-    // multipath and noise-floor are not measured during sounding — use defaults.
-    // The empty-station entry is a channel-level aggregate used internally by
-    // is_sounding_due(); it is filtered from get_all_lqa_entries() so the GUI
-    // never receives it and cannot display it as a phantom "(sounding)" row.
+    // A.5.4.1.2: write measured SINAD via update_entry_extended, populating
+    // sinad_db for both the channel and station entries; multipath/noise-floor
+    // aren't measured during sounding, so use defaults. Empty-station entry =
+    // channel-level aggregate used internally by is_sounding_due(); filtered
+    // from get_all_lqa_entries() so GUI never shows a phantom "(sounding)" row.
     database_->update_entry_extended(frequency_hz, "", snr_db, ber, sinad_db,
                                      0.0f, -120.0f, 0, 1, now);
     database_->update_entry_extended(frequency_hz, station, snr_db, ber, sinad_db,
                                      0.0f, -120.0f, 0, 1, now);
 
-    // Record the station's availability for active link establishment based on
-    // the sounding's conclusion word: TIS = available, TWAS = not available.
-    // Only the per-station entry carries the flag (the "" channel aggregate has
-    // no station to be "available"), and it is what the GUI displays.
+    // Records station availability for active link establishment from the
+    // sounding's conclusion word: TIS=available, TWAS=not available. Only the
+    // per-station entry carries the flag ("" channel aggregate has no station
+    // to be "available"); it's what the GUI displays.
     database_->set_sounding_availability(frequency_hz, station, twas_conclusion, now);
 
     // Record propagation context at measurement time for future similarity scoring.
@@ -111,9 +107,8 @@ void LQAAnalyzer::process_sounding_extended(const std::string& station,
     
     uint32_t now = (sample.timestamp_ms == 0) ? get_current_time_ms() : sample.timestamp_ms;
 
-    // A.5.4.1.1: BER = non-unanimous vote count (0–48).
-    // Uncorrectable word → 48; correctable → 48 − unanimous_votes.
-    // Fall back to decode_success heuristic when no vote count is available.
+    // A.5.4.1.1: BER = non-unanimous vote count (0–48); uncorrectable word→48,
+    // correctable→48−unanimous_votes. Falls back to decode_success heuristic when no vote count available.
     float ber;
     if (sample.golay_uncorrectable) {
         ber = 48.0f;
@@ -123,7 +118,6 @@ void LQAAnalyzer::process_sounding_extended(const std::string& station,
         ber = 48.0f;  // no info, assume worst case
     }
 
-    // Update with full metrics
     database_->update_entry_extended(
         frequency_hz,
         station,
@@ -150,7 +144,7 @@ std::shared_ptr<ChannelRank> LQAAnalyzer::get_best_channel_for_station(
         return nullptr;
     }
 
-    // Find entry with highest bilateral channel score (A.5.4.5)
+    // Highest bilateral channel score (A.5.4.5)
     float best_score = -1.0f;
     const LQAEntry* best_entry = nullptr;
     for (const auto& e : entries) {
@@ -183,13 +177,11 @@ std::shared_ptr<ChannelRank> LQAAnalyzer::get_best_channel() const {
         return nullptr;
     }
     
-    // Find entry with highest score
     auto best = std::max_element(all_entries.begin(), all_entries.end(),
         [](const LQAEntry& a, const LQAEntry& b) {
             return a.score < b.score;
         });
-    
-    // Check if score meets minimum threshold
+
     if (best->score < config_.min_acceptable_score) {
         return nullptr;
     }
@@ -309,9 +301,8 @@ std::vector<ChannelRank> LQAAnalyzer::rank_channels_for_station(
                 break;
         }
 
-        // Propagation-aware time-of-day / SFI similarity adjustment.
-        // Applied before the handshake penalty so the penalty still computes
-        // from the already-adjusted score.
+        // Propagation-aware time-of-day/SFI similarity adjustment; applied
+        // before the handshake penalty so the penalty computes off the adjusted score.
         score *= compute_propagation_factor(entry);
 
         // A.5.4.5.1: recently-failed handshake → deprioritise this channel.
@@ -324,7 +315,7 @@ std::vector<ChannelRank> LQAAnalyzer::rank_channels_for_station(
 
         ranks.emplace_back(entry.frequency_hz, score, station,
                            entry.last_activity_ms());
-        // Store quality values for tiebreaking
+        // for sort tiebreaker below
         ranks.back().from_quality = from_q;
         ranks.back().to_quality = to_q;
     }
@@ -382,8 +373,8 @@ std::vector<Channel> LQAAnalyzer::rank_channels_for_call(
 float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry,
                                             float& from_q_out,
                                             float& to_q_out) const {
-    // TO direction: BER-led blend (same weighting as FROM) via to_direction_quality().
-    // Returns -1 when neither bilateral_ber nor bilateral_sinad carries a measurement.
+    // TO direction: BER-led blend (same weighting as FROM), via to_direction_quality();
+    // returns -1 when neither bilateral_ber nor bilateral_sinad has a measurement.
     const float to_quality = to_direction_quality(entry);
     if (to_quality < 0.0f) {
         from_q_out = -1.0f;
@@ -392,8 +383,7 @@ float LQAAnalyzer::bilateral_channel_score(const LQAEntry& entry,
     }
 
     // FROM direction: BER-led combined quality (A.5.4.1.1 primary + A.5.4.1.2
-    // SINAD secondary) via from_direction_quality(). Fall back to composite when
-    // no local measurement exists.
+    // SINAD secondary) via from_direction_quality(); falls back to composite when no local measurement.
     float from_quality = from_direction_quality(entry);
     if (from_quality < 0.0f) from_quality = entry.score;
 
@@ -444,15 +434,15 @@ float LQAAnalyzer::compute_channel_aggregate_score(uint32_t frequency_hz) const 
 
 bool LQAAnalyzer::is_sounding_due(uint32_t frequency_hz) const {
     if (!database_) {
-        return true;  // No data, sounding is needed
+        return true;  // no data, sounding needed
     }
-    
+
     auto entries = database_->get_entries_for_channel(frequency_hz);
     if (entries.empty()) {
-        return true;  // No data, sounding is needed
+        return true;  // no data, sounding needed
     }
-    
-    // Find most recent sounding on this channel
+
+    // most recent sounding on this channel
     uint32_t latest_sounding = 0;
     for (const auto& entry : entries) {
         latest_sounding = std::max(latest_sounding, entry.last_sounding_ms);
@@ -476,14 +466,12 @@ std::vector<uint32_t> LQAAnalyzer::get_channels_needing_sounding() const {
     }
     
     auto all_entries = database_->get_all_entries();
-    
-    // Get unique frequencies
+
     std::set<uint32_t> frequencies;
     for (const auto& entry : all_entries) {
         frequencies.insert(entry.frequency_hz);
     }
-    
-    // Check each frequency
+
     for (uint32_t freq : frequencies) {
         if (is_sounding_due(freq)) {
             channels.push_back(freq);
@@ -502,10 +490,8 @@ void LQAAnalyzer::update() {
         return;
     }
     
-    // Prune stale entries
     database_->prune_stale_entries();
-    
-    // Check for automatic sounding
+
     if (config_.enable_automatic_sounding && sounding_cb_) {
         auto channels = get_channels_needing_sounding();
         for (uint32_t freq : channels) {
@@ -532,7 +518,6 @@ std::string LQAAnalyzer::get_channel_quality_summary(uint32_t frequency_hz) cons
         return "No data";
     }
     
-    // Compute aggregate
     float avg_snr = 0.0f;
     float avg_score = 0.0f;
     for (const auto& e : entries) {

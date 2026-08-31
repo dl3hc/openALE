@@ -24,7 +24,7 @@ void AudioMonitor::arm(bool on)
 
 void AudioMonitor::on_rx_audio(const int16_t* buf, size_t samples)
 {
-    // A real voice link is already streaming this tick's RX audio via
+    // Real voice link already streams this tick's RX audio via
     // VoicePathManager — skip to avoid sending it to the browser twice.
     if (voice_ && voice_->passthrough_active()) return;
     if (on_pcm) on_pcm(buf, samples);

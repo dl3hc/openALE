@@ -34,7 +34,6 @@ bool IcomCiv::start() {
 }
 
 void IcomCiv::stop() {
-    // Nothing to do
 }
 
 bool IcomCiv::set_channel(const Channel& channel) {
@@ -46,7 +45,6 @@ bool IcomCiv::set_channel(const Channel& channel) {
     auto frame = build_frame(CivCommand::SET_FREQ, freq_bcd, 5);
     send_frame(frame);
     
-    // Set mode
     uint8_t mode_data[1] = { static_cast<uint8_t>(radio_mode_to_civ(channel.rx_mode)) };
     frame = build_frame(CivCommand::SET_MODE, mode_data, 1);
     send_frame(frame);
@@ -79,8 +77,7 @@ bool IcomCiv::is_ready() const {
 }
 
 std::string IcomCiv::get_port_config() const {
-    // Icom default: 9600,n,8,1 (newer radios)
-    // Older radios: 1200 or 4800
+    // Icom default 9600,n,8,1 (newer radios); older radios 1200 or 4800
     return "9600,n,8,1";
 }
 
@@ -98,20 +95,17 @@ void IcomCiv::process_response(const uint8_t* data, size_t length) {
         rx_buffer_.push_back(data[i]);
         
         if (data[i] == CIV_EOM) {
-            // Frame complete, parse it
-            if (rx_buffer_.size() >= 6 && 
-                rx_buffer_[0] == CIV_PREAMBLE && 
+            if (rx_buffer_.size() >= 6 &&
+                rx_buffer_[0] == CIV_PREAMBLE &&
                 rx_buffer_[1] == CIV_PREAMBLE) {
-                
-                // Check if it's ACK or NAK
-                // ACK: FE FE E0 radio_addr FB FD
-                // NAK: FE FE E0 radio_addr FA FD
+
+                // ACK: FE FE E0 radio_addr FB FD; NAK: FE FE E0 radio_addr FA FD
                 if (rx_buffer_.size() >= 6) {
                     uint8_t cmd = rx_buffer_[4];
                     if (cmd == CIV_ACK) {
                         if (ack_callback_) ack_callback_();
                     }
-                    // NAK handling would go here
+                    // NAK: not handled
                 }
             }
             rx_buffer_.clear();
@@ -172,8 +166,7 @@ void IcomCiv::send_frame(const std::vector<uint8_t>& frame) {
 }
 
 void IcomCiv::freq_to_bcd(uint32_t freq_hz, uint8_t* bcd, size_t len) {
-    // CI-V uses BCD encoding, LSB first
-    // 14.250.000 Hz -> 00 00 25 14 00 (5 bytes)
+    // BCD, LSB first; e.g. 14.250.000 Hz -> 00 00 25 14 00 (5 bytes)
     for (size_t i = 0; i < len; i++) {
         uint8_t lo = freq_hz % 10;
         freq_hz /= 10;

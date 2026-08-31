@@ -1,12 +1,12 @@
 /**
  * \file Protocol/Control/ale_call_processor.cpp
- * \brief ALE received-word processing — classification, per-state reactions,
- *        LQA update, and frame-assembly driving.  Moved out of ALEStateMachine
- *        so the SM does only states + transitions (+ time evolution / TX).
+ * \brief ALE received-word processing: classification, per-state reactions,
+ *        LQA update, frame-assembly driving. Split out of ALEStateMachine so
+ *        the SM does only states + transitions (+ time evolution / TX).
  *
  * Stateless: all state lives in the SM (MessageAssembler, lqa_metrics_,
- * frame_assembled_cb_, and the receive-related fields).  These static friend
- * methods receive the SM by reference and operate on its state directly.
+ * frame_assembled_cb_, receive-related fields). Static friend methods take
+ * the SM by reference and operate on its state directly.
  */
 
 #include "Protocol/Control/ale_call_processor.h"
@@ -18,12 +18,12 @@
 
 namespace ale {
 
-// Forward protocol-level debug events to the SM's injected trace callback
-// (ALECallProcessor is a friend of ALEStateMachine, so it can reach trace_cb_).
-// Zero overhead when no callback is set.
+// Forwards protocol-level debug events to the SM's injected trace callback
+// (ALECallProcessor is a friend of ALEStateMachine, reaches trace_cb_ directly).
+// Zero overhead when no callback set.
 #define CP_TRACE(sm, msg) do { if ((sm).trace_cb_) (sm).trace_cb_(msg); } while (0)
 
-// ── AllCall address recognition (A.5.5.4.4) — verbatim from ale_word_decoder.cpp ──
+// ── AllCall address recognition (A.5.5.4.4) — from ale_word_decoder.cpp ──
 bool ALECallProcessor::is_allcall_address_(const std::string& addr, const std::string& self)
 {
     if (addr.size() < 2 || addr[0] != '@' || addr[1] == '@') return false;
@@ -31,9 +31,9 @@ bool ALECallProcessor::is_allcall_address_(const std::string& addr, const std::s
     return !self.empty() && self.back() == addr[1];        // selective AllCall
 }
 
-// ── Classification — verbatim logic from ALEWordDecoder::decode() + the
-//    WordDecodeContext assembly that ALEStateMachine::process_received_word did
-//    inline.  Reads the SM's current state/phase + self address.
+// ── Classification — logic from ALEWordDecoder::decode() + the WordDecodeContext
+//    assembly ALEStateMachine::process_received_word used to do inline.
+//    Reads the SM's current state/phase + self address.
 ALECallProcessor::WordRole ALECallProcessor::classify(const ALEStateMachine& sm, const ALEWord& word)
 {
     WordRole r;
@@ -46,8 +46,8 @@ ALECallProcessor::WordRole ALECallProcessor::classify(const ALEStateMachine& sm,
     // Every valid word during LBT = channel busy.
     if (lbt_active) { r.type = WordRole::CHANNEL_BUSY; return r; }
 
-    // Collecting/expected_caller are STATE-SCOPED (see the note that was in the
-    // SM's process_received_word): ORing them across states leaks stale flags.
+    // collecting/expected_caller are STATE-SCOPED (see former note in SM's
+    // process_received_word): ORing across states leaks stale flags.
     const bool collecting =
         (sm.current_state == ALEState::CALLING   && sm.collecting_remote_conclusion)
         || (sm.current_state == ALEState::HANDSHAKE && (sm.hs_conclusion_rcvd || sm.hs_ack_tis_rcvd));
@@ -61,23 +61,21 @@ ALECallProcessor::WordRole ALECallProcessor::classify(const ALEStateMachine& sm,
 
     const std::string self = sm.address_book.get_self_address();
 
-    // AllCall (A.5.5.4.4): TO to the AllCall wildcard.  One-way broadcast — the
-    // receiver does NOT respond; it freezes and collects the conclusion.  Here we
-    // only recognize it (selective pertinence needs self_address) and pass it to
-    // the SM; the SM handles the freeze + conclusion.
+    // AllCall (A.5.5.4.4): TO to AllCall wildcard. One-way broadcast — receiver
+    // does NOT respond, freezes and collects the conclusion. Only recognized here
+    // (selective pertinence needs self_address); SM handles freeze + conclusion.
     if (word.type == PreambleType::TO && is_allcall_address_(addr, self)) {
         r.type = WordRole::ALLCALL;
         r.address = addr;
         return r;
     }
 
-    // TO to us → call to our own address.  Per A.5.2.5.1 the scanning TO word
-    // carries only the first ≤3 chars of the destination; self_address may be
-    // longer → prefix comparison. TWAS is deliberately excluded: per
-    // A.5.2.3.1.3 a TWAS word's address is always the identity of whoever is
-    // currently transmitting, never a callee reference, so matching it
-    // against self is a category error (misclassifies a far station's
-    // conclusion as TO_SELF whenever its callsign prefix-matches ours).
+    // TO to us → call to our own address. Per A.5.2.5.1 scanning TO word carries
+    // only first ≤3 chars of destination; self_address may be longer → prefix
+    // comparison. TWAS deliberately excluded: per A.5.2.3.1.3 a TWAS word's
+    // address is always the identity of whoever is currently transmitting, never
+    // a callee reference — matching it against self would misclassify a far
+    // station's conclusion as TO_SELF whenever its callsign prefix-matches ours.
     if (word.type == PreambleType::TO
         && !addr.empty()
         && self.size() >= addr.size()
@@ -89,9 +87,8 @@ ALECallProcessor::WordRole ALECallProcessor::classify(const ALEStateMachine& sm,
 
     // TIS → conclusion begin; check expected_caller if set.
     if (word.type == PreambleType::TIS) {
-        // expected_caller locks the called station onto the calling peer during its
-        // HANDSHAKE only; during CALLING a stale caller_address must not gate the
-        // responder's TIS.
+        // expected_caller locks the called station onto the calling peer during
+        // HANDSHAKE only; during CALLING a stale caller_address must not gate TIS.
         const std::string expected = (sm.current_state == ALEState::HANDSHAKE)
             ? sm.caller_address.substr(0, 3) : std::string();
         if (expected.empty() || addr == expected) {
@@ -159,17 +156,17 @@ void ALECallProcessor::react_scanning_(ALEStateMachine& sm, const WordRole& r)
 {
     detect_incoming_call_(sm, r);
     if (sm.current_state != ALEState::SCANNING) return;   // transitioned to HANDSHAKE
-    // NOTE: AllCall reception is NOT a scanning sub-state.  An AllCall word triggers
+    // NOTE: AllCall reception is NOT a scanning sub-state. AllCall word triggers
     // CALL_DETECTED above → SCANNING exits to HANDSHAKE (allcall_silent_), which
-    // receives the broadcast and its TIS/TWAS conclusion and returns to SCANNING.
-    // The scanner therefore has zero AllCall coupling — any non-call word below is
-    // just foreign traffic handled by the generic A.5.3.1 dwell freeze.
+    // receives the broadcast + TIS/TWAS conclusion and returns to SCANNING. So the
+    // scanner has zero AllCall coupling; any non-call word below is just foreign
+    // traffic handled by the generic A.5.3.1 dwell freeze.
 
-    // A.5.3.1: any valid word on this channel means ALE traffic is in progress.
-    // Freeze the dwell timer so the scanner stays long enough to receive the full
-    // frame (including TIS/TWAS conclusion and DATA address extension words)
-    // before deciding the traffic is not for us.  scan_pause_settle_ms_ is refreshed
-    // on every word; handle_scanning() hops once Tdrw silence elapses.
+    // A.5.3.1: any valid word on channel means ALE traffic in progress. Freeze the
+    // dwell timer so scanner stays long enough to receive the full frame (incl.
+    // TIS/TWAS conclusion and DATA address extension words) before deciding traffic
+    // isn't for us. scan_pause_settle_ms_ refreshed every word; handle_scanning()
+    // hops once Tdrw silence elapses.
     sm.scanning_phase_    = ScanningPhase::SCAN_PAUSE;
     sm.scan_pause_settle_ms_ = sm.current_time_ms;
 }
@@ -194,8 +191,8 @@ void ALECallProcessor::react_calling_(ALEStateMachine& sm, const WordRole& r)
         }
         break;
     case WordRole::DATA_EXTENSION:
-        // Only extend once the responder's TIS has started the conclusion;
-        // otherwise a stray DATA before TIS would pollute to_address.
+        // Only extend once responder's TIS started the conclusion, else a stray
+        // DATA before TIS would pollute to_address.
         if (sm.collecting_remote_conclusion) {
             sm.to_address      += r.address;
             sm.active_call_from = sm.to_address;
@@ -236,19 +233,18 @@ void ALECallProcessor::react_handshake_(ALEStateMachine& sm, const WordRole& r, 
             sm.hs_tlww_start_ms = sm.current_time_ms;
             break;
         case WordRole::TWAS_WORD:
-            // TWAS concluding the calling cycle (A.5.5.3.2) — for AllCall/
-            // wildcard addresses this is the spec-normal "no response"
-            // outcome (A.5.5.4.4: "Calls to wildcard addresses that conclude
-            // with TWAS shall be processed identically to the AllCall
-            // protocol"), not an error. Capture identity exactly like
-            // TIS_CALLER so a multi-word address settles via DATA_EXTENSION
-            // (classify()'s `collecting` gate keys off hs_conclusion_rcvd
-            // regardless of which branch set it); handle_handshake()'s
-            // settle timer then aborts via hs_conclusion_is_twas_ rather than
-            // linking — but only after caller_address is fully known, so any
-            // AMD already reassembled by rx_accumulate_call_amd() (e.g. an
-            // ALE-GPR position report) is correctly attributed and dispatched
-            // instead of silently dropped by on_sm_state_change()'s
+            // TWAS concluding the calling cycle (A.5.5.3.2): for AllCall/wildcard
+            // addresses this is the spec-normal "no response" outcome (A.5.5.4.4:
+            // "Calls to wildcard addresses that conclude with TWAS shall be
+            // processed identically to the AllCall protocol"), not an error.
+            // Capture identity exactly like TIS_CALLER so a multi-word address
+            // settles via DATA_EXTENSION (classify()'s `collecting` gate keys off
+            // hs_conclusion_rcvd regardless of which branch set it);
+            // handle_handshake()'s settle timer then aborts via
+            // hs_conclusion_is_twas_ rather than linking — but only after
+            // caller_address is fully known, so any AMD already reassembled by
+            // rx_accumulate_call_amd() (e.g. ALE-GPR position report) is correctly
+            // attributed/dispatched instead of dropped by on_sm_state_change()'s
             // caller.empty() guard.
             if (!sm.hs_conclusion_rcvd) {
                 sm.caller_address         = r.address;
@@ -272,9 +268,9 @@ void ALECallProcessor::react_handshake_(ALEStateMachine& sm, const WordRole& r, 
     } else if (sm.handshake_phase == HandshakePhase::WAIT_ACK) {
         switch (r.type) {
         case WordRole::TO_SELF:
-            // "TO JOE" — start of SAM's ACK frame (A.5.5.3.4).  Records the arrival
-            // so handle_handshake() can switch from the narrow Twr start-window to
-            // the frame-limited conclusion wait.
+            // "TO JOE" — start of SAM's ACK frame (A.5.5.3.4). Records arrival so
+            // handle_handshake() can switch from narrow Twr start-window to
+            // frame-limited conclusion wait.
             if (sm.hs_ack_to_ms == 0)
                 sm.hs_ack_to_ms = sm.current_time_ms;
             break;
@@ -285,25 +281,24 @@ void ALECallProcessor::react_handshake_(ALEStateMachine& sm, const WordRole& r, 
             }
             break;
         case WordRole::DATA_EXTENSION:
-            // A multi-word remote address puts DATA[ext] words BEFORE TO[addr]
-            // in the ACK frame (A.5.2.4.1 transmission order).  The DATA word
-            // arrives within the Twr narrow window; TO_SELF arrives ~Trw later,
-            // often past the 2091 ms absolute limit.  Arm hs_ack_to_ms here so
-            // handle_handshake() switches from the absolute-start window to the
-            // silence-based frame-limit check (sub-phase 2), which completes
-            // correctly once TIS arrives.  A spurious DATA during WAIT_ACK is
-            // harmless: sub-phase 2 aborts on 5×Trw silence if TIS never comes.
+            // Multi-word remote address puts DATA[ext] words BEFORE TO[addr] in the
+            // ACK frame (A.5.2.4.1 order). DATA arrives within the Twr narrow
+            // window; TO_SELF arrives ~Trw later, often past the 2091ms absolute
+            // limit. Arm hs_ack_to_ms here so handle_handshake() switches from the
+            // absolute-start window to the silence-based frame-limit check
+            // (sub-phase 2), completing correctly once TIS arrives. Spurious DATA
+            // during WAIT_ACK is harmless: sub-phase 2 aborts on 5×Trw silence if
+            // TIS never comes.
             if (sm.hs_ack_to_ms == 0)
                 sm.hs_ack_to_ms = sm.current_time_ms;
             sm.hs_tlww_start_ms = sm.current_time_ms;
             break;
         case WordRole::TWAS_WORD:
-            // TWAS instead of TIS as frame 3's conclusion, Ion2G-style: the
-            // caller sent an AMD (already delivered to us from the calling
-            // frame via rx_accumulate_call_amd()) and declined to link
-            // (link_after_send=false on their side). This is a graceful
-            // outcome, not a failure — a plain call always concludes frame 3
-            // with TIS, so caller-side TWAS-as-frame-3 only ever happens here.
+            // TWAS instead of TIS as frame 3's conclusion, Ion2G-style: caller sent
+            // an AMD (already delivered via rx_accumulate_call_amd()) and declined
+            // to link (link_after_send=false on their side). Graceful outcome, not
+            // a failure — a plain call always concludes frame 3 with TIS, so
+            // caller-side TWAS-as-frame-3 only happens here.
             if (sm.operator_callback)
                 sm.operator_callback(OperatorEvent::AMD_RECEIVED_NO_LINK);
             sm.process_event(ALEEvent::AMD_DECLINED_LINK);
@@ -314,11 +309,11 @@ void ALECallProcessor::react_handshake_(ALEStateMachine& sm, const WordRole& r, 
     }
 }
 
-// ── LINKED-state AMD delivery confirmation RX detection ──────────────────────
-// Mirrors react_calling_ (LISTENING) for the sender waiting on the peer Response,
-// and react_handshake_ WAIT_ACK for the receiver waiting on the sender ACK. Only
-// sets timing flags the SM's handle_linked_amd_* drivers consume; never consumes
-// or blocks the word (rx_accumulate_linked_amd etc. still see it).
+// ── LINKED-state AMD delivery confirmation RX detection ──────────────────
+// Mirrors react_calling_ (LISTENING) for sender awaiting peer Response, and
+// react_handshake_ WAIT_ACK for receiver awaiting sender ACK. Only sets timing
+// flags the SM's handle_linked_amd_* drivers consume; never consumes/blocks the
+// word (rx_accumulate_linked_amd etc. still see it).
 void ALECallProcessor::react_linked_amd_confirm_(ALEStateMachine& sm, const WordRole& r)
 {
     switch (sm.linked_amd_phase_) {
@@ -390,13 +385,12 @@ void ALECallProcessor::update_lqa(ALEStateMachine& sm, const LinkQuality& lq)
 // ── process_received_word — verbatim flow from ALEStateMachine::process_received_word() ──
 void ALECallProcessor::process_received_word(ALEStateMachine& sm, const ALEWord& word)
 {
-    // Diagnostic (2026-08-07): unconditional per-word trace, valid AND invalid,
-    // BEFORE any classification/state mutation — the only point that answers
-    // "did the demodulator hand the SM this word at all, and was it valid" for
-    // the still-open truncated multi-word-address investigation (a real-radio
-    // conclusion's DATA extension word is consistently absent from the RX log
-    // that only ever shows valid, classified words). Silent by default
-    // (LogLevel::TRACE, filtered unless the logger's min level is lowered).
+    // Diagnostic (2026-08-07): unconditional per-word trace (valid AND invalid),
+    // before any classification/state mutation — only point that answers "did the
+    // demodulator hand the SM this word, and was it valid" for the open truncated
+    // multi-word-address investigation (real-radio conclusion's DATA extension
+    // word consistently absent from RX log, which only shows valid classified
+    // words). Silent by default (LogLevel::TRACE, filtered unless min level lowered).
     if (word.valid) {
         pal::log_trace("RXWord", "%s [%s] fec_errors=%u sinad=%.1f votes=%u",
                         WordParser::word_type_name(word.type), word.address,
@@ -432,14 +426,13 @@ void ALECallProcessor::process_received_word(ALEStateMachine& sm, const ALEWord&
         case ALEState::HANDSHAKE: react_handshake_(sm, r, word); break;
         case ALEState::LINKED:
             // T-03: TWAS termination from peer → end link immediately (A.5.5.3.5).
-            // r.address is the identity of whoever is transmitting the TWAS
-            // (see classify()'s TO_SELF comment) — it is NOT necessarily our
-            // linked peer. A third station sounding (or terminating some
-            // other link) on the same channel also emits TWAS; without this
-            // check, that foreign TWAS would tear down *our* link too.  Only
-            // a TWAS whose address matches our linked peer counts as a
-            // termination. Prefix-compare since a single word's address may
-            // be truncated to ≤3 chars (multi-word addresses settle via
+            // r.address is whoever is transmitting the TWAS (see classify()'s
+            // TO_SELF comment), NOT necessarily our linked peer — a third station
+            // sounding/terminating another link on the same channel also emits
+            // TWAS; without this check that foreign TWAS would tear down *our*
+            // link too. Only a TWAS matching our linked peer's address counts as
+            // termination. Prefix-compare since a single word's address may be
+            // truncated to ≤3 chars (multi-word addresses settle via
             // DATA_EXTENSION, which this early word-by-word check predates).
             if (r.type == WordRole::TWAS_WORD
                 && !r.address.empty()

@@ -19,18 +19,18 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
     //   "hamlib:2:tcp://<host>:<port>[,ptt=normal|mic|data][,split=0|1][,ptt_type=cat|rts|dtr|none][,ptt_port=<device>]"
     //
     // ptt_type/ptt_port select the PTT *mechanism* (hamlib ptt_type_t: CAT vs
-    // a serial RTS/DTR line, possibly on a second device) — distinct from the
-    // pre-existing ptt=normal|mic|data, which only selects the CAT-side audio
-    // input (Mic/Data) used when ptt_type=cat. Default ptt_type=cat/ptt_port=""
-    // (empty = share the CAT port's device) reproduces today's behavior exactly.
+    // a serial RTS/DTR line, possibly on a 2nd device) — distinct from
+    // ptt=normal|mic|data, which only selects the CAT-side audio input
+    // (Mic/Data) used when ptt_type=cat. Default ptt_type=cat/ptt_port=""
+    // (empty = share CAT port's device) reproduces prior behavior exactly.
     //
     // ptt=mic|data selects the CAT PTT audio input (Kenwood TX0/TX1 etc.) —
     // only rigs with a Mic/Data distinction in Hamlib honor it; others fall
-    // back to the plain PTT-ON command. Default "normal" = plain PTT ON.
+    // back to plain PTT-ON. Default "normal" = plain PTT ON.
     //
     // split=1 enables the relay-click workaround (SerialLinePolicy::avoid_relay_click).
     //
-    // Beispiele:
+    // Examples:
     //   "hamlib:3021:COM3,9600,dtr=on,rts=on,stab=200,ptt=data,split=1"
     //   "hamlib:3021:COM3,9600"
     //   "hamlib:2:tcp://127.0.0.1:4532,ptt=data,split=1"
@@ -42,9 +42,8 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
         const std::string model        = rest.substr(0, colon);
         const std::string port_and_rest = rest.substr(colon + 1);
 
-        // TCP-Specs ("tcp://…") können ebenfalls Komma-Params tragen (z. B.
-        // ptt=data); dtr/rts/stab werden dabei von apply_line_policy() über
-        // is_serial_port() ignoriert.
+        // TCP specs ("tcp://…") can also carry comma-params (e.g. ptt=data);
+        // dtr/rts/stab are ignored by apply_line_policy() via is_serial_port().
         const auto first_comma = port_and_rest.find(',');
         const std::string port = first_comma == std::string::npos
                                   ? port_and_rest
@@ -55,14 +54,14 @@ std::unique_ptr<IRadio> create_radio(const std::string& config)
         PttPolicy        ptt_policy;  // Default: type=CAT, port=""
 
         if (first_comma != std::string::npos) {
-            // Segmente hinter dem Port splitten: "9600,dtr=on,rts=on,stab=200"
+            // Split segments after the port: "9600,dtr=on,rts=on,stab=200"
             std::istringstream ss(port_and_rest.substr(first_comma + 1));
             std::string seg;
             bool first_seg = true;
             while (std::getline(ss, seg, ',')) {
                 const auto eq = seg.find('=');
                 if (eq == std::string::npos) {
-                    // Kein '=' → numerische Baud-Rate (erstes Segment)
+                    // No '=' → numeric baud rate (first segment)
                     if (first_seg) {
                         try { baud = std::stoi(seg); } catch (...) { baud = 0; }
                     }

@@ -12,8 +12,8 @@ static constexpr double M_PI = 3.14159265358979323846;
 #endif
 
 namespace {
-// In-place Cooley-Tukey radix-2 DIT FFT.  N must be a power of 2.
-// re[]/im[] are overwritten with the complex spectrum.
+// In-place Cooley-Tukey radix-2 DIT FFT. N must be a power of 2; re[]/im[]
+// are overwritten with the complex spectrum.
 void fft_inplace(float* re, float* im, size_t N)
 {
     // Bit-reversal permutation
@@ -56,10 +56,11 @@ SpectrumAnalyser::SpectrumAnalyser()
 {
     std::fill(ring_.begin(), ring_.end(), int16_t(0));
 
-    // Blackman-Harris 4-term window — -92 dB sidelobe suppression vs Hann's -31 dB.
-    // With ALE tones 40-60 dB above the noise floor, Hann sidelobes (-31 dB) sit
-    // 9-29 dB above the noise and make each tone look broad.  Blackman-Harris keeps
-    // sidelobes below the noise floor at all realistic HF SNR values.
+    // Blackman-Harris 4-term window: -92 dB sidelobe suppression vs Hann's
+    // -31 dB. ALE tones sit 40-60 dB above the noise floor; Hann sidelobes
+    // (-31 dB) would sit 9-29 dB above noise, broadening each tone.
+    // Blackman-Harris keeps sidelobes below the noise floor at all realistic
+    // HF SNR values.
     constexpr float bh_a0 = 0.35875f, bh_a1 = 0.48829f,
                     bh_a2 = 0.14128f, bh_a3 = 0.01168f;
     for (size_t k = 0; k < SPEC_FFT_N; ++k) {
@@ -73,10 +74,10 @@ SpectrumAnalyser::SpectrumAnalyser()
 
 void SpectrumAnalyser::feed(int16_t sample)
 {
-    // Always advance the ring so it holds the last SPEC_FFT_N samples regardless
-    // of whether a callback is registered (matches the pre-extraction invariant
-    // where the demodulator's ring was always full; a callback set later then has
-    // history immediately instead of waiting one window to fill).
+    // Always advance the ring to hold the last SPEC_FFT_N samples regardless
+    // of callback registration (matches pre-extraction invariant: demodulator's
+    // ring was always full) — a callback set later gets history immediately
+    // instead of waiting one window to fill.
     ring_[count_ % SPEC_FFT_N] = sample;
     ++count_;
 
@@ -89,12 +90,12 @@ void SpectrumAnalyser::feed(int16_t sample)
 
 void SpectrumAnalyser::compute_()
 {
-    // Fill real/imag working arrays from the last SPEC_FFT_N samples of the ring
-    // (chronological order: oldest first), scaled to [-1, +1] and weighted by the
-    // precomputed Blackman-Harris window.  Member arrays (not stack) avoid placing
+    // Fill real/imag arrays from the last SPEC_FFT_N ring samples
+    // (chronological, oldest first), scaled to [-1, +1] and weighted by the
+    // precomputed Blackman-Harris window. Member arrays (not stack) avoid
     // ~80 KB on the audio-thread stack.
     constexpr float kScale = 1.0f / 32768.0f;
-    // The next write position (= oldest sample, since the buffer is full).
+    // Next write position = oldest sample (buffer is full).
     const size_t start = count_ % SPEC_FFT_N;
     for (size_t k = 0; k < SPEC_FFT_N; ++k) {
         spec_re_[k] = ring_[(start + k) % SPEC_FFT_N] * kScale * spec_window_[k];
@@ -103,7 +104,7 @@ void SpectrumAnalyser::compute_()
 
     fft_inplace(spec_re_.data(), spec_im_.data(), SPEC_FFT_N);
 
-    // One-sided magnitude spectrum (bins 0 … SPEC_FFT_N/2), normalised by N so
+    // One-sided magnitude spectrum (bins 0…SPEC_FFT_N/2), normalised by N so
     // magnitude is independent of FFT size.
     constexpr size_t kBins = SPEC_FFT_N / 2 + 1;
     const float kNorm = 1.0f / static_cast<float>(SPEC_FFT_N);
@@ -113,9 +114,9 @@ void SpectrumAnalyser::compute_()
     spec_bins_[SPEC_FFT_N / 2] = std::sqrt(spec_re_[SPEC_FFT_N/2] * spec_re_[SPEC_FFT_N/2]
                                            + spec_im_[SPEC_FFT_N/2] * spec_im_[SPEC_FFT_N/2]) * kNorm;
 
-    // Power dBFS (ref = full-scale Hann-windowed sine ≈ −6 dBFS).  Spreads HF
-    // dynamic range (~80 dB) across the display instead of compressing everything
-    // into the top few percent of a linear scale.
+    // Power dBFS (ref = full-scale Hann-windowed sine ≈ −6 dBFS): spreads HF
+    // dynamic range (~80 dB) across the display instead of compressing into
+    // the top few percent of a linear scale.
     for (size_t k = 0; k < kBins; ++k)
         spec_bins_[k] = 10.0f * std::log10(spec_bins_[k] * spec_bins_[k] + 1e-12f);
 

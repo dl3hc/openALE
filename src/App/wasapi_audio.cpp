@@ -4,10 +4,10 @@
  *
  *   Architecture (pull model)
  *   ──────────────────────────
- *   A dedicated high-priority audio thread waits on three Win32 events:
- *     render_event_  — WASAPI signals: render buffer has space for more data
- *     capture_event_ — WASAPI signals: capture buffer has new data
- *     stop_event_    — close() signals: audio thread must exit
+ *   High-priority audio thread waits on 3 Win32 events:
+ *     render_event_  — WASAPI: render buffer has space
+ *     capture_event_ — WASAPI: capture buffer has new data
+ *     stop_event_    — close(): audio thread must exit
  *
  *   TX data flow:
  *     audio thread → sym_pull_(out_49) → [modem's pull_symbol_frame()]
@@ -21,10 +21,10 @@
  *
  *   Frame completion:
  *     Audio thread increments frames_rendered_ (atomic) when a symbol frame
- *     has actually been PLAYED OUT on air (DAC consumed it), tracked via
- *     played = total_written_ - padding against per-word write-end targets.
- *     Main thread tick() fires armed callbacks from frame_notify_queue_
- *     when frames_rendered_ reaches each callback's target.
+ *     is actually PLAYED OUT on air (DAC consumed it): played = total_written_
+ *     - padding, checked against per-word write-end targets. Main thread
+ *     tick() fires armed callbacks from frame_notify_queue_ when
+ *     frames_rendered_ reaches each callback's target.
  */
 
 #include "PAL/audio_driver.h"
@@ -62,7 +62,7 @@ namespace ale {
 
 static constexpr uint32_t MODEM_RATE = 8000;
 
-// WASAPI shared-mode buffer duration: 200 ms of headroom.
+// WASAPI shared-mode buffer: 200 ms headroom.
 static constexpr REFERENCE_TIME REQ_BUFFER_HNS = 2000000;  // 200 ms in 100-ns units
 
 // ── UTF-16 → UTF-8 ────────────────────────────────────────────────────────────
@@ -93,11 +93,10 @@ static std::string friendly_name(IMMDevice* dev)
 }
 
 // ── Disambiguated display names for a device collection ───────────────────────
-// Duplicate friendly-names (e.g. two identical USB codecs) are made unique by
-// appending " (n)" to each duplicate occurrence in enumeration order; unique
-// names are left bare for backward compatibility. The SAME logic feeds both
-// list_flow() (what the GUI shows and sends back) and resolve_device() (what
-// open() matches), so a selected name always maps to exactly one device.
+// Duplicate friendly-names (e.g. two identical USB codecs) get " (n)" appended
+// in enumeration order; unique names stay bare (back-compat). Same logic feeds
+// both list_flow() (GUI display) and resolve_device() (open() matching), so a
+// selected name always maps to exactly one device.
 static std::vector<std::string> annotated_device_names(IMMDeviceCollection* coll)
 {
     UINT count = 0;
@@ -169,18 +168,18 @@ private:
     HANDLE               stop_event_    = nullptr;
 
     void audio_loop();
-    void service_render();    // called from audio thread on render event
-    void service_capture();   // called from audio thread on capture event
+    void service_render();    // audio thread, on render_event_
+    void service_capture();   // audio thread, on capture_event_
 
     // ── Symbol source (set from main thread, read from audio thread) ──────
     // Protected by sym_src_mtx_: set_symbol_source() may be called after
-    // open() while the audio thread is already running.
+    // open(), while audio thread is already running.
     std::mutex                       sym_src_mtx_;
     std::function<bool(uint8_t*)>    sym_pull_;
     // ── Raw-PCM TX source (transparent-voice passthrough) ─────────────────
-    // Same mutex as sym_pull_. When non-null, the render thread pulls 8 kHz
-    // mono PCM from pcm_pull_ instead of symbols from sym_pull_ — see
-    // service_render(). Mutually exclusive with sym_pull_ in practice.
+    // Same mutex as sym_pull_. If non-null, render thread pulls 8 kHz mono
+    // PCM from pcm_pull_ instead of symbols from sym_pull_ (service_render()).
+    // Mutually exclusive with sym_pull_ in practice.
     std::function<size_t(int16_t*, size_t)> pcm_pull_;
 
     // ── Audio-thread-only TX state (no locking needed) ────────────────────
@@ -199,24 +198,23 @@ private:
     std::unique_ptr<Resampler> rx_resampler_;      // capture rate → 8 kHz (audio thread only)
 
     // ── Frame completion tracking ─────────────────────────────────────────
-    // frames_rendered_: number of symbol frames whose device-rate samples
-    //   have actually been PLAYED OUT on air (consumed by the DAC), not merely
-    //   written into the WASAPI render buffer.  Completion fires at playout
-    //   time so the SM's rx_enabled_callback(true) / PTT release aligns with
-    //   the true on-air end of the burst — otherwise PTT drops while up to
-    //   ~buffer-depth of audio is still queued and the on-air TX is truncated.
+    // frames_rendered_: count of symbol frames actually PLAYED OUT on air
+    //   (DAC-consumed), not merely written to the WASAPI render buffer.
+    //   Completion fires at playout time so SM's rx_enabled_callback(true) /
+    //   PTT release aligns with the true on-air burst end — otherwise PTT
+    //   drops while ~buffer-depth of audio is still queued, truncating TX.
     //   Written by audio thread; read by main thread via tick().
     std::atomic<uint64_t>  frames_rendered_{0};
 
     // Playout-time completion bookkeeping (audio-thread-only):
-    //   total_written_        — cumulative device frames handed to WASAPI
-    //                           (real audio + silence), monotonic.
-    //   word_play_targets_    — write-end position (in total_written_) of each
-    //                           word still awaiting its playout completion.
-    // A word is fully on air when the DAC has consumed up to its write-end:
+    //   total_written_     — cumulative device frames handed to WASAPI
+    //                        (audio + silence), monotonic.
+    //   word_play_targets_ — write-end position (in total_written_) of each
+    //                        word still awaiting playout completion.
+    // Word fully on air once DAC consumed up to its write-end:
     //   played = total_written_ - padding  >=  word_play_targets_.front()
-    // (padding <= total_written_ since every buffered frame was written by us,
-    // so the subtraction never underflows.)
+    // (padding <= total_written_ always, since every buffered frame was
+    // written by us — subtraction never underflows.)
     uint64_t                total_written_ = 0;
     std::deque<uint64_t>    word_play_targets_;
 
@@ -243,8 +241,8 @@ private:
     IAudioRenderClient* r_svc_        = nullptr;
     WAVEFORMATEX*       r_fmt_        = nullptr;
     UINT32              r_buf_frames_ = 0;
-    // Shared-mode audio-engine latency beyond GetCurrentPadding's own buffer
-    // accounting (IAudioClient::GetStreamLatency(), 100-ns units) — queried
+    // Shared-mode audio-engine latency beyond GetCurrentPadding's buffer
+    // accounting (IAudioClient::GetStreamLatency(), 100-ns units); queried
     // once in open_render(). See IAudioDriver::output_latency_ms().
     REFERENCE_TIME      r_stream_latency_100ns_ = 0;
     uint32_t            r_rate_       = MODEM_RATE;
@@ -282,10 +280,9 @@ bool WasapiDevice::open(const std::string& in_device, const std::string& out_dev
 {
     if (open_) return true;
 
-    // RX-only mode: an empty out_device means "capture only, no render" — used by
-    // passive listeners (ale_monitor) that never transmit and have no playback
-    // endpoint to pair with the capture device. The main app always passes both
-    // devices, so this path is monitor-only and does not change openALE behaviour.
+    // Empty out_device = RX-only ("capture only, no render"), used by passive
+    // listeners (ale_monitor) that never transmit. Main app always passes both
+    // devices, so this path is monitor-only; doesn't affect openALE behaviour.
     const bool rx_only = out_device.empty();
 
     if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return false;
@@ -304,14 +301,14 @@ bool WasapiDevice::open(const std::string& in_device, const std::string& out_dev
     if (!rx_only && !open_render(out_device)) { close(); return false; }
     if (!open_capture(in_device))              { close(); return false; }
 
-    // Both resamplers are audio-thread-only — created here (before thread starts)
-    // so the thread start provides the happens-before edge. The TX resampler drives
-    // the render path, which is absent in RX-only mode.
+    // Both resamplers are audio-thread-only — created here (before thread start)
+    // so thread start gives the happens-before edge. TX resampler drives the
+    // render path, absent in RX-only mode.
     if (!rx_only)
         at_tx_resampler_ = std::make_unique<Resampler>(MODEM_RATE, r_rate_);
     rx_resampler_    = std::make_unique<Resampler>(c_rate_, MODEM_RATE);
 
-    // Pre-reserve audio-thread scratch buffers to avoid RT allocations.
+    // Pre-reserve audio-thread scratch buffers: avoid RT allocations.
     at_pcm_8k_.reserve(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
     at_pcm_filt_.reserve(SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL);
     at_tx_filter_.reset();
@@ -455,11 +452,10 @@ void WasapiDevice::audio_loop()
 
 // ── service_render (audio thread) ────────────────────────────────────────────
 //
-// Pull model: for each device-rate frame needed, drain the current render
-// buffer (one resampled symbol frame worth of samples).  When the buffer
-// empties, pull the next symbol frame via sym_pull_, render it with
-// ToneGenerator, and resample.  Signal frame completion (frames_rendered_)
-// the moment the last device-rate sample of a word is handed to WASAPI.
+// Pull model: drain current render buffer (one resampled symbol frame) per
+// device-rate frame needed. On empty, pull next symbol frame via sym_pull_,
+// render with ToneGenerator, resample. frames_rendered_ signals completion
+// once the last device-rate sample of a word is handed to WASAPI.
 
 void WasapiDevice::service_render()
 {
@@ -467,12 +463,11 @@ void WasapiDevice::service_render()
     UINT32 padding = 0;
     if (FAILED(r_client_->GetCurrentPadding(&padding))) return;
 
-    // Fire word completions whose audio has actually been played out on air.
-    // The DAC has consumed `played = total_written_ - padding` frames so far
-    // (everything written but still queued is `padding`).  A word whose last
-    // sample was written at position W is fully on air once played >= W.
-    // Checked before the avail==0 early-return so completions still fire while
-    // the render buffer drains with nothing new to write.
+    // Fire word completions actually played out on air. DAC has consumed
+    // `played = total_written_ - padding` frames so far (queued-but-written
+    // = padding). Word whose last sample was written at position W is fully
+    // on air once played >= W. Checked before avail==0 early-return so
+    // completions still fire while render buffer drains with nothing new.
     const uint64_t played = total_written_ - padding;
     while (!word_play_targets_.empty() && word_play_targets_.front() <= played) {
         word_play_targets_.pop_front();
@@ -488,7 +483,7 @@ void WasapiDevice::service_render()
     uint8_t syms[SYMBOLS_PER_WORD];
 
     for (UINT32 i = 0; i < avail; ) {
-        // Refill render buffer when current word/chunk is exhausted
+        // Refill when current word/chunk exhausted
         if (at_render_pos_ >= at_render_buf_.size()) {
             std::function<size_t(int16_t*, size_t)> pcm_pull;
             bool pulled = false;
@@ -499,11 +494,11 @@ void WasapiDevice::service_render()
             }
 
             if (pcm_pull) {
-                // Transparent-voice passthrough: pull raw 8 kHz mono PCM and
-                // resample to the device rate — no ToneGenerator, no ALE band-pass
-                // (voice is full-band baseband for the radio's SSB modulator), and
-                // no frame-completion accounting (the PCM path renders
-                // continuously; word completion is an ALE-modem concept).
+                // Transparent-voice passthrough: pull raw 8 kHz mono PCM,
+                // resample to device rate. No ToneGenerator, no ALE band-pass
+                // (voice is full-band baseband for radio's SSB modulator), no
+                // frame-completion accounting (PCM path renders continuously;
+                // word completion is an ALE-modem concept).
                 constexpr size_t PCM_WANT = 160;  // 20 ms @ 8 kHz
                 at_pcm_8k_.resize(PCM_WANT);
                 const size_t got = pcm_pull(at_pcm_8k_.data(), PCM_WANT);
@@ -513,7 +508,7 @@ void WasapiDevice::service_render()
                     at_render_pos_ = 0;
                 }
                 if (got == 0 || at_render_buf_.empty()) {
-                    // Source underrun or resampler produced nothing — silence.
+                    // Source underrun or resampler produced nothing: silence.
                     for (; i < avail; ++i) {
                         write_frame(data, i, 0);
                         ++total_written_;
@@ -525,8 +520,8 @@ void WasapiDevice::service_render()
                 at_tone_gen_.generate_symbols(syms, SYMBOLS_PER_WORD,
                                               at_pcm_8k_.data(),
                                               tx_volume_.load(std::memory_order_relaxed));
-                // SSB-audio band-pass (750–2500 Hz): strips the sub-300 Hz keying
-                // skirt and out-of-band content without touching the 8-FSK keying.
+                // SSB-audio band-pass (750-2500 Hz): strips sub-300 Hz keying
+                // skirt + out-of-band content, doesn't touch 8-FSK keying.
                 at_pcm_filt_.clear();
                 at_tx_filter_.process(at_pcm_8k_.data(),
                                       SYMBOLS_PER_WORD * SAMPLES_PER_SYMBOL,
@@ -538,10 +533,9 @@ void WasapiDevice::service_render()
                 at_render_pos_    = 0;
                 at_frame_pending_ = true;
             } else {
-                // No symbols pending — fill remaining frames with silence.
-                // Silence occupies real buffer positions, so it must advance
-                // total_written_ too (keeps played = total_written_ - padding
-                // consistent with DAC progress).
+                // No symbols pending: fill rest with silence. Silence occupies
+                // real buffer positions, so must still advance total_written_
+                // (keeps played = total_written_ - padding consistent with DAC).
                 for (; i < avail; ++i) {
                     write_frame(data, i, 0);
                     ++total_written_;
@@ -553,11 +547,10 @@ void WasapiDevice::service_render()
         write_frame(data, i++, at_render_buf_[at_render_pos_++]);
         ++total_written_;
 
-        // When the last device-rate sample of a word has been written into the
-        // WASAPI buffer, record its write-end position.  The completion is fired
-        // from the playout-progress check above once the DAC has actually
-        // consumed up to this position — NOT here at write time (which would be
-        // up to ~buffer-depth too early and truncate the on-air TX).
+        // Record write-end position when a word's last device-rate sample is
+        // written into the WASAPI buffer. Completion fires from the playout
+        // check above once DAC actually consumes up to this position — NOT
+        // here at write time (would be up to ~buffer-depth early, truncating TX).
         if (at_frame_pending_ && at_render_pos_ >= at_render_buf_.size()) {
             word_play_targets_.push_back(total_written_);
             at_frame_pending_ = false;
@@ -631,8 +624,8 @@ bool WasapiDevice::open_render(const std::string& name)
     if (FAILED(r_client_->SetEventHandle(render_event_)))               return false;
     if (FAILED(r_client_->GetService(__uuidof(IAudioRenderClient),
                                      (void**)&r_svc_)))                 return false;
-    // Best-effort: not fatal if unsupported by this endpoint/driver — PTT-tail
-    // margin simply falls back to whatever config_.ptt_tail_ms alone provides.
+    // Best-effort: not fatal if unsupported by endpoint/driver — PTT-tail
+    // margin falls back to config_.ptt_tail_ms alone.
     r_client_->GetStreamLatency(&r_stream_latency_100ns_);
     return true;
 }
@@ -678,10 +671,9 @@ IMMDevice* WasapiDevice::resolve_device(EDataFlow flow, const std::string& sub) 
     IMMDeviceCollection* coll = nullptr;
     if (FAILED(enum_->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &coll))) return nullptr;
 
-    // Match against the same disambiguated names list_flow() exposes. Prefer an
-    // exact match on the annotated name the GUI sent; fall back to the first
-    // device whose name *contains* the substring (keeps bare-name selections
-    // and CLI --in-device/--out-device matching working).
+    // Match against the disambiguated names list_flow() exposes. Prefer exact
+    // match on the GUI's annotated name; fall back to first device whose name
+    // *contains* the substring (keeps bare-name and CLI --in/--out-device matching).
     const std::vector<std::string> names = annotated_device_names(coll);
     UINT count = 0;
     coll->GetCount(&count);
@@ -695,7 +687,7 @@ IMMDevice* WasapiDevice::resolve_device(EDataFlow flow, const std::string& sub) 
     const int pick = exact_idx >= 0 ? exact_idx : substr_idx;
 
     IMMDevice* found = nullptr;
-    if (pick >= 0) coll->Item(static_cast<UINT>(pick), &found);  // Item() AddRefs
+    if (pick >= 0) coll->Item(static_cast<UINT>(pick), &found);  // AddRefs
     coll->Release();
     return found;
 }
@@ -721,11 +713,9 @@ std::vector<std::string> WasapiDevice::list_devices() const
 void WasapiDevice::list_flow(IMMDeviceEnumerator* en, EDataFlow flow,
                               const char* prefix, std::vector<std::string>& out)
 {
-    // ACTIVE only by design: resolve_device()/open() can only open active
-    // endpoints, so listing DISABLED/UNPLUGGED ones would just offer entries
-    // the user cannot connect. Duplicate friendly-names are disambiguated with
-    // a " (n)" suffix (annotated_device_names) so identically-named devices
-    // stay distinguishable and selectable.
+    // ACTIVE only: resolve_device()/open() can only open active endpoints, so
+    // listing DISABLED/UNPLUGGED would offer unconnectable entries. Duplicate
+    // friendly-names disambiguated with " (n)" (annotated_device_names).
     IMMDeviceCollection* coll = nullptr;
     if (FAILED(en->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &coll))) return;
     for (const auto& name : annotated_device_names(coll))

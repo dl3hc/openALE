@@ -3,10 +3,10 @@
  * \brief Platform timer implementation (std::chrono + OS sleep resolution).
  *
  * Windows: timeBeginPeriod(1) raises the system timer resolution to 1 ms so
- * that sleep_ms(1) reliably sleeps ~1 ms instead of the default ~15.6 ms.
- * The period is released in the destructor.
+ * sleep_ms(1) reliably sleeps ~1 ms instead of the default ~15.6 ms; period
+ * released in the destructor.
  *
- * All other platforms: relies on POSIX nanosleep via std::this_thread::sleep_for.
+ * Other platforms: POSIX nanosleep via std::this_thread::sleep_for.
  */
 
 #include "PAL/timer.h"

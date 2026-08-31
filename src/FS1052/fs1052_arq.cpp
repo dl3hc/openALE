@@ -189,11 +189,10 @@ void VariableARQ::handle_retransmit(ARQEvent event)
 {
     switch (event) {
         case ARQEvent::DATA_READY:
-            // Send retransmission blocks
             while (!m_retransmit_queue.empty()) {
                 uint8_t seq = m_retransmit_queue.front();
                 m_retransmit_queue.pop();
-                
+
                 DataBlock* block = find_block(seq);
                 if (block && !block->acknowledged) {
                     if (block->retransmit_count >= m_max_retransmits) {
@@ -240,7 +239,6 @@ void VariableARQ::handle_received_frame(const uint8_t* frame, int length)
     FrameType type = FrameParser::detect_frame_type(frame);
     
     if (type == FrameType::DATA) {
-        // Data frame
         DataFrame df;
         if (FrameParser::parse_data_frame(frame, length, df)) {
             process_data_frame(df);
@@ -300,8 +298,7 @@ void VariableARQ::transition_to(ARQState new_state)
 void VariableARQ::send_next_blocks()
 {
     int sent = 0;
-    
-    // Send up to window_size blocks
+
     while (sent < m_window_size && m_next_tx_sequence < m_tx_blocks.size()) {
         uint8_t seq = m_next_tx_sequence;
         DataBlock* block = find_block(seq);
@@ -329,7 +326,6 @@ void VariableARQ::send_block(uint8_t sequence)
         return;
     }
     
-    // Build data frame
     DataFrame frame;
     frame.data_rate_format = DataRateFormat::ABSOLUTE;
     frame.data_rate = static_cast<uint8_t>(m_data_rate);
@@ -339,7 +335,6 @@ void VariableARQ::send_block(uint8_t sequence)
     frame.data_length = block->length;
     memcpy(frame.data, block->data, block->length);
     
-    // Format and send
     uint8_t buffer[1200];
     int length = FrameFormatter::format_data_frame(frame, buffer, sizeof(buffer));
     
@@ -361,7 +356,6 @@ void VariableARQ::send_ack()
     frame.arq_mode = ARQMode::VARIABLE_ARQ;
     frame.ack_nak_type = AckNakType::DATA_ACK;
     
-    // Build ACK bitmap
     for (int i = 0; i < 256; i++) {
         if (m_rx_bitmap[i]) {
             int byte_idx = i / 8;
@@ -382,7 +376,6 @@ void VariableARQ::send_ack()
 
 void VariableARQ::send_nak(uint8_t sequence)
 {
-    // Queue for retransmission
     m_retransmit_queue.push(sequence);
 }
 
@@ -392,7 +385,6 @@ void VariableARQ::process_ack(const ControlFrame& frame)
         return;
     }
     
-    // Process ACK bitmap
     for (int i = 0; i < 256; i++) {
         int byte_idx = i / 8;
         int bit_idx = i % 8;
@@ -407,17 +399,13 @@ void VariableARQ::process_ack(const ControlFrame& frame)
 void VariableARQ::process_data_frame(const DataFrame& frame)
 {
     uint8_t seq = frame.sequence_number;
-    
-    // Check for duplicates
+
     if (m_rx_bitmap[seq]) {
-        // Already received, ignore
-        return;
+        return;  // duplicate, ignore
     }
-    
-    // Mark as received
+
     m_rx_bitmap[seq] = true;
-    
-    // Store data
+
     uint32_t offset = frame.msg_byte_offset;
     if (offset + frame.data_length > m_rx_buffer.size()) {
         m_rx_buffer.resize(offset + frame.data_length);
@@ -425,12 +413,10 @@ void VariableARQ::process_data_frame(const DataFrame& frame)
     
     memcpy(&m_rx_buffer[offset], frame.data, frame.data_length);
     
-    // Check if all blocks received
     bool all_received = true;
     for (int i = 0; i < 256; i++) {
         if (!m_rx_bitmap[i]) {
-            // Check if this block exists in the message
-            // For now, assume sequential
+            // Assumes sequential block IDs; doesn't track actual block existence.
             if (i < m_next_tx_sequence) {
                 all_received = false;
                 break;
@@ -446,7 +432,7 @@ void VariableARQ::process_data_frame(const DataFrame& frame)
 void VariableARQ::check_timeouts(uint32_t current_time)
 {
     if (current_time - m_wait_start_time > m_ack_timeout) {
-        // Timeout - queue all unacked blocks for retransmit
+        // queue all unacked blocks for retransmit
         for (const auto& block : m_tx_blocks) {
             if (!block.acknowledged) {
                 m_retransmit_queue.push(block.sequence);
@@ -523,8 +509,7 @@ DataBlock* VariableARQ::find_block(uint8_t sequence)
 
 void VariableARQ::reassemble_data()
 {
-    // Data is already reassembled in m_rx_buffer
-    // Just verify integrity
+    // Data already reassembled in m_rx_buffer — just verify integrity
 }
 
 // Utility functions

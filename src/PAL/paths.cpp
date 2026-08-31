@@ -48,8 +48,8 @@ std::string user_config_dir() {
     } else {
         return {};
     }
-    // base itself (~/.config) is assumed to already exist on any normal
-    // system; only the openALE subdirectory needs creating.
+    // base (~/.config) is assumed to already exist on any normal system;
+    // only the openALE subdirectory needs creating.
     const std::string dir = base + "/openALE";
     if (!ensure_dir(dir)) return {};
     return dir;

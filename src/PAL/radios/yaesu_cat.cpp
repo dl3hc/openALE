@@ -30,14 +30,12 @@ bool YaesuCat::start() {
 }
 
 void YaesuCat::stop() {
-    // Nothing to do
 }
 
 bool YaesuCat::set_channel(const Channel& channel) {
     if (!ready_ || !serial_) return false;
     
-    // Set frequency
-    // Yaesu format: 4 bytes packed BCD (10 Hz resolution) + command
+    // Yaesu format: 4-byte packed BCD (10 Hz resolution) + command;
     // 14.250.00 MHz -> 01 42 50 00 01
     uint8_t freq_bcd[4];
     freq_to_packed_bcd(channel.rx_frequency, freq_bcd);
@@ -46,8 +44,7 @@ bool YaesuCat::set_channel(const Channel& channel) {
                              freq_bcd[2], freq_bcd[3]);
     send_command(cmd);
     
-    // Set mode
-    cmd = build_command(YaesuCommand::SET_MODE, 
+    cmd = build_command(YaesuCommand::SET_MODE,
                         static_cast<uint8_t>(radio_mode_to_yaesu(channel.rx_mode)),
                         0, 0, 0);
     send_command(cmd);
@@ -91,8 +88,7 @@ void YaesuCat::register_ack_callback(AckCallback callback) {
 }
 
 void YaesuCat::process_response(const uint8_t* data, size_t length) {
-    // Yaesu returns status bytes
-    // For now, just acknowledge receipt
+    // Yaesu returns status bytes; for now just acknowledge receipt
     if (length > 0 && ack_callback_) {
         ack_callback_();
     }
@@ -119,11 +115,9 @@ void YaesuCat::send_command(const std::vector<uint8_t>& cmd) {
 }
 
 void YaesuCat::freq_to_packed_bcd(uint32_t freq_hz, uint8_t* bcd) {
-    // Yaesu uses packed BCD, MSB first, 10 Hz resolution
-    // 14.250.000 Hz -> 14250000 / 10 = 1425000 -> 01 42 50 00
+    // Packed BCD, MSB first, 10 Hz resolution; e.g. 14.250.000 Hz -> 1425000 -> 01 42 50 00
     uint32_t freq_10hz = freq_hz / 10;
-    
-    // Pack into 4 bytes, MSB first
+
     bcd[0] = ((freq_10hz / 10000000) % 10) << 4 | ((freq_10hz / 1000000) % 10);
     bcd[1] = ((freq_10hz / 100000) % 10) << 4 | ((freq_10hz / 10000) % 10);
     bcd[2] = ((freq_10hz / 1000) % 10) << 4 | ((freq_10hz / 100) % 10);

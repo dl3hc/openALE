@@ -22,20 +22,20 @@ VoicePathManager::~VoicePathManager()
 
 void VoicePathManager::attach(AudioDevice* vac, pal::IRadio* radio)
 {
-    // No-op when unchanged — the bridge re-binds every main-loop tick so the
-    // manager tracks AUDIO_OPEN/RIG_CONNECT device swaps.
+    // No-op when unchanged — bridge re-binds every main-loop tick so manager
+    // tracks AUDIO_OPEN/RIG_CONNECT device swaps.
     if (vac == vac_ && radio == radio_) return;
     vac_   = vac;
     radio_ = radio;
-    // VAC pcm_source arbitration is owned by AudioTransport; it resets its
+    // VAC pcm_source arbitration is owned by AudioTransport; it resets
     // source-tracking when its own attach() detects the pointer change.
 }
 
 void VoicePathManager::arm(bool on)
 {
     armed_.store(on, std::memory_order_relaxed);
-    // Re-evaluate mode: arming while already linked engages passthrough;
-    // disarming forces the modem back to exclusive ownership.
+    // Re-evaluate mode: arming while linked engages passthrough; disarming
+    // forces the modem back to exclusive ownership.
     on_link_state(linked_.load(std::memory_order_relaxed));
 }
 
@@ -55,17 +55,17 @@ void VoicePathManager::enter_passthrough_()
 {
     mode_ = Mode::VOICE_PASSTHROUGH;
     ptt_.store(false, std::memory_order_relaxed);
-    // Self-register as an RxSink so the transport fan-outs speaker audio here
-    // each tick while not transmitting.
+    // Self-register as RxSink so transport fans speaker audio here each tick
+    // while not TX.
     if (transport_) transport_->add_rx_sink(*this);
-    // TX arbitration (set_pcm_source) is handled by AudioTransport on the
-    // next tick: it will see passthrough_active()=true and install silence.
+    // TX arbitration (set_pcm_source) is handled by AudioTransport next
+    // tick: sees passthrough_active()=true, installs silence.
 }
 
 void VoicePathManager::exit_passthrough_()
 {
-    // Unregister from the transport before clearing mode so on_rx_audio is
-    // never called on a half-exited state.
+    // Unregister from transport before clearing mode so on_rx_audio is never
+    // called on a half-exited state.
     if (transport_) transport_->remove_rx_sink(*this);
     // Release PTT if the operator was mid-transmit when the link dropped.
     if (ptt_.load(std::memory_order_relaxed)) {
@@ -73,8 +73,8 @@ void VoicePathManager::exit_passthrough_()
         ptt_.store(false, std::memory_order_relaxed);
     }
     mode_ = Mode::ALE_EXCLUSIVE;
-    // AudioTransport will see passthrough_active()=false on the next tick and
-    // restore the symbol path (set_pcm_source(nullptr)).
+    // AudioTransport sees passthrough_active()=false next tick, restores the
+    // symbol path (set_pcm_source(nullptr)).
 }
 
 void VoicePathManager::on_rx_audio(const int16_t* buf, size_t samples)
@@ -92,8 +92,8 @@ void VoicePathManager::set_ptt(bool on)
     if (on) {
         if (radio_) radio_->set_ptt(true);     // key the transmitter
         if (on_ptt_activity) on_ptt_activity(); // reset link idle timer
-        // AudioTransport sees media_tx_wanted()=true on the next tick and
-        // installs the mic-pull source on the VAC.
+        // AudioTransport sees media_tx_wanted()=true next tick, installs the
+        // mic-pull source on the VAC.
     } else {
         if (radio_) radio_->set_ptt(false);    // back to receive
         // AudioTransport sees media_tx_wanted()=false and restores silence.
@@ -124,10 +124,10 @@ size_t VoicePathManager::pull_mic_pcm(int16_t* out, size_t want)
     for (size_t k = 0; k < n; ++k)
         out[k] = ring_buf_[(tail + k) & RING_MASK];
     if (n) ring_tail_.store(tail + n, std::memory_order_release);
-    // A short return (n < want) is fine: the driver's PCM render branch
-    // resamples whatever was returned and refills on the next drain cycle.
-    // A zero return (ring empty / underrun) makes the driver fill silence for
-    // the rest of that batch and retry on the next service_render() call.
+    // Short return (n < want) is fine: driver's PCM render branch resamples
+    // whatever was returned and refills on the next drain cycle. Zero return
+    // (ring empty/underrun) makes the driver fill silence for the rest of
+    // that batch and retry on the next service_render() call.
     return n;
 }
 

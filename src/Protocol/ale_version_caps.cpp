@@ -26,8 +26,7 @@ static uint32_t pack_payload(char c0, char c1, char c2)
 
 ALEWord encode_version_cmd(const VersionCmd& cmd)
 {
-    // Third character: 's' for summary, 'f' for full.
-    // Defaults to summary when both bits are set or neither is set.
+    // 3rd char: 's'=summary, 'f'=full; defaults to summary if both/neither bit set.
     const char sub = (cmd.kvf_mask & KVF_FULL) && !(cmd.kvf_mask & KVF_SUMMARY)
                      ? VERSION_FULL_CHAR
                      : VERSION_SUMMARY_CHAR;

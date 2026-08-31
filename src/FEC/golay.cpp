@@ -1,9 +1,9 @@
 /**
  * \file golay.cpp
- * \brief Implementation of Extended Golay (24,12) FEC encoder/decoder
- * 
- * Implements table-driven Golay encoder and syndrome-based decoder.
- * Can correct up to 3 bit errors per 24-bit codeword.
+ * \brief Extended Golay (24,12) FEC encoder/decoder
+ *
+ * Table-driven encoder, syndrome-based decoder. Corrects up to 3 bit errors
+ * per 24-bit codeword.
  */
 
 #include "FEC/golay.h"
@@ -12,19 +12,17 @@
 
 namespace ale {
 
-// Initialize static members
 std::array<uint32_t, Golay::SYNDROME_TABLE_SIZE> Golay::syndrome_table = {};
 std::once_flag Golay::syndrome_init_flag;
 
 // Full 4096-entry encode table for Extended Golay (24,12).
-// Indexed by 12-bit information word; value is the 12-bit parity.
+// Indexed by 12-bit info word; value is the 12-bit parity.
 //
-// Source: Charles Brain / Ilkka Toivanen, GPL (original ALE reference implementation).
-// All 4096 entries verified by the Golay linearity property:
-//   encode(a XOR b) == encode(a) XOR encode(b)
-// The 12 basis vectors (encode(2^i)) were extracted from the reference,
-// and the remaining 4000 entries were computed and cross-checked against
-// all 2929 available reference entries — 0 mismatches.
+// Source: Charles Brain / Ilkka Toivanen, GPL (original ALE reference impl).
+// All 4096 entries verified via Golay linearity: encode(a XOR b) == encode(a)
+// XOR encode(b). The 12 basis vectors (encode(2^i)) were extracted from the
+// reference; the remaining 4000 entries were computed and cross-checked
+// against all 2929 available reference entries — 0 mismatches.
 //
 // Basis vectors used:
 //   encode(0x001)=0x5C7  encode(0x002)=0xB8D  encode(0x004)=0x2DE
@@ -547,17 +545,17 @@ static constexpr std::array<uint16_t, 4096> GOLAY_ENCODE_TABLE = {
 };
 
 uint32_t Golay::encode(uint16_t info) {
-    // info is 12 bits
+    // info: 12 bits
     uint16_t parity = GOLAY_ENCODE_TABLE[info & 0xFFF];
-    
-    // Codeword = [information (12 bits) | parity (12 bits)]
+
+    // codeword = [info(12) | parity(12)]
     uint32_t codeword = ((uint32_t)info << 12) | parity;
-    
+
     return codeword;
 }
 
 uint8_t Golay::compute_parity(uint32_t value) {
-    // Count number of 1 bits mod 2
+    // popcount mod 2
     uint8_t parity = 0;
     while (value) {
         parity ^= (value & 1);
@@ -567,61 +565,55 @@ uint8_t Golay::compute_parity(uint32_t value) {
 }
 
 uint16_t Golay::compute_syndrome(uint32_t codeword) {
-    // Extract information and parity parts
     uint16_t info = (codeword >> 12) & 0xFFF;
     uint16_t received_parity = codeword & 0xFFF;
-    
-    // Compute expected parity
+
     uint16_t expected_parity = GOLAY_ENCODE_TABLE[info];
-    
-    // Syndrome = received_parity XOR expected_parity
+
+    // syndrome = received XOR expected parity
     uint16_t syndrome = received_parity ^ expected_parity;
-    
+
     return syndrome;
 }
 
 Golay::DecodeResult Golay::decode(uint32_t codeword, uint16_t& output, GolayMode mode) {
     std::call_once(syndrome_init_flag, init_syndrome_table);
 
-    // Compute syndrome s = yH^T  (MIL-STD-188-141B A.5.2.2.2.2)
+    // syndrome s = yH^T (MIL-STD-188-141B A.5.2.2.2.2)
     uint16_t syndrome = compute_syndrome(codeword);
 
     if (syndrome == 0) {
-        // No errors detected
         output = (codeword >> 12) & 0xFFF;
         return {DECODE_OK, 0};
     }
 
-    // Look up error pattern in syndrome table
     uint32_t error_pattern = syndrome_table[syndrome];
 
     if (error_pattern == 0xFFFFFFFFU) {
-        // Syndrome is non-zero but no correctable error pattern exists.
-        // Per MIL-STD-188-141B A.5.2.2.2.2: "If s is not equal to 0 and e
-        // contains more ones than the number of errors being corrected by
-        // decoding mode, a detected error is indicated and the appropriate
-        // flag is set."  → DECODE_DETECTED (distinct from DECODE_CORRECTED).
+        // Non-zero syndrome, no correctable pattern. Per MIL-STD-188-141B
+        // A.5.2.2.2.2: "If s is not equal to 0 and e contains more ones than
+        // the number of errors being corrected by decoding mode, a detected
+        // error is indicated" -> DECODE_DETECTED (not DECODE_CORRECTED).
         output = (codeword >> 12) & 0xFFF;   // raw, uncorrected info field
         return {DECODE_DETECTED, 0};
     }
 
-    // Weight of the coset-leader error pattern (number of bit errors).
+    // Weight of coset-leader error pattern (# bit errors)
     uint8_t error_weight = 0;
     for (uint32_t temp = error_pattern; temp; temp >>= 1)
         error_weight += (temp & 1u);
 
-    // A.5.2.6.3 correction-power gate: in mode n/m, correct only errors of
-    // weight ≤ n; heavier (but still detectable) errors are flagged
-    // DECODE_DETECTED and left uncorrected.  For the default Mode3_4 the
-    // syndrome table holds only weight-≤3 leaders, so this never triggers and
-    // behaviour is identical to full correction.
+    // A.5.2.6.3 correction-power gate: mode n/m corrects only weight <= n;
+    // heavier (still detectable) errors -> DECODE_DETECTED, uncorrected. For
+    // default Mode3_4 the syndrome table holds only weight-<=3 leaders, so
+    // this never triggers — behaviour is identical to full correction.
     const uint8_t max_correct = static_cast<uint8_t>(mode);
     if (error_weight > max_correct) {
         output = (codeword >> 12) & 0xFFF;   // raw, uncorrected info field
         return {DECODE_DETECTED, 0};
     }
 
-    // Correct the codeword: x_hat = y XOR e
+    // x_hat = y XOR e
     uint32_t corrected = codeword ^ error_pattern;
     output = (corrected >> 12) & 0xFFF;
 
@@ -637,17 +629,13 @@ uint16_t Golay::extract_parity(uint32_t codeword) {
 }
 
 void Golay::init_syndrome_table() {
-    // Build syndrome table: syndrome -> error pattern
-    // For each possible 24-bit error pattern with weight <= 3,
-    // compute its syndrome and store the pattern
-    
-    // Mark all entries as invalid initially
-    std::fill(syndrome_table.begin(), syndrome_table.end(), 0xFFFFFFFFU);
-    
-    // Pattern with 0 errors (syndrome = 0)
-    syndrome_table[0] = 0;
-    
-    // Patterns with 1 error (24 patterns)
+    // syndrome -> error pattern, for every 24-bit error pattern with weight <= 3
+
+    std::fill(syndrome_table.begin(), syndrome_table.end(), 0xFFFFFFFFU);  // invalid sentinel
+
+    syndrome_table[0] = 0;  // 0 errors
+
+    // 1 error (24 patterns)
     for (uint32_t bit = 0; bit < 24; ++bit) {
         uint32_t error_pattern = (1U << bit);
         uint16_t syndrome = compute_syndrome(error_pattern);
@@ -657,19 +645,19 @@ void Golay::init_syndrome_table() {
         }
     }
     
-    // Patterns with 2 errors (24*23/2 = 276 patterns)
+    // 2 errors (24*23/2 = 276 patterns)
     for (uint32_t bit1 = 0; bit1 < 24; ++bit1) {
         for (uint32_t bit2 = bit1 + 1; bit2 < 24; ++bit2) {
             uint32_t error_pattern = (1U << bit1) | (1U << bit2);
             uint16_t syndrome = compute_syndrome(error_pattern);
-            
+
             if (syndrome_table[syndrome] == 0xFFFFFFFFU) {
                 syndrome_table[syndrome] = error_pattern;
             }
         }
     }
-    
-    // Patterns with 3 errors (24*23*22/6 = 2024 patterns)
+
+    // 3 errors (24*23*22/6 = 2024 patterns)
     for (uint32_t bit1 = 0; bit1 < 24; ++bit1) {
         for (uint32_t bit2 = bit1 + 1; bit2 < 24; ++bit2) {
             for (uint32_t bit3 = bit2 + 1; bit3 < 24; ++bit3) {

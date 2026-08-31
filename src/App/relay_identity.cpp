@@ -42,12 +42,10 @@ std::string iso8601_utc(std::time_t t) {
 
 namespace {
 
-// ── Base64 (encode-only for the public key/signature; decode-only for the
-// persisted seed) — small self-contained codec. http_poster.cpp does not
-// currently expose a reusable base64 helper (checked during implementation:
-// only a comment referencing "base64/opaque" tokens, no actual codec), so
-// this is a deliberate, minimal, single-purpose implementation kept local
-// to this translation unit rather than a shared utility.
+// ── Base64 (encode-only for pubkey/signature; decode-only for persisted seed) ──
+// http_poster.cpp has no reusable base64 helper (checked: only a comment
+// referencing "base64/opaque" tokens, no actual codec) — deliberate minimal
+// impl kept local to this translation unit rather than a shared utility.
 constexpr char kB64Chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 std::string base64_encode(const unsigned char* data, size_t len) {
@@ -86,7 +84,7 @@ int base64_decode_char(char c) {
     return -1;
 }
 
-// Decodes exactly the bytes present (ignores padding/whitespace at the end);
+// Decodes exactly the bytes present (ignores trailing padding/whitespace);
 // returns false if any non-padding character is invalid.
 bool base64_decode(const std::string& in, std::string& out) {
     out.clear();
@@ -128,17 +126,15 @@ bool generate_seed(unsigned char seed[32]) {
 #endif
 }
 
-// Best-effort file-permission hardening. POSIX enforces 0600 at creation
-// time (O_EXCL). Windows has no equivalent atomic primitive via <fstream>,
-// so this narrows the ACL after the fact and only logs on failure — per the
-// design doc, Windows ACL APIs are inconsistent across filesystems (e.g.
-// FAT32 network shares) and a failure here must not block startup.
+// Best-effort permission hardening. POSIX enforces 0600 at creation (O_EXCL);
+// Windows has no equivalent atomic <fstream> primitive, so this narrows the
+// ACL after the fact and only logs on failure — Windows ACL APIs are
+// inconsistent across filesystems (e.g. FAT32 shares) and must not block startup.
 void restrict_key_file_permissions(const std::string& path) {
 #ifdef _WIN32
     PSECURITY_DESCRIPTOR sd = nullptr;
-    // Owner (OW) + Local System (SY) get full access; everyone else is
-    // denied. ConvertStringSecurityDescriptorToSecurityDescriptor is the
-    // simplest correct way to build this without hand-rolling ACL structs.
+    // Owner(OW)+Local System(SY) get full access, else denied; SDDL string
+    // avoids hand-rolling ACL structs.
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorA(
             "D:PAI(A;;FA;;;OW)(A;;FA;;;SY)", SDDL_REVISION_1, &sd, nullptr)) {
         pal::log_warn("RelayIdentity",
@@ -165,8 +161,7 @@ void restrict_key_file_permissions(const std::string& path) {
     }
     LocalFree(sd);
 #else
-    // POSIX: handled at creation via O_CREAT|O_EXCL, mode 0600 (see
-    // write_identity_file). Nothing further to do here.
+    // POSIX: handled at creation via O_CREAT|O_EXCL, mode 0600 (see write_identity_file).
     (void)path;
 #endif
 }
@@ -193,9 +188,8 @@ bool write_identity_file(const std::string& path, const std::string& callsign,
     restrict_key_file_permissions(path);
     return true;
 #else
-    // O_CREAT|O_EXCL would fail on overwrite (regenerate-on-callsign-change
-    // case), so this always truncates-and-writes with 0600 explicitly rather
-    // than relying on O_EXCL for the permission guarantee.
+    // O_CREAT|O_EXCL would fail on overwrite (regenerate-on-callsign-change),
+    // so always truncate-and-write with 0600 explicit rather than relying on O_EXCL.
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         pal::log_error("RelayIdentity", "failed to open %s for writing", path.c_str());
@@ -211,8 +205,8 @@ bool write_identity_file(const std::string& path, const std::string& callsign,
 #endif
 }
 
-// Parses the 3-line key file. Returns false on any structural problem
-// (caller then regenerates rather than treating it as fatal).
+// Parses the 3-line key file; returns false on any structural problem
+// (caller regenerates rather than treating it as fatal).
 bool read_identity_file(const std::string& path, std::string& callsign, unsigned char seed[32]) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;

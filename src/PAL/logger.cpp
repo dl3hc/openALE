@@ -23,7 +23,7 @@ static const char* level_prefix(LogLevel l) {
 }
 
 // Fixed filename, same "just works, no config" convention as station.state/
-// lqa.bin — opened relative to the process's current working directory.
+// lqa.bin — opened relative to the process CWD.
 constexpr const char* kLogFileName = "openALE.log";
 constexpr const char* kLogFileOld  = "openALE.log.old";
 constexpr long        kMaxLogBytes = 5 * 1024 * 1024;  // rotate past ~5 MB
@@ -38,10 +38,9 @@ FILE* fopen_portable(const char* path, const char* mode) {
 #endif
 }
 
-// If the existing log has grown past kMaxLogBytes, move it aside before
-// opening — "längere Verwendung" (long sessions) is exactly the scenario
-// that would otherwise let this grow unbounded. Best-effort: a failed
-// rotation (e.g. .old locked by another viewer) must not block logging.
+// If the log exceeds kMaxLogBytes, rotate before opening — otherwise long
+// sessions grow it unbounded. Best-effort: a failed rotation (e.g. .old
+// locked by another viewer) must not block logging.
 void rotate_if_large() {
     FILE* probe = fopen_portable(kLogFileName, "rb");
     if (!probe) return;
@@ -73,7 +72,7 @@ public:
     ConsoleLogger() {
         rotate_if_large();
         // append mode: never truncate — a crash right after this run needs
-        // the previous run's tail to still be on disk after a restart.
+        // the previous run's tail on disk after restart.
         log_file_ = fopen_portable(kLogFileName, "a");
     }
     ~ConsoleLogger() override {

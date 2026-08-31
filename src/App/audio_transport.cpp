@@ -9,19 +9,18 @@
 
 namespace ale {
 
-// Silence source handed to the VAC while a voice link is active but the
-// operator is not transmitting: returns 0 ⇒ the driver fills silence on the
-// render side, so nothing is transmitted to the radio. The radio stays in RX
-// and its captured audio flows to the decoder (always) and the speaker (when
-// not transmitting). Non-capturing, so it can be stored once.
+// Silence source for the VAC while a voice link is active but not TX:
+// returns 0 ⇒ driver fills silence on render, nothing transmitted. Radio
+// stays RX; captured audio flows to decoder (always) and speaker (when not
+// TX). Non-capturing, so it can be stored once.
 static size_t silence_source_(int16_t* /*out*/, size_t /*want*/) { return 0; }
 
 AudioTransport::AudioTransport() = default;
 
 AudioTransport::~AudioTransport()
 {
-    // Restore the modem symbol path on teardown so the device is left in the
-    // default (non-passthrough) state — matches VoicePathManager's destructor.
+    // Restore modem symbol path on teardown so device is left in default
+    // (non-passthrough) state — matches VoicePathManager's destructor.
     if (vac_ && last_source_ != Source::Symbol) vac_->set_pcm_source(nullptr);
 }
 
@@ -55,20 +54,19 @@ void AudioTransport::tick()
     vac_->tick(rx_buf_);
 
     // ── RX fan-out ────────────────────────────────────────────────────────
-    // The decoder is a PERMANENT sink: fed in all states, including voice
-    // passthrough. This is the fix that lets a remote TWAS termination be
-    // decoded during an active phone-patch link.
+    // Decoder is a PERMANENT sink: fed in all states incl. voice passthrough
+    // — lets a remote TWAS termination be decoded during an active phone-patch link.
     if (!rx_buf_.empty() && decoder_sink_)
         decoder_sink_(rx_buf_.data(), rx_buf_.size());
 
     // Arbitrate TX first so the speaker-suppression gate below reflects the
-    // current transmit decision (protocol or media burst ⇒ no speaker).
+    // current TX decision (protocol or media burst ⇒ no speaker).
     arbitrate_tx_();
 
-    // Dynamic sinks (voice speaker, …): called only when not transmitting.
-    // Half-duplex: both protocol and media TX suppress RX forwarding so the
-    // operator hears no echo. VoicePathManager adds itself via add_rx_sink()
-    // on passthrough entry and removes itself on exit — no explicit gate here.
+    // Dynamic sinks (voice speaker, …): called only when not TX. Half-duplex:
+    // both protocol and media TX suppress RX forwarding so operator hears no
+    // echo. VoicePathManager adds itself via add_rx_sink() on passthrough
+    // entry, removes on exit — no explicit gate here.
     if (!rx_buf_.empty() && !protocol_tx_active_ && !media_tx_active_) {
         for (RxSink* s : rx_sinks_)
             s->on_rx_audio(rx_buf_.data(), rx_buf_.size());
@@ -86,7 +84,7 @@ void AudioTransport::arbitrate_tx_()
     Source want;
     if (protocol) {
         // Modem has a burst to send (TERM, ack, sounding, …) — highest
-        // priority. Restore the symbol path so pull_symbol_frame() runs.
+        // priority; restore symbol path so pull_symbol_frame() runs.
         want = Source::Symbol;
         protocol_tx_active_ = true;
         media_tx_active_    = false;
@@ -96,16 +94,16 @@ void AudioTransport::arbitrate_tx_()
         protocol_tx_active_ = false;
         media_tx_active_    = true;
     } else if (passthrough) {
-        // Voice link active, not transmitting — keep the radio quiet so RX
-        // flows to the speaker (and the decoder, always).
+        // Voice link active, not TX — keep radio quiet so RX flows to the
+        // speaker (and the decoder, always).
         want = Source::Silence;
         protocol_tx_active_ = false;
         media_tx_active_    = false;
     } else {
-        // No voice link: normal ALE. Leave the modem symbol path active so
-        // calling/sounding TX works exactly as before (set_pcm_source(nullptr)
-        // ⇒ driver falls through to the symbol source). When idle the modem
-        // renders silence through the symbol path itself.
+        // No voice link: normal ALE. Leave modem symbol path active so
+        // calling/sounding TX works as before (set_pcm_source(nullptr) ⇒
+        // driver falls through to symbol source); idle modem renders silence
+        // via the symbol path itself.
         want = Source::Symbol;
         protocol_tx_active_ = false;
         media_tx_active_    = false;

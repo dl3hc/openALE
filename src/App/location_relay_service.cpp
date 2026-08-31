@@ -8,13 +8,13 @@
 
 namespace ale {
 
-// ── Gate + dedup key (free functions, individually testable) ──────────────────
+// ── Gate + dedup key (free functions, testable) ──────────────────
 
 bool is_shareable(const AleGpr& gpr, const std::string& source_addr,
                    const std::string& call_context, const std::string& self_addr,
                    const ALEStationConfig& cfg) {
     if (!cfg.location_sharing_enabled) return false;
-    if (source_addr.empty() || source_addr == self_addr) return false;  // never relay our own TX
+    if (source_addr.empty() || source_addr == self_addr) return false;  // never relay own TX
     if (!gpr.valid_gpr_structure) return false;
 
     if (call_context == "ALLCALL")         return cfg.location_sharing_allcall;
@@ -43,7 +43,7 @@ std::string make_dedup_key(const AleGpr& gpr, const std::string& source_addr,
     return key;
 }
 
-// ── JSON body (Konzept §9) ─────────────────────────────────────────────────────
+// ── JSON body (Konzept §9) ──────────────────
 
 namespace {
 
@@ -111,32 +111,29 @@ std::string LocationRelayService::to_json(const LocationReport& r) {
 
 namespace {
 
-// The ingest URL is configured as .../api/v1/locations; the register
-// endpoint lives alongside it at .../api/v1/register. Simple suffix
-// replacement rather than full URL parsing — both are always literal path
-// segments on the same host by construction (see docs/LOCATION_SHARING_CONCEPT.md §9).
+// Ingest URL is .../api/v1/locations; register endpoint is .../api/v1/register,
+// same host. Suffix swap suffices — no need for full URL parsing (docs/LOCATION_SHARING_CONCEPT.md §9).
 std::string register_url_from_ingest_url(const std::string& ingest_url) {
     static const std::string kSuffix = "/locations";
     if (ingest_url.size() >= kSuffix.size() &&
         ingest_url.compare(ingest_url.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0) {
         return ingest_url.substr(0, ingest_url.size() - kSuffix.size()) + "/register";
     }
-    // Unexpected URL shape — fall back to appending; register_identity()
-    // logs the outcome either way, so a malformed URL just shows up as a
-    // failed registration rather than crashing anything.
+    // Unexpected shape — fall back to appending; register_identity() logs the
+    // outcome either way, so a malformed URL just shows as a failed registration.
     return ingest_url + "/../register";
 }
 
 } // namespace
 
-// ── Service ─────────────────────────────────────────────────────────────────────
+// ── Service ──────────────────
 
 void LocationRelayService::start(const Config& cfg) {
     if (running_.load()) stop();
     cfg_ = cfg;
     {
         std::lock_guard<std::mutex> g(conn_mtx_);
-        conn_state_   = CS_UNKNOWN;   // fresh run — initial probe re-establishes it
+        conn_state_   = CS_UNKNOWN;   // fresh run; initial probe re-establishes it
         last_drained_ = CS_UNKNOWN;
     }
     {
@@ -289,16 +286,14 @@ void LocationRelayService::update_conn_state(bool reached, int http_status) {
 }
 
 void LocationRelayService::update_reg_state(int http_status, const std::string& response_body) {
-    // No JSON parser here — the response bodies are tiny, fixed-shape
-    // {"error":"unauthorized","reason":"<reason>"} objects from auth.js, so
-    // a substring check on the reason token is sufficient and avoids pulling
-    // in a JSON library for one field.
+    // No JSON parser: response bodies are tiny fixed-shape
+    // {"error":"unauthorized","reason":"<reason>"} objects from auth.js, so a
+    // substring check on the reason token suffices.
     int new_state = reg_state_;
     if (http_status >= 200 && http_status < 300) {
         new_state = REG_APPROVED;
     } else if (http_status == 409) {
-        // Duplicate report (already-seen broadcast) still means this
-        // identity is approved and sending successfully.
+        // Duplicate (already-seen broadcast) still implies identity is approved.
         new_state = REG_APPROVED;
     } else if (http_status == 403 && response_body.find("revoked") != std::string::npos) {
         new_state = REG_REVOKED;
@@ -361,21 +356,19 @@ void LocationRelayService::register_identity() {
     if (res.status == 201) {
         pal::log_info("LocationRelay", "registered new identity %s (pending approval)",
                        cfg_.callsign.c_str());
-        update_reg_state(401, "pending_approval");  // reuse the pending classification
+        update_reg_state(401, "pending_approval");  // reuse pending classification
     } else if (res.status == 200) {
         update_reg_state(401, "pending_approval");
     } else if (res.status == 409) {
-        // Already known to the server — its body tells us which: registering
-        // an approved or revoked callsign both 409, distinguished by
-        // {"error":"already_approved"|"revoked"}. Classify immediately
-        // rather than waiting for an ingest attempt that may never come
-        // (e.g. this station hasn't relayed anything yet) — otherwise the
-        // GUI is stuck showing "Status: unknown" indefinitely after an
-        // operator has already approved the identity.
+        // Already known to server; body distinguishes approved vs revoked callsign
+        // via {"error":"already_approved"|"revoked"}. Classify now rather than
+        // waiting for an ingest attempt that may never come (station may never
+        // relay anything) — else GUI shows "Status: unknown" forever even after
+        // operator approval.
         if (res.body.find("revoked") != std::string::npos) {
             update_reg_state(403, "revoked");
         } else {
-            update_reg_state(200, res.body);  // already_approved (or any other 409 shape)
+            update_reg_state(200, res.body);  // already_approved (or other 409 shape)
         }
         pal::log_info("LocationRelay", "registration for %s: %s", cfg_.callsign.c_str(),
                        res.body.c_str());
@@ -386,7 +379,7 @@ void LocationRelayService::register_identity() {
 }
 
 void LocationRelayService::run_health_check() {
-    RelayAuth auth;  // unauthenticated — matches the relay server's public GET endpoints
+    RelayAuth auth;  // unauthenticated, matches server's public GET endpoints
     HttpPostResult res;
     const bool reached = http_probe(cfg_.url, auth, cfg_.ca_cert_path, res);
     update_conn_state(reached, res.status);
@@ -394,9 +387,8 @@ void LocationRelayService::run_health_check() {
 
 void LocationRelayService::worker_loop() {
     pal::log_info("LocationRelay", "worker thread started");
-    // Idempotent on the server (already-pending/already-approved both return
-    // a defined, non-error response) — so it's safe to always attempt this
-    // rather than tracking "is this key file brand new" state here.
+    // Idempotent server-side (pending/approved both return defined non-error
+    // response) — always safe to attempt, no need to track key-file freshness.
     register_identity();
 
     static constexpr uint32_t kBackoffMs[3] = { 5000, 15000, 45000 };
@@ -404,9 +396,9 @@ void LocationRelayService::worker_loop() {
     static constexpr std::time_t kStaleAfterSec = 600;  // 10 min
 
     const auto idle_poll = std::chrono::milliseconds(500);
-    // Fire the initial connection check immediately (epoch < now), then on a
-    // fixed cadence while idle. Every real send also refreshes conn_state and
-    // pushes this deadline forward, so a busy stream does not re-probe.
+    // Initial check fires immediately (epoch < now), then fixed cadence while
+    // idle. Every real send also refreshes conn_state and pushes this deadline
+    // forward, so a busy stream doesn't re-probe.
     auto next_health_check = std::chrono::steady_clock::time_point{};
     const auto health_interval =
         std::chrono::seconds(cfg_.health_check_interval_sec > 0
@@ -439,17 +431,16 @@ void LocationRelayService::worker_loop() {
             continue;
         }
 
-        // Signed fresh at send time, not at enqueue time — the replay window
-        // is only 300s, and reports can sit queued (retry backoff, throttle)
-        // for longer than that.
+        // Sign at send time not enqueue time: replay window is only 300s and
+        // reports can sit queued (retry backoff, throttle) longer than that.
         const std::string body = to_json(report);
         const RelaySignature signature = sign_relay_request(*identity_, body);
         const RelayAuth auth{ signature.callsign, signature.timestamp, signature.signature_b64 };
 
         HttpPostResult res;
         const bool sent = http_post_json(cfg_.url, auth, body, cfg_.ca_cert_path, res);
-        // A send is itself a connectivity sample — reclassify the endpoint and
-        // defer the next idle probe so we don't double-probe after traffic.
+        // A send is itself a connectivity sample: reclassify endpoint and defer
+        // next idle probe to avoid double-probing after traffic.
         update_conn_state(sent, res.status);
         if (sent) update_reg_state(res.status, res.body);
         next_health_check = std::chrono::steady_clock::now() + health_interval;
@@ -474,7 +465,7 @@ void LocationRelayService::worker_loop() {
             pal::log_warn("LocationRelay", "malformed report (422) for %s — dropped",
                           report.source.c_str());
         } else {
-            // 429, 5xx, or no response at all (network/TLS/timeout) — retry with backoff.
+            // 429, 5xx, or no response (network/TLS/timeout) — retry with backoff.
             report.retry_count++;
             if (report.retry_count > kMaxRetries) {
                 pal::log_warn("LocationRelay", "giving up on %s after %u retries",

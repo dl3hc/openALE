@@ -183,8 +183,7 @@ void NetStore::unassign_channel_everywhere(const std::string& channel_id) {
 void NetStore::rename_channel(const std::string& old_id, const std::string& new_id) {
     if (old_id == new_id) return;
     for (auto& n : nets_) {
-        // If new_id is already a member, drop the renamed slot so membership
-        // stays a set (no duplicate ids).
+        // If new_id already a member, drop renamed slot: membership stays a set (no dup ids).
         const bool has_new = std::find(n.channel_ids.begin(), n.channel_ids.end(),
                                        new_id) != n.channel_ids.end();
         for (auto& id : n.channel_ids)
@@ -387,7 +386,7 @@ void OtherStationStore::update_contact(const std::string& address,
             return;
         }
     }
-    // Implicitly add previously unknown stations seen on air, if capacity allows
+    // Auto-add unknown station heard on air, if capacity allows
     if (stations_.size() >= kCapacity) return;
     StationInfo info;
     info.address         = address;
