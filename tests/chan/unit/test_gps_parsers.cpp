@@ -10,19 +10,25 @@ static void test_gpgga_fix() {
     // Munich area: lat 48°07.038'N, lon 011°31.000'E
     const std::string s = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47";
     double lat = 0, lon = 0;
-    assert(GpsService::parse_gpgga(s, lat, lon));
+    bool has_alt = false;
+    double alt = 0;
+    assert(GpsService::parse_gpgga(s, lat, lon, has_alt, alt));
     // 48°07.038' = 48 + 7.038/60 = 48.1173°
     assert(std::abs(lat - 48.1173) < 0.0001);
     // 011°31.000' = 11 + 31.0/60 = 11.5167°
     assert(std::abs(lon - 11.5167) < 0.0001);
-    std::cout << "  lat=" << lat << " lon=" << lon << " PASS" << std::endl;
+    assert(has_alt);
+    assert(std::abs(alt - 545.4) < 0.0001);
+    std::cout << "  lat=" << lat << " lon=" << lon << " alt=" << alt << " PASS" << std::endl;
 }
 
 static void test_gpgga_no_fix() {
     std::cout << "Test: parse_gpgga quality=0 returns false..." << std::endl;
     const std::string s = "$GPGGA,123519,4807.038,N,01131.000,E,0,08,0.9,545.4,M,46.9,M,,*47";
     double lat = 0, lon = 0;
-    assert(!GpsService::parse_gpgga(s, lat, lon));
+    bool has_alt = false;
+    double alt = 0;
+    assert(!GpsService::parse_gpgga(s, lat, lon, has_alt, alt));
     std::cout << "  PASS" << std::endl;
 }
 
@@ -31,11 +37,15 @@ static void test_gpgga_south_west() {
     // Sydney area: 33°52'S, 151°12'E
     const std::string s = "$GPGGA,235947,3352.000,S,15112.000,E,1,08,1.0,100.0,M,0.0,M,,*00";
     double lat = 0, lon = 0;
-    assert(GpsService::parse_gpgga(s, lat, lon));
+    bool has_alt = false;
+    double alt = 0;
+    assert(GpsService::parse_gpgga(s, lat, lon, has_alt, alt));
     assert(lat < 0.0);   // South = negative
     assert(lon > 0.0);   // East = positive
     assert(std::abs(lat - (-33.8667)) < 0.001);
     assert(std::abs(lon - 151.2)      < 0.001);
+    assert(has_alt);
+    assert(std::abs(alt - 100.0) < 0.0001);
     std::cout << "  PASS" << std::endl;
 }
 
@@ -67,10 +77,13 @@ static void test_tpv_json_3d_fix() {
         R"({"class":"TPV","device":"/dev/ttyACM0","mode":3,"lat":48.1173,"lon":11.5167,"speed":0.0})";
     double lat = 0, lon = 0;
     bool fix_ok = false;
-    assert(GpsService::parse_tpv_json(json, lat, lon, fix_ok));
+    bool has_alt = false;
+    double alt = 0;
+    assert(GpsService::parse_tpv_json(json, lat, lon, fix_ok, has_alt, alt));
     assert(fix_ok);
     assert(std::abs(lat - 48.1173) < 0.0001);
     assert(std::abs(lon - 11.5167) < 0.0001);
+    assert(!has_alt);  // no "alt" field in this JSON
     std::cout << "  PASS" << std::endl;
 }
 
@@ -79,7 +92,9 @@ static void test_tpv_json_2d_fix() {
     const std::string json = R"({"class":"TPV","mode":2,"lat":48.1,"lon":11.5})";
     double lat = 0, lon = 0;
     bool fix_ok = false;
-    assert(GpsService::parse_tpv_json(json, lat, lon, fix_ok));
+    bool has_alt = false;
+    double alt = 0;
+    assert(GpsService::parse_tpv_json(json, lat, lon, fix_ok, has_alt, alt));
     assert(fix_ok);
     std::cout << "  PASS" << std::endl;
 }
@@ -89,7 +104,9 @@ static void test_tpv_json_no_fix() {
     const std::string json = R"({"class":"TPV","mode":1,"lat":0.0,"lon":0.0})";
     double lat = 0, lon = 0;
     bool fix_ok = false;
-    assert(GpsService::parse_tpv_json(json, lat, lon, fix_ok));
+    bool has_alt = false;
+    double alt = 0;
+    assert(GpsService::parse_tpv_json(json, lat, lon, fix_ok, has_alt, alt));
     assert(!fix_ok);
     std::cout << "  PASS" << std::endl;
 }
