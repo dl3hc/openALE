@@ -3162,7 +3162,15 @@ void ALEController::commit_ack_amd()
 // AMD_DELIVERED / AMD_RETRY / AMD_NOT_DELIVERED operator events to the GUI.
 void ALEController::reply_to_linked_amd_(const std::string& sender)
 {
-    if (sender.empty() || self_address_store_.matches_self(sender)) return;
+    // No self-address check here (deliberately, regression fixed 2026-08-31):
+    // `sender` is our LINKED peer's identity (active_peer(), populated from
+    // the handshake we already completed with them) — there is no protocol
+    // reason it can't equal our own address (same-callsign bench tests are
+    // legitimate; on real air it simply won't happen since a station can't
+    // link to itself). A `matches_self(sender)` guard here silently dropped
+    // every reply in that scenario with zero diagnostic output — belt where
+    // no protocol invariant needs one. Only reject a genuinely unknown peer.
+    if (sender.empty()) return;
     // Optional bilateral LQA piggyback: the CMD 'a' word (what WE measured FROM
     // the sender) rides the Response frame; SM builds TO[sender]×2 + … + TIS,
     // we supply only the CMD 'a' word (LQA measurement lives above the SM).
