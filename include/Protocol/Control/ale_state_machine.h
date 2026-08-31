@@ -20,6 +20,7 @@
 #include "Protocol/Control/ale_channel_types.h"
 #include "Protocol/Control/ale_channel_manager.h"
 #include "Protocol/Message/ale_message.h"
+#include "Protocol/Frame/frame_reassembler.h"
 #include "Word/ale_word.h"
 #include "Word/ale_sequence.h"
 #include "Word/address_encoder.h"
@@ -586,6 +587,10 @@ public:
     bool           is_emergency_active()      const { return emergency_active; }
     const std::string& get_to_address()      const { return to_address; }
     const std::string& get_caller_address()   const { return caller_address; }
+    /// Shadow-mode FrameReassembler (OFS Phase 2): the in-progress frame
+    /// candidate for tests/inspection; completed frames are drained (and
+    /// frame-level traced, FR-10) inside update().
+    const FrameReassembler& frame_reassembler() const { return frame_reassembler_; }
     /// Linked peer (full address). Drives the LINKED-state TWAS peer-match
     /// guard (A.5.5.3.5): only a TWAS matching this address terminates the link.
     const std::string& get_active_call_to()   const { return active_call_to; }
@@ -770,6 +775,10 @@ private:
     uint32_t         link_start_time_ms;
     uint32_t         last_word_time_ms;
     MessageAssembler message_assembler;
+    // OFS Phase 2 shadow observer (docs/FRAMING_STANDARD.md §5): fed every
+    // valid received word + the update() clock; produces Frame events nothing
+    // consumes yet (Phase 3 routes them into the §8 context matrix).
+    FrameReassembler frame_reassembler_;
     bool             linked_terminating_;  ///< true = TWAS-Terminierungsframe läuft (T-07)
     // TX-drain safety net for terminate_link() / trigger_linked_orderwire():
     // both wait for on_word_complete() to drain words_pending to 0.  If that

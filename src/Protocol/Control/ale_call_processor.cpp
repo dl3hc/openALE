@@ -421,6 +421,11 @@ void ALECallProcessor::process_received_word(ALEStateMachine& sm, const ALEWord&
             ? static_cast<uint8_t>(48u - word.unanimous_votes) : 0u);
     update_lqa(sm, lq);
 
+    // OFS Phase 2 shadow feed: the FrameReassembler observes the same valid-
+    // word stream classify() sees, at the same point — roles from parse
+    // position (FR-01..05). Nothing consumes its output yet (Phase 3).
+    sm.frame_reassembler_.on_word(word, sm.current_time_ms);
+
     const WordRole r = classify(sm, word);
 
     switch (sm.current_state) {

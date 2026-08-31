@@ -31,6 +31,29 @@ static const char* EVENT_NAMES[] = {
     "SOUNDING_REQUEST", "SOUNDING_COMPLETE", "ERROR_OCCURRED"
 };
 
+// FR-10 frame-level trace line for a reassembled frame: type + completed
+// addresses + sender identity — never just the last word. Example:
+// "[FRAME] F_RESPONSE to JOE from TIS SAM (7 words)".
+static std::string frame_trace_line(const AssembledFrame& f) {
+    std::string s = std::string("[FRAME] ") + frame_type_name(f.type);
+    for (const auto& a : f.addressed_to) {
+        s += " to ";
+        s += a;
+    }
+    if (!f.quick_id.empty()) s += " quick-id " + f.quick_id;
+    if (f.complete) {
+        s += " from ";
+        s += f.conclusion_is_twas ? "TWAS " : "TIS ";
+        s += f.conclusion_identity;
+    } else {
+        s += " (incomplete)";
+    }
+    if (!f.blocks.empty())
+        s += " blocks=" + std::to_string(f.blocks.size());
+    s += " words=" + std::to_string(f.word_count);
+    return s;
+}
+
 // Must match CallingPhase enum order exactly.
 static const char* PHASE_NAMES[] = {
     "LBT", "TUNING", "SCANNING_CALL", "GROUP_SCANNING_CALL", "LEADING_CALL", "MESSAGE",
@@ -213,6 +236,15 @@ void ALEStateMachine::update(uint32_t now_ms) {
         return;
     }
     this->current_time_ms = now_ms;
+
+    // ── OFS FrameReassembler shadow feed (Phase 2, docs/FRAMING_STANDARD.md) ──
+    // Observes the word stream in parallel; nothing consumes its Frame events
+    // yet (Phase 3 wires them into the §8 context matrix). Completed frames
+    // are drained here and traced at frame level — FR-10: RX diagnostics
+    // name the frame type and the completed addresses, not just the last word.
+    frame_reassembler_.tick(current_time_ms);
+    for (const auto& f : frame_reassembler_.take_completed())
+        SM_TRACE(frame_trace_line(f));
 
     if (check_link_timeout()) {
         process_event(ALEEvent::LINK_TIMEOUT);
