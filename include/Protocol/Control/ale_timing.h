@@ -92,6 +92,12 @@ constexpr double   Tx_max_ms  = Ta_max_ms;       // Tx max = Ta max = 1960 ms  m
 
 // Message section limit (basic — extended by AMD/DTM/DBM per Annex B note)
 constexpr double   Tm_max_ms  = 30.0 * TRW_MS;  // Tm max = 30×Trw = 11760 ms
+// Tm max incl. AMD (A.5.8.4: "29 Trw* + 30 Trw = 23.128 s") — the window a
+// receiver waits out for the conclusion of a message-bearing frame. *Basic
+// counts 29 Trw when combined, since the AMD (or DTM/DBM) transmission
+// commences one Trw before the close of Tm max basic. DTM (382 Trw) and DBM
+// (3589 Trw) extensions are separate, much larger limits (A.5.8.4).
+constexpr double   Tm_max_amd_ms = 59.0 * TRW_MS;  // Tm max incl. AMD = 23128 ms
 
 // Last-word-wait delay  (spec: T₁ww — subscript "1ww")
 constexpr uint32_t Tlww_ms    = TRW_MS;          // T1ww = Trw = 392 ms
@@ -339,6 +345,7 @@ namespace ALETimingConstants {
     // ── Derived protocol limits (integer, for SM comparisons) ────────────
     constexpr uint32_t Tx_max_ms  = 5u  * Trw_ms;  // max termination  = 5×Trw  = 1960 ms
     constexpr uint32_t Tm_max_ms  = 30u * Trw_ms;  // max message      = 30×Trw = 11760 ms
+    constexpr uint32_t Tm_max_amd_ms = 59u * Trw_ms;  // max msg incl. AMD = 59×Trw = 23128 ms (A.5.8.4)
     // Trc_min: minimum receiving-call window (Annex B: 2×Tc + Tx = 3×Trw for 1-word addr).
     // Also used as the LISTENING / WAIT_ACK base window for this SW-decoder implementation.
     constexpr uint32_t Trc_min_ms = 3u  * Trw_ms;  // 1176 ms

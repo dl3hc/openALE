@@ -804,6 +804,11 @@ target_link_libraries(test_calling_twas_guard ale_link ale_protocol ale_fsk_core
 target_include_directories(test_calling_twas_guard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME CallingTwasGuard COMMAND test_calling_twas_guard)
 
+add_executable(test_calling_lqa_response_budget tests/link/unit/test_calling_lqa_response_budget.cpp)
+target_link_libraries(test_calling_lqa_response_budget ale_link ale_protocol ale_fsk_core ale_fec)
+target_include_directories(test_calling_lqa_response_budget PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME CallingLqaResponseBudget COMMAND test_calling_lqa_response_budget)
+
 add_executable(test_frame tests/frame/unit/test_frame.cpp)
 target_link_libraries(test_frame ale_link ale_modem ale_protocol ale_fsk_core ale_fec)
 target_include_directories(test_frame PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -112,9 +112,19 @@ private:
     // on file for the peer with no cap, so a long-lived or heavily-tested peer
     // (Test-Channel's per-channel sweep against one target is the prime case)
     // can otherwise grow a report past that budget and overflow the TX queue.
-    // 20 entries -> ceil(20*36/21)=35 DATA words + 1 header word, comfortably
-    // under the ceiling alongside the rest of the response frame.
-    static constexpr size_t kMaxReportEntries = 20;
+    //
+    // The tighter governing bound is the SPEC's message-section limit, not the
+    // modem queue: Tm max basic = 30×Trw = 11.76 s (A.5.8.4). The response's
+    // message section is CMD 'a' + CMD 'r' + DATA, and the caller per A.5.5.3.3
+    // only waits Tlc + Tm max for the conclusion. 16 entries → 1 + 1 +
+    // ceil(16×36/21) = 30 words = exactly Tm max basic; the previous 20-entry
+    // cap (36 words ≈ 14.1 s) exceeded it — issue #5's responder-side share
+    // (the caller's fixed listen budget, fixed separately in
+    // ALEStateMachine::check_link_timeout, had no term for any of this).
+    static constexpr size_t kMaxReportEntries = 16;
+    static_assert(1u + 1u + (kMaxReportEntries * 36u + 20u) / 21u <= 30u,
+                  "response message section (CMD 'a' + CMD 'r' + DATA) must stay "
+                  "within Tm max basic = 30 words (A.5.8.4)");
 
     LQADatabase&                             db_;
     std::function<bool(const std::string&)>  is_self_;

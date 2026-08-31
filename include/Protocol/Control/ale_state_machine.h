@@ -1057,6 +1057,7 @@ private:
     // handshake before deciding a retry/timeout is due.
     static uint32_t listening_response_wait_ms_();  ///< LISTENING(a): Twrt_slow + Tdrw + settle
     static uint32_t wait_ack_start_wait_ms_();       ///< WAIT_ACK(1): Twr_slow + Tdrw + settle
+    uint32_t response_conclusion_window_ms_() const; ///< post-TO-self: Tlc + Tm max incl. AMD (A.5.5.3.3)
 
     bool check_link_timeout();
 

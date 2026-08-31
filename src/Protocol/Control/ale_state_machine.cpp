@@ -707,9 +707,14 @@ void ALEStateMachine::handle_handshake() {
                 return;
             }
             // Tmmax: message section began but conclusion not yet received → abort
-            // (A.5.5.3.2, AC-LINK-018-5 second condition)
+            // (A.5.5.3.2, AC-LINK-018-5 second condition). A.5.8.4: the message
+            // read window for a message-bearing frame is Tm max incl. AMD =
+            // 59×Trw = 23.128 s (29 Trw basic + 30 Trw AMD), not the 11.76 s
+            // basic value — a max-length 90-char calling-frame AMD (FROM +
+            // CMD AMD + 30 data words ≈ 12.5 s to its TIS conclusion) runs
+            // past the basic bound, and the old check raced it to the abort.
             if (!hs_conclusion_rcvd && hs_message_start_ms > 0 &&
-                (current_time_ms - hs_message_start_ms) >= ALETimingConstants::Tm_max_ms) {
+                (current_time_ms - hs_message_start_ms) >= ALETimingConstants::Tm_max_amd_ms) {
                 SM_TRACE("[TRACE] handle_handshake: Tmmax elapsed without conclusion → LINK_TIMEOUT\n");
                 process_event(ALEEvent::LINK_TIMEOUT);
                 return;
@@ -1187,6 +1192,30 @@ uint32_t ALEStateMachine::wait_ack_start_wait_ms_() {
     return ale::Twr_slow_int
          + static_cast<uint32_t>(ale::Tdrw_ms)
          + (ALETimingConstants::Tdrw_ms - ALETimingConstants::Tlww_ms);
+}
+
+uint32_t ALEStateMachine::response_conclusion_window_ms_() const {
+    // check_link_timeout CALLING, post-response-start branch (issue #5).
+    // A.5.5.3.3: the caller accepts the responder's conclusion ("TIS JOE")
+    // "starting within Tlc (plus Tm max, if message included)". Anchored at
+    // the first received TO-self word (response_rx_start_ms):
+    //   leading_seq_ × Trw — the response's doubled TO block: the responder
+    //                        echoes OUR address, so its word count equals our
+    //                        own leading call (Tlc).
+    //   + Tm max incl. AMD — the largest message section waited out (59×Trw,
+    //                        A.5.8.4). Covers this stack's bilateral-LQA
+    //                        response (bounded to Tm max basic = 30×Trw by
+    //                        LqaExchangeManager::kMaxReportEntries) and
+    //                        foreign AMD-bearing responses; DTM/DBM-sized
+    //                        responses (382/3589 Trw) are deliberately not
+    //                        waited out.
+    //   + 5×Trw + Tdrw      — worst-case extended TIS conclusion (15-char
+    //                        address = Ta max, A.5.2.4.1) + settle.
+    // 3-char addresses: 2×392 + 23128 + 5×392 + 784 = 26656 ms.
+    return static_cast<uint32_t>(leading_seq_.size()) * ALETimingConstants::Trw_ms
+         + ALETimingConstants::Tm_max_amd_ms
+         + 5u * ALETimingConstants::Trw_ms
+         + ALETimingConstants::Tdrw_ms;
 }
 
 void ALEStateMachine::send_linked_amd(std::vector<ALEWord> content_words,
@@ -1753,6 +1782,23 @@ const Channel* ALEStateMachine::select_best_channel() const {
 bool ALEStateMachine::check_link_timeout() {
     switch (current_state) {
         case ALEState::CALLING:
+            // A.5.5.3.3: once the responder's response frame has started
+            // (TO-self decoded, response_to_detected), the fixed calling
+            // budget no longer governs — its listen term (calc_calling_
+            // timeout_ms) is sized for a bare TO×2+TIS response and carries
+            // no term for the responder's message section. Issue #5: with
+            // bilateral LQA exchange enabled on both stations, the response
+            // carries CMD 'a' + CMD 'r' + DATA… (up to Tm max basic) and the
+            // fixed budget fired LINK_TIMEOUT mid-response, killing the link
+            // on both ends. The response-conclusion window (Tlc + Tm max,
+            // anchored at the first TO-self word) governs instead — through
+            // SENDING_ACK too, since the elapsed time at ACK start already
+            // exceeds the old budget after a long response. A stalled
+            // response is still aborted early by the LISTENING(b) 5×Trw
+            // silence window; a stalled ACK by the SENDING_ACK drain deadline.
+            if (response_to_detected)
+                return (current_time_ms - response_rx_start_ms)
+                       > response_conclusion_window_ms_();
             return (current_time_ms - state_entry_time_ms) > compute_calling_timeout_ms();
         case ALEState::HANDSHAKE:
             return (current_time_ms - state_entry_time_ms) > timing_.Twa_ms;
