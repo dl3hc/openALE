@@ -17,8 +17,17 @@
  *   2. Repeats are redundant copies of the SAME identity, not independent
  *      transmissions: a later repeat's lost extension word must not discard
  *      an earlier repeat's fully-assembled address.
+ *   3. A single anchor word whose content differs from the open session is
+ *      NOT proof of a different station — it can be a one-off Golay
+ *      miscorrection of the real, still-transmitting anchor (Golay(24,12)
+ *      guarantees correction only up to 3 bit errors per half; beyond that
+ *      it can miscorrect to a different, still "valid"-looking codeword). A
+ *      mismatch is only trusted once it repeats (see "pending" below) —
+ *      exactly the same "never act on one observation" discipline the vote
+ *      maps already apply to extension slots, now also applied to the
+ *      anchor-level decision that flushes an in-progress session.
  *
- * This class fixes both: per-cycle slot-indexed acceptance (a word is only
+ * This class fixes all three: per-cycle slot-indexed acceptance (a word is only
  * assigned to slot N if its type matches slot N's required type; on the
  * first mismatch — wrong type, golay_uncorrectable, or valid==false for any
  * other reason — no further words are slot-assigned in *this* cycle; no
@@ -101,10 +110,14 @@ public:
      *                      time only).
      * \param now_ms        Current monotonic time.
      * \return A Result if processing this word caused an in-progress session
-     *         for a DIFFERENT station to be flushed (TIS/TWAS anchor
-     *         mismatch) — caller must commit it via commit_sounding_result().
-     *         Empty otherwise (including the common case of the word being
-     *         folded into the still-open session).
+     *         for a DIFFERENT station to be flushed — caller must commit it
+     *         via commit_sounding_result(). A TIS/TWAS anchor mismatch alone
+     *         does NOT trigger this: the mismatched content is parked as a
+     *         pending candidate and only flushes the open session once that
+     *         SAME content repeats (confirmation, not a single observation —
+     *         see the class doc, point 3). Empty otherwise, including both
+     *         the common case (word folded into the still-open session) and
+     *         an unconfirmed first-sighting mismatch (parked, nothing flushed).
      */
     std::optional<Result> on_word(const ALEWord& word, uint32_t frequency_hz, uint32_t now_ms);
 
@@ -140,6 +153,7 @@ private:
         float       sinad_sum    = 0.0f;
         uint32_t    word_count   = 0;
         uint32_t    last_word_ms = 0;
+        std::string pending_anchor;                   ///< unconfirmed anchor-mismatch candidate content, empty = none
     };
 
     std::optional<Session> session_;

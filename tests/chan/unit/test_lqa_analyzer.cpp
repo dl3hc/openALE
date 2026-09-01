@@ -530,6 +530,37 @@ void test_rank_all_channels_min_path_score() {
     std::cout << "  PASS" << std::endl;
 }
 
+void test_process_sounding_reconciles_truncated_fragment() {
+    std::cout << "Test: process_sounding reconciles a truncated-fragment sounding "
+                 "(root cause of phantom Heard-Stations rows)..." << std::endl;
+
+    LQADatabase db;
+    LQAAnalyzer analyzer(&db);
+
+    // Live-log scenario: a full repeat cycle resolves "DL3HC1" first, then a
+    // later repeat cycle in the SAME burst loses its extension word and the
+    // accumulator upstream (whatever its timing) only resolves the 3-char
+    // anchor "DL3". Both go through process_sounding(), exactly as
+    // ALEController::commit_sounding_result() calls it for each accumulator
+    // Result.
+    analyzer.process_sounding("DL3HC1", 18106000, 20.0f, 0.0f, 15.0f, /*twas=*/true, 1000);
+    analyzer.process_sounding("DL3",    18106000, 18.0f, 3.0f, 12.0f, /*twas=*/true, 5000);
+
+    // Must be ONE Heard-Stations entry for this channel, not two — the
+    // fragment must never coexist as a separate, worse-scored phantom row.
+    auto channel_entries = db.get_entries_for_channel(18106000);
+    int named = 0;
+    for (const auto& e : channel_entries) if (!e.remote_station.empty()) ++named;
+    assert(named == 1);
+
+    assert(db.get_entry(18106000, "DL3") == nullptr);
+    auto full = db.get_entry(18106000, "DL3HC1");
+    assert(full != nullptr);
+    assert(full->sample_count == 2);  // both soundings folded into the one entry
+
+    std::cout << "  named entries on channel: " << named << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== LQA Analyzer Tests ===" << std::endl;
 
@@ -553,6 +584,7 @@ int main() {
     test_handshake_fail_penalty();
     test_rank_all_channels_mode();
     test_rank_all_channels_min_path_score();
+    test_process_sounding_reconciles_truncated_fragment();
 
     std::cout << "\n=== All LQA Analyzer Tests Passed ===" << std::endl;
     return 0;

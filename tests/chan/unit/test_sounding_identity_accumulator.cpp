@@ -11,13 +11,21 @@
  *        not discard an earlier repeat's fully-assembled address
  *   003  positional corruption: a type-mismatched word is never slot-assigned;
  *        a later clean repeat still recovers the full address
- *   004  anchor mismatch mid-session flushes the finished station first, with
- *        no cross-contamination between the two stations' addresses
+ *   004  CONFIRMED anchor mismatch (repeats twice) flushes the finished
+ *        station first, with no cross-contamination between the two
+ *        stations' addresses
  *   005  golay_uncorrectable word contributes to linear BER/SNR/SINAD only,
  *        never to the reassembled station string
  *   006  settle-refresh regression guard: an invalid-but-not-uncorrectable
  *        word mid-burst refreshes the inactivity timer — the exact gap that
  *        caused the originally-reported premature commit
+ *   007  root-cause regression guard: an UNCONFIRMED (single-observation)
+ *        anchor mismatch — e.g. a one-off Golay miscorrection — does not
+ *        flush, does not truncate, and does not contaminate the open
+ *        session; the real station's next repeat recovers cleanly
+ *   008  an unconfirmed mismatch followed by the ORIGINAL station's own
+ *        settle (never confirmed) commits the original session untouched —
+ *        the stray word leaves no trace
  */
 
 #include "App/sounding_identity_accumulator.h"
@@ -148,9 +156,9 @@ void test_003_positional_mismatch_not_assigned_then_recovered()
     }
 }
 
-void test_004_anchor_mismatch_flushes_without_cross_contamination()
+void test_004_confirmed_anchor_mismatch_flushes_without_cross_contamination()
 {
-    std::printf("[AC-SND-004] anchor mismatch mid-session flushes finished station, no cross-contamination\n");
+    std::printf("[AC-SND-004] CONFIRMED anchor mismatch (repeats) flushes finished station, no cross-contamination\n");
 
     SoundingIdentityAccumulator acc;
     uint32_t t = 0;
@@ -158,9 +166,15 @@ void test_004_anchor_mismatch_flushes_without_cross_contamination()
     acc.on_word(make_word(PreambleType::TIS, "SL3"), kFreq, t);  t += 100;
     acc.on_word(make_word(PreambleType::DATA, "ZXB"), kFreq, t); t += 100; // station A complete
 
-    auto flushed = acc.on_word(make_word(PreambleType::TIS, "BOB"), kFreq, t); // different anchor
+    // First sighting of "BOB" is parked, not trusted yet.
+    auto unconfirmed = acc.on_word(make_word(PreambleType::TIS, "BOB"), kFreq, t);
     t += 100;
-    check(flushed.has_value(), "004: anchor mismatch returns a flushed result");
+    check(!unconfirmed.has_value(), "004: a single differing anchor does not flush");
+
+    // Repeat confirms it really is a new station.
+    auto flushed = acc.on_word(make_word(PreambleType::TIS, "BOB"), kFreq, t);
+    t += 100;
+    check(flushed.has_value(), "004: confirmed anchor mismatch returns a flushed result");
     const bool a_pass = flushed.has_value() && flushed->station == "SL3ZXB";
     check(a_pass, "004: flushed station == \"SL3ZXB\" (station A, complete)");
 
@@ -174,6 +188,58 @@ void test_004_anchor_mismatch_flushes_without_cross_contamination()
                 flushed ? flushed->station.c_str() : "(none)",
                 b ? b->station.c_str() : "(none)",
                 (a_pass && b_pass) ? "PASS" : "FAIL");
+}
+
+void test_007_unconfirmed_mismatch_does_not_truncate_or_contaminate()
+{
+    std::printf("[AC-SND-007] root cause: UNCONFIRMED single-word anchor mismatch does not truncate/contaminate\n");
+
+    SoundingIdentityAccumulator acc;
+    uint32_t t = 0;
+
+    acc.on_word(make_word(PreambleType::TIS, "DL3"), kFreq, t);  t += 200;
+    acc.on_word(make_word(PreambleType::DATA, "HC1"), kFreq, t); t += 200; // repeat 1 complete: DL3HC1
+
+    // A one-off Golay miscorrection: a single stray anchor word with
+    // different content. Must NOT flush "DL3HC1", must NOT be trusted.
+    auto stray = acc.on_word(make_word(PreambleType::TIS, "DL2"), kFreq, t);
+    t += 200;
+    check(!stray.has_value(), "007: a single stray anchor mismatch returns no flushed result");
+
+    // The real station's next real repeat must still fold in cleanly — the
+    // stray word left no trace on the open session.
+    acc.on_word(make_word(PreambleType::TIS, "DL3"), kFreq, t);  t += 200;
+    acc.on_word(make_word(PreambleType::DATA, "HC1"), kFreq, t); t += 200;
+
+    auto result = acc.finalize();
+    check(result.has_value(), "007: finalize() produces a result");
+    const bool pass = result.has_value() && result->station == "DL3HC1";
+    check(pass, "007: station == \"DL3HC1\" (not truncated to \"DL3\", not contaminated by \"DL2\")");
+
+    std::printf("  station=%s: %s\n", result ? result->station.c_str() : "(none)",
+                pass ? "PASS" : "FAIL");
+}
+
+void test_008_unconfirmed_mismatch_then_original_settles_untouched()
+{
+    std::printf("[AC-SND-008] unconfirmed mismatch never repeats; original session settles untouched\n");
+
+    SoundingIdentityAccumulator acc;
+    uint32_t t = 0;
+
+    acc.on_word(make_word(PreambleType::TIS, "DL3"), kFreq, t);  t += 200;
+    acc.on_word(make_word(PreambleType::DATA, "HC1"), kFreq, t); t += 200;
+
+    auto stray = acc.on_word(make_word(PreambleType::TIS, "DL2"), kFreq, t); // never repeats
+    check(!stray.has_value(), "008: unconfirmed mismatch returns no flushed result");
+
+    auto result = acc.finalize();
+    check(result.has_value(), "008: finalize() produces a result");
+    const bool pass = result.has_value() && result->station == "DL3HC1";
+    check(pass, "008: station == \"DL3HC1\" (the never-confirmed stray word left no trace)");
+
+    std::printf("  station=%s: %s\n", result ? result->station.c_str() : "(none)",
+                pass ? "PASS" : "FAIL");
 }
 
 void test_005_uncorrectable_word_metrics_only()
@@ -252,9 +318,11 @@ int main()
     test_001_single_clean_cycle();                              std::printf("\n");
     test_002_repeat_redundancy_recovers_dropped_extension();     std::printf("\n");
     test_003_positional_mismatch_not_assigned_then_recovered();  std::printf("\n");
-    test_004_anchor_mismatch_flushes_without_cross_contamination(); std::printf("\n");
+    test_004_confirmed_anchor_mismatch_flushes_without_cross_contamination(); std::printf("\n");
     test_005_uncorrectable_word_metrics_only();                  std::printf("\n");
     test_006_settle_refresh_regression_guard();                  std::printf("\n");
+    test_007_unconfirmed_mismatch_does_not_truncate_or_contaminate(); std::printf("\n");
+    test_008_unconfirmed_mismatch_then_original_settles_untouched(); std::printf("\n");
 
     std::printf("======================================================================\n");
     if (g_failures == 0) {

@@ -549,6 +549,115 @@ void test_bilateral_quality_score_spec_direction() {
     std::cout << "  PASS" << std::endl;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// reconcile_sounding_identity() — root-cause fix for truncated Heard-
+// Stations/LQA entries: a sounding conclusion's address is learned
+// incrementally (TIS/TWAS anchor word decodes before its DATA/REP extension
+// words), so a single reception can be a still-growing prefix, or — if an
+// extension word is lost to fading after an earlier reception already
+// resolved the full address — a truncated fragment of a station already
+// known. The database must never grow two rows for one physical station
+// just because its address was split across receptions.
+// ─────────────────────────────────────────────────────────────────────────
+
+void test_reconcile_fragment_after_full() {
+    std::cout << "Test: reconcile_sounding_identity — fragment arriving AFTER the full identity..." << std::endl;
+
+    LQADatabase db;
+    // The full identity is resolved first (e.g. a clean repeat cycle)...
+    db.update_entry_extended(18106000, "DL3HC1", 20.0f, 0.0f, 15.0f, 0.0f, -120.0f, 0, 2, 1000);
+
+    // ...then a later repeat's extension word is lost to fading and only the
+    // 3-char anchor is resolved. This must be recognised as the SAME
+    // station's dropped tail, not a new station.
+    const std::string canonical = db.reconcile_sounding_identity(18106000, "DL3", 3000);
+    assert(canonical == "DL3HC1");
+
+    // The caller must use `canonical` for the write — simulating that here
+    // confirms no phantom "DL3" row is ever created.
+    db.update_entry_extended(18106000, canonical, 18.0f, 1.0f, 12.0f, 0.0f, -120.0f, 0, 1, 3000);
+
+    assert(db.get_entry(18106000, "DL3") == nullptr);
+    auto full = db.get_entry(18106000, "DL3HC1");
+    assert(full != nullptr);
+    assert(full->sample_count == 2);  // both writes landed on the one entry
+
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_reconcile_full_after_fragment() {
+    std::cout << "Test: reconcile_sounding_identity — full identity arriving AFTER a fragment..." << std::endl;
+
+    LQADatabase db;
+    // A session times out early and commits just the anchor first...
+    db.update_entry_extended(18106000, "DL3", 20.0f, 0.0f, 15.0f, 0.0f, -120.0f, 0, 1, 1000);
+
+    // ...then a later repeat cycle resolves the full address. The earlier
+    // fragment entry must be renamed forward, not left as an orphan row.
+    const std::string canonical = db.reconcile_sounding_identity(18106000, "DL3HC1", 2000);
+    assert(canonical == "DL3HC1");
+
+    db.update_entry_extended(18106000, canonical, 20.0f, 0.0f, 15.0f, 0.0f, -120.0f, 0, 2, 2000);
+
+    assert(db.get_entry(18106000, "DL3") == nullptr);       // fragment entry renamed away, not duplicated
+    auto full = db.get_entry(18106000, "DL3HC1");
+    assert(full != nullptr);
+    assert(full->sample_count == 2);  // history from the fragment entry carried forward
+
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_reconcile_outside_burst_window_no_merge() {
+    std::cout << "Test: reconcile_sounding_identity — no merge once outside the sounding-burst window..." << std::endl;
+
+    LQADatabase db;
+    db.update_entry_extended(18106000, "DL3HC1", 20.0f, 0.0f, 15.0f, 0.0f, -120.0f, 0, 2, 1000);
+
+    // Same prefix relationship, but far beyond kSoundingBurstWindowMs later —
+    // this is plausibly an unrelated station that happens to share a prefix,
+    // not a fragment of the same transmission. Must NOT merge.
+    const uint32_t far_later = 1000u + LQADatabase::kSoundingBurstWindowMs + 1000u;
+    const std::string canonical = db.reconcile_sounding_identity(18106000, "DL3", far_later);
+    assert(canonical == "DL3");
+
+    db.update_entry_extended(18106000, canonical, 18.0f, 1.0f, 12.0f, 0.0f, -120.0f, 0, 1, far_later);
+    assert(db.get_entry(18106000, "DL3") != nullptr);
+    assert(db.get_entry(18106000, "DL3HC1") != nullptr);
+    assert(db.get_entries_for_channel(18106000).size() == 2);  // both survive as distinct entries
+
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_reconcile_unrelated_stations_no_merge() {
+    std::cout << "Test: reconcile_sounding_identity — non-prefix stations never merge..." << std::endl;
+
+    LQADatabase db;
+    db.update_entry_extended(18106000, "DL3HC1", 20.0f, 0.0f, 15.0f, 0.0f, -120.0f, 0, 2, 1000);
+
+    const std::string canonical = db.reconcile_sounding_identity(18106000, "XY9ZZ", 1500);
+    assert(canonical == "XY9ZZ");  // no relation — unchanged
+
+    std::cout << "  PASS" << std::endl;
+}
+
+void test_reconcile_ignores_channel_aggregate() {
+    std::cout << "Test: reconcile_sounding_identity — channel aggregate (\"\") never merged/matched..." << std::endl;
+
+    LQADatabase db;
+    // The "" channel-aggregate entry always exists once soundings are logged.
+    db.update_entry_extended(18106000, "", 20.0f, 0.0f, 15.0f, 0.0f, -120.0f, 0, 2, 1000);
+    db.update_entry_extended(18106000, "DL3HC1", 20.0f, 0.0f, 15.0f, 0.0f, -120.0f, 0, 2, 1000);
+
+    // Empty input is returned unchanged, never treated as a real station.
+    assert(db.reconcile_sounding_identity(18106000, "", 1500) == "");
+
+    // A real fragment lookup must not match against the "" aggregate entry.
+    const std::string canonical = db.reconcile_sounding_identity(18106000, "DL3", 1600);
+    assert(canonical == "DL3HC1");
+
+    std::cout << "  PASS" << std::endl;
+}
+
 int main() {
     std::cout << "=== LQA Database Tests ===" << std::endl;
 
@@ -573,6 +682,11 @@ int main() {
     test_bilateral_x_vs_dash();
     test_bilateral_save_load();
     test_bilateral_quality_score_spec_direction();
+    test_reconcile_fragment_after_full();
+    test_reconcile_full_after_fragment();
+    test_reconcile_outside_burst_window_no_merge();
+    test_reconcile_unrelated_stations_no_merge();
+    test_reconcile_ignores_channel_aggregate();
 
     std::cout << "\n=== All LQA Database Tests Passed ===" << std::endl;
     return 0;

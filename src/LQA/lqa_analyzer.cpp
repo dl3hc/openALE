@@ -72,6 +72,17 @@ void LQAAnalyzer::process_sounding(const std::string& station,
 
     uint32_t now = (timestamp_ms == 0) ? get_current_time_ms() : timestamp_ms;
 
+    // A.5.3.1: the sounding conclusion's address is learned incrementally by
+    // the caller (anchor word decodes before its DATA/REP extension words),
+    // so `station` here may be a still-growing prefix of an identity already
+    // known on this channel, or a truncated fragment of one resolved moments
+    // ago. Reconcile to the single canonical identity before writing so a
+    // dropped extension word can never leave a second, phantom Heard-
+    // Stations/LQA row for the same physical station — this holds regardless
+    // of how the accumulator upstream happened to time the split.
+    const std::string canonical =
+        database_->reconcile_sounding_identity(frequency_hz, station, now);
+
     // A.5.4.1.2: write measured SINAD via update_entry_extended, populating
     // sinad_db for both the channel and station entries; multipath/noise-floor
     // aren't measured during sounding, so use defaults. Empty-station entry =
@@ -79,22 +90,22 @@ void LQAAnalyzer::process_sounding(const std::string& station,
     // from get_all_lqa_entries() so GUI never shows a phantom "(sounding)" row.
     database_->update_entry_extended(frequency_hz, "", snr_db, ber, sinad_db,
                                      0.0f, -120.0f, 0, 1, now);
-    database_->update_entry_extended(frequency_hz, station, snr_db, ber, sinad_db,
+    database_->update_entry_extended(frequency_hz, canonical, snr_db, ber, sinad_db,
                                      0.0f, -120.0f, 0, 1, now);
 
     // Records station availability for active link establishment from the
     // sounding's conclusion word: TIS=available, TWAS=not available. Only the
     // per-station entry carries the flag ("" channel aggregate has no station
     // to be "available"); it's what the GUI displays.
-    database_->set_sounding_availability(frequency_hz, station, twas_conclusion, now);
+    database_->set_sounding_availability(frequency_hz, canonical, twas_conclusion, now);
 
     // Record propagation context at measurement time for future similarity scoring.
     if (prop_ctx_.position_valid) {
         const float elev = compute_solar_elevation(
             prop_ctx_.lat_deg, prop_ctx_.lon_deg,
             ms_to_unix_sec(prop_ctx_.now_ms > 0 ? prop_ctx_.now_ms : now));
-        database_->set_propagation_at_measurement(frequency_hz, "",      elev, prop_ctx_.sfi_current);
-        database_->set_propagation_at_measurement(frequency_hz, station, elev, prop_ctx_.sfi_current);
+        database_->set_propagation_at_measurement(frequency_hz, "",        elev, prop_ctx_.sfi_current);
+        database_->set_propagation_at_measurement(frequency_hz, canonical, elev, prop_ctx_.sfi_current);
     }
 }
 

@@ -237,6 +237,17 @@ public:
     /// Minimum data-retention period without external power (REQ-GEN-018 / AC-GEN-006-003): 1 hour.
     static constexpr uint32_t kMinRetentionMs = 3600000u;
 
+    /// A.5.3.1: a sounding transmission repeats its conclusion for ~10-15s.
+    /// Two same-channel observations at most this far apart can plausibly be
+    /// fragments of ONE physical transmission whose address was learned
+    /// incrementally (the TIS/TWAS anchor word decodes before its DATA/REP
+    /// extension words). reconcile_sounding_identity() uses this window to
+    /// fold/rename such fragments into one canonical entry. Generous margin
+    /// (2x the documented max burst) absorbs slow scan-hop return and decode
+    /// latency without risking a false merge between two unrelated stations
+    /// that happen to share a prefix and are heard minutes apart.
+    static constexpr uint32_t kSoundingBurstWindowMs = 30000u;
+
     /**
      * @brief Construct empty LQA database
      */
@@ -370,6 +381,40 @@ public:
                                    const std::string& remote_station,
                                    bool twas,
                                    uint32_t timestamp_ms = 0);
+
+    /**
+     * @brief Reconcile a sounding-conclusion station identity that may be a
+     *        fragment of, or a fuller resolution of, a station already known
+     *        on this channel (A.5.3.1: the address is learned incrementally —
+     *        the TIS/TWAS anchor word decodes before its DATA/REP extension
+     *        words — so any single reception can be a still-growing prefix,
+     *        and a dropped extension word can make a later reception a
+     *        truncated tail of an address already resolved moments ago).
+     *
+     * Call this BEFORE writing @p station to the database (update_entry_extended,
+     * set_sounding_availability, ...) and use the returned string as the key
+     * for all of those calls instead of @p station directly. This is the
+     * single reconciliation point that guarantees the database never grows
+     * two separate rows for one physical station just because its address
+     * happened to be split across receptions — independent of whatever
+     * upstream timing produced the split.
+     *
+     * Scoped to same-channel entries active within kSoundingBurstWindowMs so
+     * two distinct stations that happen to share a prefix, heard minutes
+     * apart, are never conflated.
+     *
+     * @param frequency_hz Channel frequency in Hz
+     * @param station      Station identity just resolved from a sounding
+     * @param timestamp_ms Measurement timestamp (0 = current time)
+     * @return @p station unchanged if no related entry exists; the existing
+     *         fuller identity if @p station is a fragment of it (write your
+     *         measurement under that identity instead); or @p station itself
+     *         after an existing shorter fragment entry has been renamed
+     *         forward to it in place (its accumulated history is preserved).
+     */
+    std::string reconcile_sounding_identity(uint32_t frequency_hz,
+                                            const std::string& station,
+                                            uint32_t timestamp_ms = 0);
 
     /**
      * @brief Get LQA entry for specific channel/station

@@ -264,6 +264,65 @@ void LQADatabase::set_sounding_availability(uint32_t frequency_hz,
     it->second.score              = compute_score(it->second);
 }
 
+std::string LQADatabase::reconcile_sounding_identity(uint32_t frequency_hz,
+                                                     const std::string& station,
+                                                     uint32_t timestamp_ms) {
+    if (station.empty()) return station;  // "" is the channel aggregate, never a station identity
+    const uint32_t now = (timestamp_ms == 0) ? get_current_time_ms() : timestamp_ms;
+
+    // Find the most-recently-active same-channel entry, within one
+    // sounding-burst window, that is a strict prefix of `station` or of
+    // which `station` is a strict prefix. Recency breaks ties among
+    // multiple candidates (rare in practice, since the window is short).
+    enum class Relation { NONE, EXISTING_IS_FRAGMENT, STATION_IS_FRAGMENT };
+    Relation relation = Relation::NONE;
+    EntryKey best_key{0, ""};
+    uint32_t best_activity = 0;
+
+    for (const auto& pair : entries_) {
+        if (pair.first.frequency_hz != frequency_hz) continue;
+        const std::string& existing = pair.first.remote_station;
+        if (existing.empty() || existing == station) continue;
+        const uint32_t activity = pair.second.last_activity_ms();
+        if ((now - activity) > kSoundingBurstWindowMs) continue;
+
+        Relation r = Relation::NONE;
+        if (existing.size() < station.size()
+                && station.compare(0, existing.size(), existing) == 0)
+            r = Relation::EXISTING_IS_FRAGMENT;
+        else if (station.size() < existing.size()
+                && existing.compare(0, station.size(), station) == 0)
+            r = Relation::STATION_IS_FRAGMENT;
+        if (r == Relation::NONE) continue;
+
+        if (relation == Relation::NONE || activity > best_activity) {
+            relation      = r;
+            best_key      = pair.first;
+            best_activity = activity;
+        }
+    }
+
+    if (relation == Relation::EXISTING_IS_FRAGMENT) {
+        // `station` is the fuller identity just resolved — rename the
+        // existing fragment entry forward in place so its accumulated
+        // history (score, sample_count, sounding type, propagation
+        // context, ...) carries over instead of starting a second,
+        // disconnected row.
+        LQAEntry entry = entries_.at(best_key);
+        entry.remote_station = station;
+        entries_.erase(best_key);
+        entries_[EntryKey{frequency_hz, station}] = entry;
+        return station;
+    }
+    if (relation == Relation::STATION_IS_FRAGMENT) {
+        // `station` is a truncated tail of an identity already resolved
+        // moments ago — it is that SAME station's dropped extension word,
+        // not a new station. Fold this measurement into the existing entry.
+        return best_key.remote_station;
+    }
+    return station;
+}
+
 std::shared_ptr<LQAEntry> LQADatabase::get_entry(uint32_t frequency_hz,
                                                  const std::string& remote_station) const {
     EntryKey key{frequency_hz, remote_station};

@@ -94,21 +94,39 @@ SoundingIdentityAccumulator::on_word(const ALEWord& word, uint32_t frequency_hz,
         }
         if (content == session_->anchor) {
             // Same-station repeat (A.5.3.1 redundancy): only in-cycle position
-            // resets; slot-vote maps and linear accumulators persist.
+            // resets; slot-vote maps and linear accumulators persist. The real
+            // station reconfirming itself also retires any unconfirmed
+            // mismatch seen since the last repeat — it was a one-off
+            // miscorrection, not a second station (class doc point 3).
             session_->next_slot    = 1;
             session_->cycle_open   = true;
+            session_->pending_anchor.clear();
             fold_linear(*session_, word);
             session_->last_word_ms = now_ms;
             return std::nullopt;
         }
 
-        // Different station started talking: flush finished session first
-        // (pre-existing same-vs-different-anchor branch; fixed to flush-before-discard, not silently discard).
-        Result flushed = build_result(*session_);
-        session_.reset();
-        open_session(word, content, frequency_hz, now_ms);
-        if (flushed.station.empty()) return std::nullopt; // defensive: nothing usable was accumulated
-        return flushed;
+        // Anchor content differs from the open session's. A single mismatched
+        // word is never trusted as proof of a different station (it can be a
+        // one-off Golay miscorrection of the real anchor) — only a REPEAT of
+        // the same new content confirms it, mirroring the vote maps' own
+        // "no single observation is authoritative" rule.
+        if (!session_->pending_anchor.empty() && session_->pending_anchor == content) {
+            // Confirmed: this content has now been seen twice. Flush the
+            // previous (different) station and open a fresh session for the
+            // newly confirmed one.
+            Result flushed = build_result(*session_);
+            session_.reset();
+            open_session(word, content, frequency_hz, now_ms);
+            if (flushed.station.empty()) return std::nullopt; // defensive: nothing usable was accumulated
+            return flushed;
+        }
+        // First sighting of this mismatch: park it as the pending candidate.
+        // The open session is left completely untouched — still counting
+        // toward its own settle, still able to accept its real extension
+        // word — so one stray word can neither truncate nor contaminate it.
+        session_->pending_anchor = content;
+        return std::nullopt;
     }
 
     if (!session_) return std::nullopt; // no session open, non-conclusion word: ignored entirely
