@@ -887,9 +887,7 @@ bool HamlibRadio::configure_port() {
     // ── PTT method ────────────────────────────────────────────────────────
     // Separate from rigport (CAT connection): hamlib carries its own pttport
     // in rig_state. impl_set_ptt() needs no change — rig_set_ptt() already
-    // dispatches via pttport.type.ptt configured here. The CAT-side MIC/DATA
-    // sub-select (policy_.ptt_input) is unaffected by this — relevant only
-    // when pttport.type.ptt == RIG_PTT_RIG (CAT).
+    // dispatches via pttport.type.ptt configured here.
     //
     // Set pttport.type.ptt directly rather than the top-level rig_state::ptt_type
     // convenience field: that field's presence differs across hamlib versions
@@ -902,7 +900,22 @@ bool HamlibRadio::configure_port() {
         case PttPolicy::Type::DTR:  rig_->state.pttport.type.ptt = RIG_PTT_SERIAL_DTR; break;
         case PttPolicy::Type::NONE: rig_->state.pttport.type.ptt = RIG_PTT_NONE;       break;
         case PttPolicy::Type::CAT:
-        default:                    rig_->state.pttport.type.ptt = RIG_PTT_RIG;       break;
+        default:
+            // impl_set_ptt() passes RIG_PTT_ON_MIC/RIG_PTT_ON_DATA (per
+            // policy_.ptt_input) to rig_set_ptt() — but rig.h documents both
+            // as "fallbacks on RIG_PTT_ON if unavailable", and availability
+            // is decided by *this* field: only RIG_PTT_RIG_MICDATA supports
+            // the mic/data distinction, plain RIG_PTT_RIG always falls back
+            // to generic PTT-on and never switches the rig's TX audio
+            // source. Radio keys up either way (PTT itself doesn't need the
+            // distinction), which is why this was easy to miss — but with
+            // ptt_input=DATA/MIC and plain RIG_PTT_RIG, the rig keeps
+            // whatever audio source it already had selected, so modulation
+            // fed to the "other" source never reaches the transmitter.
+            rig_->state.pttport.type.ptt =
+                (policy_.ptt_input != SerialLinePolicy::PttInput::NORMAL)
+                    ? RIG_PTT_RIG_MICDATA : RIG_PTT_RIG;
+            break;
     }
     if (ptt_policy_.type == PttPolicy::Type::RTS || ptt_policy_.type == PttPolicy::Type::DTR) {
         const std::string& ptt_dev = !ptt_policy_.port.empty() ? ptt_policy_.port : port_;
