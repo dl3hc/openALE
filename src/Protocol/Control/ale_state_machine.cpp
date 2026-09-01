@@ -1791,11 +1791,24 @@ bool ALEStateMachine::check_link_timeout() {
             // carries CMD 'a' + CMD 'r' + DATA… (up to Tm max basic) and the
             // fixed budget fired LINK_TIMEOUT mid-response, killing the link
             // on both ends. The response-conclusion window (Tlc + Tm max,
-            // anchored at the first TO-self word) governs instead — through
-            // SENDING_ACK too, since the elapsed time at ACK start already
-            // exceeds the old budget after a long response. A stalled
-            // response is still aborted early by the LISTENING(b) 5×Trw
-            // silence window; a stalled ACK by the SENDING_ACK drain deadline.
+            // anchored at the first TO-self word) governs the LISTENING phase
+            // instead. A stalled response is still aborted early by the
+            // LISTENING(b) 5×Trw silence window.
+            //
+            // KA1-in-ACK asymmetry (187-721D §5.4.3.1, build_ack_words()):
+            // once SENDING_ACK starts, the ACK itself may now carry OUR
+            // report (up to another Tm max basic) requested by the response's
+            // KA1=1. response_conclusion_window_ms_() is sized for the
+            // response only and is anchored at response_rx_start_ms — by the
+            // time a long response finishes, elapsed time can already exceed
+            // it, so it must not keep governing through SENDING_ACK (that
+            // would fire LINK_TIMEOUT mid-ACK, the mirror image of issue #5).
+            // build_ack_words() arms tx_drain_deadline_ms_ scaled to the
+            // words actually queued — handle_calling's own SENDING_ACK case
+            // checks that deadline directly, so this backstop stands down
+            // once SENDING_ACK is reached.
+            if (calling_phase == CallingPhase::SENDING_ACK)
+                return false;
             if (response_to_detected)
                 return (current_time_ms - response_rx_start_ms)
                        > response_conclusion_window_ms_();
@@ -1930,24 +1943,64 @@ void ALEStateMachine::build_ack_words() {
     //                                        AMD send with link_after_send=true)
     //   TO [to_address] × 2 + TWAS [self] — AMD sent with link_after_send=false:
     //                                        handshake concludes, no link persists
-    // No message content here — LQA CMD/report and AMD (if any) were already
-    // sent in the calling frame MESSAGE section (enqueue_call_sequence_()).
-    // to_address is set during the LISTENING phase (process_received_word),
-    // so it's encoded here at send time, not pre-computed.
+    // AMD (if any) was already sent in the calling frame MESSAGE section
+    // (enqueue_call_sequence_()). This frame can still carry OUR bilateral LQA
+    // report when the response requested one (KA1=1) — 187-721D §5.4.3.1
+    // "an LQA report in the acknowledgment". to_address is set during the
+    // LISTENING phase (process_received_word), so it's encoded here at send
+    // time, not pre-computed.
     const bool no_link = (active_message_.type == PendingMessage::Type::AMD)
                        && !active_message_.link_after_send;
-    transmit_words(ALEFrameBuilder::ack(
-        to_address, address_book.get_self_address(), no_link).words());
+
+    // Consume LQA report sequence if pending (set via set_pending_lqa_report_seq(),
+    // queued in rx_handle_lqa_exchange() as soon as the response's KA1=1 is
+    // decoded — well before this point). TIS-only for the first cut (open
+    // decision D2): a TWAS-concluding ACK (AMD-decline path) stays bare and
+    // leaves the report queued/discarded rather than growing that frame too.
+    ALESequence report_seq{};
+    if (!no_link && pending_lqa_report_set_) {
+        report_seq = pending_lqa_report_seq_;
+        pending_lqa_report_set_ = false;
+    }
+
+    if (report_seq.empty()) {
+        transmit_words(ALEFrameBuilder::ack(
+            to_address, address_book.get_self_address(), no_link).words());
+    } else {
+        // Fig. A-31 base frame: TO peer×2 + TIS self. Message section
+        // (CMD 'r' + DATA...) inserted BEFORE the conclusion, same splice
+        // build_response_words() uses for the response frame.
+        const auto base = ALEFrameBuilder::ack(
+            to_address, address_book.get_self_address(), no_link);
+        const auto& bw = base.words();
+        size_t conc_start = bw.size();
+        for (size_t i = 0; i < bw.size(); ++i) {
+            if (bw[i].type == PreambleType::TIS || bw[i].type == PreambleType::TWAS) {
+                conc_start = i;
+                break;
+            }
+        }
+        std::vector<ALEWord> words;
+        for (size_t i = 0; i < conc_start; ++i)         words.push_back(bw[i]);
+        for (const auto& w : report_seq.words())        words.push_back(w);
+        for (size_t i = conc_start; i < bw.size(); ++i) words.push_back(bw[i]);
+        transmit_words(words);
+    }
 
     // Arm the TX-drain deadline: on_word_complete() normally fires
     // LINK_ESTABLISHED/AMD_DECLINED_LINK once the frame drains; if audio
     // stalls or the completion is never armed, handle_calling SENDING_ACK
     // force-aborts after tx_drain_deadline_ms_ instead of waiting the full
-    // Twa backstop. This frame no longer carries AMD content (moved to the
-    // calling frame, see enqueue_call_sequence_()), so the flat default always suffices.
+    // Twa backstop. Scale the deadline to the words actually queued — a
+    // report-bearing ACK can add up to Tm max basic (30 words, ~11.8 s), same
+    // as build_response_words() does for its message section.
     if (words_pending > 0) {
         tx_drain_start_ms_    = current_time_ms;
-        tx_drain_deadline_ms_ = ALETimingConstants::TX_DRAIN_TIMEOUT_MS;
+        tx_drain_deadline_ms_ = report_seq.empty()
+            ? ALETimingConstants::TX_DRAIN_TIMEOUT_MS
+            : std::max(ALETimingConstants::TX_DRAIN_TIMEOUT_MS,
+                       words_pending * ALETimingConstants::Trw_ms
+                           + 2u * ALETimingConstants::Trw_ms);
     }
 }
 

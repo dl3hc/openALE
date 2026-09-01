@@ -2368,7 +2368,11 @@ void ALEController::maybe_emit_call_alert()
     hs_call_acc_.reset();
     hs_call_freq_hz_ = 0;
 
-    // Block A4 (responder) — queue CMD LQA (KA1=0) for the response frame.
+    // Block A4 (responder) — queue CMD LQA (KA1=1) for the response frame.
+    // KA1=1 per 187-721D §5.4.3.1 "an LQA report with a request in the
+    // response": the responder now requests the caller's report back, which
+    // rides the caller's ACK frame (see LqaExchangeManager::apply_pending
+    // call in rx_handle_lqa_exchange() and ALEStateMachine::build_ack_words()).
     // encode_outgoing reads the fresh calling-frame measurement committed above.
     // Done here (once, at alert time) so it applies to both auto-accept and manual-accept.
     if (config_.lqa_exchange_enabled) {
@@ -2378,7 +2382,7 @@ void ALEController::maybe_emit_call_alert()
         if (cur_blka4_ch.rx_frequency_hz > 0
             && !reporting_inhibited(cur_blka4_ch.rx_frequency_hz))
             lqa_exchange_.encode_outgoing(cur_blka4_ch.rx_frequency_hz,
-                                          sm_.get_caller_address(), false);
+                                          sm_.get_caller_address(), true);
         else if (cur_blka4_ch.rx_frequency_hz > 0
                  && reporting_inhibited(cur_blka4_ch.rx_frequency_hz))
             emit_status("LQA CMD 'a' exchange suppressed — channel "
@@ -3292,9 +3296,21 @@ void ALEController::rx_handle_lqa_exchange(const ALEWord& word)
             const Channel cur_bilat_ch = get_current_channel();
             // Per-channel inhibit_reporting: do not decode peer's CMD 'a' here.
             if (cur_bilat_ch.rx_frequency_hz > 0
-                && !reporting_inhibited(cur_bilat_ch.rx_frequency_hz))
+                && !reporting_inhibited(cur_bilat_ch.rx_frequency_hz)) {
                 lqa_exchange_.on_word_lqa_cmd(word.raw_payload,
                                                cur_bilat_ch.rx_frequency_hz);
+                // Caller side (187-721D §5.4.3.1 frame 2→3): JOE's response set
+                // KA1=1 requesting our report back — queue it now, well before
+                // build_ack_words() needs pending_lqa_report_seq_ at SENDING_ACK.
+                // sm_.get_to_address() isn't populated until TIS is decoded, so
+                // resolve the peer from the dialed target instead (set by
+                // encode_outgoing() at initiate_call() time, cleared only at
+                // on_call_concluded()). No-op if this capture is JOE's own
+                // WAIT_CYCLE_END/LINKED window (cur_st != CALLING).
+                if (cur_st == ALEState::CALLING)
+                    lqa_exchange_.apply_pending(lqa_exchange_.call_target(), true,
+                                                 [this](const std::string& m){ emit_status(m); });
+            }
         }
     }
 

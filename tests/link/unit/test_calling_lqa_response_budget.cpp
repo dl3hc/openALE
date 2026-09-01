@@ -30,10 +30,30 @@
  *   TEST 4  responder: max-length calling-frame AMD (TIS 12.15 s after
  *            message start, past the 11.76 s basic bound) → conclusion
  *            still received, handshake not aborted
+ *
+ * KA1-in-ACK asymmetry (187-721D §5.4.3.1, docs/LQA_KA1_ACK_REPORT_HANDOFF.md):
+ * once the responder's response also requests OUR report (KA1=1),
+ * build_ack_words() may queue a report-bearing ACK — up to another Tm max
+ * basic (30×Trw) beyond a bare ACK. The response-conclusion window is
+ * anchored at response_rx_start_ms and sized for the response alone, so a
+ * long response followed by a long ACK can exceed it before the ACK even
+ * finishes draining — the mirror image of issue #5, this time hitting
+ * SENDING_ACK instead of LISTENING.
+ *
+ *   TEST 5  pending LQA report queued before SENDING_ACK → the ACK frame
+ *            carries CMD 'r' + DATA before its TIS conclusion (mirrors
+ *            build_response_words()'s splice)
+ *   TEST 6  SENDING_ACK is no longer bound by response_conclusion_window_ms_:
+ *            a deliberately oversized report-bearing ACK pushes elapsed time
+ *            (since response_rx_start_ms) decisively past that window, yet
+ *            the handshake still reaches LINKED
+ *   TEST 7  regression — no report pending → ACK is byte-identical to the
+ *            pre-fix bare TO×2 + TIS (no CMD 'r'/DATA inserted)
  */
 
 #include "Word/ale_word.h"
 #include "Protocol/Control/ale_state_machine.h"
+#include "LQA/lqa_report.h"
 #include <iostream>
 #include <vector>
 
@@ -270,6 +290,163 @@ bool test_wait_cycle_end_amd_conclusion_within_tm_max_amd()
     return conclusion && still_hs;
 }
 
+// Build a dummy N-entry LQA report vector — content is irrelevant to these
+// tests, only word count (which drives ACK drain timing) matters.
+static std::vector<LQAReport> make_reports(size_t n)
+{
+    std::vector<LQAReport> reports;
+    reports.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        LQAReport r;
+        r.frequency_hz = 3000000u + static_cast<uint32_t>(i);
+        r.age   = 0u;
+        r.mp    = 0u;
+        r.sinad = 20u;
+        r.ber   = 10u;
+        reports.push_back(r);
+    }
+    return reports;
+}
+
+// Drive a minimal response (TO[self]×2 + TIS[peer], no message section) to
+// its conclusion. Returns the time of the TIS word (response_rx_start_ms is
+// the time of the first TO-self word, tx_end + 1600).
+static uint32_t drive_minimal_response(ALEStateMachine& sm, uint32_t tx_end)
+{
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    uint32_t t = tx_end + 1600;
+    rx_at(sm, t,            addr_word(PreambleType::TO,  "SAM"));
+    rx_at(sm, t += Trw,     addr_word(PreambleType::TO,  "SAM"));
+    rx_at(sm, t += Trw,     addr_word(PreambleType::TIS, "JOE"));
+    return t;
+}
+
+// Settle past Tlww/Tdrw and drain n_words of ACK, one on_word_complete() per
+// word (matching the real per-word drain cadence). Returns the final clock time.
+static uint32_t settle_and_drain_ack(ALEStateMachine& sm, uint32_t t_tis, size_t n_words)
+{
+    const uint32_t Trw = ALETimingConstants::Trw_ms;
+    uint32_t t = t_tis + ALETimingConstants::Tdrw_ms + 1;
+    sm.update(t);   // LISTENING(c) settle → SENDING_ACK
+    for (size_t i = 0; i < n_words; ++i) {
+        t += Trw;
+        sm.update(t);
+        sm.on_word_complete();
+    }
+    return t;
+}
+
+// ── TEST 5 ───────────────────────────────────────────────────────────────────
+// A report queued (set_pending_lqa_report_seq(), simulating ALEController's
+// rx_handle_lqa_exchange() decoding KA1=1 in the response) before SENDING_ACK
+// must appear in the ACK frame as CMD 'r' + DATA before the TIS conclusion —
+// build_ack_words()'s splice, mirrored from build_response_words().
+bool test_ack_carries_pending_report()
+{
+    std::cout << "\n[KA1-ACK] Pending LQA report → ACK carries CMD 'r' + DATA before TIS\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap);
+    const uint32_t tx_end = drain_calling_frame(sm, cap, "JOE");
+    const uint32_t t_tis  = drive_minimal_response(sm, tx_end);
+
+    const auto reports    = make_reports(4);
+    const ALESequence rep = ALESequenceBuilder::lqa_report(reports);
+    sm.set_pending_lqa_report_seq(rep);
+
+    const size_t ack_start_idx = cap.size();
+    const size_t expected_ack_words = 2 /*TO×2*/ + rep.size() + 1 /*TIS*/;
+    settle_and_drain_ack(sm, t_tis, expected_ack_words);
+
+    if (cap.size() != ack_start_idx + expected_ack_words) {
+        std::cout << "  FAIL: expected " << expected_ack_words << " ACK words, got "
+                  << (cap.size() - ack_start_idx) << "\n";
+        return false;
+    }
+    const auto& w = cap.words;
+    bool shape_ok = w[ack_start_idx].type     == PreambleType::TO
+                 && w[ack_start_idx + 1].type == PreambleType::TO
+                 && w[ack_start_idx + 2].type == PreambleType::CMD   // CMD 'r' header
+                 && w[cap.size() - 1].type    == PreambleType::TIS;  // conclusion last
+    std::cout << "  ACK = TO,TO,[CMD 'r'+DATA...],TIS: " << (shape_ok ? "PASS" : "FAIL") << "\n";
+
+    const bool linked = sm.get_state() == ALEState::LINKED;
+    std::cout << "  reached LINKED: " << (linked ? "PASS" : "FAIL") << "\n";
+    return shape_ok && linked;
+}
+
+// ── TEST 6 ───────────────────────────────────────────────────────────────────
+// SENDING_ACK must no longer be bound by response_conclusion_window_ms_ (a
+// window sized for the response alone, anchored at response_rx_start_ms). A
+// deliberately oversized report (bypassing LqaExchangeManager's on-air
+// kMaxReportEntries cap, which does not exist at this SM-level test) pushes
+// total elapsed decisively past that window before the ACK finishes
+// draining. Pre-fix, check_link_timeout() would fire LINK_TIMEOUT mid-ACK;
+// post-fix it stands down for calling_phase==SENDING_ACK and the scaled
+// tx_drain_deadline_ms_ (armed by build_ack_words()) governs instead.
+bool test_sending_ack_not_bound_by_response_window()
+{
+    std::cout << "\n[KA1-ACK] Oversized report-bearing ACK survives past the "
+                 "response-conclusion window\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap);
+    const uint32_t tx_end = drain_calling_frame(sm, cap, "JOE");
+    const uint32_t t_tis  = drive_minimal_response(sm, tx_end);
+
+    const auto reports    = make_reports(40);   // deliberately oversized, see above
+    const ALESequence rep = ALESequenceBuilder::lqa_report(reports);
+    sm.set_pending_lqa_report_seq(rep);
+
+    const size_t expected_ack_words = 2 + rep.size() + 1;
+    const uint32_t response_rx_start_ms = tx_end + 1600;
+    const uint32_t t_end = settle_and_drain_ack(sm, t_tis, expected_ack_words);
+
+    // response_conclusion_window_ms_() is private; reconstruct it inline from
+    // the same terms (A.5.5.3.3, see check_link_timeout()'s CALLING case):
+    // leading_seq_.size()×Trw (2, "JOE") + Tm_max_amd_ms + 5×Trw + Tdrw_ms.
+    const uint32_t window_ms = 2u * ALETimingConstants::Trw_ms
+                             + ALETimingConstants::Tm_max_amd_ms
+                             + 5u * ALETimingConstants::Trw_ms
+                             + ALETimingConstants::Tdrw_ms;
+    const uint32_t elapsed = t_end - response_rx_start_ms;
+    std::cout << "  elapsed since response start = " << elapsed
+              << " ms, response-conclusion window = " << window_ms << " ms\n";
+    if (elapsed <= window_ms) {
+        std::cout << "  FAIL: elapsed didn't exceed the window — test setup error\n";
+        return false;
+    }
+
+    const bool linked = sm.get_state() == ALEState::LINKED;
+    std::cout << "  reached LINKED despite exceeding the response window: "
+              << (linked ? "PASS" : "FAIL") << "\n";
+    return linked;
+}
+
+// ── TEST 7 ───────────────────────────────────────────────────────────────────
+// Regression: no report pending (KA1=0 case) → ACK is byte-identical to the
+// pre-fix bare TO×2 + TIS. A plain call must not change shape on air.
+bool test_ack_without_pending_report_is_bare()
+{
+    std::cout << "\n[KA1-ACK] No pending report → ACK stays bare TO×2 + TIS\n";
+
+    WordCapture cap;
+    ALEStateMachine sm = make_sm(cap);
+    const uint32_t tx_end = drain_calling_frame(sm, cap, "JOE");
+    const uint32_t t_tis  = drive_minimal_response(sm, tx_end);
+
+    const size_t ack_start_idx = cap.size();
+    settle_and_drain_ack(sm, t_tis, /*n_words=*/3);
+
+    const bool bare = (cap.size() == ack_start_idx + 3)
+        && cap.words[ack_start_idx].type     == PreambleType::TO
+        && cap.words[ack_start_idx + 1].type == PreambleType::TO
+        && cap.words[ack_start_idx + 2].type == PreambleType::TIS;
+    std::cout << "  ACK == TO,TO,TIS (3 words, no CMD 'r'/DATA): "
+              << (bare ? "PASS" : "FAIL") << "\n";
+    return bare;
+}
+
 } // namespace ale
 
 int main()
@@ -279,6 +456,9 @@ int main()
     ok &= ale::test_no_response_still_aborts();
     ok &= ale::test_stalled_response_aborts_early();
     ok &= ale::test_wait_cycle_end_amd_conclusion_within_tm_max_amd();
+    ok &= ale::test_ack_carries_pending_report();
+    ok &= ale::test_sending_ack_not_bound_by_response_window();
+    ok &= ale::test_ack_without_pending_report_is_bare();
 
     std::cout << (ok ? "\nALL ISSUE-5 RESPONSE-BUDGET TESTS PASSED\n"
                      : "\nISSUE-5 RESPONSE-BUDGET TESTS FAILED\n");
