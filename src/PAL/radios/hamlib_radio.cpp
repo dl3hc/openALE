@@ -887,18 +887,24 @@ bool HamlibRadio::configure_port() {
     // ── PTT method ────────────────────────────────────────────────────────
     // Separate from rigport (CAT connection): hamlib carries its own pttport
     // in rig_state. impl_set_ptt() needs no change — rig_set_ptt() already
-    // dispatches via the ptt_type configured here. The CAT-side MIC/DATA
+    // dispatches via pttport.type.ptt configured here. The CAT-side MIC/DATA
     // sub-select (policy_.ptt_input) is unaffected by this — relevant only
-    // when ptt_type == RIG_PTT_RIG (CAT).
+    // when pttport.type.ptt == RIG_PTT_RIG (CAT).
+    //
+    // Set pttport.type.ptt directly rather than the top-level rig_state::ptt_type
+    // convenience field: that field's presence differs across hamlib versions
+    // (present in the 4.7.2 build pinned for Windows via scripts/build_hamlib.sh,
+    // absent from the older hamlib package Ubuntu/odroid ships via apt) while
+    // pttport.type.ptt is the field hamlib's PTT logic actually consults in
+    // every version, so this stays portable across both.
     switch (ptt_policy_.type) {
-        case PttPolicy::Type::RTS:  rig_->state.ptt_type = RIG_PTT_SERIAL_RTS; break;
-        case PttPolicy::Type::DTR:  rig_->state.ptt_type = RIG_PTT_SERIAL_DTR; break;
-        case PttPolicy::Type::NONE: rig_->state.ptt_type = RIG_PTT_NONE;       break;
+        case PttPolicy::Type::RTS:  rig_->state.pttport.type.ptt = RIG_PTT_SERIAL_RTS; break;
+        case PttPolicy::Type::DTR:  rig_->state.pttport.type.ptt = RIG_PTT_SERIAL_DTR; break;
+        case PttPolicy::Type::NONE: rig_->state.pttport.type.ptt = RIG_PTT_NONE;       break;
         case PttPolicy::Type::CAT:
-        default:                    rig_->state.ptt_type = RIG_PTT_RIG;       break;
+        default:                    rig_->state.pttport.type.ptt = RIG_PTT_RIG;       break;
     }
     if (ptt_policy_.type == PttPolicy::Type::RTS || ptt_policy_.type == PttPolicy::Type::DTR) {
-        rig_->state.pttport.type.ptt = rig_->state.ptt_type;
         const std::string& ptt_dev = !ptt_policy_.port.empty() ? ptt_policy_.port : port_;
         std::strncpy(rig_->state.pttport.pathname, ptt_dev.c_str(), HAMLIB_FILPATHLEN);
         rig_->state.pttport.pathname[HAMLIB_FILPATHLEN - 1] = '\0';
