@@ -9,11 +9,9 @@ namespace ale {
 
 LqaExchangeManager::LqaExchangeManager(
         LQADatabase&                             db,
-        std::function<bool(const std::string&)>  is_self,
         std::function<void(uint32_t)>            sm_queue_cmd_a,
         std::function<void(ALESequence)>         sm_queue_report)
     : db_(db)
-    , is_self_(std::move(is_self))
     , sm_queue_cmd_a_(std::move(sm_queue_cmd_a))
     , sm_queue_report_(std::move(sm_queue_report))
 {}
@@ -93,7 +91,11 @@ bool LqaExchangeManager::on_report_data(uint32_t raw_payload,
     if (!report_decoder_.active()) return false;
     if (!report_decoder_.feed(raw_payload)) return false;
 
-    if (!sender.empty() && !is_self_(sender)) {
+    // No self-address check: sender is always resolved from a decoded
+    // received word (ale_controller.cpp rx_handle_lqa_exchange()), so a
+    // match against our own callsign means a same-callsign peer, not a
+    // self-referential report — see ctor doc comment.
+    if (!sender.empty()) {
         for (const auto& r : report_decoder_.reports())
             db_.update_bilateral(r.frequency_hz, sender, r.sinad, r.ber, r.mp, 0u);
         emit("LQA Report RX from " + sender + ": "
@@ -109,7 +111,13 @@ bool LqaExchangeManager::apply_pending(const std::string& peer,
 {
     if (!pending_valid_) return false;
 
-    const bool valid_peer = !peer.empty() && !is_self_(peer);
+    // No self-address check: peer is always resolved from a decoded received
+    // word (see call sites in ale_controller.cpp), so a match against our own
+    // callsign means a same-callsign peer, not us — see ctor doc comment.
+    // Dropping data (and skipping the Block C5 report queue below) here
+    // broke same-callsign bench tests: no bilateral DB entry, no report ever
+    // rode the ACK, regardless of the KA1 bit.
+    const bool valid_peer = !peer.empty();
     if (valid_peer) {
         db_.update_bilateral(pending_freq_, peer,
                               pending_.sinad, pending_.ber, pending_.mp, 0u);

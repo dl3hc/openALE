@@ -324,7 +324,6 @@ ALEController::ALEController()
     : contact_store_(sm_.get_address_book())
     , lqa_analyzer_(&lqa_database_)
     , lqa_exchange_(lqa_database_,
-                    [this](const std::string& a){ return self_address_store_.matches_self(a); },
                     [this](uint32_t w){ sm_.set_pending_lqa_cmd(w); },
                     [this](ALESequence s){ sm_.set_pending_lqa_report_seq(s); })
     , freq_select_(sm_,
@@ -2342,7 +2341,11 @@ void ALEController::maybe_emit_call_alert()
     // CMD 'a'. Reset the accumulator; on_sm_state_change provides the
     // safety-net reset if the alert fires but LINKED is never reached.
     if (op_params_.lqa_enabled && hs_call_acc_.word_count() > 0) {
-        if (!caller.empty() && !self_address_store_.matches_self(caller)) {
+        // No self-address check: caller is decoded from the received calling
+        // frame, so a match against our own callsign means a same-callsign
+        // peer, not us (same-callsign-bench-test regression, see
+        // reply_to_linked_amd_()'s comment and 2026-09-01 LQA-exchange fix).
+        if (!caller.empty()) {
             // Commit uses hs_call_freq_hz_ (set by the accumulator above via
             // the radio-backed get_current_channel()), so guard on that —
             // not sm_.get_current_channel(), which is nullptr on no-scan
@@ -2392,8 +2395,12 @@ void ALEController::maybe_emit_call_alert()
 
 void ALEController::commit_sounding_result(const SoundingIdentityAccumulator::Result& r)
 {
-    // MIL-STD Fig. A-27: LQA matrix is remote-stations only — never store own address.
-    if (self_address_store_.matches_self(r.station)) return;
+    // No self-address check: this only ever fires on a RECEIVED sounding
+    // frame (rx_accumulate_sounding() gates on SCANNING/IDLE; our own
+    // transmitted sounding never reaches here, see the SOUNDING-entry
+    // comment in on_sm_state_change()) — Fig. A-27 "remote stations only" is
+    // already satisfied structurally. r.station matching our callsign means
+    // a same-callsign peer, not us (2026-09-01 LQA-exchange fix).
     // Forward the sounding's conclusion type so the LQA entry is flagged
     // available (TIS) / not available (TWAS) for active link establishment.
     lqa_analyzer_.process_sounding(r.station, r.frequency_hz,
@@ -2418,10 +2425,10 @@ void ALEController::commit_rx_ber_sample()
     const std::string sender = !sm_.get_to_address().empty()
         ? sm_.get_to_address() : sm_.get_caller_address();
 
-    // Skip when no peer is known yet or the address is our own (Fig. A-27: the
-    // LQA matrix records remote stations only).
-    if (!sender.empty() && !self_address_store_.matches_self(sender)
-        && rx_ber_freq_hz_ > 0) {
+    // Skip only when no peer is known yet. No self-address check: sender is
+    // resolved from a decoded received word, so a match against our own
+    // callsign means a same-callsign peer, not us (2026-09-01 LQA-exchange fix).
+    if (!sender.empty() && rx_ber_freq_hz_ > 0) {
         const float n        = static_cast<float>(words);
         const float avg_ber  = static_cast<float>(rx_ber_acc_.ber_score());
         const float avg_snr  = rx_ber_snr_sum_  / n;
@@ -2686,8 +2693,10 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // JOE committed hs_call in maybe_emit_call_alert() already.
             if (op_params_.lqa_enabled && hs_resp_acc_.word_count() > 0) {
                 const std::string peer = sm_.get_to_address();
-                if (!peer.empty() && !self_address_store_.matches_self(peer)
-                    && hs_resp_freq_hz_ > 0) {
+                // No self-address check: peer is decoded from the received
+                // response frame, so a match against our own callsign means a
+                // same-callsign peer, not us (2026-09-01 LQA-exchange fix).
+                if (!peer.empty() && hs_resp_freq_hz_ > 0) {
                     lqa_database_.update_entry_extended(hs_resp_freq_hz_, peer,
                         hs_resp_acc_.snr_avg(),
                         static_cast<float>(hs_resp_acc_.ber_score()),
@@ -2753,8 +2762,10 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // commit whatever response-frame quality was measured.
             if (op_params_.lqa_enabled && hs_resp_acc_.word_count() > 0) {
                 const std::string peer = sm_.get_to_address();
-                if (!peer.empty() && !self_address_store_.matches_self(peer)
-                    && hs_resp_freq_hz_ > 0) {
+                // No self-address check: peer is decoded from the received
+                // response frame, so a match against our own callsign means a
+                // same-callsign peer, not us (2026-09-01 LQA-exchange fix).
+                if (!peer.empty() && hs_resp_freq_hz_ > 0) {
                     lqa_database_.update_entry_extended(hs_resp_freq_hz_, peer,
                         hs_resp_acc_.snr_avg(),
                         static_cast<float>(hs_resp_acc_.ber_score()),
@@ -2835,8 +2846,10 @@ void ALEController::on_operator_event(OperatorEvent ev)
             // reads as a failure in the ALE Log or contact history.
             if (op_params_.lqa_enabled && hs_resp_acc_.word_count() > 0) {
                 const std::string peer = sm_.get_to_address();
-                if (!peer.empty() && !self_address_store_.matches_self(peer)
-                    && hs_resp_freq_hz_ > 0) {
+                // No self-address check: peer is decoded from the received
+                // response frame, so a match against our own callsign means a
+                // same-callsign peer, not us (2026-09-01 LQA-exchange fix).
+                if (!peer.empty() && hs_resp_freq_hz_ > 0) {
                     lqa_database_.update_entry_extended(hs_resp_freq_hz_, peer,
                         hs_resp_acc_.snr_avg(),
                         static_cast<float>(hs_resp_acc_.ber_score()),

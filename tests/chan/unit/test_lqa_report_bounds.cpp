@@ -54,7 +54,6 @@ static void test_reset_discards_incomplete_report()
     std::vector<ALESequence> queued_reports;
     LqaExchangeManager mgr(
         db,
-        [](const std::string& s){ return s == "SAM"; },     // is_self
         [](uint32_t){},                                      // sm_queue_cmd_a (unused here)
         [&](ALESequence s){ queued_reports.push_back(std::move(s)); });
 
@@ -102,7 +101,6 @@ static void test_without_reset_stale_decoder_would_complete()
     LQADatabase db;
     LqaExchangeManager mgr(
         db,
-        [](const std::string& s){ return s == "SAM"; },
         [](uint32_t){},
         [](ALESequence){});
 
@@ -147,7 +145,6 @@ static void test_outgoing_report_is_capped()
     bool        report_queued = false;
     LqaExchangeManager mgr(
         db,
-        [](const std::string& s){ return s == "SAM"; },
         [](uint32_t){},
         [&](ALESequence s){ queued_report = std::move(s); report_queued = true; });
 

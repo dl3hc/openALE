@@ -28,12 +28,17 @@ class LqaExchangeManager {
 public:
     /**
      * @param db              LQA database for all read/write operations
-     * @param is_self         Returns true if the address is a local self-address
      * @param sm_queue_cmd_a  Queue a 24-bit CMD 'a' word in the state machine
      * @param sm_queue_report Queue a Block C5 sequence in the state machine
+     *
+     * No self-address filter: peer/sender addresses passed to apply_pending()
+     * and on_report_data() always come from a decoded received word (see
+     * their call sites), never from our own transmission — so a literal
+     * match against our configured callsign means a same-callsign peer, not
+     * us, and must not be dropped (regression: same-callsign bench tests
+     * silently got zero bilateral data and no queued report, 2026-09-01).
      */
     LqaExchangeManager(LQADatabase&                             db,
-                       std::function<bool(const std::string&)>  is_self,
                        std::function<void(uint32_t)>            sm_queue_cmd_a,
                        std::function<void(ALESequence)>         sm_queue_report);
 
@@ -127,7 +132,6 @@ private:
                   "within Tm max basic = 30 words (A.5.8.4)");
 
     LQADatabase&                             db_;
-    std::function<bool(const std::string&)>  is_self_;
     std::function<void(uint32_t)>            sm_queue_cmd_a_;
     std::function<void(ALESequence)>         sm_queue_report_;
 
