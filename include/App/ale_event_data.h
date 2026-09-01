@@ -43,6 +43,10 @@ struct WordData {
     uint8_t     fec;      ///< fec_errors corrected
     uint32_t    ts_ms;    ///< timestamp_ms from ALEWord
     uint32_t    freq_hz;  ///< RX freq (word_decoded) or TX freq (word_tx) at dispatch time
+    const char* cmd_name; ///< TABLE A-XVI function name when preamble=="CMD"
+                          ///< (decode_cmd_function()), else nullptr. Lets the
+                          ///< GUI show e.g. "LQA (bilateral LQA data)" instead
+                          ///< of the bare function-code address.
 };
 
 /// Payload for EventType::ALE_FRAME_DECODED

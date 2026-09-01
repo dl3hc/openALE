@@ -445,9 +445,12 @@ void ALEController::wire_callbacks()
         // emit time, regardless of PTT-lead buffering. Pairs with
         // on_word_decoded so ALE Monitor shows sent/received words identically.
         {
+            const char* cmd_name = (w.type == PreambleType::CMD)
+                ? ale::decode_cmd_function(w.raw_payload).name : nullptr;
             ale::WordData wd{ WordParser::word_type_name(w.type), w.address,
                               tx_word_seq_++, w.unanimous_votes, w.fec_errors,
-                              w.timestamp_ms, get_current_channel().tx_frequency_hz };
+                              w.timestamp_ms, get_current_channel().tx_frequency_hz,
+                              cmd_name };
             dispatch(pal::EventType::ALE_WORD_TX, "", 0, &wd, sizeof(wd));
         }
 
@@ -2990,9 +2993,12 @@ void ALEController::rx_track_signal_quality(const ALEWord& word)
     // Fires regardless of local protocol state or address match, in strict
     // on-air arrival order — no reordering, no deferral.
     {
+        const char* cmd_name = (word.type == PreambleType::CMD)
+            ? ale::decode_cmd_function(word.raw_payload).name : nullptr;
         ale::WordData wd{ WordParser::word_type_name(word.type), word.address,
                           monitor_frame_id_, word.unanimous_votes, word.fec_errors,
-                          word.timestamp_ms, get_current_channel().rx_frequency_hz };
+                          word.timestamp_ms, get_current_channel().rx_frequency_hz,
+                          cmd_name };
         dispatch(pal::EventType::ALE_WORD_DECODED, "", 0, &wd, sizeof(wd));
     }
 }

@@ -604,6 +604,7 @@ body {
 .ale-entry-word { flex-shrink: 0; }
 .ale-entry-addr { color: var(--tx); flex: 1; }
 .ale-entry-ber  { font-size: 10px; flex-shrink: 0; }
+.ale-entry-cmdname { color: var(--tx-muted); font-size: 10px; font-style: italic; flex-shrink: 0; }
 .ale-ber-ok   { color: var(--accent); }
 .ale-ber-warn { color: #ffca28; }
 .ale-ber-bad  { color: #e06060; }

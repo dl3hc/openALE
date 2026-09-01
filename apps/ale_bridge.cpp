@@ -2144,6 +2144,7 @@ int main(int argc, char* argv[]) {
             e.set("fec",      mj::Value::number(d->fec));
             e.set("ts_ms",    mj::Value::number(d->ts_ms));
             e.set("freq_hz",  mj::Value::number(d->freq_hz));
+            e.set("cmd_name", mj::Value::string(d->cmd_name ? d->cmd_name : ""));
             ws.send_text(mj::dump(e));
         });
 
@@ -2158,6 +2159,7 @@ int main(int argc, char* argv[]) {
             e.set("fec",      mj::Value::number(d->fec));
             e.set("ts_ms",    mj::Value::number(d->ts_ms));
             e.set("freq_hz",  mj::Value::number(d->freq_hz));
+            e.set("cmd_name", mj::Value::string(d->cmd_name ? d->cmd_name : ""));
             ws.send_text(mj::dump(e));
         });
 

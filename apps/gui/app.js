@@ -1475,6 +1475,11 @@ function onAleLogWord(e, dir) {
   const berCls = fec === 0 ? 'ale-ber-ok' : fec <= 1 ? 'ale-ber-warn' : 'ale-ber-bad';
   const dirCls = isTx ? 'dir-tx' : 'dir-rx';
   const dirSym = isTx ? '▶' : '◀';
+  // TABLE A-XVI function name (e.g. "LQA (bilateral LQA data)") for CMD words
+  // — decoded server-side (decode_cmd_function()); empty for non-CMD words or
+  // functions with no table entry, so the bracketed code is all that shows.
+  const cmdNameHtml = (p === 'cmd' && e.cmd_name)
+    ? `<span class="ale-entry-cmdname">${escapeHtml(e.cmd_name)}</span>` : '';
   aleLogAppend(
     `<div class="ale-entry${isTx ? ' ale-entry-tx' : ''}">` +
     `<span class="ale-entry-ts">${ts}</span>` +
@@ -1483,6 +1488,7 @@ function onAleLogWord(e, dir) {
     `<span class="ale-entry-dir ${dirCls}">${dirSym}</span>` +
     `<span class="ale-entry-word pill ${pill}">${escapeHtml(e.preamble)}</span>` +
     `<span class="ale-entry-addr">[${escapeHtml(e.addr)}]</span>` +
+    cmdNameHtml +
     `<span class="ale-entry-ber ${berCls}">BER: ${fec}</span>` +
     `</div>`);
   // Waterfall markers are RX-only (received frames). Our own TX does not mark

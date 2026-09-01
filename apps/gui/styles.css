@@ -1283,6 +1283,7 @@
     .dir-tx         { color: var(--s-calling); } /* ▶ sent */
     .ale-entry-tx   { background: rgba(255,202,40,.045); } /* subtle tint for sent rows */
     .ale-entry-ber  { color: var(--tx-muted); font-size: 9px; }
+    .ale-entry-cmdname { color: var(--tx-muted); font-size: 9px; font-style: italic; }
     .ale-entry.ale-info .ale-entry-mode { color: var(--accent); }
     .ale-entry.ale-info .ale-entry-addr { color: var(--tx-muted); flex: 1; white-space: normal; }
     .ale-ber-ok    { color: var(--s-linked); }
