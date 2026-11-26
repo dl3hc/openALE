@@ -83,7 +83,7 @@ ctest --test-dir build --verbose
 pacman -S git base-devel mingw-w64-x86_64-toolchain automake autoconf libtool
 bash scripts/build_hamlib.sh
 ```
-This builds Hamlib 4.5.2 as a static library into `libs/hamlib-built/`, which CMake then
+This builds Hamlib 4.7.2 as a static library into `libs/hamlib-built/`, which CMake then
 detects and links automatically:
 ```powershell
 mkdir build; cd build; cmake ..; cmake --build .
